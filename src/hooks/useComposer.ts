@@ -98,6 +98,9 @@ export interface UseComposerOptions {
       then, which is also what an unbounded box gets, because the form's own
       percentage budget does not resolve there either. */
   boxHeight?: number;
+  /** What the form may take where its box grows with it (the orchestrator
+      seat, #1734); null in a card, whose budget is a share of `boxHeight`. */
+  boxBudget?: number | null;
 }
 
 /**
@@ -108,7 +111,7 @@ export interface UseComposerOptions {
  * own delivery (`submit`) and its own surrounding chrome; everything below the
  * text lives in `ComposerBar`.
  */
-export function useComposer({ initialText, persistText, submit, disabled = false, imageCapability = null, acceptFiles = false, holdInputWhileBusy = true, viewActive = true, accessorySurfaces = 0, boxHeight = 0 }: UseComposerOptions) {
+export function useComposer({ initialText, persistText, submit, disabled = false, imageCapability = null, acceptFiles = false, holdInputWhileBusy = true, viewActive = true, accessorySurfaces = 0, boxHeight = 0, boxBudget = null }: UseComposerOptions) {
   /* A remount mid-typing (column reshuffles, draft handovers) restores the
      draft from storage; the ref always holds the latest text so async
      dictation callbacks append to what the user typed meanwhile instead of
@@ -200,7 +203,7 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   const layoutH = useLayoutViewportHeight(viewActive);
   const maxPx = isMobile
     ? mobileComposerCeiling(viewportH, layoutH, accessorySurfaces)
-    : cardComposerCeiling(boxHeight, accessorySurfaces);
+    : cardComposerCeiling(boxHeight, accessorySurfaces, boxBudget);
 
   const attachments = useImageAttachments({
     onError: (message) => setStatus({ kind: "err", text: message }),

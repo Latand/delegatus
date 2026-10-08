@@ -231,12 +231,15 @@ export interface StructuredReconfigureEffect {
 
 export interface StructuredReconfigureOwnership {
   isCurrent(): Promise<boolean>;
+  /** The conversation's sends this switch holds back that no host was ever
+      handed: the switch carries them to the successor. */
+  carriedSends?: readonly string[];
 }
 
 export type StructuredReconfigureHandler = (
   effect: StructuredReconfigureEffect,
   ownership: StructuredReconfigureOwnership,
-) => Promise<void | "applied" | "pending">;
+) => Promise<void | "applied" | "pending" | "writer-busy">;
 
 type NativeEffect = NativeQueueCommand & { operationId: string; eventSeq: number };
 type DeliveryEffect = NativeEffect | SendEffect | InjectEffect | ControlEffect | CompactEffect | StructuredReconfigureEffect;
@@ -267,6 +270,12 @@ function isReconfigureEffect(effect: DeliveryEffect): effect is StructuredReconf
 /** An account pick that has not started moving the conversation: it waits for the next engagement (#1846). */
 function isParkableSwitch(effect: DeliveryEffect, receipt: StructuredOperationStatus | null): boolean {
   return isReconfigureEffect(effect) && Boolean(effect.accountId) && receipt?.status !== "applying";
+}
+
+/** A receipt still at its admission revision: queued and never moved, so no
+    host was handed the operation. The first-dispatch evidence reads the same. */
+function neverDispatched(receipt: StructuredOperationStatus | null | undefined): boolean {
+  return receipt?.revision === 1 && (receipt.status === "queued" || receipt.status === "pending");
 }
 
 /** What engages a conversation: a message for its next turn. */
@@ -1085,7 +1094,15 @@ export class StructuredDeliveryQueue {
         }
         if (effect.accountId && !engaged && !this.port.reconfigureCancelled?.(effect)
           && durableStatuses.get(effect.operationId)?.status !== "applying") continue;
-        const blocked = await this.drainReconfigure(effect);
+        /* Every later message of this conversation waits behind the switch, so
+           a send already claimed on the predecessor that was never dispatched
+           can only go out after it. The switch carries those to the successor
+           (2026-10-07, run 3: ten minutes of neither moving). */
+        const carriedSends = effect.accountId
+          ? effects.filter((later) => (later.kind === "send" || later.kind === "steer")
+            && neverDispatched(durableStatuses.get(later.operationId))).map((later) => later.operationId)
+          : [];
+        const blocked = await this.drainReconfigure(effect, carriedSends);
         if (blocked) {
           this.scheduleControlSettlementCheck(durableStatuses.get(effect.operationId) ?? null);
           return true;
@@ -2029,7 +2046,7 @@ export class StructuredDeliveryQueue {
     }
   }
 
-  private async drainReconfigure(effect: StructuredReconfigureEffect): Promise<boolean> {
+  private async drainReconfigure(effect: StructuredReconfigureEffect, carriedSends: readonly string[] = []): Promise<boolean> {
     const retry = this.reconfigureRetries.get(effect.operationId) ?? new RetryBackoff();
     this.reconfigureRetries.set(effect.operationId, retry);
     if (!retry.ready()) { this.retrySoon(); return true; }
@@ -2054,6 +2071,7 @@ export class StructuredDeliveryQueue {
     try {
       outcome = await this.reconfigure(effect, {
         isCurrent: () => this.isCurrentReconfigure(effect),
+        ...(carriedSends.length ? { carriedSends } : {}),
       });
     } catch (error) {
       await this.transitionReconfigure(effect, "failed", { reason: failureReason(error) });
@@ -2067,8 +2085,11 @@ export class StructuredDeliveryQueue {
     }
     // Journal timeouts after the executor returns cannot turn its outcome into
     // a failed switch. Read/reconcile the original receipt on a bounded retry.
-    if (outcome === "pending") {
-      await this.transitionReconfigure(effect, "queued", { reason: "turn-boundary" });
+    /* `writer-busy`: the switch found the delivery record's write lock held
+       past its bound and wrote nothing. The reason rides on the switch's own
+       receipt, so the composer says why the switch is waiting. */
+    if (outcome === "pending" || outcome === "writer-busy") {
+      await this.transitionReconfigure(effect, "queued", { reason: outcome === "writer-busy" ? "switch-writer-busy" : "turn-boundary" });
       retry.fail();
       this.retrySoon();
       return true;

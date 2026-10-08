@@ -42,6 +42,37 @@ function spawnEntry(pathname: string, accountId = "terra") {
   };
 }
 
+test.each(["cleared", "missing"] as const)("resume setup claims %s host entries atomically and preserves the writer fence", (kind) => {
+  const store = jsonRegistry();
+  const entry = { ...spawnEntry(`/sessions/${crypto.randomUUID()}.jsonl`), status: "dead" as const };
+  if (kind === "cleared") store.upsert(entry);
+  const setupHost = { kind: "codex-app-server" as const, endpoint: "stdio:pending", process: null,
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] };
+  const owner = { pid: 41_001, startIdentity: "setup-first" };
+  const successor = { pid: 41_002, startIdentity: "setup-successor" };
+  const current = () => store.readOnlySnapshot().entries[`codex:${entry.key.sessionId}`]!;
+  const setup = { setupHost, setupEntry: entry };
+  expect(store.claimStructuredHost(entry.key, owner, setup)).toBeNull();
+  if (kind === "cleared") expect(current().structuredHost).toBeNull();
+  else expect(current()).toBeUndefined();
+  const claimed = store.claimStructuredHost(entry.key, owner, { allowUnhosted: true, ...setup })!;
+  expect(claimed).toMatchObject({ status: kind === "cleared" ? "dead" : "unhosted", claimEpoch: 1,
+    structuredHost: { process: null, writerClaimEpoch: 1 } });
+  expect(store.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, 1)).toBeTrue();
+  expect(setupHost.writerClaimEpoch).toBe(0);
+  expect(store.claimStructuredHost(entry.key, successor, { allowUnhosted: true, ...setup })).toBeNull();
+  expect(current()).toEqual(claimed);
+  store.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, 1);
+  const replacement = store.claimStructuredHost(entry.key, successor, { allowUnhosted: true, ...setup })!;
+  expect(replacement.claimEpoch).toBe(2);
+  expect(store.setStructuredHostClaimed(entry.key, setupHost, "live", claimed.claimOwner!, 1)).toBeNull();
+  expect(current()).toEqual(replacement);
+  store.releaseStructuredHostClaim(entry.key, replacement.claimOwner!, 2);
+  store.upsert({ ...current(), structuredHost: null, structuredTerminationSurvivors: [successor] });
+  expect(store.claimStructuredHost(entry.key, owner, { allowUnhosted: true, ...setup })).toBeNull();
+  expect(current().structuredHost).toBeNull();
+});
+
 function structuredLaunchFixture(store: AgentRegistry, pendingAction: "spawn" | "handoff" = "spawn") {
   const sessionId = crypto.randomUUID();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1583-registry-"));

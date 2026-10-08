@@ -736,6 +736,28 @@ test("a launched card with its reader open lands under the agent being read, whe
 });
 
 
+test("a launched card whose turn ended keeps its place under the agent being read while both readers stay open", () => {
+  const working = (startedAt: number) => ({ activity: "live" as const, proc: "running" as const, authoritativeTurn: { state: "busy" as const, source: "lifecycle" as const, terminalAt: null }, lastTurn: { startedAt, endedAt: null } });
+  const read = file(1, { ...working(NOW * 1_000 - 1_000), mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1, activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: "2026-09-14T12:30:00.000Z" } });
+  const other = file(3, { ...working(NOW * 1_000 - 9_000), mtime: NOW - 2_000 });
+  const tasks = [task("read", "assigned", [read.path]), task("launched", "assigned", [launchedFile.path]), task("other", "assigned", [other.path])];
+  const files = [read, launchedFile, other];
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const both = new Set([conversationIdentity(read), conversationIdentity(launchedFile)]);
+  /* The finished card sorts under every working one: without the rule a card stands between it and the card being read. */
+  expect(order(both)).toEqual(["read", "other", "launched"]);
+  expect(order(both, isLaunched)).toEqual(["read", "launched", "other"]);
+  /* Closing the launched card's reader lets it sort as any other. */
+  expect(order(new Set([conversationIdentity(read)]), isLaunched).at(-1)).toBe("launched");
+});
+
+
 test("a launched card with its reader open stands first when no other card is read, above a needs-you card", () => {
   const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000 });
   const launchedFile = file(2, { mtime: NOW - 1 });
@@ -1389,4 +1411,14 @@ test("a mixed persisted checklist keeps valid entries through both board project
       expect(phone.columns.blocked.cards[0]!.card.stepSummary).toMatchObject({ done: 1, total: 2, open: 1 });
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("a waiting prototype counts once in needs-you and clears after the choice", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z" };
+  const waiting = model([task("prototype", "inbox", [], { prototypeReview: review })], []);
+  expect(waiting.totals.needsYou).toBe(1);
+  expect(waiting.columns.inbox.needsYou).toBe(1);
+  const decided = model([task("prototype", "inbox", [], { prototypeReview: { ...review, waitingReviewId: null } })], []);
+  expect(decided.totals.needsYou).toBe(0);
 });

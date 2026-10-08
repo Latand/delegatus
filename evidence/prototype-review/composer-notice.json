@@ -1,0 +1,602 @@
+{
+  "driver": "src/components/conversation/conversationWindow.browser.test.tsx",
+  "readings": {
+    "phone-390-en-light-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "and 2 more prototypes",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          134.6,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-light-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            539,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-links",
+          "text": "Prototype readyRepair old links in the release notes · Release notes links, smaller arrows and a title long enough to be cutGo to prototype",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            593,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Repair old links in the release notes»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Redesign attachment upload for large files»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Show fewer",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          77.1,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-light-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        131,
+        390,
+        713
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    },
+    "phone-390-en-dark-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "and 2 more prototypes",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          134.6,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-dark-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            539,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-links",
+          "text": "Prototype readyRepair old links in the release notes · Release notes links, smaller arrows and a title long enough to be cutGo to prototype",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            593,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Repair old links in the release notes»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype for «Redesign attachment upload for large files»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Show fewer",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          77.1,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-dark-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        131,
+        390,
+        713
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    },
+    "phone-390-uk-light-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "і ще 2 прототипи",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          106.8,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-light-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            539,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-links",
+          "text": "Прототип готовийПолагодити старі посилання в нотатках до випуску · Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            593,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Полагодити старі посилання в нотатках до випуску»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Прототип готовийПереробити завантаження великих вкладень · Панель перебігу завантаженняДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Переробити завантаження великих вкладень»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Показати менше",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          105.2,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-light-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        115,
+        390,
+        729
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    },
+    "phone-390-uk-dark-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "і ще 2 прототипи",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          106.8,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-dark-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            539,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-links",
+          "text": "Прототип готовийПолагодити старі посилання в нотатках до випуску · Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            593,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Полагодити старі посилання в нотатках до випуску»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Прототип готовийПереробити завантаження великих вкладень · Панель перебігу завантаженняДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу задачі «Переробити завантаження великих вкладень»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Показати менше",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          105.2,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-dark-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        115,
+        390,
+        729
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    }
+  },
+  "failures": []
+}

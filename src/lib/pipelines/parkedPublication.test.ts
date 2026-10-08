@@ -8,15 +8,17 @@ import type { Flow } from "@/lib/flows/types";
 
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
-// pre-push hook's other selected suites in the parent Bun process.
+// pre-push hook's other selected suites in the parent Bun process. The child
+// takes 45 s at load 18 on 24 cores; the bound stays inside the hook's
+// five-minute budget per file.
 if (process.env.LLV_PARKED_PUBLICATION_CHILD !== "1") {
   test("isolated parked publication regressions", () => {
     const result = spawnSync(process.execPath, ["test", import.meta.path], {
-      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 30_000,
+      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 120_000,
     });
     if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
     expect(result.status).toBe(0);
-  }, 35_000);
+  }, 125_000);
 } else {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
@@ -657,6 +659,64 @@ test("a refused publication of a head that changed code parks at once and is nev
   } finally { h.cleanup(); }
 });
 
+test("a hook that stopped at the deadline it was handed is retried as an interrupted push, even when the stage changed code", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const { NoVerdict } = await import("../../../scripts/local-gate");
+    // The hook's own line, as scripts/local-gate.ts writes it.
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, { ranMs: 830_000 }).message}`;
+    const handed = path.join(h.root, "deadline");
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho "$LLV_GATE_PUSH_DEADLINE" > '${handed}'\necho 'pre-push: privacy' >&2\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    const before = Date.now();
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    // Fourteen minutes: the fifteen-minute push limit less one for the pack.
+    const deadline = Number(fs.readFileSync(handed, "utf8"));
+    expect(deadline).toBeGreaterThanOrEqual(before + 14 * 60_000);
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 14 * 60_000);
+    const cause = "the pre-push hook's 14-minute budget ran out before its \"touched tests\" check reached a verdict, and the push did not reach the remote";
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
+    for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; for (let n = 0; n < 8; n++) await tickPipelines([], ports); }
+    expect(h.pushes()).toBe(4);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toBe(`publishing the passed stage: ${cause}; retried 3 times. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.`);
+  } finally { h.cleanup(); }
+});
+
+test("a hook stopped at its deadline stays an interrupted push when the Viewer stopped before settling it", async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const { NoVerdict } = await import("../../../scripts/local-gate");
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, { ranMs: 830_000 }).message}`;
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
+    const clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    // The executor retained its result; settlement never ran.
+    const interrupted = h.current();
+    const operation = interrupted.delivery!.operation!;
+    expect(operation.executor!.result).toMatchObject({ ok: false, outcome: "not-landed" });
+    operation.state = "running"; delete operation.result;
+    interrupted.stateDetail = "publication accepted; remote verification pending";
+    savePipelines([interrupted]);
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toContain("automatic retry 1 of 3");
+  } finally { h.cleanup(); }
+});
+
 test("a privacy refusal of an unchanged head is never retried or bypassed: the pushed commits stay unpublished", async () => {
   const h = fixture();
   try {
@@ -681,7 +741,9 @@ test("the publication hook environment drops the Viewer's settings and keeps the
   const env = pipelinePublicationHookEnv({ NODE_ENV: "production", PATH: "/usr/bin", HOME: "/sandbox/home", LANG: "en_US.UTF-8",
     LLV_LANG: "uk", LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: "/checkout", LLV_TOKEN: "t", LLV_STATE_OWNER: "viewer",
     LLV_SKIP_HOOKS: "1", DELEGATUS_DEBUG: "1", NEXT_RUNTIME: "nodejs", LLV_GATE_SLOTS: "2", LLV_PRIVACY_OCR_LANGUAGES: "eng",
-    LLV_PUBLICATION_NAME: "Agent", NEXT_TELEMETRY_DISABLED: "1" });
+    LLV_PUBLICATION_NAME: "Agent", NEXT_TELEMETRY_DISABLED: "1",
+    // The operator's CPU placement choices reach the hook's gates.
+    DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_CPU_PRESSURE_HOLD: "30", DELEGATUS_WORK_CPU_QUOTA: "900", DELEGATUS_WORK_SCOPE_CPU_QUOTA: "200" });
   // Every key present is an explicit removal; a kept variable is inherited untouched.
   expect(Object.values(env).every((value) => value === undefined)).toBe(true);
   expect(Object.keys(env).sort()).toEqual(["DELEGATUS_DEBUG", "LLV_LANG", "LLV_LAUNCHER_CHECKOUT", "LLV_LAUNCHER_REEXEC", "LLV_SKIP_HOOKS", "LLV_STATE_OWNER", "LLV_TOKEN", "NEXT_RUNTIME", "NODE_ENV"]);
@@ -713,6 +775,7 @@ test("an interrupted push is named by what ended it and the phase the hook had r
   expect(publicationInterruptionCause({ ...failure, outputTail: "" })).toBe("the push was ended by SIGKILL and did not reach the remote");
   // The Viewer died with its push: nothing was retained.
   expect(publicationInterruptionCause()).toBe("the push was interrupted and did not reach the remote");
+  expect(publicationInterruptionCause({ ...failure, code: 1, signal: null, hookBudgetMs: 840_000 })).toBe("the pre-push hook's 14-minute budget ran out while its \"Linux tests\" phase was still running; it stopped without a verdict and the push did not reach the remote");
 });
 
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {

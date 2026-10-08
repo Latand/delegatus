@@ -1,0 +1,393 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "holdMs": 60000,
+  "fadeMs": 1600,
+  "burstLimit": 6,
+  "frames": [
+    {
+      "form": "desktop",
+      "frame": "rest",
+      "layer": false,
+      "paused": false,
+      "wires": [],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": null
+    },
+    {
+      "form": "desktop",
+      "frame": "action",
+      "layer": true,
+      "paused": true,
+      "wires": [
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        },
+        {
+          "taskId": "t-onboarding",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 0
+        },
+        {
+          "taskId": "t-rounds",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 2,
+      "dots": 3,
+      "overflow": false,
+      "stats": {
+        "updates": 8,
+        "totalMs": 18.900000035762787,
+        "maxMs": 3.800000011920929,
+        "rectReads": 63,
+        "wires": 3,
+        "stubs": 0,
+        "elements": 23
+      }
+    },
+    {
+      "form": "desktop",
+      "frame": "mid-fade",
+      "layer": true,
+      "paused": true,
+      "wires": [
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        },
+        {
+          "taskId": "t-onboarding",
+          "tone": "live",
+          "flows": true,
+          "opacity": 0.675196,
+          "crossed": 0,
+          "corners": 0
+        },
+        {
+          "taskId": "t-rounds",
+          "tone": "live",
+          "flows": true,
+          "opacity": 0.675874,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 2,
+      "dots": 1,
+      "overflow": false,
+      "stats": {
+        "updates": 13,
+        "totalMs": 27.500000059604645,
+        "maxMs": 3.800000011920929,
+        "rectReads": 123,
+        "wires": 3,
+        "stubs": 0,
+        "elements": 20
+      }
+    },
+    {
+      "form": "desktop",
+      "frame": "restarted-only",
+      "layer": true,
+      "paused": false,
+      "wires": [
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 1,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 15,
+        "totalMs": 28.500000059604645,
+        "maxMs": 3.800000011920929,
+        "rectReads": 140,
+        "wires": 1,
+        "stubs": 0,
+        "elements": 9
+      }
+    },
+    {
+      "form": "desktop",
+      "frame": "after",
+      "layer": false,
+      "paused": false,
+      "wires": [],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 15,
+        "totalMs": 28.500000059604645,
+        "maxMs": 3.800000011920929,
+        "rectReads": 140,
+        "wires": 0,
+        "stubs": 0,
+        "elements": 0
+      }
+    },
+    {
+      "form": "phone",
+      "frame": "rest",
+      "layer": false,
+      "paused": false,
+      "wires": [],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": null
+    },
+    {
+      "form": "phone",
+      "frame": "action",
+      "layer": true,
+      "paused": true,
+      "wires": [
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 1,
+      "overflow": false,
+      "stats": {
+        "updates": 8,
+        "totalMs": 4.300000011920929,
+        "maxMs": 1.100000023841858,
+        "rectReads": 48,
+        "wires": 1,
+        "stubs": 0,
+        "elements": 10
+      }
+    },
+    {
+      "form": "phone",
+      "frame": "action-other-tab",
+      "layer": true,
+      "paused": true,
+      "wires": [
+        {
+          "taskId": "t-rounds",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 29,
+        "totalMs": 12.299999952316284,
+        "maxMs": 1.100000023841858,
+        "rectReads": 217,
+        "wires": 1,
+        "stubs": 0,
+        "elements": 8
+      }
+    },
+    {
+      "form": "phone",
+      "frame": "mid-fade",
+      "layer": true,
+      "paused": true,
+      "wires": [
+        {
+          "taskId": "t-rounds",
+          "tone": "live",
+          "flows": true,
+          "opacity": 0.680607,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 73,
+        "totalMs": 30.899999916553497,
+        "maxMs": 1.100000023841858,
+        "rectReads": 587,
+        "wires": 1,
+        "stubs": 0,
+        "elements": 8
+      }
+    },
+    {
+      "form": "phone",
+      "frame": "restarted-only",
+      "layer": true,
+      "paused": false,
+      "wires": [
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 95,
+        "totalMs": 39.09999978542328,
+        "maxMs": 1.100000023841858,
+        "rectReads": 759,
+        "wires": 1,
+        "stubs": 0,
+        "elements": 8
+      }
+    },
+    {
+      "form": "phone",
+      "frame": "after",
+      "layer": false,
+      "paused": false,
+      "wires": [],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 96,
+        "totalMs": 39.19999974966049,
+        "maxMs": 1.100000023841858,
+        "rectReads": 763,
+        "wires": 0,
+        "stubs": 0,
+        "elements": 0
+      }
+    },
+    {
+      "form": "desktop-seat-top",
+      "frame": "action",
+      "layer": true,
+      "paused": true,
+      "wires": [
+        {
+          "taskId": "t-onboarding",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        },
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 3
+        }
+      ],
+      "stubs": [],
+      "seatPort": 2,
+      "dots": 2,
+      "overflow": false,
+      "stats": {
+        "updates": 5,
+        "totalMs": 8.899999976158142,
+        "maxMs": 2.5,
+        "rectReads": 63,
+        "wires": 2,
+        "stubs": 0,
+        "elements": 18
+      }
+    },
+    {
+      "form": "desktop-reduced",
+      "frame": "action",
+      "layer": true,
+      "paused": false,
+      "wires": [
+        {
+          "taskId": "t-onboarding",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 0
+        }
+      ],
+      "stubs": [],
+      "seatPort": 1,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 3,
+        "totalMs": 2.300000011920929,
+        "maxMs": 1.5,
+        "rectReads": 15,
+        "wires": 1,
+        "stubs": 0,
+        "elements": 9
+      }
+    },
+    {
+      "form": "desktop-reduced",
+      "frame": "after",
+      "layer": false,
+      "paused": false,
+      "wires": [],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false,
+      "stats": {
+        "updates": 3,
+        "totalMs": 2.300000011920929,
+        "maxMs": 1.5,
+        "rectReads": 15,
+        "wires": 0,
+        "stubs": 0,
+        "elements": 0
+      }
+    }
+  ]
+}

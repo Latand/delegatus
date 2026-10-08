@@ -43,6 +43,38 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
   }
 }
 
+test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
+  const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
+    stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+  if (pinned) {
+    pipeline.baseBranch = "main";
+    pipeline.baseRef = "a".repeat(40);
+    pipeline.lastPassedCommit = pipeline.baseRef;
+  }
+  savePipelines([pipeline]);
+  expect(loadPipelines()).toEqual([pipeline]);
+  pipeline.state = "closed";
+  pipeline.closedAt = "2026-07-02T00:00:00.000Z";
+  pipeline.hiddenAt = pipeline.closedAt;
+  savePipelines([pipeline]);
+  expect(findPipelineRecord(pipeline.id)).toEqual(pipeline);
+  expect(loadPipelinesForStartup()).toEqual([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(1);
+  expect(loadPipelines()).toEqual([]);
+  expect(loadArchivedPipelines()).toEqual([pipeline]);
+  expect(findPipelineRecord(pipeline.id)).toEqual(pipeline);
+}));
+
+test.each(["provisioning", "running", "needs_decision", "needs_review", "paused", "completed"] as const)(
+  "a stageless pipeline still cannot be stored as %s", async (state) => isolatedDelivery(() => {
+    const pipeline = buildPipeline({ id: "empty-invalid", task: "Empty graph", project: "fixture", repoDir: "/repo",
+      stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+    pipeline.state = state;
+    expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record");
+    expect(loadPipelines()).toEqual([]);
+  }),
+);
+
 test("promoted Viewer loads historical severity-only verdicts before hot-state activation", async () => isolatedDelivery(async (root) => {
   const pipeline = deliveryFixture("legacy-verdict");
   pipeline.state = "running";
@@ -1100,4 +1132,14 @@ test("loaded provider recovery state does not alias the cached persisted record"
   expect(second.providerRecoveryBudget!.failedAccounts).toEqual(["account-c"]);
   expect(second.providerWait!.capacityProbes).toBe(1);
   expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
+}));
+
+test("runtime-switch state survives store reopening and malformed targets are refused", async () => isolatedDelivery(async () => {
+  const pipeline = deliveryFixture("runtime-switch-store");
+  pipeline.state = "running";
+  const seat = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "account-a" };
+  const record = { id: "runtime-switch-store:build:1:1", seq: 1, requestedAt: "2026-10-02T10:00:00.000Z", actor: { kind: "operator" as const }, mode: "fork" as const, phase: "requested" as const, from: { ...seat, conversationId: "conversation_store", launchId: "launch-store", sessionId: "session-store", agentPath: "/sessions/store.jsonl" }, to: { ...seat, accountId: "account-b", accountPinned: false } };
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole), launchId: "launch-store", conversationId: "conversation_store", sessionId: "session-store", agentPath: "/sessions/store.jsonl", paneId: null, flowId: null, startedAt: record.requestedAt, completedAt: null, input: "brief", activatedBy: null, output: null, verdict: null, error: null, runtimeSwitches: [record] });
+  savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
+  record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
 }));

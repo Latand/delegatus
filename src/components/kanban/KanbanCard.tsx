@@ -21,6 +21,7 @@ import { clearedLine, needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
 
 import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
+import { CardPrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TASK_COLOR_HEX } from "@/components/tasks/taskColorHex";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
@@ -410,7 +411,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      the tile's place. */
   const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
-  const reasons = card.needsYou ? reasonsText(t, card.reasons) : "";
+  /* A card that waits with no reason of its own waits on its prototype
+     review: its review button says so in words, and the card's label names
+     it for assistive tech. The choice clears it, so there is no dismissal. */
+  const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t("proto.notice.ready");
   const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
   const remote = card.task ? props.remote ?? null : null;
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
@@ -427,12 +431,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      conversations it holds or that nothing is on it. */
   const footMeta = (
     <>
-      {card.needsYou ? (
+      {card.needsYou && card.reasons.length ? (
         <span className="foot-meta needs" data-foot-needs={card.reasons.length} title={card.reasons.map((need) => needLabel(t, need)).join("\n")}>
           <span className="clamp">{reasons}</span>
         </span>
       ) : null}
-      {card.needsYou && onDismiss ? (
+      {card.needsYou && card.reasons.length && onDismiss ? (
         <button
           type="button"
           className="icon-btn dismiss"
@@ -866,6 +870,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           {footMeta}
           <span className="spacer" />
+          {/* The task's prototype review: highlighted while a round waits. */}
+          <CardPrototypeButton task={card.task} title={title} />
           {/* The task's album: every picture its agents made or looked at. */}
           <CardAlbumButton
             taskId={card.task.id}
@@ -876,12 +882,18 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           {/* The orchestrator's composer takes a reference to this task as a chip
               (never text in the input). Not on the Overview, where cards of
               several projects stand and no seat is on screen to take it. */}
-          {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
-          {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
-            <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
-              <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
-            </button>
+          {/* «Ask» and «+ Agent» wrap together: neither is left alone on a line. */}
+          {!props.projectNames || (!remote && props.onAddAgent) ? (
+            <span className="foot-acts">
+              {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
+              {!remote && props.onAddAgent ? (
+                <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
+                  <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
+                </button>
+              ) : null}
+            </span>
           ) : null}
+          {remote ? <HostChip remote={remote} /> : null}
         </div>
       ) : (
         <div className="foot">

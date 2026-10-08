@@ -8,13 +8,15 @@ import { useId, type HTMLAttributes } from "react";
  * the phone's is 44 px tall. `rowProps` and `switchProps` carry each setting's
  * own data attributes.
  */
-export function ProjectSettingRow({ label, hint, enabled, disabled, failed, variant, rowProps, switchProps }: {
+export function ProjectSettingRow({ label, hint, enabled, disabled, failed, variant, blocked = false, rowProps, switchProps }: {
   label: string;
   hint: string;
   enabled: boolean;
   disabled: boolean;
   failed: boolean;
   variant: "menu" | "sheet" | "inline";
+  /** On, and something else stops it working: the switch turns amber, so it does not read as working. */
+  blocked?: boolean;
   rowProps?: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | undefined>;
   switchProps: { onClick: () => void } & Record<`data-${string}`, string | undefined>;
 }) {
@@ -34,8 +36,9 @@ export function ProjectSettingRow({ label, hint, enabled, disabled, failed, vari
           {...switchProps}
           className={`relative flex shrink-0 items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 ${sheet ? "h-11 w-12" : "h-6 w-9"} rounded-full`}
         >
-          <span aria-hidden className={`block h-5 w-9 rounded-full border transition-colors ${enabled ? "border-accent bg-accent" : "border-border bg-well"}`}>
-            <span className={`mt-[1px] block h-4 w-4 rounded-full bg-card shadow transition-transform ${enabled ? "translate-x-[17px]" : "translate-x-[1px]"}`} />
+          {/* Off is an outlined track with a muted knob: a card-coloured knob on the well vanishes in the dark theme. */}
+          <span aria-hidden className={`block h-5 w-9 rounded-full border transition-colors ${enabled ? blocked ? "border-warning bg-warning" : "border-accent bg-accent" : "border-strong bg-well"}`}>
+            <span className={`mt-[1px] block h-4 w-4 rounded-full shadow transition-transform ${enabled ? "translate-x-[17px] bg-card" : "translate-x-[1px] bg-muted"}`} />
           </span>
         </button>
       </div>

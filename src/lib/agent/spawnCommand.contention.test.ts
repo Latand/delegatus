@@ -306,9 +306,48 @@ test("a catalog generation change cannot admit the previously selected home", as
     body: JSON.stringify({ clientAttemptId, title: "Reject stale catalog", engine: "claude", cwd, prompt: "inspect", mcpServers: [] }),
   }), dependencies);
   expect(reads).toBe(2);
-  expect(response.status).toBe(500);
-  expect(await response.json()).toMatchObject({ error: "spawn account changed during admission" });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({
+    error: "The account changed while preparing the launch; try again shortly.",
+    code: "account_admission_changed",
+    retrySafe: true,
+    retryable: true,
+  });
   expect(agentRegistry().spawnReceiptForClientAttempt(clientAttemptId)).toBeNull();
+});
+
+test("automatic target admission refuses a changed pool after account evidence without reserving a launch", async () => {
+  const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
+  const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+  const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+  const cwd = statePath("automatic-target-cwd"); fs.mkdirSync(cwd, { recursive: true });
+  const dependencies = structuredRouteDependencies(cwd);
+  let entered!: () => void, resume!: () => void;
+  const collecting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  const nativeResolve = dependencies.resolveHealthySpawnAccount;
+  dependencies.resolveHealthySpawnAccount = async (...args) => { entered(); await gate; return nativeResolve(...args); };
+  dependencies.assertAccountAdmission = () => { accountProjectBindings(); };
+  let dispatches = 0;
+  dependencies.defer = () => { dispatches++; };
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [] });
+  const id = `attempt_${crypto.randomUUID()}`;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: id, title: "Automatic target", engine: "claude", cwd, prompt: "inspect", mcpServers: [] }),
+  });
+  const pending = executeSpawnRequest(request(), dependencies);
+  await Promise.race([collecting, pending.then(() => { throw new Error("spawn did not wait for evidence"); })]);
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: "damaged" }); resume();
+  const refused = await pending;
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error).toContain("account-project-bindings.json");
+  expect(agentRegistry().spawnReceiptForClientAttempt(id)).toBeNull(); expect(dispatches).toBe(0);
+  // Deliberate operator launches do not acquire the automatic pool restriction.
+  delete dependencies.assertAccountAdmission;
+  expect((await executeSpawnRequest(request(), dependencies)).status).toBe(202);
+  expect(dispatches).toBe(1);
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [] });
 });
 
 test.each(["dependency", "forwarded", "scheduled"] as const)("autonomous %s spawn rechecks update admission after account evidence, while manual and receipt replay remain allowed", async (source) => {

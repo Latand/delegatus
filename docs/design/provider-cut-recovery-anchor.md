@@ -788,3 +788,32 @@ into the fence it hands over.
   message and withdraws the retry.
 - The reader units in the build replace the probe names used in the prototype;
   the case lists above are the ones the prototype ran.
+
+## Build notes
+
+The build landed the prototype's source change unchanged (192 added, 97
+removed) with its 134 engine cases and the reader units under the family names
+above. Before the source change, 94 of the 134 engine cases and 7 reader cases
+failed; after it, all pass. The merge of `origin/main` (base `ff4af9a38`) met
+four changes on main and settled them as follows:
+
+- **Evidence floor.** Main measures a stage attempt from
+  `attemptEvidenceFloor(attempt)`, which moves past `attempt.startedAt` when a
+  runtime switch continues the attempt (#2511). The tick, the continuation
+  fence and `providerCutActivity` pass that floor to the reader, so chain
+  membership starts there.
+- **Closed Claude API errors.** Main reads a Claude API-error record stamped
+  with a closing stop reason as the end of a stage attempt
+  (`claudeApiErrorClosedAttempt`). The chain tracker counts the same record as
+  a cut, so the reader and the tick agree on which records cut the stage.
+- **One snapshot.** The reader returns no evidence when the transcript changed
+  between its reads only for a recovery read (a requested cut, or a provider
+  cut with a known attempt start). Other reads keep main's behaviour.
+- **Account failover.** Main's #2511 reseated a Codex conversation onto the
+  next allowed account from the provider path. This branch binds the target
+  with a fresh host for both engines, because a review of lane 499d73d9 found
+  an incident where a reseat request was followed by a continuation on the
+  source account. Main's account-policy fences stay: the pool filter on the
+  selected target, and the wait while a persisted migration or reseat target is
+  no longer allowed. Main's two Codex reseat cases now assert the fresh launch
+  and the fence.

@@ -373,6 +373,10 @@ export interface HeldDelivery {
       supersede of that migration touches only the deliveries it fenced. Absent
       on records written before it existed. */
   fencedBy?: string | null;
+  /** What a held reservation waits for, recorded when the hold is placed so
+      the receipt can name it: the conversation is switching accounts and the
+      message goes out right after. Cleared once it is assigned to a host. */
+  waitReason?: "switching-accounts" | null;
   /** Admission order within the conversation (#1709), assigned once in the
       transaction that creates the reservation and kept by every replay. A
       record without it was written before it existed. */

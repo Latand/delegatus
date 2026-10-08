@@ -1,5 +1,5 @@
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -156,8 +156,13 @@ export class RuntimeHost {
         Number(request.params?.timeoutMs ?? 15_000),
         options.signal,
       );
-      else if (request.method === "append" || request.method === "operation") {
+      else if (request.method === "append" || request.method === "append-session-fenced" || request.method === "operation") {
         const event = request.params?.event as RuntimeEventInput;
+        if (request.method === "append-session-fenced" && (!event?.scope || parseRuntimeScope(event.scope).type !== "session"
+          || event.kind !== "session-status" || !Number.isSafeInteger(event.expectedSessionRevision)
+          || event.expectedSessionRevision! < 0)) {
+          throw new Error("a fenced session append requires a session-status event and its observed revision");
+        }
         const publishedBefore = this.journal.publishedSeq();
         const appended = this.journal.append(event);
         const newlyPublished = appended.seq > publishedBefore;

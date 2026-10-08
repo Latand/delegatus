@@ -4,9 +4,15 @@ import path from "node:path";
 import { afterAll } from "bun:test";
 
 import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "./src/lib/tempDirs";
+import { beginCodexFeatureFixture } from "./src/lib/agent/codexSpawnPolicyTestFixtures";
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
+
+// Fake launchers share an explicit inventory, even when their binary only
+// implements MCP enumeration or Codex is absent from PATH. Native policy tests
+// opt into the real reader for each test and restore this default afterwards.
+beginCodexFeatureFixture();
 
 /*
  * One temp root for the whole test process, removed when the run ends (#1957).
@@ -40,4 +46,16 @@ afterAll(() => run.release());
  */
 if (!process.env.LLV_STATE_DIR) {
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(run.root, "llv-test-state-"));
+}
+
+/*
+ * CPU placement and CPU-pressure admission act on the live user manager and
+ * read the machine's pressure. A test that exercises them passes its own env
+ * and slices; no test process configures a live slice or waits on load. The
+ * folded `LLV_` names are the ones every entry point leaves behind
+ * (bin/envAlias.mjs), so a fold later in the run cannot turn this back on.
+ */
+for (const name of ["AGENT_CPU", "CPU_PRESSURE"]) {
+  delete process.env[`DELEGATUS_${name}`];
+  process.env[`LLV_${name}`] = "off";
 }

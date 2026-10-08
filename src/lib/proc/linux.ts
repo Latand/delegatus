@@ -62,6 +62,12 @@ function processIdentity(pid: number): string | null {
   return startTicks ? `${pid}:${startTicks}` : null;
 }
 
+/** State Z (exited, not yet reaped) or X (being torn down) in /proc/<pid>/stat. */
+function processExited(pid: number): boolean {
+  const state = statFields(pid)?.[0];
+  return state === "Z" || state === "X" || state === "x";
+}
+
 /** utime + stime from /proc/<pid>/stat, in milliseconds. USER_HZ is 100 on
     every Linux this runs on, which is what makes the ticks convertible. */
 function processCpuMs(pid: number): number | null {
@@ -256,6 +262,7 @@ export const linuxBackend: ProcBackend = {
   readCwd,
   readPpid,
   processIdentity,
+  processExited,
   processCpuMs,
   readEnvVar,
   listProcesses,

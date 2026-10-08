@@ -389,7 +389,6 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
   setAgentRegistryForTests(null);
 });
 
-
 test("provider recovery authority survives the engine idle retirement helper", async () => {
   const fixture = hostedConversation();
   const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
@@ -407,4 +406,12 @@ test("provider recovery authority cannot select an unconditional engine stop", a
   const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
   expect(await stopPipelineStageAgent(target(fixture.conversationId, fixture.path), { providerRecovery })).toEqual({ outcome: "deferred" });
   expect(killed).toEqual([]);
+});
+
+test("runtime-switch handoff forwards its stable owned stop identity to the kill control", async () => {
+  const fixture = hostedConversation();
+  killResult = { status: 200, body: { ok: true, operationId: "switch-owned-stop", receipt: { status: "delivered" } } };
+  expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { operationId: "switch-owned-stop" })).toEqual({ outcome: "stopped" });
+  expect(killed[0]).toMatchObject({ operationId: "switch-owned-stop", conversationId: fixture.conversationId });
+  setAgentRegistryForTests(null);
 });

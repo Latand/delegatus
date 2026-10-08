@@ -8,7 +8,7 @@ import {
 } from "@/lib/agent/registry";
 import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { advanceConversationMigration, deliveryFence } from "@/lib/accounts/migration/coordinator";
+import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
@@ -117,7 +117,6 @@ export interface StructuredMessageDependencies {
   previewImageRefs?: (images: readonly RuntimeImageUpload[]) => StructuredImageRef[];
   /** Cross-process fence spanning image publication and durable reservation. */
   withImageAdmissionLock?: <T>(operation: () => Promise<T>) => Promise<T>;
-  executeSwitch?: (conversationId: ViewerConversationId, registry: AgentRegistry) => Promise<RegistryConversation>;
   /** Set only by startup recovery when it delivers the continuation an
       interruption obligation is owed (#1835). A dependency on purpose: nothing
       a request body carries can set it. It admits that continuation to a
@@ -595,30 +594,6 @@ function requiresDeadConversationRecovery(
     && entry.structuredHost?.process === null;
 }
 
-/** Whether the structured queue's reconfigure executor owns this switch, and
-    with it the predecessor teardown that follows the commit (issue #1028). It
-    is woken by a drain, never executed a second time from here. */
-function reconfigureOwnsSwitch(conversation: RegistryConversation): boolean {
-  return conversation.reconfigure?.status === "applying"
-    && conversation.reconfigure.accountId === conversation.migration?.targetId;
-}
-
-/** The runtime session that owns the conversation once a forced switch has
-    settled (issue #1028): the successor when its host is published, the
-    unchanged source when the switch failed and left it in place. */
-async function sessionAfterSwitch(
-  client: RuntimeHostClient,
-  conversation: RegistryConversation,
-): Promise<RuntimeSession | null> {
-  const current = conversation.generations.at(-1);
-  try {
-    const refreshed = await readRuntimeSession(client, { conversationId: conversation.id });
-    return refreshed && (!current || refreshed.artifactPath === current.path) ? refreshed : null;
-  } catch {
-    return null;
-  }
-}
-
 function requestMigrationProgress(
   registry: AgentRegistry,
   conversationId: ViewerConversationId,
@@ -671,10 +646,10 @@ function uncertainReservationFailure(reservation: HeldDelivery): StructuredMessa
 function requestDeliveryDrain(kick: () => void | Promise<void>): void {
   try {
     void Promise.resolve(kick()).catch((error) => {
-      console.error("[structured delivery] reclaimed host drain request failed", error);
+      console.error("[structured delivery] drain request failed", error);
     });
   } catch (error) {
-    console.error("[structured delivery] reclaimed host drain request failed", error);
+    console.error("[structured delivery] drain request failed", error);
   }
 }
 
@@ -1124,61 +1099,22 @@ export async function enqueueStructuredMessage(
       status: 409,
     });
   }
-  let migrationOwnsSend = deliveryFence(conversation) === "held";
-  /* Belt and braces for issue #1028: a send arriving while a switch is pending
-     FORCES it. "After current turn" is only an honest promise while a turn is
-     actually running — an idle host has nothing left to wait for, and parking
-     the operator's message behind that wait is how a queued send becomes
-     permanently stranded, whatever woke the coordinator or failed to.
-
-     Forcing means waking the executor that OWNS this switch, never running a
-     second one: a reconfigure-owned switch is driven by the structured queue,
-     which commits and then retires the predecessor host, so the send kicks
-     that drain and waits for it. Only a switch nobody owns — an engine drain,
-     the active-account reseat above — is advanced here directly. Either way
-     the message is admitted after the switch lands, so it is the successor's
-     first input instead of input queued against a session being retired.
-
-     Only an idle host forces it. A running turn keeps the promise the banner
-     made, and an unknown turn axis — recovering, degraded, gone — is not
-     evidence that anything finished, so those sends keep waiting rather than
-     tear down a session that may still be working. */
-  let successorAwaitsItsHost = false;
-  if (migrationOwnsSend && session.turn === "idle") {
-    try {
-      await (dependencies.kick ?? kickStructuredDeliveryQueue)();
-    } catch {
-      /* A drain failure is not this send's to report; the fallback below still
-         advances a switch the drain did not settle. */
-    }
-    conversation = registry.conversation(conversation.id) ?? conversation;
-    if (deliveryFence(conversation) === "held" && !reconfigureOwnsSwitch(conversation)) {
-      try {
-        conversation = await (dependencies.executeSwitch ?? advanceConversationMigration)(conversation.id, registry);
-      } catch {
-        conversation = registry.conversation(conversation.id) ?? conversation;
-      }
-    }
-    migrationOwnsSend = deliveryFence(conversation) === "held";
-    if (!migrationOwnsSend) {
-      /* Deliveries held earlier in the same pending window are the successor's
-         too, and only the coordinator drains those. */
-      (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
-      const switched = await sessionAfterSwitch(client, conversation);
-      /* The successor owns the conversation but has not published its host
-         yet. This message still becomes a durable reservation against the
-         successor generation below — payload, images and all — and the
-         coordinator's drain delivers it; only the in-request command is
-         skipped, because there is nothing yet to aim it at. */
-      if (!switched) successorAwaitsItsHost = true;
-      else session = switched;
-    }
-  }
+  /* A send that arrives while a switch is pending is admitted at once, held
+     durably with its wait reason, and answered. It never runs or awaits the
+     switch inside this request: on 2026-10-06 a send forced an idle seat's
+     switch here and the operator's request stayed open for the whole fork,
+     successor start and commit, about two minutes with no answer, until the
+     composer gave up and reported a delivery it could not confirm. The
+     controller tick and the drain requested on the held answer below advance
+     the switch, whose owner (a reconfigure, or the coordinator) is unchanged,
+     and the drain hands the held message to whichever host owns the
+     conversation when it dispatches (#1028, #1709). */
+  const migrationOwnsSend = deliveryFence(conversation) === "held";
   /* A session left over from the retired predecessor is not this send's target
      and must not be republished or recovered into one: the successor is the
      conversation's session now, and its own publication is already under way
      (#1028). */
-  if (!migrationOwnsSend && !successorAwaitsItsHost) {
+  if (!migrationOwnsSend) {
     try {
       const refreshed = await refreshRepublishedSession(
         session,
@@ -1198,7 +1134,6 @@ export async function enqueueStructuredMessage(
     }
   }
   const recoveryRequired = !migrationOwnsSend
-    && !successorAwaitsItsHost
     && requiresDeadConversationRecovery(session, registry, conversation);
   /* Conflict preflight computes candidate refs and digest before writing.
      A changed payload under an existing client message id rejects with zero
@@ -1338,7 +1273,7 @@ export async function enqueueStructuredMessage(
      way the payload is admitted durably and the drain judges it against the
      real host, so a capability this projection cannot see must not 409 an
      image the operator already handed over. */
-  const imageCapability = migrationOwnsSend || successorAwaitsItsHost
+  const imageCapability = migrationOwnsSend
     ? runtimeImageCapability(activeSession.sessionKey.engine, true)
     : activeSession.capabilities.imageInput
       ?? runtimeImageCapability(activeSession.sessionKey.engine, false);
@@ -1392,6 +1327,7 @@ export async function enqueueStructuredMessage(
         };
       }
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
+      requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
       return {
         ok: true,
         structured: true,
@@ -1408,16 +1344,6 @@ export async function enqueueStructuredMessage(
         recoveredHost ? null : conversation.id,
         recoveredHost,
       );
-    }
-    if (reservation.state === "assigned" && successorAwaitsItsHost) {
-      (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
-      return {
-        ok: true,
-        structured: true,
-        target: conversation.id,
-        outcome: "held",
-        operationId: reservation.command.operationId,
-      };
     }
     if (reservation.state !== "assigned" || !reservation.generationId) {
       return {
@@ -1467,6 +1393,7 @@ export async function enqueueStructuredMessage(
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order. */
       registry.requeueHeldDelivery(reservation.id);
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
+      requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
       return {
         ok: true,
         structured: true,

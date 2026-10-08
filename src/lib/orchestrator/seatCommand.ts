@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
-import { ACCOUNT_MUTATION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE, AccountAdmissionChangedError, AccountMutationBusyError, isAccountAdmissionRetryable, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -30,17 +30,9 @@ import { mappingRowRefusal, type LaunchRuntime } from "@/lib/roles/sizing";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
-import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { activeDrain } from "@/lib/selfUpdate/drain";
-
-function operatorTelegramConnected(): boolean {
-  try {
-    const connection = readTelegramConnection();
-    return connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
-  } catch {
-    return false;
-  }
-}
+import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 
 import {
   boundHistoryBody,
@@ -75,6 +67,7 @@ import {
   orchestratorRevocations,
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
+  recordOrchestratorSeatAuthCredentialBaseline,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -114,9 +107,15 @@ import {
  * duplicated.
  */
 
+/** Trusted in-process restrictions; request JSON cannot supply admission. */
+export interface SeatLaunchAdmission {
+  autonomous?: boolean;
+  assertAccount?(accountId: string): void;
+}
+
 export interface SeatCommandDependencies {
   /** POST /api/spawn in-process, on the operator's own authority. */
-  spawn(body: Record<string, unknown>, autonomous?: boolean): Promise<{ status: number; body: Record<string, unknown> }>;
+  spawn(body: Record<string, unknown>, autonomous?: boolean, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }>;
   /** Deliver the mandate to an existing conversation, idempotent on
       `clientMessageId`. */
   deliver(input: { conversationId: string; path: string | null; clientMessageId: string; text: string }): Promise<{ ok: boolean; error?: string; outcome?: string }>;
@@ -254,7 +253,7 @@ function resolveOrchestratorCwd(project: string, requested: unknown, dependencie
   return dependencies.projectRoot?.(project) ?? null;
 }
 
-async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false): Promise<{ status: number; body: Record<string, unknown> }> {
+async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }> {
   const { executeSpawnRequest, productionSpawnCommandDependencies } = await import("@/lib/agent/spawnCommand");
   /* An in-process call the VIEWER makes, on its own authority: the designation
      surfaces have already made their authority decision — the seat route by
@@ -272,7 +271,8 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
-    autonomousAdmissionHeld: () => autonomous && !!activeDrain() });
+    autonomousAdmissionHeld: () => autonomous && !!activeDrain(),
+    assertAccountAdmission: admission?.assertAccount });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -438,12 +438,9 @@ export interface SeatCommandResult {
   body: Record<string, unknown>;
 }
 
-function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null): SeatCommandResult | null {
-  const hold = triggeredBy?.kind === "agent" ? activeDrain() : null;
-  return hold ? { status: 409, body: {
-    error: "new launches are held while the automatic update drains running work",
-    code: "launch_held_for_update", target: hold.target, since: hold.since,
-  } } : null;
+function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null, autonomous = false): SeatCommandResult | null {
+  const hold = autonomous || triggeredBy?.kind === "agent" ? activeDrain() : null;
+  return hold ? { status: 409, body: { ...launchHoldRefusal(hold) } } : null;
 }
 
 function text(value: unknown): string {
@@ -827,7 +824,7 @@ async function seatStoreReleased(deadline: number, attempt: number): Promise<boo
  * EVERY WAY OUT OF A SEAT TRANSITION IS A RECORD (issue #1757).
  *
  * The seat store is guarded by the account mutation lock, and its synchronous
- * form throws `AccountMutationBusyError` at once rather than waiting. Any throw
+ * form waits at most 25 ms for a foreign holder. Any throw
  * past the durable begin — that one, a registry read that blew up, a bug — used
  * to leave the route answering an unhandled 500 with no body, the burnt epoch
  * sitting in `pending` with `error: null`, and every later designation refused
@@ -864,9 +861,10 @@ async function guardedSeatTransition(
     try {
       return await run();
     } catch (thrown) {
-      const storeBusy = thrown instanceof AccountMutationBusyError;
+      const storeBusy = isAccountAdmissionRetryable(thrown);
       if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
-      const reason = storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
+      const admissionChanged = thrown instanceof AccountAdmissionChangedError;
+      const reason = admissionChanged ? thrown.message : storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
       const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       const clientRequestId = text(rawBody.clientRequestId);
       let terminalized: OrchestratorSeatTerminalization | null = null;
@@ -887,7 +885,7 @@ async function guardedSeatTransition(
         status: storeBusy ? 503 : 500,
         body: {
           error: reason,
-          code: storeBusy ? "seat_store_busy" : code,
+          code: admissionChanged ? "account_admission_changed" : storeBusy ? "seat_store_busy" : code,
           retryable: storeBusy,
           seat: terminalized?.seat ?? null,
         },
@@ -922,8 +920,9 @@ export function executeOrchestratorSeatRequest(
      Deliberately not a `rawBody` field: the body is caller-supplied JSON, and
      attribution that a caller can write is not attribution. */
   triggeredBy: OrchestratorSeatTrigger | null = null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy), {
+  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
@@ -934,6 +933,7 @@ async function runOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
   triggeredBy: OrchestratorSeatTrigger | null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
@@ -1120,9 +1120,13 @@ async function runOrchestratorSeatRequest(
   if (spawnSizing) return spawnSizing;
   // Reconciliation and completed replay above can settle admitted work. A
   // fresh agent spawn still needs admission after any awaited handoff work.
-  const hold = agentSeatLaunchHold(triggeredBy);
+  const hold = agentSeatLaunchHold(triggeredBy, admission?.autonomous);
   if (hold) return hold;
-  const telegramGrant = operatorTelegramConnected();
+  if (admission?.assertAccount) admission.assertAccount(text(rawBody.accountId));
+  /* A seat holds the grant wherever Telegram is set up, whatever its
+     connection reads this minute: the launch repairs a connection that is down
+     or starts without the tool, and the grant brings the tool back later. */
+  const telegramGrant = telegramSetUp();
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
@@ -1215,7 +1219,11 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawned = await dependencies.spawn(spawnBody, begun.seat.triggeredBy?.kind === "agent");
+  const spawnAdmission: SeatLaunchAdmission = { ...admission, assertAccount: (accountId) => {
+    admission?.assertAccount?.(accountId);
+    recordOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
+  } };
+  const spawned = await dependencies.spawn(spawnBody, admission?.autonomous || begun.seat.triggeredBy?.kind === "agent", spawnAdmission);
   if (spawned.body.code === "AUTO_UPDATE_DRAIN") {
     // No receipt was admitted: keep the pending intent and its downstream key.
     return { status: 409, body: { ...spawned.body, code: "launch_held_for_update", seat: begun.seat } };
@@ -1232,7 +1240,8 @@ async function runOrchestratorSeatRequest(
     /* The spawn route answers its own busy store as a plain failure. It is the
        same wait as ours: nothing was launched, and the replay asks again under
        the same attempt id. */
-    if (text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError(text(spawned.body.error));
+    if (spawned.body.code === "account_admission_changed" || text(spawned.body.error) === "spawn account changed during admission") throw new AccountAdmissionChangedError();
+    if (spawned.body.code === "account_store_busy" || text(spawned.body.error) === ACCOUNT_STORE_BUSY_MESSAGE || text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError();
     const error = text(spawned.body.error)
       || (!admitted
         ? `spawn was rejected with HTTP status ${spawned.status}`
@@ -1395,8 +1404,9 @@ function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
  * every earlier handoff, and this rotation's fresh handoff — so a seat that has
  * rotated a dozen times designates exactly as cheaply as one that never has.
  *
- * Never automatic: context pressure only ever produces a recommendation
- * (`./health`), and this function runs solely when explicitly called.
+ * Context pressure only produces a recommendation (`./health`). The seat tick
+ * automatically calls this path after an authentication failure, selecting
+ * another allowed account; all other rotations are explicitly requested.
  */
 export function executeOrchestratorRotation(
   rawBody: Record<string, unknown>,
@@ -1406,14 +1416,20 @@ export function executeOrchestratorRotation(
      someone else. Null is an in-process caller that named nobody, and records
      unknown provenance; the operator is never credited by default. */
   actor: ViewerActor | null = null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor));
+  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor, admission), {
+    replay: true,
+    waitMs: dependencies.seatStoreWaitMs,
+    launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+  });
 }
 
 async function runOrchestratorRotation(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
   actor: ViewerActor | null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
@@ -1458,9 +1474,13 @@ async function runOrchestratorRotation(
       },
     };
   }
+  if (typeof rawBody.expectedIncumbentSeatEpoch === "number"
+    && rawBody.expectedIncumbentSeatEpoch !== incumbent.seatEpoch) {
+    return incumbentChangedResult(project, Number(rawBody.expectedIncumbentSeatEpoch), incumbent);
+  }
   // An accepted rotation can be replayed during a hold. Defer a fresh one
   // before composition, which may itself launch a handoff summarizer.
-  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy);
+  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy, admission?.autonomous);
   if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
@@ -1509,7 +1529,7 @@ async function runOrchestratorRotation(
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
-    autonomousAdmissionHeld: triggeredBy?.kind === "agent" ? () => !!activeDrain() : undefined,
+    autonomousAdmissionHeld: admission?.autonomous || triggeredBy?.kind === "agent" ? () => !!activeDrain() : undefined,
   }, dependencies);
   const composed = composition instanceof Promise ? await composition : composition;
   const rotatedFrom = {
@@ -1568,7 +1588,7 @@ async function runOrchestratorRotation(
           ? { cwd: readable.cwd }
           : {}),
     ...(rawBody.accountId !== undefined ? { accountId: rawBody.accountId } : {}),
-  }, dependencies, triggeredBy);
+  }, dependencies, triggeredBy, admission);
   return {
     status: outcome.status,
     body: {

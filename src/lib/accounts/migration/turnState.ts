@@ -63,6 +63,14 @@ function providerAuthoredAssistant(record: RecordLike): boolean {
   return stringValue((recordValue(record.message) ?? {}).model) !== SYNTHETIC_MODEL;
 }
 
+/** Whether an assistant record ends the provider turn: a terminal API error,
+    or a provider-authored record whose stop reason ends it. Both Claude
+    projections below read this one rule, so a record the provider did not
+    author closes a turn on neither axis (issue #1811). */
+function assistantEndsTurn(record: RecordLike): boolean {
+  return terminalApiError(record) || (providerAuthoredAssistant(record) && assistantStopReasonEndsTurn(record));
+}
+
 function messageText(record: RecordLike): string {
   const content = recordValue(record.message)?.content;
   if (typeof content === "string") return content;
@@ -278,7 +286,7 @@ export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEn
            session file, so a branch that waits for one leaves every finished
            Claude turn busy for ever — and a send held for the turn to end is
            then held for a turn that ended long ago (issue #1792). */
-        state = terminalApiError(record) || (providerAuthoredAssistant(record) && assistantStopReasonEndsTurn(record))
+        state = assistantEndsTurn(record)
           ? { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) }
           : { state: "busy", source: "assistant", terminalAt: null };
       }
@@ -288,11 +296,22 @@ export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEn
     return release ? { state: "terminal", source: "lifecycle", terminalAt: release.terminalAt } : state;
   }
 
+  /* The activity projection: the newest prompt or assistant record decides.
+     A stop reason the CLI stamped itself leaves the turn open here too. That
+     is right while the CLI may still retry, and it does not hold a dead
+     session busy for ever: an open turn nobody writes to reads `stalled` after
+     the scanner's three minutes, the coordinator releases a stalled turn that
+     has no process and no registered host, and turn liveness reads it as
+     severed once its recorded process is gone. */
   for (const record of [...records].reverse()) {
     if (record.type === "assistant") {
-      if (terminalApiError(record)) return { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) };
-      if (assistantStopReasonEndsTurn(record)) return { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) };
-      return { state: "busy", source: "assistant", terminalAt: null };
+      if (assistantEndsTurn(record)) return { state: "terminal", source: "lifecycle", terminalAt: timestamp(record) };
+      /* The CLI's own no-op that retires a queued prompt follows a turn that
+         already ended; the recovery-tail rule finds that turn's boundary. */
+      const release = providerAuthoredAssistant(record) ? null : claudeRecoveryTailRelease(records);
+      return release
+        ? { state: "terminal", source: "lifecycle", terminalAt: release.terminalAt }
+        : { state: "busy", source: "assistant", terminalAt: null };
     }
     if (record.type === "user") return { state: "busy", source: "lifecycle", terminalAt: null };
   }

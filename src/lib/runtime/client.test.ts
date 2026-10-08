@@ -382,3 +382,65 @@ test("guarded recovery wire admits its fences on the current runtime and cancels
     expect(requests.at(-1)).toBe("command");
   } finally { journal.close(); }
 });
+
+const text = (bytes: Uint8Array) => Buffer.from(bytes).toString("utf8");
+
+test("the encoded snapshot is the host's own text, never a re-encoding of it", async () => {
+  // Text a parse and a stringify would not give back: key order kept, `1.0` and an escape as written.
+  const written = '{"b":1.0,"a":"\\u00e9","sessions":[{"text":"} { Відповідь 文"}]}';
+  const params: unknown[] = [];
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    params.push(request.params);
+    const answer = `{"id":${JSON.stringify(request.id)},"ok":true,"result":${written}}\n`;
+    // Split inside the envelope, then inside a multibyte character of the result.
+    const bytes = Buffer.from(answer);
+    const middle = bytes.indexOf(Buffer.from("В")) + 1;
+    socket.write(bytes.subarray(0, 9));
+    setTimeout(() => { socket.write(bytes.subarray(9, middle)); setTimeout(() => socket.write(bytes.subarray(middle)), 5); }, 5);
+  });
+  const client = new UnixRuntimeHostClient(socketPath);
+  expect(text(await client.snapshotBytes())).toBe(written);
+  expect(text(await client.snapshotBytes(undefined, { voiceBodiesFor: [] }))).toBe(written);
+  expect(params).toEqual([undefined, { voiceBodiesFor: [] }]);
+  expect(await client.snapshot()).toEqual(JSON.parse(written));
+});
+
+test("an encoded read of any other frame layout parses it, and a refusal still throws", async () => {
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    if (request.params?.voiceBodiesFor) socket.write(JSON.stringify({ id: request.id, ok: false, error: "snapshot refused", code: "refused" }) + "\n");
+    else socket.write(JSON.stringify({ ok: true, id: request.id, result: { sessions: [] }, note: "later member" }) + "\n");
+  });
+  const client = new UnixRuntimeHostClient(socketPath);
+  expect(text(await client.snapshotBytes())).toBe('{"sessions":[]}');
+  const refusal = await client.snapshotBytes(undefined, { voiceBodiesFor: [] }).catch((error) => error);
+  expect(refusal).toBeInstanceOf(RuntimeHostUnavailableError);
+  expect(refusal.message).toBe("snapshot refused");
+  expect(refusal.code).toBe("refused");
+});
+
+test("the runtime host's frame is the envelope the encoded read cuts the result out of", async () => {
+  const { serveRuntimeHost } = await import("@/runtime-host/socket");
+  const { PreserializedJson } = await import("@/runtime-host/preserializedJson");
+  const cached = '{"sessions":[{"conversationId":"one","note":"kept as written: 1.0"}],"filesRevision":7}';
+  const socketPath = path.join(SANDBOX, "real-host.sock");
+  const server = serveRuntimeHost(socketPath, {
+    handle: async (request: { id: string; params?: { voiceBodiesFor?: unknown } }) => request.params?.voiceBodiesFor
+      ? { id: request.id, ok: true, result: JSON.parse(cached) }
+      : { id: request.id, ok: true, result: new PreserializedJson(cached) },
+  } as never);
+  servers.push(server);
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socketPath);
+  const parse = spyOn(JSON, "parse");
+  try {
+    expect(text(await client.snapshotBytes())).toBe(cached);
+    // The server parses the request; nothing parses the answer.
+    expect(parse.mock.calls.filter((call) => String(call[0]).includes("kept as written"))).toHaveLength(0);
+  } finally {
+    parse.mockRestore();
+  }
+  // A result the host did not preserialize crosses in the same envelope.
+  expect(text(await client.snapshotBytes(undefined, { voiceBodiesFor: [] }))).toBe(JSON.stringify(JSON.parse(cached)));
+});

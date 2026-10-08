@@ -6,8 +6,9 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { livenessProbe } from "@/lib/agent/accountLiveness";
+import { agentLivenessSnapshot, canonicalConversationId, conversationIdForPath, conversationRegistryHost, headlessReviewerProcess, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
-import { conversationTurnLiveness } from "@/lib/runtime/liveness";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { flowPipelineController } from "@/lib/pipelines/controller";
@@ -30,10 +31,10 @@ import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
 import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
-import { currentHostTurnIdle } from "./quiet";
+import { currentHostTurnIdle, registryAdmissionEvidence, type QuietPorts } from "./quiet";
+import { readWorkOffThread } from "./workReads";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
-import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
 
 const POLL_MINUTES = 60;
 const SSE_MIN_GAP_MS = 250;
@@ -75,6 +76,69 @@ async function prepareOnce(directory: string, mirrorObjects: string): Promise<st
     }
   }
   return directory;
+}
+
+/**
+ * The evidence a restart judges one journal row on: the row `agent_activity`
+ * answers for the conversation, read through the same snapshot it uses, then
+ * the host its registry row names, the headless reviewer a flow round names,
+ * then what a host in this Viewer says about its own turn (#2515).
+ *
+ * The drain used to ask a second liveness reading that answers only for a
+ * registry row still carrying its structured host columns. A host that died
+ * has those columns cleared, so every such row came back with no answer, and
+ * no answer blocked the update for as long as the row existed.
+ */
+export function turnEvidenceReader(
+  sources: () => AgentLivenessSources = productionLivenessSources,
+): NonNullable<QuietPorts["turnLiveness"]> {
+  let base: AgentLivenessSources | null = null;
+  const perProbe = new WeakMap<object, AgentLivenessSources>();
+  return async ({ conversationId, artifactPath }, probe) => {
+    base ??= sources();
+    const liveness = perProbe.get(probe) ?? probeSources(base);
+    perProbe.set(probe, liveness);
+    const read = async (request: { conversationId: string } | { transcriptPath: string }) =>
+      (await agentLivenessSnapshot({ ...request, limit: 1 }, liveness)).conversations[0] ?? null;
+    /* By id first. The transcript the journal row itself names is the second
+       reading, for an id the registry no longer resolves. */
+    const record = await read({ conversationId }) ?? (artifactPath ? await read({ transcriptPath: artifactPath }) : null);
+    const registry = liveness.registrySnapshot();
+    const requestedId = canonicalConversationId(registry, conversationId);
+    // A legacy flow may name only a path. The registry keeps that ownership
+    // even after the transcript disappears, including past generations and
+    // continuity paths. Ask the canonical owner's current host in every case.
+    const ownerId = registry.conversations[requestedId] ? requestedId
+      : canonicalConversationId(registry, (artifactPath ? conversationIdForPath(registry, artifactPath) : null)
+        ?? record?.conversationId ?? requestedId);
+    const host = structuredDeliveryHostForConversation(ownerId);
+    return {
+      record,
+      registryHost: conversationRegistryHost(registry, ownerId, liveness.probe),
+      headlessReviewerProcess: headlessReviewerProcess(liveness.flows?.() ?? [], ownerId, artifactPath ?? null, liveness.probe, registry),
+      currentTurnIdle: currentHostTurnIdle(await host?.health()),
+    };
+  };
+}
+
+/**
+ * The liveness sources as one probe consumes them. A probe asks about every
+ * journal row in turn, and each answer would otherwise reload the registry, the
+ * flows and every pipeline. The pipelines only name a row's stage lineage,
+ * which no verdict reads, so they are left out; the other two are read once
+ * for all the rows of one probe, and afresh by the next.
+ */
+function probeSources(base: AgentLivenessSources): AgentLivenessSources {
+  const once = <T>(read: () => T): (() => T) => {
+    let held: { value: T } | null = null;
+    return () => (held ??= { value: read() }).value;
+  };
+  return {
+    ...base,
+    registrySnapshot: once(base.registrySnapshot),
+    pipelines: () => [],
+    ...(base.flows ? { flows: once(base.flows) } : {}),
+  };
 }
 
 export function productionDeps(env: Readonly<Record<string, string | undefined>> = process.env): ServiceDeps {
@@ -126,25 +190,18 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     quiet: {
       // Admitted work by identity. The journal is left out on purpose: every
       // event of a turn already running moves it, so it cannot fence new work.
-      dispatchVersion: () => {
-        const records = admittedRecords(agentRegistry().snapshot());
-        if (!records) throw new Error("Runtime admission evidence is unavailable");
-        return createHash("sha256").update(JSON.stringify([records, flowPipelineController().idle(), seatTickIdle()])).digest("hex");
-      },
+      dispatchVersion: () => createHash("sha256")
+        .update(JSON.stringify([...registryAdmissionEvidence(agentRegistry().readOnlySnapshot()), flowPipelineController().idle(), seatTickIdle()]))
+        .digest("hex"),
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");
-        return client.snapshot(undefined, { timeoutMs: 10_000 });
+        return client.snapshot();
       },
       pipelines: loadPipelinesForList,
       flows: () => loadFlows(),
-      turnLiveness: async (id) => {
-        const verdict = await conversationTurnLiveness(agentRegistry(), id);
-        if (!verdict) return null;
-        const host = structuredDeliveryHostForConversation(id);
-        const current = await host?.health();
-        return { ...verdict, currentTurnIdle: currentHostTurnIdle(current) };
-      },
+      turnLiveness: turnEvidenceReader(),
+      reviewerProcess: (round) => headlessRoundProcess(round, livenessProbe()),
       seats: () => activeOrchestratorSeats().filter((seat): seat is typeof seat & { conversationId: string } => !!seat.conversationId),
       controllerBusyReason: async () => {
         if (!(await import("@/lib/pipelines/controller")).flowPipelineController().idle()) return "pipeline-controller";
@@ -153,6 +210,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       presence: listPresence,
       memoryAvailableMb: memAvailableMb,
     },
+    observedReads: () => readWorkOffThread(),
   };
 }
 
@@ -174,11 +232,19 @@ export function setSelfUpdateServiceForTests(service: SelfUpdateService | null):
   holder[KEY] = service;
 }
 
+/** Why the install could not be read, for the surface to say so (#2594). */
+export function snapshotFailure(error: unknown): { code: "snapshot-failed"; error: string } {
+  return { code: "snapshot-failed", error: error instanceof Error ? error.message : String(error) };
+}
+
 /** The Snapshot as a server-sent event stream: one `state` event on every
     change (at most one per 250 ms), and a re-read of the install every
     second while something runs and every five seconds otherwise, since the
-    launcher, the runtime host and a deployment move without telling us. */
-export function snapshotStream(service: SelfUpdateService, signal: AbortSignal): ReadableStream<Uint8Array> {
+    launcher, the runtime host and a deployment move without telling us.
+    The work in progress follows in a later `state` once its reading lands;
+    a read that fails is a `snapshot-error` event, never silence. */
+export function snapshotStream(service: SelfUpdateService, signal: AbortSignal, options: { work?: boolean } = {}): ReadableStream<Uint8Array> {
+  const read = options.work === false ? () => service.snapshot() : () => service.observe();
   const encoder = new TextEncoder();
   let closed = false;
   let last = "";
@@ -202,11 +268,28 @@ export function snapshotStream(service: SelfUpdateService, signal: AbortSignal):
     if (closed) return;
     try { controllerRef?.enqueue(encoder.encode(text)); } catch { close(); }
   };
+  /* Readings overlap (a change, the tick, the first read) and can finish in
+     any order. Each is numbered as it starts; one that finishes after a later
+     one already answered is about an older install and is dropped, error or
+     state, so the surface never steps back. */
+  let started = 0;
+  let answered = 0;
   const broadcast = async (force = false) => {
     pending = null;
     if (closed) return;
+    const reading = ++started;
     let snapshot: Snapshot;
-    try { snapshot = await service.snapshot(); } catch { return; }
+    try { snapshot = await read(); } catch (error) {
+      if (reading < answered) return;
+      answered = reading;
+      const failure = JSON.stringify(snapshotFailure(error));
+      if (!force && failure === last) return;
+      last = failure;
+      send(`event: snapshot-error\ndata: ${failure}\n\n`);
+      return;
+    }
+    if (reading < answered) return;
+    answered = reading;
     const body = JSON.stringify(snapshot);
     /* serverTime moves every read; compare without it. */
     const comparable = body.replace(/"serverTime":"[^"]*"/, "");

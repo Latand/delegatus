@@ -1,0 +1,1789 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "cases": [
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "missing-key",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 214.5,
+      "height": 178,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 28,
+          "right": 122.234375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory is added only with an OpenRouter key.Enter the key",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "invalid-key",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 248.75,
+      "height": 212.25,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 28,
+          "right": 142.75
+        },
+        {
+          "left": 146.75,
+          "right": 218
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory is added only with an OpenRouter key.Save keyOnly printable ASCII, no spaces. Paste the key again.",
+      "numbers": null,
+      "keyError": "Only printable ASCII, no spaces. Paste the key again.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "write-failed",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 248.75,
+      "height": 212.25,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 28,
+          "right": 142.75
+        },
+        {
+          "left": 146.75,
+          "right": 218
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Try again.",
+      "numbers": null,
+      "keyError": "Could not save or read the key. Try again.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "inactive",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 180.5,
+      "height": 144,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        }
+      ],
+      "overlaps": [],
+      "reason": "Another release serves traffic and adds memory there.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "ready",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 239.6875,
+      "height": 203.1875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 123.953125,
+          "right": 161.671875
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": "0added1checked$0spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "capped",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 260.4375,
+      "height": 223.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 123.953125,
+          "right": 161.671875
+        }
+      ],
+      "overlaps": [],
+      "reason": "The $1 monthly cap is used up; it resets on November 1.",
+      "numbers": "0added1checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "off",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 260.4375,
+      "height": 223.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 123.953125,
+          "right": 161.671875
+        }
+      ],
+      "overlaps": [],
+      "reason": "The $1 monthly cap is used up; it resets on November 1.",
+      "numbers": "0added1checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "environment",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 188,
+      "height": 151.5,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "staging-env",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 239.375,
+      "height": 202.875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "staging-file",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 188,
+      "height": 151.5,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "staging-missing-key",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 260.4375,
+      "height": 223.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 123.953125,
+          "right": 161.671875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory needs an OpenRouter key. Enter it on the production release.",
+      "numbers": "0added1checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "unavailable-spend",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 210.75,
+      "height": 174.25,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        }
+      ],
+      "overlaps": [],
+      "reason": "Could not read the state of memory. Open the menu again.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "unavailable-pending",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 210.75,
+      "height": 174.25,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        }
+      ],
+      "overlaps": [],
+      "reason": "Could not read the state of memory. Open the menu again.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "memory-write-failed",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 290.6875,
+      "height": 254.1875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 123.953125,
+          "right": 161.671875
+        }
+      ],
+      "overlaps": [],
+      "reason": "The $1 monthly cap is used up; it resets on November 1.",
+      "numbers": "0added1checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "missing-key",
+      "left": 0,
+      "right": 390,
+      "top": 475,
+      "bottom": 900,
+      "height": 425,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 28,
+          "right": 139.65625
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory is added only with an OpenRouter key.Enter the key",
+      "numbers": "0added1checked$0spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "invalid-key",
+      "left": 0,
+      "right": 390,
+      "top": 455.875,
+      "bottom": 900,
+      "height": 444.125,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 28,
+          "right": 280.328125
+        },
+        {
+          "left": 284.328125,
+          "right": 362
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory is added only with an OpenRouter key.Save keyOnly printable ASCII, no spaces. Paste the key again.",
+      "numbers": "0added1checked$0spent of $1",
+      "keyError": "Only printable ASCII, no spaces. Paste the key again.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "write-failed",
+      "left": 0,
+      "right": 390,
+      "top": 455.875,
+      "bottom": 900,
+      "height": 444.125,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 28,
+          "right": 280.328125
+        },
+        {
+          "left": 284.328125,
+          "right": 362
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Try again.",
+      "numbers": "0added1checked$0spent of $1",
+      "keyError": "Could not save or read the key. Try again.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "inactive",
+      "left": 0,
+      "right": 390,
+      "top": 525,
+      "bottom": 900,
+      "height": 375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "Another release serves traffic and adds memory there.",
+      "numbers": "0added1checked$0spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "ready",
+      "left": 0,
+      "right": 390,
+      "top": 542.625,
+      "bottom": 900,
+      "height": 357.375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": "0added2checked$0spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "capped",
+      "left": 0,
+      "right": 390,
+      "top": 525,
+      "bottom": 900,
+      "height": 375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "The $1 monthly cap is used up; it resets on November 1.",
+      "numbers": "0added2checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "off",
+      "left": 0,
+      "right": 390,
+      "top": 525,
+      "bottom": 900,
+      "height": 375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "The $1 monthly cap is used up; it resets on November 1.",
+      "numbers": "0added2checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "environment",
+      "left": 0,
+      "right": 390,
+      "top": 673.75,
+      "bottom": 900,
+      "height": 226.25,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "staging-env",
+      "left": 0,
+      "right": 390,
+      "top": 633.5,
+      "bottom": 900,
+      "height": 266.5,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "staging-file",
+      "left": 0,
+      "right": 390,
+      "top": 658.625,
+      "bottom": 900,
+      "height": 241.375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "staging-missing-key",
+      "left": 0,
+      "right": 390,
+      "top": 507.125,
+      "bottom": 900,
+      "height": 392.875,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "Memory needs an OpenRouter key. Enter it on the production release.",
+      "numbers": "0added2checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "unavailable-spend",
+      "left": 0,
+      "right": 390,
+      "top": 618,
+      "bottom": 900,
+      "height": 282,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        }
+      ],
+      "overlaps": [],
+      "reason": "Could not read the state of memory. Open the menu again.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "unavailable-pending",
+      "left": 0,
+      "right": 390,
+      "top": 618,
+      "bottom": 900,
+      "height": 282,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        }
+      ],
+      "overlaps": [],
+      "reason": "Could not read the state of memory. Open the menu again.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "memory-write-failed",
+      "left": 0,
+      "right": 390,
+      "top": 509.875,
+      "bottom": 900,
+      "height": 390.125,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 58.640625
+        }
+      ],
+      "overlaps": [],
+      "reason": "The $1 monthly cap is used up; it resets on November 1.",
+      "numbers": "0added2checked$1spent of $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "missing-key",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 307.4375,
+      "height": 270.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 28,
+          "right": 123.03125
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Ввести ключ",
+      "numbers": "0підставлено2перевірено$0витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "invalid-key",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 341.6875,
+      "height": 305.1875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 28,
+          "right": 107.921875
+        },
+        {
+          "left": 111.921875,
+          "right": 218
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключЛише друкований ASCII без пробілів. Вставте ключ ще раз.",
+      "numbers": "0підставлено2перевірено$0витрачено із $1",
+      "keyError": "Лише друкований ASCII без пробілів. Вставте ключ ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "write-failed",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 341.6875,
+      "height": 305.1875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 28,
+          "right": 107.921875
+        },
+        {
+          "left": 111.921875,
+          "right": 218
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
+      "numbers": "0підставлено2перевірено$0витрачено із $1",
+      "keyError": "Не вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "inactive",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 273.4375,
+      "height": 236.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Запити обслуговує інший реліз; пам’ять підставляє він.",
+      "numbers": "0підставлено2перевірено$0витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "ready",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 267.8125,
+      "height": 231.3125,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": "0підставлено3перевірено$0витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "capped",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 273.4375,
+      "height": 236.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Ліміт $1 на місяць використано, відновиться 1 листопада.",
+      "numbers": "0підставлено3перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "off",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 273.4375,
+      "height": 236.9375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Ліміт $1 на місяць використано, відновиться 1 листопада.",
+      "numbers": "0підставлено3перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "environment",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 188,
+      "height": 151.5,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "staging-env",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 239.375,
+      "height": 202.875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "staging-file",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 188,
+      "height": 151.5,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "staging-missing-key",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 289.9375,
+      "height": 253.4375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Пам’яті потрібен ключ OpenRouter. Введіть його на продакшен-версії.",
+      "numbers": "0підставлено3перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "unavailable-spend",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 225.875,
+      "height": 189.375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        }
+      ],
+      "overlaps": [],
+      "reason": "Не вдалося прочитати стан пам’яті. Відкрийте меню ще раз.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "unavailable-pending",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 225.875,
+      "height": 189.375,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        }
+      ],
+      "overlaps": [],
+      "reason": "Не вдалося прочитати стан пам’яті. Відкрийте меню ще раз.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "memory-write-failed",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 303.6875,
+      "height": 267.1875,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 190,
+          "right": 226
+        },
+        {
+          "left": 71.703125,
+          "right": 140.09375
+        }
+      ],
+      "overlaps": [],
+      "reason": "Ліміт $1 на місяць використано, відновиться 1 листопада.",
+      "numbers": "0підставлено3перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "missing-key",
+      "left": 0,
+      "right": 390,
+      "top": 457.125,
+      "bottom": 900,
+      "height": 442.875,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 28,
+          "right": 140.546875
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Ввести ключ",
+      "numbers": "0підставлено3перевірено$0витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "invalid-key",
+      "left": 0,
+      "right": 390,
+      "top": 438,
+      "bottom": 900,
+      "height": 462,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 28,
+          "right": 240.953125
+        },
+        {
+          "left": 244.953125,
+          "right": 362
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключЛише друкований ASCII без пробілів. Вставте ключ ще раз.",
+      "numbers": "0підставлено3перевірено$0витрачено із $1",
+      "keyError": "Лише друкований ASCII без пробілів. Вставте ключ ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "write-failed",
+      "left": 0,
+      "right": 390,
+      "top": 438,
+      "bottom": 900,
+      "height": 462,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 28,
+          "right": 240.953125
+        },
+        {
+          "left": 244.953125,
+          "right": 362
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
+      "numbers": "0підставлено3перевірено$0витрачено із $1",
+      "keyError": "Не вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "inactive",
+      "left": 0,
+      "right": 390,
+      "top": 525,
+      "bottom": 900,
+      "height": 375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Запити обслуговує інший реліз; пам’ять підставляє він.",
+      "numbers": "0підставлено3перевірено$0витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "ready",
+      "left": 0,
+      "right": 390,
+      "top": 542.625,
+      "bottom": 900,
+      "height": 357.375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": "0підставлено4перевірено$0витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "capped",
+      "left": 0,
+      "right": 390,
+      "top": 507.125,
+      "bottom": 900,
+      "height": 392.875,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Ліміт $1 на місяць використано, відновиться 1 листопада.",
+      "numbers": "0підставлено4перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "off",
+      "left": 0,
+      "right": 390,
+      "top": 507.125,
+      "bottom": 900,
+      "height": 392.875,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Ліміт $1 на місяць використано, відновиться 1 листопада.",
+      "numbers": "0підставлено4перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "environment",
+      "left": 0,
+      "right": 390,
+      "top": 673.75,
+      "bottom": 900,
+      "height": 226.25,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "staging-env",
+      "left": 0,
+      "right": 390,
+      "top": 633.5,
+      "bottom": 900,
+      "height": 266.5,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "staging-file",
+      "left": 0,
+      "right": 390,
+      "top": 658.625,
+      "bottom": 900,
+      "height": 241.375,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "staging-missing-key",
+      "left": 0,
+      "right": 390,
+      "top": 507.125,
+      "bottom": 900,
+      "height": 392.875,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Пам’яті потрібен ключ OpenRouter. Введіть його на продакшен-версії.",
+      "numbers": "0підставлено4перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "unavailable-spend",
+      "left": 0,
+      "right": 390,
+      "top": 618,
+      "bottom": 900,
+      "height": 282,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        }
+      ],
+      "overlaps": [],
+      "reason": "Не вдалося прочитати стан пам’яті. Відкрийте меню ще раз.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "unavailable-pending",
+      "left": 0,
+      "right": 390,
+      "top": 618,
+      "bottom": 900,
+      "height": 282,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        }
+      ],
+      "overlaps": [],
+      "reason": "Не вдалося прочитати стан пам’яті. Відкрийте меню ще раз.",
+      "numbers": null,
+      "keyError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "memory-write-failed",
+      "left": 0,
+      "right": 390,
+      "top": 492,
+      "bottom": 900,
+      "height": 408,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 326,
+          "right": 374
+        },
+        {
+          "left": 16,
+          "right": 93.296875
+        }
+      ],
+      "overlaps": [],
+      "reason": "Ліміт $1 на місяць використано, відновиться 1 листопада.",
+      "numbers": "0підставлено4перевірено$1витрачено із $1",
+      "keyError": null,
+      "pageErrors": []
+    }
+  ]
+}

@@ -381,3 +381,49 @@ test("managed Codex removal reports a corrupt registry as locked", async () => {
   expect(response.status).toBe(409);
   await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "accounts_locked" }));
 });
+
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`managed create queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(SANDBOX, `contention-create-${kind}`, "state");
+  const runtime = new ManagedCodexRuntime({ startClient: async (home) => {
+    const child = new FakeChild();
+    return CodexAppServerClient.start({ home, spawn: () => child as never });
+  } });
+  setManagedCodexRuntimeForTests(runtime);
+  try {
+    const response = await withAccountHolder(kind, () => POST(new NextRequest("http://127.0.0.1/api/accounts/codex", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ label: `Contended ${kind}` }),
+    })));
+    if (kind === "timeout") {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+    } else {
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+    }
+  } finally {
+    await runtime.cancelLogin(`contended-${kind}`);
+    setManagedCodexRuntimeForTests(null);
+    process.env.LLV_STATE_DIR = previousState;
+  }
+});
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`orphan cleanup queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(SANDBOX, `contention-cleanup-${kind}`, "state");
+  try {
+    const response = await withAccountHolder(kind, () => remove(new NextRequest("http://127.0.0.1/api/accounts/codex", {
+      method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ cleanupOrphans: true }),
+    })));
+    if (kind === "timeout") {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+    } else {
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+    }
+  } finally {
+    process.env.LLV_STATE_DIR = previousState;
+  }
+});

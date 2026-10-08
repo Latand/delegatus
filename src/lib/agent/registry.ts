@@ -6,6 +6,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
@@ -150,7 +151,7 @@ function structuredClaimOwner(identity: ProcessIdentity): string {
   return `${STRUCTURED_CLAIM_PREFIX}${JSON.stringify(identity)}`;
 }
 
-function structuredClaimIdentity(owner: string): ProcessIdentity | null {
+export function structuredClaimIdentity(owner: string): ProcessIdentity | null {
   if (!owner.startsWith(STRUCTURED_CLAIM_PREFIX)) return null;
   try {
     const identity = JSON.parse(owner.slice(STRUCTURED_CLAIM_PREFIX.length)) as Partial<ProcessIdentity>;
@@ -1470,6 +1471,7 @@ function settleDeliveriesAtCommit(
     if (decision === "carry") {
       delivery.state = "assigned";
       delivery.fencedBy = null;
+      delivery.waitReason = null;
       delivery.generationId = successor.id;
       delivery.assignedAt = committedAt;
       delivery.deliveredAt = null;
@@ -1519,6 +1521,7 @@ function rearmRolledBackMigrationDeliveries(
       continue;
     }
     delivery.state = "assigned";
+    delivery.waitReason = null;
     delivery.generationId = current.id;
     delivery.assignedAt = assignedAt;
     delivery.deliveredAt = null;
@@ -1657,6 +1660,7 @@ function rearmFencedDeliveries(
     if (!held) continue;
     delivery.state = "assigned";
     delivery.fencedBy = null;
+    delivery.waitReason = null;
     delivery.generationId = current.id;
     delivery.assignedAt = assignedAt;
     delivery.deliveredAt = null;
@@ -1681,7 +1685,9 @@ function refenceHeldDeliveries(
     const held = (from.migration && migrationHeldDelivery(file, conversation, delivery, from.migration))
       || (Boolean(from.keptFrom) && delivery.state === "held" && delivery.fencedBy === from.keptFrom
         && resolveConversationAlias(file, delivery.conversationId) === conversation.id);
-    if (held) delivery.fencedBy = operationId;
+    if (!held) continue;
+    delivery.fencedBy = operationId;
+    if (delivery.state === "held") delivery.waitReason = "switching-accounts";
   }
 }
 
@@ -2466,6 +2472,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
     fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
+    waitReason: state === "held" && value.waitReason === "switching-accounts" ? value.waitReason : null,
     admissionSeq: Number.isSafeInteger(value.admissionSeq) && value.admissionSeq! > 0 ? value.admissionSeq : undefined,
     generationId: imagesCorrupt ? null : value.generationId ?? null,
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
@@ -2544,6 +2551,7 @@ function placeDeliveryForRetryInFile(
   if (migrationBlocksDelivery) {
     delivery.state = "held";
     delivery.fencedBy = conversation.migration!.operationId;
+    delivery.waitReason = "switching-accounts";
     delivery.generationId = null;
     delivery.assignedAt = null;
     delivery.deliveredAt = null;
@@ -2562,6 +2570,7 @@ function placeDeliveryForRetryInFile(
     return delivery;
   }
   delivery.state = "assigned";
+  delivery.waitReason = null;
   delivery.generationId = current.id;
   delivery.assignedAt = now();
   delivery.deliveredAt = null;
@@ -4127,6 +4136,9 @@ export interface AgentRegistryStorageOptions {
       bound has none and an empty bound proves nothing about the origin rule. */
   mcpGrantPolicy?: McpGrantPolicy;
   sqliteFilename?: string;
+  /** How long an off-loop delivery write waits for the lock before it is
+      refused (5 s). Tests shorten it to exercise a refusal quickly. */
+  sqliteWriterDeadlineMs?: number;
   onSqliteWriterWait?: (durationMs: number) => void;
   onSqliteSnapshotLoad?: () => void;
   onSqliteRowPayloadRead?: (collection: string, count: number) => void;
@@ -4305,6 +4317,7 @@ function journalStructuredTermination(registryFilename: string, record: Record<s
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
+  private readonly writerDeadlineMs: number | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
@@ -4358,6 +4371,7 @@ export class AgentRegistry {
       ?? backend.sqliteFilename
       ?? defaultRegistrySqliteFilename(filename);
     this.mcpGrantPolicy = storage.mcpGrantPolicy;
+    this.writerDeadlineMs = storage.sqliteWriterDeadlineMs;
     this.mirrorCheckpointMs = Math.max(0, storage.mirrorCheckpointMs ?? 5_000);
     this.now = storage.now ?? Date.now;
     this.scheduleMirrorCheckpoint = storage.scheduleMirrorCheckpoint
@@ -5117,7 +5131,7 @@ export class AgentRegistry {
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
-      const mutation = this.sqliteStore!.mutate(mutator, false, { updateSnapshotCache: !options.deliveryOnly, operationName });
+      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -5186,21 +5200,49 @@ export class AgentRegistry {
       : readFile(this.filename, this.mcpGrantPolicy);
   }
 
+  /**
+   * Runs one registry mutation with the write lock waited for off the event
+   * loop, for callers on the Viewer's delivery path. `operation` runs in the
+   * synchronous step that acquired the lock and its mutation commits inside
+   * that transaction, so the wait and the write cannot be separated by another
+   * writer. `{ acquired: false }` means the lock stayed held past the deadline
+   * and nothing ran; the refusal is logged with the operation it was for, and
+   * the caller defers. `operation` must go straight to its mutation, with no
+   * snapshot read before it. Stores without a SQLite writer run it at once.
+   */
+  private async whenWriterHeld<T>(
+    correlation: { label: string; operationId?: string | null },
+    operation: () => T,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") return { acquired: true, value: operation() };
+    const written = await this.sqliteStore!.withWriter(operation, {
+      ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
+    });
+    if (!written.acquired) {
+      console.warn(`[registry] ${correlation.label}${correlation.operationId ? ` for ${correlation.operationId}` : ""} `
+        + `found the write lock held for ${Math.round(written.waitedMs)}ms and wrote nothing`);
+      return { acquired: false };
+    }
+    return { acquired: true, value: written.value };
+  }
+
   /** Shared process-local snapshot for projections that never mutate registry
       objects. Atomic writers change the inode/signature, including writers in
-      the runtime-host process, so the next reader reparses immediately. */
+      the runtime-host process, so the next reader reparses immediately. The
+      JSON view is a copy nobody else holds, frozen all the way down before a
+      reader sees it, as the SQLite store's view is. */
   readOnlySnapshot(): RegistryFile {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") return this.sqliteStore!.readOnlySnapshot().file;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = readFile(this.filename, this.mcpGrantPolicy);
+      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return readFile(this.filename, this.mcpGrantPolicy);
+    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
@@ -5246,6 +5288,12 @@ export class AgentRegistry {
         if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
       }
       for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
+      /* A held send's receipt names what it waits for, which the owning
+         conversation's switch phase decides. */
+      for (const delivery of Object.values(result.heldDeliveries)) {
+        const conversation = delivery.state === "held" ? file.conversations[delivery.conversationId] : undefined;
+        if (conversation) result.conversations[conversation.id] = clone(conversation);
+      }
       return result;
     });
   }
@@ -7028,15 +7076,32 @@ export class AgentRegistry {
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
   }
 
-  /** Atomically claims a stale structured row and advances its writer fence. */
+  /** Atomically claims a stale structured row and advances its writer fence.
+      Resume setup may seed a missing entry for imported history in this lock. */
   claimStructuredHost(
     key: SessionKey,
     owner: ProcessIdentity,
-    options: { allowUnhosted?: boolean; reclaimUnverifiedOwner?: boolean } = {},
+    options: {
+      allowUnhosted?: boolean;
+      reclaimUnverifiedOwner?: boolean;
+      setupHost?: StructuredHostColumns;
+      setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
+    } = {},
   ): AgentRegistryEntry | null {
     return this.mutate((file) => {
-      const entry = file.entries[sessionKeyId(key)];
-      if (!entry?.structuredHost) return null;
+      const keyId = sessionKeyId(key);
+      const existing = file.entries[keyId];
+      const entry: AgentRegistryEntry | null = existing ?? (options.allowUnhosted === true && options.setupHost && options.setupEntry
+        ? { ...clone(options.setupEntry), key, status: "unhosted" as const, host: null,
+          claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
+        : null);
+      if (!entry) return null;
+      const terminal = entry.status === "unhosted" || entry.status === "dead";
+      // A dead-host cleanup clears these columns. Resume setup must publish
+      // its writer claim before starting the replacement host, under this lock.
+      const structuredHost = entry.structuredHost
+        ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
+      if (!structuredHost) return null;
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
@@ -7047,22 +7112,28 @@ export class AgentRegistry {
          claim owner remains the writer fence. A host can publish `dead` before
          its late reap releases that claim, and its live writer must finish
          before a successor advances the epoch. */
-      const terminal = entry.status === "unhosted" || entry.status === "dead";
-      const liveHost = entry.structuredHost.process;
+      const liveHost = structuredHost.process;
       if (!terminal && liveHost && this.ownerAlive(liveHost)) return null;
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);
         const reclaimUnverifiedOwner = options.reclaimUnverifiedOwner === true
-          && entry.structuredHost.process === null
+          && structuredHost.process === null
           && priorOwner?.startIdentity === null
           && owner.startIdentity !== null;
         if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return null;
       }
       entry.claimOwner = requestedOwner;
       entry.claimEpoch += 1;
-      entry.structuredHost.writerClaimEpoch = entry.claimEpoch;
+      entry.structuredHost = { ...structuredHost, writerClaimEpoch: entry.claimEpoch };
       entry.updatedAt = now();
+      if (!existing) {
+        const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);
+        const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
+        file.entries[keyId] = entry;
+        reboundEntryMcpGrant(file, key, this.mcpGrantPolicy);
+        advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
+      }
       return clone(entry);
     });
   }
@@ -8889,11 +8960,13 @@ export class AgentRegistry {
         if (migrationBlocksDelivery) {
           delivery.state = "held";
           delivery.fencedBy = conversation!.migration!.operationId;
+          delivery.waitReason = "switching-accounts";
           delivery.generationId = null;
           delivery.assignedAt = null;
         } else if (current) {
           delivery.state = "assigned";
           delivery.fencedBy = null;
+          delivery.waitReason = null;
           delivery.generationId = current.id;
           delivery.assignedAt = now();
         } else {
@@ -9486,7 +9559,9 @@ export class AgentRegistry {
 
   /** Terminalizes the reservation after the runtime journal has fenced its
       operation. This includes a never-actuated hold and an unverified failure
-      the operator explicitly chose to discard. */
+      the operator explicitly chose to discard. After reservation compaction,
+      writes the retained owner and returns null; callers verify the outcome
+      through deliverySnapshotForOperation. */
   discardDeliveryForOperation(
     conversationId: ViewerConversationId,
     operationId: string,
@@ -9501,15 +9576,33 @@ export class AgentRegistry {
         : Object.values(file.heldDeliveries).find((candidate) =>
           candidate.command.operationId === operationId
           && resolveConversationAlias(file, candidate.conversationId) === canonicalId);
-      if (!delivery
-        || delivery.command.operationId !== operationId
+      // A legacy failure with no disposition retains duplicate risk, exactly
+      // like an explicit unverified failure. The owner survives compaction and
+      // is the durable record in that case; there is no reservation to mutate.
+      // An explicit unverified disposition also covers account switches after
+      // an attempt; the migration reason alone cannot establish a known loss.
+      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
+        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
+          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+      if (!delivery) {
+        if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+          && owner.terminalState === "failed"
+          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          owner.terminalReason = reason.slice(0, 240);
+          owner.terminalDisposition = disposition;
+          owner.settledAt = now();
+          owner.evidenceText = "";
+        }
+        return null;
+      }
+      if (delivery.command.operationId !== operationId
         || resolveConversationAlias(file, delivery.conversationId) !== canonicalId) return null;
       if (delivery.state === "delivered") return clone(delivery);
       const discardable = delivery.state === "held"
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && (delivery.error === reason || owner?.terminalDisposition === "unverified"));
+          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]
@@ -9527,6 +9620,51 @@ export class AgentRegistry {
       compactDeliveryReservations(file, delivery.conversationId, this.now());
       return clone(delivery);
     });
+  }
+
+  /**
+   * Hands the switch the sends it is holding back (2026-10-07, run 3).
+   *
+   * A send admitted just after an account pick, before the queue claimed the
+   * pick, is claimed on the predecessor and journaled behind the pick. The
+   * queue runs the pick first and holds every later message of the
+   * conversation behind it, while the switch waits for that claim to settle:
+   * neither moved until the ten-minute settlement failed the message. The
+   * queue names the operations it holds behind the switch that it never
+   * dispatched, and each one's claim on the source generation goes back to a
+   * hold the switch carries to the successor, the same hold a send made after
+   * the pick gets. Answers how many claims were handed over, or that the write
+   * lock stayed held and nothing was written.
+   */
+  async holdUndispatchedClaimsForSwitch(
+    id: ViewerConversationId,
+    operationIds: readonly string[],
+    switchOperationId: string,
+  ): Promise<{ acquired: true; value: number } | { acquired: false }> {
+    if (operationIds.length === 0) return { acquired: true, value: 0 };
+    /* The switch runs on the Viewer's event loop, so the lock is waited for off
+       it: a writer in another process held it for up to five seconds of frozen
+       requests. A refusal writes nothing and the switch's next pass hands the
+       same claims over. */
+    return this.whenWriterHeld({ label: "switch.hand-over-claims", operationId: switchOperationId }, () => this.mutate((file) => {
+      const canonicalId = resolveConversationAlias(file, id);
+      const migration = file.conversations[canonicalId]?.migration;
+      if (!migration || !IN_FLIGHT_MIGRATION_PHASES.has(migration.phase)) return 0;
+      const carried = new Set(operationIds);
+      let handed = 0;
+      for (const delivery of Object.values(file.heldDeliveries)) {
+        if (delivery.state !== "delivery-uncertain"
+          || !carried.has(delivery.command.operationId)
+          || delivery.generationId !== migration.sourceGenerationId
+          || resolveConversationAlias(file, delivery.conversationId) !== canonicalId) continue;
+        /* The claim never reached a host, so it is no attempt the commit has
+           to fear may have reached the previous account. */
+        delivery.attempts = Math.max(0, delivery.attempts - 1);
+        placeDeliveryForRetryInFile(file, delivery, true);
+        handed += 1;
+      }
+      return handed;
+    }, { deliveryOnly: true }));
   }
 
   requeueUnactuatedDelivery(id: string, cause?: string): HeldDelivery {

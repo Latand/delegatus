@@ -59,6 +59,9 @@ export interface PhoneCard {
   /** The newest dismissal still live, while nothing else asks: the muted
       «Cleared · who» line and its Undo. */
   cleared: ClearedNeed | null;
+  /** The task's prototype review waits for a choice and nothing else on the
+      card asks: the card's own line says so, and the choice clears it. */
+  waitsOnPrototype: boolean;
   /** The card's one coloured edge: the need's hue. A task's colour label
       takes the edge only when nothing is needed (the component draws it). */
   edge: "warning" | "danger" | null;
@@ -157,11 +160,16 @@ function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason
   return card.reasons.filter((need) => need.subject !== "pipeline" || !closing.has(need.pipeline.id));
 }
 
+/** The task's prototype review still waits for the operator's choice. */
+function prototypeWaits(card: KanbanCard): boolean {
+  return Boolean(card.task?.prototypeReview?.waitingReviewId);
+}
+
 /** Whether the card needs the operator, as the ⚠ queue reads it. */
 function cardNeeds(card: KanbanCard, closing: ReadonlySet<string>): boolean {
   const live = liveReasons(card, closing);
   const motionReason = typeof card.motion.reason === "object" ? card.motion.reason : null;
-  return live.length > 0 || (card.motion.key === "needs-you"
+  return live.length > 0 || prototypeWaits(card) || (card.motion.key === "needs-you"
     && (motionReason?.kind === "operator" || (card.stepSummary?.needsYou ?? 0) > 0));
 }
 
@@ -214,7 +222,8 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
   const says = need?.kind === "conversation" ? working > 0 : !shown || outside > 0;
   const agents = kind === "task" && says ? { working, conversations: card.conversations, atMs } : null;
   const cleared = reasons.length ? null : card.cleared[0] ?? null;
-  return { key: card.id, kind, card, need, reasons, cleared, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };
+  const waitsOnPrototype = kind === "task" && !reasons.length && prototypeWaits(card);
+  return { key: card.id, kind, card, need, reasons, cleared, waitsOnPrototype, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };
 }
 
 /** Where each card stands in the attention queue: its earliest ask. */

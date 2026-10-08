@@ -98,6 +98,14 @@ App holds no permission for (an issue, a workflow dispatch, a run rerun, a
 release, a comment) is not on the list, is not rerouted, and runs as it always
 did. Adding a kind is a decision about the App's permissions.
 
+One issue is filed by Delegatus itself: the bug report an operator approved
+(`issue_report`, `src/lib/issueReports/publish.ts`). In a declared App
+repository it goes out as the App on a token asked for `issues: write` and
+`metadata: read` alone (`FORGE_APP_ISSUE_PERMISSIONS`), so the App needs the
+`issues` permission granted before a report can be filed there; without it the
+report is refused and nothing is sent as a person. An agent's own
+`gh issue create` is not covered and runs as it always did.
+
 One action has one classification in every spelling `gh` accepts: `pr new`
 for `pr create`, a pull request given as its URL (which names the repository
 from any directory, before `--repo`), a REST path or its absolute
@@ -265,16 +273,36 @@ comparison as touched tests, so a platform test `origin/main` already fails is
 stage, a branch that only trails `origin/main`) runs privacy with
 `--check-commits` and nothing else; a push that changes only `.md`, `.mdx` or
 `.txt` files skips types. Any other changed file keeps every scoped check.
+The native Codex phase runs the files that start the Codex executable once per
+supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
+once (`--shared-only`), all three at the same time. A caller that kills the
+push at a limit of its own hands the hook a Unix-millisecond deadline in
+`LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
+its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
+install (which waits for machine admission) and every step then end by it, and
+nothing starts once it has passed. A stopped step takes with it every process
+that inherited its environment and every scope `gate-slot.sh` gave it; one that
+survives fails the push with its PIDs. The shared native
+contracts, which the hosted `Bun runtime pin` workflow also runs, are stopped
+and named as left to that workflow; a decisive step still running is stopped
+with `no verdict within the push budget`, naming the check, which the
+publication retries as an interrupted push. Without a deadline nothing is
+stopped.
 Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
 
 Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
-(default `8G`), and a default Node heap of 6144 MB. Without a user systemd
-manager, commands run directly; without flock (macOS), the slot lock is omitted.
-`LLV_GATE_LOCK_DIR=/var/tmp` joins the existing machine gate's lock files.
-Otherwise locks live in a `delegatus-gate` directory under the runtime/temp root.
+(default `8G`), and a default Node heap of 6144 MB. The slot locks live in
+`/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
+share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. On Linux a
+gate waits while CPU pressure is high (sampled again when it takes its slot),
+then runs in its own scope in
+`delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
+systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
+refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
+(docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted.
 An existing `NODE_OPTIONS` is preserved.
 
 `LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
@@ -283,8 +311,12 @@ when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
 CI OCR. The two required privacy checks remain strict and unchanged; local
 hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
-Docker PR builds are limited to image inputs, with a 45-minute timeout and
-cancellation of superseded runs. Main and v* tag image publishing are preserved,
+Docker PR builds are limited to image inputs, push nothing, end at the
+45-minute job timeout, and are cancelled when superseded or closed. Merge-batch branches skip image verification. App changes verify
+amd64; image recipes, installation and native runtime inputs verify both Linux
+architectures. One PR build and one publication can run at once in separate
+single-build slots, leaving publication independent of the PR queue.
+Main and v* tag image publishing are preserved,
 as are npm publishing and the in-image candidate rehearsal.
 
 `scripts/rebuild.test.ts` exercises the actual host deploy command against a

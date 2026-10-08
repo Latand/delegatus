@@ -7,6 +7,7 @@ import { afterAll, expect, test } from "bun:test";
 
 import type { CodexAccount } from "./codex";
 import type { CodexAppServerClient as CodexAppServerClientType } from "./codexAppServer";
+import { foreignAccountHolder } from "./accountMutation.fixture";
 
 const RUNTIME_SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-codex-runtime-suite-"));
 const PREVIOUS_STATE = process.env.LLV_STATE_DIR;
@@ -75,6 +76,21 @@ class FakeChild extends EventEmitter {
 function account(id: string, home: string): CodexAccount {
   return { id, label: id, kind: "managed", home, sessionsDir: home + "/sessions", authPresent: false, loginPane: null, createdAt: 0 };
 }
+
+test("ManagedCodexRuntime.record commits a completion behind a short foreign holder before returning", async () => {
+  const dir = path.join(RUNTIME_SANDBOX, "foreign-completion");
+  const stateFile = path.join(dir, "attempts.json");
+  const child = new FakeChild();
+  const runtime = new ManagedCodexRuntime({ stateFile, startClient: async home => CodexAppServerClient.start({ home, spawn: () => child as never }) });
+  const login = await runtime.startLogin(account("short-holder", path.join(dir, "account")));
+  const holder = await foreignAccountHolder();
+  try {
+    holder.releaseAfter(8);
+    child.completed(login.loginId);
+    expect(persistedAttemptStates(stateFile)).toContain("completed");
+    expect(child.kills).toBe(1);
+  } finally { await holder.close(); }
+});
 
 test("Codex provider probes wait behind account deletion mutations", async () => {
   const children: FakeChild[] = [];

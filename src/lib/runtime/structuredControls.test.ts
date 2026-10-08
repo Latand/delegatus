@@ -1360,7 +1360,6 @@ test("structured reconfigure captures an exact ultrafast rollback profile before
   })]);
 });
 
-
 test("provider recovery authority reaches the structured kill command", async () => {
   const fixture = structuredConversation();
   const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
@@ -1383,4 +1382,15 @@ test("provider recovery authority requires the structured idle-only kill", async
   const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
   expect(await dispatchStructuredControl({ path: "", conversationId: "conversation_fixture", action: "kill", providerRecovery },
     { enabled: () => false })).toMatchObject({ status: 400 });
+});
+
+test("the pipeline switch adapter recognizes receipt-free native reconfigure success", async () => {
+  const { runtimeSwitchControlAcknowledgement } = await import("@/lib/pipelines/runtimeSwitch");
+  const fixture = profiledConversation();
+  const { journal, client, commands } = journalClient("pipeline-current");
+  try {
+    const result = await pickAccount(fixture, client, "pipeline-current", { model: "gpt-5.6-sol", effort: "high", fast: true, accountId: "codex-subscription" });
+    expect(runtimeSwitchControlAcknowledgement(result)).toBe("already-current");
+    expect(commands).toHaveLength(0);
+  } finally { journal.close(); }
 });

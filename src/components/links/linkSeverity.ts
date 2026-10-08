@@ -10,6 +10,25 @@ export function isDrawnState(code: string | null | undefined): code is string {
   return code === "ok" || code === "unverified" || BLOCKING.includes(code ?? "") || REQUEST_ERRORS.includes(code ?? "");
 }
 
+export type HostSeen = { host: string | null; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null; unknown: string[] };
+
+/** What a failed Host check recorded, when the saved check carries all of it. */
+export function hostSeen(check: { code: string; expected?: unknown; seen?: unknown } | null | undefined): { expected: string; seen: HostSeen } | null {
+  if (check?.code !== "host-rewritten" || typeof check.expected !== "string" || typeof check.seen !== "object" || check.seen === null) return null;
+  const read = (key: keyof HostSeen) => { const value = (check.seen as Record<string, unknown>)[key]; return typeof value === "string" ? value : null; };
+  const unknown = (check.seen as { unknown?: unknown }).unknown;
+  return { expected: check.expected, seen: { host: read("host"), forwardedHost: read("forwardedHost"), forwardedProto: read("forwardedProto"), forwarded: read("forwarded"),
+    unknown: Array.isArray(unknown) ? unknown.filter((key): key is string => typeof key === "string") : [] } };
+}
+
+/** Whether X-Forwarded-Host carries the address's name while Host carries
+    another one. A Host with the right name and another port has lost nothing. */
+export function forwardedNamesAddress(expected: string, seen: HostSeen): boolean {
+  const name = (value: string) => value.trim().toLowerCase().replace(/:\d+$/, "");
+  if (seen.forwardedHost === null || (seen.host !== null && name(seen.host) === name(expected))) return false;
+  return name(seen.forwardedHost.split(",")[0]!) === name(expected);
+}
+
 /** How a check state reads. An unverified address only blocks linking when the
     local entry vouches for loopback callers (`localVouches`), which is the
     condition `mintCode` refuses it under; otherwise it is a warning. */

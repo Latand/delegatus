@@ -132,6 +132,33 @@
  * the viewer while a click on the picture or a pan that ends off it does not;
  * it renders the viewer mid-gallery at 1440 × 900 and 390 × 844.
  *
+ * With BOARD_CAPTURE_CASE=seat-composer it types into the seat's composer
+ * (#1734) on the home the seat cases seed: drafts of one, three, eight and
+ * twenty lines and back to empty, in en and uk, at 1440 × 900, 1000 × 700 and
+ * 1280 × 600 with the seat at its default height, at the compact height the
+ * issue was reported at and at the grip's lower stop, and in the seat's
+ * conversation on the phone at 390 × 844. It requires three and eight lines
+ * read whole, twenty edited in at least eight rows and scrolling inside the
+ * field with the newest line in view, the transcript never under its minimum,
+ * a form that never scrolls its own content, every control inside the form
+ * and clear of the field, a seat that grows only once the transcript is at
+ * its minimum and never past the stop its grip has, a default seat and the
+ * board under it standing still, and everything back where it was once the
+ * draft is emptied. It then drags the grip by pointer from a roomy seat to
+ * its lower stop at the three desktop sizes and requires, on the frame after
+ * the release, a whole composer and the height a page loading there draws.
+ * Every surface must be drawn in its own language: the server's choice is
+ * set before each one, and the document's language and the dictation
+ * button's name are checked.
+ *
+ * With BOARD_CAPTURE_CASE=relay-answers it renders the relay card's Recent
+ * answers (docs/design/relay.md §B.9) on a home with one paired relay, a
+ * fake relay service on loopback that never hands a request out, and five
+ * invented answer records: the member limit field, the list, a hand-off
+ * opened read-only, and a long answer with its received input unfolded, at
+ * 1440 × 900 and 390 × 844 in en and uk. It requires each label in its language, no editable field, no
+ * sideways overflow and 44 px controls on the phone.
+ *
  * With BOARD_CAPTURE_CASE=seat-creation it renders what the orchestrator pane
  * says when a creation did not land, on a signed-in home with no seat: the
  * designation still waiting on its launch, a failure recorded with the account
@@ -143,6 +170,15 @@
  * timeout, no pid and no engine name in either, the recorded text for a cause
  * with no sentence of its own, one retry control inside the viewport, and no
  * text cut or scrolled inside the failure block.
+ *
+ * With BOARD_CAPTURE_CASE=twice-switched-link it opens a link to a
+ * conversation switched between accounts twice whose payload carries both
+ * archived generations and not yet the current one (2026-10-07). The real
+ * `/api/files` answer is reshaped in the browser so three seeded transcripts
+ * are those generations: canonical `#c=` and legacy `#f=` links, with the
+ * archived rows in either order, must each open a reader with no not-found
+ * notice; then the third generation arrives and the reader must follow it
+ * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -167,10 +203,13 @@ import { chromium, type Browser, type Page } from "playwright-core";
 
 import { OPEN_LINKED_SETTINGS_EVENT } from "../src/components/links/openLinkedSettings";
 import { translate } from "../src/lib/i18n";
+import { clampSeatHeight, SEAT_HEIGHT_VERSION, SEAT_MIN_HEIGHT, SEAT_STORAGE_KEY, seatMaxHeight } from "../src/components/kanban/kanbanSeatStore";
+import { SEAT_TRANSCRIPT_FLOOR_PX } from "../src/lib/composerScroll";
 import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
+import { procBackend } from "../src/lib/proc";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -1311,11 +1350,14 @@ async function captureOnboarding(): Promise<void> {
             if (viewport.phone) {
               await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
               await page.click('[data-mobile2-open="menu"]');
+              /* The roles table is on the menu's Settings page. */
+              await page.click('[data-mobile2-menu-row="settings"]');
               await page.waitForSelector('[data-testid="menu-agent-mapping"]');
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click('[data-testid="menu-agent-mapping"]');
             } else {
               await page.click("[data-rail-menu]");
+              await page.click("[data-rail-menu-settings]");
               await page.waitForSelector("[data-rail-menu-agent-mapping]");
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click("[data-rail-menu-agent-mapping]");
@@ -1331,10 +1373,13 @@ async function captureOnboarding(): Promise<void> {
             await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
             if (viewport.phone) {
               await page.click('[data-mobile2-open="menu"]');
+              /* The setup guide is under «Help and learning». */
+              await page.click('[data-mobile2-menu-row="help"]');
               await page.waitForSelector('[data-testid="menu-setup-guide"]');
               await page.click('[data-testid="menu-setup-guide"]');
             } else {
               await page.click("[data-rail-menu]");
+              await page.click("[data-rail-menu-help]");
               await page.waitForSelector("[data-rail-menu-setup-guide]");
               await page.click("[data-rail-menu-setup-guide]");
             }
@@ -1479,11 +1524,14 @@ async function captureOnboarding(): Promise<void> {
             const openGuide = async (row: "setup-guide" | "dictation") => {
               if (viewport.phone) {
                 await page.click('[data-mobile2-open="menu"]');
+                /* The guide is under «Help and learning», dictation on the Settings page. */
+                await page.click(row === "dictation" ? '[data-mobile2-menu-row="settings"]' : '[data-mobile2-menu-row="help"]');
                 await page.waitForSelector(`[data-testid="menu-${row}"]`);
                 if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
                 await page.click(`[data-testid="menu-${row}"]`);
               } else {
                 await page.click("[data-rail-menu]");
+                await page.click(row === "dictation" ? "[data-rail-menu-settings]" : "[data-rail-menu-help]");
                 await page.waitForSelector(`[data-rail-menu-${row}]`);
                 if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
                 await page.click(`[data-rail-menu-${row}]`);
@@ -2572,7 +2620,9 @@ function readMenu() {
   const shown = (node: Element) => { const box = node.getBoundingClientRect(); return box.width > 0 && box.height > 0; };
   const rows = [...element.querySelectorAll("button")].filter(shown).map((button) => ({ label: (button.getAttribute("aria-label") || button.textContent || "").replace(/\s+/g, " ").trim(), h: button.getBoundingClientRect().height, disabled: (button as HTMLButtonElement).disabled }));
   const groups = [...element.querySelectorAll(":scope > [data-bar-menu-group]")].filter(shown).map((group) => ({ name: group.getAttribute("data-bar-menu-group"), ruled: parseFloat(getComputedStyle(group).borderTopWidth) > 0 }));
-  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows, groups, text: element.textContent ?? "" };
+  /* What is not used daily sits behind named sections; one whose rows all stood down draws nothing. */
+  const sections = [...element.querySelectorAll("[data-bar-menu-section]")].filter(shown).map((section) => section.getAttribute("data-bar-menu-section"));
+  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows, groups, sections, text: element.textContent ?? "" };
 }
 
 type MenuReading = ReturnType<typeof readMenu>;
@@ -2723,6 +2773,8 @@ async function headerMain(): Promise<void> {
         await page.click("[data-bar-more]");
         await page.waitForSelector("[data-bar-more-menu]");
         menu = await page.evaluate(readMenu);
+        /* Narrow, the accounts are a section of ⋯ that opens in place. */
+        await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
         await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
       }
       await page.waitForTimeout(800);
@@ -2759,7 +2811,7 @@ async function headerMain(): Promise<void> {
       };
       checkMenu(tag, menu);
       must(menu.rows.length >= (wide ? 3 : 5), `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
-      must(wide ? !menu.groups.some((group) => group.name === "accounts") : menu.groups.some((group) => group.name === "accounts"), `${tag}: the accounts rows are ${wide ? "repeated in" : "missing from"} ⋯`);
+      must(wide ? !menu.sections.includes("accounts") : menu.sections.includes("accounts"), `${tag}: the accounts rows are ${wide ? "repeated in" : "missing from"} ⋯`);
       await page.keyboard.press("Escape");
       await page.mouse.click(width / 2, 600);
 
@@ -2839,8 +2891,8 @@ async function headerMain(): Promise<void> {
       const quietMenu = await quietPage.evaluate(readMenu);
       await quietPage.screenshot({ path: path.join(OUT_DIR, `header-${tag}-quiet-more.png`), clip: { x: Math.max(0, quietMenu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, quietMenu.rect.x - 40), quietMenu.rect.w + 80), height: quietMenu.rect.y + quietMenu.rect.h + 16 } });
       checkMenu(`${tag} quiet`, quietMenu);
-      /* Sound (two rows), Archive, Delete; this leaf's message search sits in the bar's find slot. */
-      must(quietMenu.groups.some((group) => group.name === "project") && quietMenu.rows.length >= 4, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
+      /* Sound (two rows) and the rows of the sections; Archive and Delete sit behind theirs. This leaf's message search sits in the bar's find slot. */
+      must(quietMenu.sections.includes("project") && quietMenu.rows.length >= 4, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
       report[`${tag}:quiet`] = { menu: quietMenu };
       await quiet.close();
     }
@@ -3024,6 +3076,7 @@ async function accountRemovalMain(): Promise<void> {
     const openPanel = async (page: Page) => {
       await page.click("[data-bar-more]");
       await page.waitForSelector("[data-bar-more-menu]");
+      await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
       await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
       await page.waitForSelector('[role="dialog"] [data-account-row]');
       await page.waitForTimeout(400);
@@ -3750,6 +3803,342 @@ async function seatsMain(which: SeatCase): Promise<void> {
     console.error(`${which} acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
     console.log(`${which} acceptance passed at ${which === "columns-wide" ? "1920, " : ""}1440 and 1280 (en, uk; light, dark)${which === "seats" ? " and 390 × 844" : ""}.`);
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=seat-composer: the seat's composer and a long draft    */
+/* (#1734)                                                                   */
+/* ------------------------------------------------------------------------- */
+
+const SEAT_DRAFT_LINES = [1, 3, 8, 20] as const;
+const SEAT_COMPOSER_VIEWPORTS = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }, { width: 1280, height: 600 }] as const;
+/* The seat's sizes: the default, the compact height #1734 was reported at
+   (`clamp(160px, 30vh, 360px)`, which the grip still reaches), and the grip's
+   own lower stop. */
+const SEAT_COMPOSER_SIZES = ["default", "compact", "minimum"] as const;
+/* The grip drag: from a roomy seat, further up than the grip's lower stop is. */
+const SEAT_DRAG_FROM = 465;
+const SEAT_DRAG_TRAVEL = 400;
+const compactSeatHeight = (windowHeight: number) => Math.min(360, Math.max(SEAT_MIN_HEIGHT, Math.round(windowHeight * 0.3)));
+const seatDraft = (lang: "en" | "uk", lines: number) => Array.from({ length: lines }, (_, index) => (lang === "uk" ? `Рядок чернетки ${index + 1} із ${lines}.` : `Draft line ${index + 1} of ${lines}.`)).join("\n");
+
+/** The composer, the transcript above it and the box they share, read in the page. */
+function readSeatComposer(formSelector: string) {
+  const rect = (element: Element | null | undefined) => {
+    if (!element) return null;
+    const r = element.getBoundingClientRect();
+    return { x: Math.round(r.x * 2) / 2, y: Math.round(r.y * 2) / 2, w: Math.round(r.width * 2) / 2, h: Math.round(r.height * 2) / 2 };
+  };
+  const form = document.querySelector<HTMLElement>(formSelector);
+  const field = form?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+  if (!form || !field) return null;
+  /* The box the form's percentage budget resolves against, found the way `useComposerBox` finds it. */
+  let conversation = form.parentElement;
+  while (conversation && conversation.clientHeight === 0) conversation = conversation.parentElement;
+  const seat = document.querySelector("[data-kanban-seat]");
+  const style = getComputedStyle(field);
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    seat: rect(seat),
+    head: rect(seat?.querySelector(".seat-head")),
+    box: conversation?.clientHeight ?? 0, transcript: rect(conversation?.querySelector("[data-log-feed-scroller]")),
+    strip: rect(conversation?.querySelector("[data-agent-control-strip]")),
+    form: rect(form)!,
+    formClient: form.clientHeight,
+    formScroll: form.scrollHeight,
+    field: rect(field)!,
+    fieldClient: field.clientHeight,
+    fieldScroll: field.scrollHeight,
+    fieldScrollTop: Math.round(field.scrollTop),
+    fieldOverflow: style.overflowY,
+    lineHeight: parseFloat(style.lineHeight),
+    controls: [...form.querySelectorAll<HTMLElement>("button, select")].map((node) => ({ name: node.getAttribute("aria-label") ?? node.textContent?.trim() ?? "", rect: rect(node)! })).filter((entry) => entry.rect.w > 0 && entry.rect.h > 0),
+    frame: rect(document.querySelector(".board-frame")),
+  };
+}
+
+async function seatComposerMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  writeQuietProject();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "seat-composer", transcriptFloor: SEAT_TRANSCRIPT_FLOOR_PX, draftLines: SEAT_DRAFT_LINES };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const project = await (async () => {
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        const files = ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? [];
+        const busy = files.find((file) => file.path?.includes(projectSlug(REPO_DIR)))?.project;
+        const quiet = files.find((file) => file.path?.includes(projectSlug(QUIET_DIR)))?.project;
+        if (busy && quiet) return busy;
+        await Bun.sleep(2_000);
+      }
+      throw new Error("the two seeded projects never scanned");
+    })();
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    await seedSeats(project);
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    await Bun.sleep(4_000);
+    /* The install notice is a toast over the foot of the window, where the composer is in every frame here; dismissed the way its own button does. */
+    const dismissed = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ noticeDismissed: true }) });
+    if (!dismissed.ok) throw new Error(`dismissing the install notice answered ${dismissed.status}`);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+    /** A value set the way the composer receives one from a keystroke or a dictated revision, caret at the end. */
+    const setDraft = (page: Page, selector: string, value: string) => page.evaluate(({ selector, value }) => {
+      const field = document.querySelector<HTMLTextAreaElement>(`${selector} textarea`);
+      if (!field) throw new Error("no composer field");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(field, value);
+      field.setSelectionRange(value.length, value.length);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    }, { selector, value });
+
+    /* The server's language is the one a page adopts after it mounts (`syncOperatorLocale`), so it is chosen there before every surface; the browser's own storage alone left every uk surface drawn in English. */
+    const chooseLanguage = async (lang: "en" | "uk") => {
+      const written = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!written.ok) throw new Error(`choosing ${lang} answered ${written.status}`);
+    };
+    /** The surface is drawn in its own language: the document says so and the dictation button is named in it. */
+    const requireLanguage = async (page: Page, tag: string, selector: string, lang: "en" | "uk") => {
+      const shown = await page.evaluate((selector) => ({
+        lang: document.documentElement.lang,
+        names: [...document.querySelectorAll<HTMLElement>(`${selector} button`)].map((node) => node.getAttribute("aria-label") ?? ""),
+      }), selector);
+      must(shown.lang === lang, `${tag}: the document is in «${shown.lang}», the surface is ${lang}`);
+      must(shown.names.includes(translate(lang, "mic.dictate")), `${tag}: no «${translate(lang, "mic.dictate")}» among the composer's buttons (${shown.names.filter(Boolean).join(", ")})`);
+    };
+
+    type Reading = NonNullable<ReturnType<typeof readSeatComposer>>;
+    /** Drive one composer through every draft length and back to empty; the checks every surface shares. */
+    const drive = async (page: Page, tag: string, selector: string, lang: "en" | "uk") => {
+      const read = async (): Promise<Reading> => {
+        const reading = await page.evaluate(readSeatComposer, selector);
+        if (!reading) throw new Error(`${tag}: no composer at ${selector}`);
+        return reading;
+      };
+      await requireLanguage(page, tag, selector, lang);
+      const empty = await read();
+      const drafts: Record<string, Reading> = {};
+      for (const lines of SEAT_DRAFT_LINES) {
+        await setDraft(page, selector, seatDraft(lang, lines));
+        await page.waitForTimeout(350);
+        drafts[lines] = await read();
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-${lines}.png`) });
+      }
+      /* Past the ceiling the field scrolls: the newest line is in view after typing, and the first one is reachable. */
+      const pinnedBottom = drafts[20]!.fieldScrollTop;
+      const scrolledTop = await page.evaluate((selector) => {
+        const field = document.querySelector<HTMLTextAreaElement>(`${selector} textarea`)!;
+        field.scrollTop = 0;
+        return Math.round(field.scrollTop);
+      }, selector);
+      await setDraft(page, selector, "");
+      await page.waitForTimeout(350);
+      const cleared = await read();
+
+      const fits = (reading: Reading) => reading.fieldScroll <= reading.fieldClient + 1;
+      const [one, three, eight, twenty] = SEAT_DRAFT_LINES.map((lines) => drafts[lines]!) as [Reading, Reading, Reading, Reading];
+      /* Rows the field shows without scrolling, from its own line height. */
+      const rows = (reading: Reading) => Math.round(((reading.fieldClient - (one.fieldClient - one.lineHeight)) / one.lineHeight) * 10) / 10;
+      must(near(one.field.h, empty.field.h, 0.5), `${tag}: one line makes the field ${one.field.h}px, empty is ${empty.field.h}px`);
+      must(fits(one), `${tag}: one line does not fit the field (${one.fieldScroll} in ${one.fieldClient})`);
+      must(three.field.h > one.field.h && eight.field.h >= three.field.h && twenty.field.h >= eight.field.h, `${tag}: the field does not grow with the draft (${[one, three, eight, twenty].map((reading) => reading.field.h).join(", ")}px)`);
+      must(!fits(twenty) && /auto|scroll/.test(twenty.fieldOverflow), `${tag}: twenty lines neither fit nor scroll (${twenty.fieldScroll} in ${twenty.fieldClient}, overflow ${twenty.fieldOverflow})`);
+      must(pinnedBottom + twenty.fieldClient >= twenty.fieldScroll - 1, `${tag}: the newest line is out of view (scrollTop ${pinnedBottom} of ${twenty.fieldScroll - twenty.fieldClient})`);
+      must(pinnedBottom > 0 && scrolledTop === 0, `${tag}: the field does not scroll back to its first line (${pinnedBottom} → ${scrolledTop})`);
+      must(near(cleared.field.h, empty.field.h, 0.5) && near(cleared.form.h, empty.form.h, 0.5), `${tag}: an emptied field stays at ${cleared.field.h}px in a ${cleared.form.h}px form (was ${empty.field.h} in ${empty.form.h})`);
+      /* The rows in the seat are fractions of a px tall and the seat grows by whole ones, so it comes back within one. */
+      if (empty.seat && cleared.seat) must(near(cleared.seat.h, empty.seat.h, 1), `${tag}: the seat came back at ${cleared.seat.h}px, was ${empty.seat.h}px`);
+      if (empty.transcript && cleared.transcript) must(near(cleared.transcript.h, empty.transcript.h, 0.5), `${tag}: the transcript came back at ${cleared.transcript.h}px, was ${empty.transcript.h}px`);
+      for (const [name, reading] of [["empty", empty], ...SEAT_DRAFT_LINES.map((lines) => [`${lines} lines`, drafts[lines]!] as const), ["cleared", cleared]] as const) {
+        const where = `${tag} ${name}`;
+        /* Nothing overlaps: the transcript, the control strip and the form stack, and the field and every control sit inside the form's own box. */
+        const bottom = (r: Rect) => r.y + r.h;
+        if (reading.transcript) {
+          must(bottom(reading.transcript) <= (reading.strip ?? reading.form).y + 0.5, `${where}: the transcript ends at ${bottom(reading.transcript)}, under the row below it at ${(reading.strip ?? reading.form).y}`);
+          /* The transcript keeps its readable minimum under every draft. */
+          must(reading.transcript.h >= SEAT_TRANSCRIPT_FLOOR_PX - 0.5, `${where}: the transcript is ${reading.transcript.h}px, under its ${SEAT_TRANSCRIPT_FLOOR_PX}px minimum`);
+        }
+        if (reading.strip) must(bottom(reading.strip) <= reading.form.y + 0.5, `${where}: the control strip ends at ${bottom(reading.strip)}, under the form at ${reading.form.y}`);
+        must(reading.formScroll <= reading.formClient + 1, `${where}: the form scrolls its own content (${reading.formScroll} in ${reading.formClient})`);
+        must(reading.field.y >= reading.form.y - 0.5 && bottom(reading.field) <= bottom(reading.form) + 0.5, `${where}: the field leaves the form`);
+        for (const control of reading.controls) {
+          must(control.rect.y >= reading.form.y - 0.5 && bottom(control.rect) <= bottom(reading.form) + 0.5, `${where}: «${control.name}» leaves the form`);
+          must(!overlaps(control.rect, reading.field, 0.5), `${where}: «${control.name}» overlaps the field`);
+        }
+        must(bottom(reading.form) <= reading.viewport.h + 0.5 || reading.seat !== null, `${where}: the form ends at ${bottom(reading.form)}, below the ${reading.viewport.h}px window`);
+        if (reading.seat) {
+          /* The seat grows only once the transcript is at its minimum, never past the stop its grip has, and the board starts under it. */
+          must(reading.seat.h >= empty.seat!.h - 0.5 && reading.seat.h <= Math.max(empty.seat!.h, seatMaxHeight(reading.viewport.h)) + 0.5, `${where}: the seat is ${reading.seat.h}px (${empty.seat!.h}px empty, ${seatMaxHeight(reading.viewport.h)}px at most)`);
+          must(near(reading.seat.h, empty.seat!.h, 0.5) || (reading.transcript !== null && near(reading.transcript.h, SEAT_TRANSCRIPT_FLOOR_PX, 1)), `${where}: the seat grew to ${reading.seat.h}px with ${reading.transcript?.h}px of transcript left to give`);
+          must(bottom(reading.form) <= bottom(reading.seat) + 0.5 && (reading.head === null || bottom(reading.head) <= (reading.transcript ?? reading.form).y + 0.5), `${where}: the seat's rows leave it`);
+          if (reading.frame) {
+            must(bottom(reading.seat) <= reading.frame.y + 0.5, `${where}: the seat ends at ${bottom(reading.seat)}, over the board at ${reading.frame.y}`);
+            must(near(reading.frame.y - bottom(reading.seat), empty.frame!.y - bottom(empty.seat!), 0.5), `${where}: the board is ${reading.frame.y - bottom(reading.seat)}px under the seat, was ${empty.frame!.y - bottom(empty.seat!)}px`);
+          }
+        }
+      }
+      const summary = (reading: Reading) => ({ field: reading.field.h, rows: rows(reading), fits: fits(reading), form: reading.form.h, transcript: reading.transcript?.h ?? null, seat: reading.seat?.h ?? null, board: reading.frame?.y ?? null, formScrolls: reading.formScroll > reading.formClient + 1 });
+      return {
+        seat: empty.seat?.h ?? null, box: empty.box, lineHeight: one.lineHeight,
+        empty: summary(empty), drafts: Object.fromEntries(SEAT_DRAFT_LINES.map((lines) => [lines, summary(drafts[lines]!)])), cleared: summary(cleared),
+        scroll: { pinnedBottom, scrolledTop, range: twenty.fieldScroll - twenty.fieldClient },
+        readings: { three, eight, twenty },
+      };
+    };
+
+    const SEAT_FORM = "[data-kanban-seat] [data-orchestrator-conversation] form";
+    /* How tall the seat is on a page that loads with it stored at the grip's lower stop, per window and language. */
+    const loadedAtStop = new Map<string, number>();
+    for (const viewport of SEAT_COMPOSER_VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const size of SEAT_COMPOSER_SIZES) {
+      const tag = `seat-composer-${viewport.width}x${viewport.height}-${lang}-${size}`;
+      await chooseLanguage(lang);
+      const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      /* The seat as this browser would have kept it: open (a window under 800 px starts it folded) and at the size under test. */
+      const height = size === "default" ? null : size === "compact" ? compactSeatHeight(viewport.height) : SEAT_MIN_HEIGHT;
+      await context.addInitScript(({ lang, key, record }) => {
+        localStorage.setItem("llv_lang", lang);
+        localStorage.setItem(key, record);
+      }, { lang, key: SEAT_STORAGE_KEY, record: JSON.stringify({ height, heightV: SEAT_HEIGHT_VERSION, collapsed: { [project]: false }, placement: "top" }) });
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      try {
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector(`${SEAT_FORM} textarea`, { timeout: 120_000 });
+        await page.waitForTimeout(2_500);
+        const entry = await drive(page, tag, SEAT_FORM, lang);
+        report[tag] = entry;
+        const { drafts } = entry;
+        (entry as Record<string, unknown>).setHeight = height;
+        if (size === "minimum" && entry.seat !== null) loadedAtStop.set(`${viewport.width}x${viewport.height}-${lang}`, entry.seat);
+        /* The seat is the height under test, or what an empty composer under the transcript's minimum needs where that is more. */
+        must(height === null ? near(entry.seat ?? 0, seatMaxHeight(viewport.height), 1) : (entry.seat ?? 0) >= height - 0.5, `${tag}: the seat is ${entry.seat}px, set to ${height ?? "its default"}`);
+        if (size === "default") must(SEAT_DRAFT_LINES.every((lines) => drafts[lines]!.seat === entry.seat && drafts[lines]!.board === entry.empty.board), `${tag}: a default seat or the board under it moved (${SEAT_DRAFT_LINES.map((lines) => `${drafts[lines]!.seat}/${drafts[lines]!.board}`).join(", ")})`);
+        /* What #1734 asks for, at every size the grip reaches: three and eight lines are read whole, and twenty are edited in at least eight rows. */
+        must(drafts[3]!.fits && drafts[8]!.fits, `${tag}: eight lines do not fit (${drafts[3]!.rows} and ${drafts[8]!.rows} rows shown)`);
+        must(drafts[20]!.rows >= 8, `${tag}: twenty lines are edited in ${drafts[20]!.rows} rows`);
+        must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+    }
+
+    /* The grip, dragged by pointer from a roomy seat to its lower stop: the usual way a seat becomes compact. Read on the
+       frame after the release, with nothing typed and nothing else touched: the composer is whole and the seat is as tall
+       as a page that loads at that height draws it. */
+    for (const viewport of SEAT_COMPOSER_VIEWPORTS) for (const lang of ["en", "uk"] as const) {
+      const tag = `seat-composer-${viewport.width}x${viewport.height}-${lang}-dragged`;
+      await chooseLanguage(lang);
+      const roomy = clampSeatHeight(SEAT_DRAG_FROM, viewport.height);
+      const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript(({ lang, key, record }) => {
+        localStorage.setItem("llv_lang", lang);
+        localStorage.setItem(key, record);
+      }, { lang, key: SEAT_STORAGE_KEY, record: JSON.stringify({ height: roomy, heightV: SEAT_HEIGHT_VERSION, collapsed: { [project]: false }, placement: "top" }) });
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      try {
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector(`${SEAT_FORM} textarea`, { timeout: 120_000 });
+        await page.waitForTimeout(2_500);
+        await requireLanguage(page, tag, SEAT_FORM, lang);
+        const read = async (): Promise<Reading> => {
+          const reading = await page.evaluate(readSeatComposer, SEAT_FORM);
+          if (!reading) throw new Error(`${tag}: no composer`);
+          return reading;
+        };
+        const before = await read();
+        const grip = await page.locator('[data-seat-grip=""]').boundingBox();
+        if (!grip) throw new Error("the seat has no height grip");
+        const from = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 };
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x, from.y - SEAT_DRAG_TRAVEL, { steps: 20 });
+        await page.mouse.up();
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        const released = await read();
+        const set = await page.evaluate(() => document.querySelector<HTMLElement>("[data-kanban-seat]")?.style.getPropertyValue("--seat-h") ?? "");
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
+        /* The page that loaded with the seat stored at that stop, measured above. */
+        const loaded = loadedAtStop.get(`${viewport.width}x${viewport.height}-${lang}`) ?? null;
+        report[tag] = { from: before.seat?.h ?? null, setHeight: set, loadedSeat: loaded, released };
+        const bottom = (r: Rect) => r.y + r.h;
+        must(near(before.seat?.h ?? 0, roomy, 1), `${tag}: the seat started at ${before.seat?.h}px, set to ${roomy}`);
+        must(set === `${SEAT_MIN_HEIGHT}px`, `${tag}: the drag left the seat set to «${set}», not its ${SEAT_MIN_HEIGHT}px stop`);
+        must(released.formScroll <= released.formClient + 1, `${tag}: after the release the form scrolls its own content (${released.formScroll} in ${released.formClient})`);
+        must(bottom(released.field) <= bottom(released.form) + 0.5, `${tag}: after the release the field leaves the form`);
+        must(released.controls.length > 0, `${tag}: the composer shows no controls after the release`);
+        for (const control of released.controls) must(control.rect.y >= released.form.y - 0.5 && bottom(control.rect) <= bottom(released.form) + 0.5, `${tag}: after the release «${control.name}» leaves the form`);
+        must((released.transcript?.h ?? 0) >= SEAT_TRANSCRIPT_FLOOR_PX - 0.5, `${tag}: after the release the transcript is ${released.transcript?.h}px, under its ${SEAT_TRANSCRIPT_FLOOR_PX}px minimum`);
+        must(released.seat !== null && loaded !== null && near(released.seat.h, loaded, 0.5), `${tag}: the seat is ${released.seat?.h}px after the release and ${loaded}px on a page that loads at that height`);
+        if (released.seat && released.frame) must(bottom(released.seat) <= released.frame.y + 0.5, `${tag}: the seat ends at ${bottom(released.seat)}, over the board at ${released.frame.y}`);
+        must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+    }
+
+    /* The phone: the seat's conversation is a full screen with its own composer box and ceiling. */
+    const PHONE_FORM = '[data-testid="bounded-mobile-composer"]';
+    for (const lang of ["en", "uk"] as const) {
+      const tag = `seat-composer-390x844-${lang}`;
+      await chooseLanguage(lang);
+      const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: "reduce" });
+      await phone.addInitScript(seedInit);
+      await phone.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await phone.newPage();
+      try {
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector("[data-mobile2-seat-open]", { timeout: 120_000 });
+        await page.waitForTimeout(2_500);
+        await page.click("[data-mobile2-seat-open]");
+        await page.waitForSelector(`${PHONE_FORM} textarea`, { timeout: 60_000 });
+        await page.waitForTimeout(1_500);
+        const entry = await drive(page, tag, PHONE_FORM, lang);
+        report[tag] = entry;
+        must(entry.drafts[3]!.fits && entry.drafts[8]!.fits, `${tag}: eight lines do not fit the phone's field (${entry.drafts[8]!.rows} rows shown)`);
+        const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+        must(sideways <= 0, `${tag}: the page scrolls sideways by ${sideways}px`);
+      } catch (error) {
+        failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await phone.close();
+      }
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "seat-composer.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`seat-composer measurements: ${path.join(OUT_DIR, "seat-composer.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`seat-composer acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("seat-composer acceptance passed at 1440 × 900, 1000 × 700, 1280 × 600 and 390 × 844 (en, uk; one, three, eight and twenty lines; the grip dragged to its lower stop).");
   }
 }
 
@@ -6262,6 +6651,8 @@ async function selfUpdateInstallMain(): Promise<void> {
 type LinkingFixture = {
   role: "accept" | "connect"; state: string | null; publicUrl: string | null; vouches: boolean;
   peers: unknown[]; grants: unknown[]; used: boolean; connect: { status: number; body: unknown } | null; focus: string;
+  /** What a failed Host check recorded beside its code (#2516). */
+  detail?: { expected: string; seen: { host: string; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null; unknown: string[] } };
 };
 
 async function linkingMain(): Promise<void> {
@@ -6278,6 +6669,17 @@ async function linkingMain(): Promise<void> {
     "accept-unverified": { fixture: accept({ state: "unverified", focus: "[data-linked-state]" }), steps: async () => {} },
     "accept-verified": { fixture: accept({ focus: "[data-linked-state]" }), steps: async () => {} },
     "accept-blocked": { fixture: accept({ state: "tls-failure", focus: "[data-linked-state]" }), steps: async () => {} },
+    /* The proxy shape of #2516: Host is the upstream and X-Forwarded-Host alone names the address. */
+    "accept-host-rewritten": { fixture: accept({ state: "host-rewritten", focus: "[data-linked-host-seen]", detail: { expected: "delegatus.example.com",
+      seen: { host: "127.0.0.1:8898", forwardedHost: "delegatus.example.com", forwardedProto: "https", forwarded: null, unknown: [] } } }), steps: async () => {} },
+    /* A proxy that sends no X-Forwarded-*: Next writes both itself, so the route records them as unknown.
+       The longest value the route keeps (200 characters) must wrap inside the box. */
+    "accept-host-rewritten-long": { fixture: accept({ state: "host-rewritten", focus: "[data-linked-host-seen]", detail: { expected: "delegatus.example.com",
+      seen: { host: "upstream.internal.example.test:8898", forwardedHost: null, forwardedProto: null, unknown: ["forwardedHost", "forwardedProto"],
+        forwarded: `for=203.0.113.7;host=delegatus.example.com;proto=https, ${"for=198.51.100.17;by=203.0.113.43, ".repeat(5)}`.slice(0, 200) } } }), steps: async () => {} },
+    /* Host keeps the name and carries the upstream's port: the name was never lost. */
+    "accept-host-rewritten-port": { fixture: accept({ state: "host-rewritten", focus: "[data-linked-host-seen]", detail: { expected: "delegatus.example.com",
+      seen: { host: "delegatus.example.com:8898", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] } } }), steps: async () => {} },
     "accept-code": { fixture: accept({ focus: "[data-pair-code]" }), steps: async (page, lang) => {
       await page.getByRole("button", { name: translate(lang, "links.allow"), exact: true }).click();
       await page.waitForSelector("[data-pair-code-value]");
@@ -6336,7 +6738,7 @@ async function linkingMain(): Promise<void> {
           if (pathname === "/api/links/grants") return json({ grants: minted || !fixture.used ? fixture.grants : [] });
           if (pathname === "/api/links/shared") return json({ shared: { v: 1, all: false, projects: [] }, known: [{ key: "repo-1", name: "harbor" }], states: [] });
           return json({
-            self: { label: "stage", publicUrl: fixture.publicUrl, check: fixture.publicUrl ? { code: fixture.state, at: "2026-09-29T08:00:00.000Z" } : null },
+            self: { label: "stage", publicUrl: fixture.publicUrl, check: fixture.publicUrl ? { code: fixture.state, at: "2026-09-29T08:00:00.000Z", ...fixture.detail } : null },
             state: fixture.publicUrl ? fixture.state : null, entry: { port: 8898, publishable: true, localVouches: fixture.vouches }, keyOn: true, tailnetUrl: null,
           });
         });
@@ -6374,7 +6776,13 @@ async function linkingMain(): Promise<void> {
           const shortButtons = allow.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent);
           /* The state frames keep the role picker in view when they can; the ones below the fold centre their subject. */
           if (focus) dialog.querySelector(focus)?.scrollIntoView({ block: focus === "[data-linked-state]" ? "nearest" : "center" });
-          return { clipped, buttonsOutside, shortButtons, overflow: dialog.scrollWidth - dialog.clientWidth };
+          const box = dialog.querySelector<HTMLElement>("[data-linked-state]");
+          const boxEdge = box?.getBoundingClientRect();
+          const seen = [...dialog.querySelectorAll<HTMLElement>("[data-linked-host-seen] dt, [data-linked-host-seen] dd, [data-linked-host-seen] p")];
+          const hostSeen = { rows: dialog.querySelectorAll("[data-linked-host-seen] dt").length,
+            outside: seen.filter((node) => { const rect = node.getBoundingClientRect(); return !boxEdge || rect.left < boxEdge.left - 0.5 || rect.right > boxEdge.right + 0.5 || node.scrollWidth > node.clientWidth + 1; }).length,
+            controls: box?.querySelectorAll("button, a, input").length ?? 0, text: box?.innerText ?? "" };
+          return { clipped, buttonsOutside, shortButtons, overflow: dialog.scrollWidth - dialog.clientWidth, hostSeen };
         }, fixture.focus);
         const tag = `${width}-${lang}-${name}`;
         report.frames[tag] = { ...geometry, text: undefined, after };
@@ -6386,6 +6794,20 @@ async function linkingMain(): Promise<void> {
         if (!geometry.text.includes(translate(lang, "links.title"))) report.failures.push(`${tag}: wrong interface language`);
         if (name === "accept-unverified" && geometry.hasBlocking) report.failures.push(`${tag}: warning drawn as blocking`);
         if (name === "accept-blocked" && !geometry.hasBlocking) report.failures.push(`${tag}: blocker not drawn as blocking`);
+        if (fixture.detail) {
+          const { expected, seen } = fixture.detail;
+          const forwarded = seen.forwardedHost === expected && !seen.host.startsWith(expected);
+          const action = translate(lang, forwarded ? "links.hostSeen.actionForwarded" : "links.hostSeen.action");
+          if (!forwarded && after.hostSeen.text.includes(translate(lang, "links.hostSeen.actionForwarded"))) report.failures.push(`${tag}: the box says the name arrived in X-Forwarded-Host`);
+          const unknown = after.hostSeen.text.split(translate(lang, "links.hostSeen.unknown")).length - 1;
+          if (unknown !== seen.unknown.length) report.failures.push(`${tag}: ${unknown} headers read as unknown, ${seen.unknown.length} recorded`);
+          if (!geometry.hasBlocking || after.hostSeen.rows !== 4) report.failures.push(`${tag}: the box does not list the four headers`);
+          if (after.hostSeen.outside) report.failures.push(`${tag}: ${after.hostSeen.outside} header lines leave the box or are clipped`);
+          if (after.hostSeen.controls) report.failures.push(`${tag}: the box gained a control`);
+          for (const value of [translate(lang, "links.hostSeen.expected", { expected }), seen.host, action, seen.forwarded ?? translate(lang, "links.hostSeen.absent")]) {
+            if (!after.hostSeen.text.includes(value)) report.failures.push(`${tag}: the box does not say "${value.slice(0, 40)}"`);
+          }
+        } else if (after.hostSeen.rows) report.failures.push(`${tag}: header lines drawn without a failed Host check`);
         const frame = path.join(OUT_DIR, `${tag}.png`);
         await page.screenshot({ path: frame });
         if (evidenceDir) {
@@ -6442,7 +6864,7 @@ async function installPingMain(): Promise<void> {
       const noticeBackground = await notice.evaluate(node => getComputedStyle(node).backgroundColor);
       if (noticeBackground === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent notice`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-notice.png`) });
-      await notice.getByRole("button", { name: translate(lang, "telemetry.settings"), exact: true }).click();
+      await notice.getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
       const dialog = page.locator("[data-telemetry-settings]");
       await dialog.waitFor({ state: "visible" });
       const toggle = dialog.getByRole("switch");
@@ -6478,6 +6900,117 @@ async function installPingMain(): Promise<void> {
  * BOARD_CAPTURE_CASE=hydration uses only the synthetic home above. Set
  * HYDRATION_MUTATE_SHELL=1 to prove that a server/client text mismatch fails the gate.
  */
+/** A link to a conversation whose two archived generations are listed and its current one is not yet. */
+async function twiceSwitchedLinkMain(): Promise<void> {
+  seedHome();
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const conversationId = "conversation_twice-switched-link";
+  const failures: string[] = [];
+  const frames: Record<string, unknown> = {};
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* Three transcripts of one project; the first scan can still hold them under a project it has not resolved. */
+    let seeded: string[] = [];
+    let seededProject = "";
+    for (const deadline = Date.now() + 60_000; seeded.length < 3 && Date.now() < deadline; await Bun.sleep(1_000)) {
+      const byProject = new Map<string, string[]>();
+      for (const file of ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? []) {
+        if (file.project && file.path?.endsWith(".jsonl")) byProject.set(file.project, [...byProject.get(file.project) ?? [], file.path]);
+      }
+      seededProject = byProject.has(PROJECT_NAME) ? PROJECT_NAME : [...byProject.entries()].sort((a, b) => b[1].length - a[1].length)[0]?.[0] ?? "";
+      seeded = [...byProject.get(seededProject) ?? []].sort();
+    }
+    if (seeded.length < 3) throw new Error(`the scan listed ${seeded.length} seeded transcripts of one project, three are needed`);
+    const [older, newer, successor] = seeded as [string, string, string];
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const lang of ["en", "uk"] as const) for (const order of ["older-first", "newer-first"] as const) for (const link of ["canonical", "legacy"] as const) {
+      const tag = `${lang}-${order}-${link}`;
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      let arrived = false;
+      /* The catalog answers served once the successor arrived, by request scope. */
+      const servedAfter: string[] = [];
+      await context.route(/\/api\/files(\?|$)/, async (route) => {
+        if (arrived) servedAfter.push(new URL(route.request().url()).searchParams.get("path") === null ? "plain" : "pinned");
+        try {
+          /* A 304 would keep the page on the shape it was served before the successor arrived. */
+          const headers = { ...route.request().headers() };
+          delete headers["if-none-match"];
+          delete headers["if-modified-since"];
+          const response = await route.fetch({ headers });
+          if (response.status() !== 200) return route.fulfill({ response });
+          const body = await response.json() as { files?: Array<Record<string, unknown> & { path?: string }> };
+          /* All three generations stay in the project the link opened: the fixture's first scans can
+             place a transcript under a project they have not resolved yet. */
+          const generation = (file: Record<string, unknown>, value: number, migratedTo: string | null) =>
+            ({ ...file, project: seededProject, conversationId, generation: value, ...(migratedTo ? { migratedTo } : {}) });
+          const rows = body.files ?? [];
+          const at = rows.findIndex((file) => file.path === older || file.path === newer);
+          const olderRow = rows.find((file) => file.path === older);
+          const newerRow = rows.find((file) => file.path === newer);
+          const successorRow = rows.find((file) => file.path === successor);
+          const rest = rows.filter((file) => file.path !== older && file.path !== newer && file.path !== successor);
+          const archived = olderRow && newerRow
+            ? (order === "older-first" ? [generation(olderRow, 1, newer), generation(newerRow, 2, successor)] : [generation(newerRow, 2, successor), generation(olderRow, 1, newer)])
+            : [];
+          const current = arrived && successorRow ? [{ ...generation(successorRow, 3, null), predecessorPath: newer }] : [];
+          body.files = [...rest.slice(0, Math.max(0, at)), ...archived, ...current, ...rest.slice(Math.max(0, at))];
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
+      });
+      const page = await context.newPage();
+      const hash = link === "canonical" ? `#c=${encodeURIComponent(conversationId)}` : `#f=${encodeURIComponent(older)}`;
+      await page.goto(`${baseUrl}/${hash}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      const readersOf = (paths: string[]) => page.evaluate((wanted: string[]) => [...document.querySelectorAll("[data-kanban-board] [data-kanban-reader]")]
+        .filter((reader) => wanted.some((file) => reader.matches(`[data-link-path="${CSS.escape(file)}"]`) || reader.querySelector(`[data-link-path="${CSS.escape(file)}"]`) !== null)).length, paths);
+      const drawn = (file: string) => page.evaluate((wanted: string) => document.querySelector(`[data-kanban-board] [data-member="${CSS.escape(wanted)}"]`) !== null, file);
+      const notice = () => page.evaluate(() => document.querySelector("[data-stale-focus-notice]") !== null);
+      const opened = await page.waitForFunction(() => document.querySelector("[data-kanban-board] [data-kanban-reader]") !== null, null, { timeout: 30_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const before = { readers: await readersOf([older, newer]), notice: await notice() };
+      await page.screenshot({ path: path.join(OUT_DIR, `twice-switched-${tag}-opened.png`) });
+      if (!opened || before.readers < 1) failures.push(`${tag}: the link opened ${before.readers} readers of the conversation`);
+      if (before.notice) failures.push(`${tag}: a not-found notice for a link that resolves`);
+      arrived = true;
+      await page.evaluate((event: string) => window.dispatchEvent(new Event(event)), "llv:files-changed");
+      const followed = await page.waitForFunction((wanted: string) => [...document.querySelectorAll("[data-kanban-board] [data-kanban-reader]")]
+        .some((reader) => reader.matches(`[data-link-path="${CSS.escape(wanted)}"]`) || reader.querySelector(`[data-link-path="${CSS.escape(wanted)}"]`) !== null), successor, { timeout: 30_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const after = {
+        successorReaders: await readersOf([successor]),
+        archivedReaders: await readersOf([older, newer]),
+        archivedDrawn: (await drawn(older)) || (await drawn(newer)),
+        notice: await notice(),
+      };
+      await page.screenshot({ path: path.join(OUT_DIR, `twice-switched-${tag}-followed.png`) });
+      if (!followed || after.successorReaders !== 1) failures.push(`${tag}: ${after.successorReaders} readers followed the arriving generation`);
+      if (after.archivedReaders || after.archivedDrawn) failures.push(`${tag}: an archived generation is still drawn beside its successor`);
+      if (after.notice) failures.push(`${tag}: a not-found notice after the successor arrived`);
+      const language = await page.evaluate(() => document.documentElement.lang);
+      if (language !== lang) failures.push(`${tag}: the page speaks ${language}`);
+      frames[tag] = { language, before, after, servedAfter };
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  const report = JSON.stringify({ commit: captureCommit(), frames, failures }, null, 2) + "\n";
+  fs.writeFileSync(path.join(OUT_DIR, "twice-switched-link.json"), report);
+  if (failures.length) throw new Error(failures.join("; "));
+  console.log(`twice-switched link: ${path.join(OUT_DIR, "twice-switched-link.json")}`);
+}
+
 async function hydrationMain(): Promise<void> {
   const { reviewers } = seedHome();
   /* Scanner-only transcripts have no canonical conversation id. Register a
@@ -6587,7 +7120,219 @@ async function hydrationMain(): Promise<void> {
   console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
 }
 
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=relay-answers                                           */
+/* ------------------------------------------------------------------------- */
+
+const RELAY_ANSWERS_ROOT = path.join(STATE_DIR, "external-relay", "answers", "relay-1", "bot-1");
+
+/** One answer record as `src/lib/externalRelay/answers.ts` writes it (relay.md §B.2). */
+function writeRelayAnswer(minutesAgo: number, requestId: string, over: Record<string, unknown>): void {
+  const started = Date.now() - minutesAgo * 60_000;
+  const durationMs = typeof over.durationMs === "number" ? over.durationMs : 5_400;
+  const record = {
+    v: 1, requestId, relayId: "relay-1", targetId: "bot-1", targetName: "Club helper", engine: "claude", model: "opus",
+    claimedAt: new Date(started - 400).toISOString(), startedAt: new Date(started).toISOString(),
+    finishedAt: new Date(started + durationMs).toISOString(), durationMs, state: "finished", outcome: "answered",
+    answer: null, delivery: "accepted", input: null, ...over,
+  };
+  fs.mkdirSync(RELAY_ANSWERS_ROOT, { recursive: true });
+  fs.writeFileSync(path.join(RELAY_ANSWERS_ROOT, `${started}_${requestId}.json`), JSON.stringify(record) + "\n");
+}
+
+/** Invented exchanges of one club chat: a hand-off, a long answer, a time-out, a busy decline and one still running. */
+function seedRelayAnswers(): void {
+  const message = (id: string, key: string, name: string, text: string, minutesAgo: number, replyTo: string | null = null) => ({
+    id, author: { key, name, self: key === "self" }, sent_at: new Date(Date.now() - minutesAgo * 60_000).toISOString(), text, reply_to: replyTo,
+  });
+  const frame = { instructions: "You answer as the club's helper. Plain text, at most three sentences.", owner_instructions: "Friendly and brief.", documents: [] };
+  const tools = [
+    { name: "lookup_notes", summary: "Search the club's documents.", mode: "handoff" },
+    { name: "restrict_member", summary: "Mute a participant for a while.", mode: "handoff" },
+    { name: "poll_attendees", summary: "Post a poll in the chat.", mode: "handoff" },
+    { name: "draw_picture", summary: "Draw a picture and post it.", mode: "handoff" },
+  ];
+  writeRelayAnswer(2, "rq_running", { state: "running", outcome: null, finishedAt: null, durationMs: null, delivery: null,
+    input: { ...frame, conversation: [message("m90", "u_c", "Member C", "@helper what should I bring on Thursday?", 2)], respond_to: "m90", request_text: null } });
+  // Keep the invented running answer under this capture process's custody.
+  // Without its ledger entry, startup correctly settles it as interrupted.
+  const ownerIdentity = procBackend.processIdentity(process.pid);
+  if (!ownerIdentity) throw new Error("relay capture process identity unavailable");
+  fs.writeFileSync(path.join(STATE_DIR, "external-relay", "runs.json"), JSON.stringify({ v: 1, runs: [{
+    requestId: "rq_running", leaseId: "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", relayId: "relay-1", targetId: "bot-1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity,
+    runDir: path.join(BASE, "running-relay"), startedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+  }] }) + "\n");
+  writeRelayAnswer(9, "rq_handoff", { outcome: "declined:handoff", answer: { action: "handoff", text: "", reply_to: null }, durationMs: 4_200,
+    input: { ...frame,
+      conversation: [
+        message("m71", "u_x", "Visitor X", "Cheap followers here: example.invalid/promo", 11),
+        message("m72", "u_a", "Admin A", "@helper mute the person posting promo links, for an hour", 9, "m71"),
+      ],
+      respond_to: "m72", request_text: null,
+      requester: { key: "u_a", is_admin: true, can_restrict_members: true, can_delete_messages: true, is_owner: false, is_anonymous_admin: false },
+      short_term_memory: "The Thursday meetup moved to the north pier this week.", tools } });
+  const longAnswer = "The meetup is on Thursday at 18:30 at the north pier, because the hall is being painted this week. "
+    + "Bring a warm layer: it gets windy by the water after sunset. If you are new, look for the blue flag by the cafe; someone will meet you there. "
+    + "We usually walk to the lighthouse and back, about five kilometres at an easy pace, and finish with tea at the cafe around 20:00.";
+  writeRelayAnswer(34, "rq_answered", { answer: { action: "reply", text: longAnswer, reply_to: "m55" }, durationMs: 7_800,
+    input: { ...frame,
+      conversation: [
+        message("m54", "self", "Club helper", "Welcome to the club chat!", 60),
+        message("m55", "u_b", "Member B", "@helper when and where is the next meetup? [Voice message, 0:12. Transcript: and is it the usual route or something new?]", 34),
+      ],
+      respond_to: "m55", request_text: null,
+      requester: { key: "u_b", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false }, short_term_memory: null, tools: tools.filter((tool) => tool.name !== "restrict_member") } });
+  writeRelayAnswer(80, "rq_hard_cap", { outcome: "failed:hard_cap", durationMs: 1_800_000, delivery: "unconfirmed",
+    input: { ...frame, conversation: [message("m30", "u_d", "Member D", "@helper summarise everything from last month", 80)], respond_to: "m30", request_text: null } });
+  writeRelayAnswer(140, "rq_busy", { outcome: "declined:busy", engine: null, model: null, durationMs: 300,
+    input: { ...frame, conversation: [message("m12", "u_e", "Member E", "@helper hi", 140)], respond_to: "m12", request_text: null } });
+}
+
+function seedRelayStore(apiOrigin: string): void {
+  const dir = path.join(STATE_DIR, "external-relay");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "relays.json"), JSON.stringify({
+    v: 1, installId: crypto.randomUUID(), label: "Delegatus", pending: [],
+    relays: [{
+      id: "relay-1", origin: apiOrigin, api_base: `${apiOrigin}/v1`, name: "Example Connect", description: "Answers club chats with the owner's own agent.",
+      credential: "c".repeat(43), owner: { namespace: "example", id: "owner-1", display_name: "Person A", handle: null },
+      pairedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), paused: false,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+      targets: [{ id: "bot-1", name: "Club helper", answered_by: "install", fallback: "service", enabled: true, engine: "claude", model: "opus", effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }],
+    }],
+  }) + "\n");
+}
+
+/**
+ * The relay card's Recent answers (relay.md §B.9 [rc]) in the real settings
+ * dialog of the production build: a fake relay service on a loopback port 0
+ * answers the target list and holds every claim, so nothing is ever claimed.
+ * At 1440 × 900 and 390 × 844 in en and uk it renders the list, a hand-off
+ * opened read-only and a long answer with its received input unfolded, and
+ * requires the language of each label, no field to type into, no sideways
+ * overflow and 44 px controls. Frames go to RELAY_ANSWERS_RENDER_DIR (or the
+ * run's out directory), readings to relay-answers.json beside them.
+ */
+async function relayAnswersMain(): Promise<void> {
+  seedHome();
+  const service = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    async fetch(request) {
+      const { pathname } = new URL(request.url);
+      if (pathname === "/v1/targets") return Response.json({ targets: [{ target_id: "bot-1", name: "Club helper", answered_by: "install", fallback: "service" }] });
+      if (pathname === "/v1/requests/claim") { await Bun.sleep(20_000); return new Response(null, { status: 204 }); }
+      return Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
+    },
+  });
+  seedRelayStore(`http://127.0.0.1:${service.port}`);
+  seedRelayAnswers();
+  const renderDir = process.env.RELAY_ANSWERS_RENDER_DIR?.trim() || OUT_DIR;
+  fs.mkdirSync(renderDir, { recursive: true });
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  const must = (ok: boolean, message: string) => { if (!ok) report.failures.push(message); };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    /* The telemetry notice sits above every dialog; this case is about the relay card. */
+    await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const tag = `${lang}-${width}`;
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/`);
+      await page.waitForFunction(() => {
+        if (document.querySelector("[data-external-relay-settings]")) return true;
+        window.dispatchEvent(new Event("delegatus:open-external-relay-settings"));
+        return false;
+      }, undefined, { timeout: 60_000 });
+      const toggle = page.locator("[data-external-relay-target=bot-1] [data-external-relay-answers-toggle]");
+      await toggle.waitFor({ timeout: 30_000 });
+      const measure = (scope: string) => page.evaluate((selector) => {
+        const dialog = document.querySelector<HTMLElement>("[data-external-relay-settings]")!;
+        const scroller = [...dialog.querySelectorAll<HTMLElement>("div")].find((node) => getComputedStyle(node).overflowY === "auto") ?? dialog;
+        const area = document.querySelector<HTMLElement>(selector)!;
+        const outer = dialog.getBoundingClientRect();
+        const visible = (node: Element) => (node as HTMLElement).offsetParent !== null;
+        const controls = [...area.querySelectorAll("button, summary")].filter(visible);
+        return {
+          overflow: Math.max(dialog.scrollWidth - dialog.clientWidth, scroller.scrollWidth - scroller.clientWidth),
+          outside: [...area.querySelectorAll("*")].filter(visible).filter((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && (rect.left < outer.left - 0.5 || rect.right > outer.right + 0.5); }).length,
+          shortControls: controls.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent?.slice(0, 40)),
+          editable: area.querySelectorAll("input, textarea, [contenteditable=true]").length,
+          lang: document.documentElement.lang,
+          text: area.innerText,
+        };
+      }, scope);
+      const t = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+      must((await toggle.textContent()) === t("externalRelay.answers.open"), `${tag}: the toggle reads ${await toggle.textContent()}`);
+      /* The member limit field sits in the same row, showing the default. */
+      const limit = page.locator("[data-external-relay-target=bot-1] [data-external-relay-member-limit]");
+      await limit.evaluate((node) => node.scrollIntoView({ block: "center" }));
+      const limitBox = await limit.boundingBox();
+      must((await limit.inputValue()) === "10", `${tag}: the member limit shows ${await limit.inputValue()}`);
+      must((limitBox?.height ?? 0) >= 43.5, `${tag}: the member limit field is ${limitBox?.height} px tall`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-member-limit.png`) });
+      await toggle.click();
+      await page.waitForSelector("[data-external-relay-answer-list]", { timeout: 15_000 });
+      await page.evaluate(() => document.querySelector("[data-external-relay-answers=bot-1]")?.scrollIntoView({ block: "start" }));
+      const rows = await page.locator("[data-external-relay-answer]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-external-relay-answer")));
+      must(JSON.stringify(rows) === JSON.stringify(["rq_running", "rq_handoff", "rq_answered", "rq_hard_cap", "rq_busy"]), `${tag}: the list is ${rows.join(", ")}`);
+      const list = await measure("[data-external-relay-answers=bot-1]");
+      must(list.text.includes(t("externalRelay.outcome.handoff")) && list.text.includes(t("externalRelay.answers.running")), `${tag}: the list misses the hand-off or running label`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-list.png`) });
+      await page.locator("[data-external-relay-answer=rq_handoff]").click();
+      const exchange = page.locator("[data-external-relay-exchange=rq_handoff]");
+      await exchange.waitFor({ timeout: 15_000 });
+      await exchange.scrollIntoViewIfNeeded();
+      await page.evaluate(() => document.querySelector("[data-external-relay-exchange]")?.scrollIntoView({ block: "start" }));
+      const handoff = await measure("[data-external-relay-answers=bot-1]");
+      must((await page.locator("[data-external-relay-exchange-outcome]").textContent()) === t("externalRelay.outcome.handoff"), `${tag}: the exchange outcome is not the hand-off label`);
+      must((await page.locator("[data-external-relay-exchange-answer]").textContent()) === t("externalRelay.answers.handedOff"), `${tag}: the hand-off answer line`);
+      must(handoff.text.includes(`Admin A · ${t("externalRelay.answers.role.admin")}`), `${tag}: who asked is missing`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-handoff.png`) });
+      await page.getByRole("button", { name: t("externalRelay.answers.back"), exact: true }).click();
+      await page.locator("[data-external-relay-answer=rq_answered]").click();
+      await page.locator("[data-external-relay-exchange=rq_answered]").waitFor({ timeout: 15_000 });
+      await page.locator("[data-external-relay-exchange=rq_answered] summary").click();
+      await page.evaluate(() => document.querySelector("[data-external-relay-exchange-answer]")?.scrollIntoView({ block: "start" }));
+      const answered = await measure("[data-external-relay-answers=bot-1]");
+      must(answered.text.includes("north pier, because the hall"), `${tag}: the long answer is missing`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-answer-input.png`) });
+      for (const [name, reading] of Object.entries({ list, handoff, answered })) {
+        must(reading.overflow <= 1, `${tag} ${name}: ${reading.overflow} px sideways overflow`);
+        must(reading.outside === 0, `${tag} ${name}: ${reading.outside} elements outside the dialog`);
+        must(reading.editable === 0, `${tag} ${name}: ${reading.editable} editable fields in a read-only view`);
+        must(reading.lang === lang, `${tag} ${name}: document language ${reading.lang}`);
+        if (width === 390) must(reading.shortControls.length === 0, `${tag} ${name}: controls under 44 px: ${reading.shortControls.join(" | ")}`);
+        report.frames[`${tag}-${name}`] = { ...reading, text: undefined };
+      }
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+    service.stop(true);
+  }
+  fs.writeFileSync(path.join(renderDir, "relay-answers.json"), JSON.stringify(report, null, 2) + "\n");
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`relay answers: ${Object.keys(report.frames).length} readings passed in ${renderDir}`);
+}
+
 if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
+else if (process.env.BOARD_CAPTURE_CASE === "relay-answers") await relayAnswersMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
@@ -6600,5 +7345,6 @@ else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else if (process.env.BOARD_CAPTURE_CASE === "seat-creation") await seatCreationMain();
+else if (process.env.BOARD_CAPTURE_CASE === "seat-composer") await seatComposerMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);
 else await main();

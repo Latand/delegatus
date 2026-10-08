@@ -114,7 +114,7 @@ interface Switch {
   sourceKey: SessionKey;
   successorPath: string;
   effect: StructuredReconfigureEffect;
-  apply: () => Promise<"applied" | "pending">;
+  apply: () => Promise<"applied" | "pending" | "writer-busy">;
 }
 
 /** A switch to account B requested while account A's turn runs, before any delivery is admitted. */

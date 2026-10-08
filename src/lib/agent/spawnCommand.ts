@@ -9,7 +9,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -64,10 +64,12 @@ import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentW
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
-import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "./capabilityHeader";
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { updateHoldWait } from "@/lib/selfUpdate/launchHold";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -151,6 +153,9 @@ export interface SpawnCommandDependencies {
   /** In-process autonomous callers recheck their admission hold under the
       account lock. Direct operator requests omit this callback. */
   autonomousAdmissionHeld?(): boolean;
+  /** Trusted automatic target restriction, checked under the account lock
+      immediately before a fresh launch receipt is reserved. */
+  assertAccountAdmission?(accountId: string): void;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -176,21 +181,22 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
 /** Record a request-bound pre-reservation refusal. The shared durable fence is
     the authoritative downstream evidence; if it cannot be written, recovery
     must retain unknown rather than trusting the HTTP error. */
-export function fenceSpawnAdmissionRejection(
+export async function fenceSpawnAdmissionRejection(
   body: Record<string, unknown>,
   status: number,
   error: string,
   dependencies: Pick<SpawnCommandDependencies, "registry">,
-): SpawnAdmissionFenceResult | null {
+): Promise<SpawnAdmissionFenceResult | null> {
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   if (!clientAttemptId || !/^[A-Za-z0-9_-]{8,128}$/.test(clientAttemptId)) return null;
   try {
-    return recordSpawnAdmissionRejection({
+    const requestDigest = spawnAdmissionBodyDigest(body);
+    return await withAccountMutationLockAsync(() => recordSpawnAdmissionRejection({
       clientAttemptId,
-      requestDigest: spawnAdmissionBodyDigest(body),
+      requestDigest,
       status,
       error,
-    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId));
+    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId)), { caller: "spawn refusal" });
   } catch {
     return null;
   }
@@ -340,9 +346,9 @@ export async function executeSpawnRequest(
   /* Every pre-reservation refusal below records the request-bound fence, so a
      caller whose dispatch was interrupted can recover this exact key to a
      terminal NOT_EXECUTED instead of an indefinite unknown (#1641). */
-  const refuse = (error: string): NextResponse<ApiError> => {
+  const refuse = async (error: string): Promise<NextResponse<ApiError>> => {
     if (!authenticatedCallerError) {
-      fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
+      await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
     }
     return NextResponse.json({ error }, { status: 400 });
   };
@@ -389,7 +395,7 @@ export async function executeSpawnRequest(
   if (role.value && (engine === "claude" || engine === "codex") && readiness !== "connected") {
     const refusal = { role: role.value.role, engine, reason: readiness };
     const error = engineNotConnectedMessage(refusal);
-    if (!authenticatedCallerError) fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
+    if (!authenticatedCallerError) await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
     return NextResponse.json({ error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal) }, { status: 409 });
   }
   if (body.accountId !== undefined && typeof body.accountId !== "string") return NextResponse.json({ error: "accountId must be a string" }, { status: 400 });
@@ -613,27 +619,29 @@ export async function executeSpawnRequest(
       agentRole: role.value?.role ?? null,
     });
     const implicitRootTelegram = requestedMcpServers === null && sessionOrigin === "operator-root";
-    if (requestedTelegram && engine === "copilot") {
+    /* Whether Telegram is set up on this installation decides the grant. A
+       connection that is down this minute changes nothing here: the launch
+       repairs it, or the host starts without the tool and gets it back on a
+       later start. Where Telegram is not set up the request is left out and
+       the launch goes on. That is settled before the checks on who may hold
+       the grant, because nothing is granted there and nothing is left to
+       refuse. A replayed attempt keeps what its receipt recorded. */
+    const telegramAvailable = (requestedTelegram || implicitRootTelegram) && telegramSetUp();
+    const telegramLeftOut = requestedTelegram && (existingAttempt
+      ? !existingAttempt.launchProfile.mcpServers.includes("telegram")
+      : !telegramAvailable);
+    const telegramWanted = requestedTelegram && !telegramLeftOut;
+    if (telegramWanted && engine === "copilot") {
       return refuse("telegram MCP is unsupported by the Copilot engine");
     }
-    let telegramConnected = false;
-    if (requestedTelegram || implicitRootTelegram) {
-      try {
-        const connection = readTelegramConnection();
-        const session = readTelegramSession();
-        telegramConnected = connection.status === "connected" && connection.credentialRef === session?.credentialRef
-          && Boolean(session.connectorToken);
-      }
-      catch { /* an unreadable connector cannot supply a grant */ }
-      if (requestedTelegram && !telegramConnected && !existingAttempt) return refuse("telegram MCP connector is not connected");
-    }
-    if (requestedTelegram) {
+    if (telegramWanted) {
       if (!existingAttempt && !seatLaunch && !seatParent && sessionOriginFor({
         origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
         parentConversationId, agentRole: role.value?.role ?? null,
       }) === "delegated") return refuse("telegram MCP requires an operator-owned orchestrator seat parent");
     }
-    const telegramSeatGrant = requestedTelegram && seatParent;
+    const requestedSeatGrant = requestedTelegram && seatParent;
+    const telegramSeatGrant = requestedSeatGrant && !telegramLeftOut;
     if (telegramSeatGrant && authenticatedCaller?.kind === "agent"
       && authenticatedCaller.conversationId !== parentConversationId) {
       return refuse("telegram MCP requires the orchestrator seat's own spawn capability");
@@ -663,20 +671,23 @@ export async function executeSpawnRequest(
         origin: sessionOrigin,
         requested: requestedPlugins.value,
       });
-    /* A seat carries the operator's connected connector, and an explicit
-       child request may receive that same grant from the seat. All other
-       delegated launches keep the Viewer baseline. */
-    const grantedServers = existingAttempt && requestedTelegram
+    /* A seat carries the operator's connector, and an explicit child request
+       may receive that same grant from the seat. All other delegated launches
+       keep the Viewer baseline. This is the request as it was asked, which is
+       what an attempt is matched by when it is replayed; the launch itself
+       takes {@link grantedServers}. */
+    const requestedServers = requestedTelegram && (existingAttempt || (telegramLeftOut && !reportClassGrant))
       ? grantedMcpServers(requestedMcpServers ?? [])
       : existingAttempt && implicitRootTelegram && !reportClassGrant
       ? existingAttempt.launchProfile.mcpServers
-      : implicitRootTelegram && (!telegramConnected || engine === "copilot" || transport === "tmux")
+      : implicitRootTelegram && (!telegramAvailable || engine === "copilot" || transport === "tmux")
       ? ["viewer"]
       : reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
-      : (seatLaunch || telegramSeatGrant) && requestedTelegram
+      : (seatLaunch || requestedSeatGrant) && requestedTelegram
         ? grantedMcpServers(requestedMcpServers)
       : mcpServersForSession({ origin: sessionOrigin, requested: requestedMcpServers });
+    const grantedServers = telegramLeftOut ? requestedServers.filter((name) => name !== "telegram") : requestedServers;
     if (transport === "tmux" && grantedServers.includes("telegram")) {
       return refuse("telegram MCP requires structured spawn transport");
     }
@@ -691,7 +702,7 @@ export async function executeSpawnRequest(
         accountId,
         role: role.value?.role ?? null,
         title: launchTitle,
-        mcpServers: grantedServers,
+        mcpServers: requestedServers,
         ...(plugins.length ? { plugins } : {}),
         ...(body.allowSubagents === true ? { allowSubagents: true } : {}),
         ...(explicitProject ? { project: explicitProject } : {}),
@@ -800,6 +811,7 @@ export async function executeSpawnRequest(
       ...(explicitProject ? { project: explicitProject } : {}),
     });
     const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
+      if (isAccountAdmissionRetryable(failure)) throw failure;
       const accountId = body.accountId as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
       const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
@@ -843,6 +855,7 @@ export async function executeSpawnRequest(
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
         : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model, launchTier ? { id: launchTier, model: selectedModel.model!, required: tierResolution.required } : undefined);
     } catch (error) {
+      if (isAccountAdmissionRetryable(error)) throw error;
       /* The record needs the operator, and until it gets them this launch
          selects nothing. A conflict, not a server fault: the request is well
          formed and the state it addresses is what is wrong — the same answer
@@ -873,7 +886,8 @@ export async function executeSpawnRequest(
           } else {
             return await terminalizePinnedAccountFailure(error);
           }
-        } catch {
+        } catch (fallbackError) {
+          if (isAccountAdmissionRetryable(fallbackError)) throw fallbackError;
           return await terminalizePinnedAccountFailure(error);
         }
       } else {
@@ -992,8 +1006,9 @@ export async function executeSpawnRequest(
           || accountProbeIdentity(current) !== admissionAccount!.identity
           || current.accountId !== account.accountId || current.kind !== account.kind
           || current.home !== account.home || current.transcriptRoot !== account.transcriptRoot) {
-          throw new Error("spawn account changed during admission");
+          throw new AccountAdmissionChangedError();
         }
+        dependencies.assertAccountAdmission?.(account.accountId);
       }
       return registry.beginSpawnRequest(canonicalSpawnRequest(
         receiptAccountId,
@@ -1002,9 +1017,15 @@ export async function executeSpawnRequest(
         existingAttempt?.accountPin ?? (body.accountId !== undefined),
       ));
     }, { holder: "spawn admission", caller: "spawn" });
-    if (!begun) return NextResponse.json({ error: "autonomous work is held for the automatic update", code: "AUTO_UPDATE_DRAIN" }, { status: 503 });
+    if (!begun) {
+      /* The same wait the MCP refusal names (#2515). */
+      const wait = updateHoldWait();
+      return NextResponse.json({
+        code: "AUTO_UPDATE_DRAIN", ...wait,
+      }, { status: 503 });
+    }
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
-    if (begun.kind === "created" && requestedTelegram && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
+    if (begun.kind === "created" && requestedTelegram && !telegramLeftOut && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";
       if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
       else registry.failSpawn(begun.receipt.launchId, reason);
@@ -1012,7 +1033,7 @@ export async function executeSpawnRequest(
     }
     if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
       && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
-      const reason = "telegram MCP orchestrator seat is no longer active";
+      const reason = TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH;
       if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
       else registry.failSpawn(begun.receipt.launchId, reason);
       return refuse(reason);
@@ -1390,6 +1411,8 @@ export async function executeSpawnRequest(
     if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
+    if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof ProjectAccountRefusedError) return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */
     if (error instanceof SpawnAdmissionError) return NextResponse.json(spawnRejectionResponse(error), { status: 403 });

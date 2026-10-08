@@ -5,6 +5,8 @@ import path from "node:path";
 import { commitPipelineStage, reconcilePipelineStageHead, type PipelineGitResult, type ProvisionExecPort } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
+const pipelineTerminal = (pipeline: Pipeline) => pipeline.state === "completed" || pipeline.state === "closed";
+
 export type StageBranchProtection = { branch: string; head: string; error: string | null };
 
 /** Other lanes can acquire branch claims while this lane is outside its lease.
@@ -13,7 +15,7 @@ export function stageBranchOwnershipFence(pipelines: readonly Pipeline[], ownerI
   return JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
     pipeline.id, pipeline.repoDir, pipeline.worktreeDir, pipeline.branch,
     pipeline.delivery?.target, pipeline.delivery?.active, pipeline.delivery?.ownerId,
-    pipeline.delivery?.epoch, pipeline.delivery?.publish,
+    pipeline.delivery?.epoch, pipeline.delivery?.publish, pipelineTerminal(pipeline),
   ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
 
@@ -107,8 +109,11 @@ export async function commitAndAdoptStageBranch(
     if ([...pipelineIdentity.directories].some((directory) => otherIdentity.directories.has(directory))
       || pipelineIdentity.unresolved || otherIdentity.unresolved) others.push(other);
   }
-  const ownedByOther = (name: string) => others.some((other) => other.branch === name
-    || (other.delivery?.active && other.delivery.target.branch === `refs/heads/${name}`));
+  // A finished lane whose delivery claim was released keeps its branch name,
+  // and a successor delivering to that pull request branch must not lose it.
+  const ownedByOther = (name: string) => others.some((other) => other.delivery?.active
+    ? other.branch === name || other.delivery.target.branch === `refs/heads/${name}`
+    : other.branch === name && !pipelineTerminal(other));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
   if (!adoption && source === pipeline.branch) return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile));
   if (!adoption && source === deliveryBranch) {

@@ -6,6 +6,7 @@
  * commit. With nothing linked the store never calls this.
  */
 import { TASK_SYNC_GROUPS, type BoardTask, type TaskSyncGroup } from "@/lib/tasks/types";
+import { prototypeReviewReplica } from "@/lib/prototypeReview/model";
 
 import { derivedStamp, maxStamp, nextStamp } from "./stamp";
 import { floorKey, isFloor, isTombstone, tombstoneKey, type TombstoneRow } from "./tombstones";
@@ -27,7 +28,7 @@ export interface TaskSyncWrite {
     is a change of its text even when the words stay. */
 export function groupDigest(task: BoardTask, group: TaskSyncGroup): string {
   switch (group) {
-    case "text": return JSON.stringify([task.text, task.details ?? null, task.chosen === true]);
+    case "text": return JSON.stringify([task.text, task.details ?? null, task.chosen === true, prototypeReviewReplica(task) ?? null]);
     case "status": return JSON.stringify(task.status);
     case "look": return JSON.stringify([task.color ?? null, task.icon ?? null, task.priority ?? null]);
     case "place": return JSON.stringify([task.placement, task.pos ?? null]);

@@ -14,6 +14,8 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
@@ -21,8 +23,21 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   preservedLocalRef?: PreservedProvisionRef;
   /** The controller must retry this committing attempt after collecting fresh evidence. */
   deferred?: true;
+  /** Set only when `git commit` itself answered no for a passed stage. */
+  commitRefusal?: StageCommitRefusal;
 };
+/** A refused stage commit, handed back to the stage that wrote it. The
+    controller does not judge what the hook printed: the stage reads it, repairs
+    its files or reports why it cannot. `paths` are the files the refused commit
+    held, for the message to name. */
+export type StageCommitRefusal = { paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
+
+async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
+  if (staged) return { paths: [...staged] };
+  const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
+  return { paths: index.code === 0 ? index.stdout.split("\0").filter(Boolean) : [] };
+}
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
   return { ok: false, error: `${step}: ${(result.stderr || result.stdout || "no output").trim()}` };
@@ -663,7 +678,10 @@ export async function commitPipelineStage(
   }
   const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
-  if (commit.code !== 0) return failure("committing the passed stage", commit);
+  if (commit.code !== 0) {
+    return { ...failure("committing the passed stage", commit),
+      commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
+  }
   const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
   if (receipt && receiptFile) {
@@ -1177,10 +1195,19 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
-/** The last phase the hook announced with its own `pre-push: <phase>` marker. */
+/** The hook's verdict for one member of a group it runs at once (a native
+    Codex version), `pre-push: <check>: failed (<code>) after <n> s`. */
+const HOOK_MEMBER_FAILED = /^pre-push: ([^;:]{1,60}): failed \(/;
+/** The last phase the hook announced with its own `pre-push: <phase>` marker,
+    or the group member it last named as failed after that. A member that
+    passed is never a phase. */
 export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
-  return failure.outputTail.split("\n").map((line) => line.trim())
-    .filter((line) => /^pre-push: [^;:]{1,60}$/.test(line)).at(-1)?.slice("pre-push: ".length) ?? null;
+  for (const line of failure.outputTail.split("\n").map((line) => line.trim()).reverse()) {
+    const member = HOOK_MEMBER_FAILED.exec(line);
+    if (member) return member[1]!;
+    if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
+  }
+  return null;
 }
 
 /** What stopped a publication, in one line a person can act on. The hook's
@@ -1197,11 +1224,32 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
+/** What a publication's push may take, its repository hook included. */
+const PUBLICATION_PUSH_TIMEOUT_MS = 900_000;
+/** Left after the hook's deadline for git to send the pack. */
+const PUBLICATION_PACK_MARGIN_MS = 60_000;
+
+/** The hook's line for a decisive check its push budget stopped before a
+    verdict (NO_VERDICT_PREFIX in scripts/local-gate.ts): the push was
+    interrupted, it was not refused. */
+const HOOK_NO_VERDICT = /^pre-push: no verdict within the push budget of (\d+) s: "([^"\n]{1,80})"/m;
+/** The budget and the check the hook stopped, from its own no-verdict line. */
+export function hookBudgetStop(output: string): { ms: number; check: string } | null {
+  const match = HOOK_NO_VERDICT.exec(output);
+  return match ? { ms: Number(match[1]) * 1000, check: match[2]! } : null;
+}
+
 /** A push that was stopped before it reached the remote, in one line: what
     ended it and which phase the hook had announced. Evidence is absent when
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
   const phase = failure ? publicationFailurePhase(failure) : null;
+  if (failure?.hookBudgetMs) {
+    const budget = `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out`;
+    // The check the hook named is exact; the last phase marker is a group at best.
+    if (failure.hookStoppedCheck) return `${budget} before its "${failure.hookStoppedCheck}" check reached a verdict, and the push did not reach the remote`;
+    return `${budget}${phase ? ` while its "${phase}" phase was still running` : ""}; it stopped without a verdict and the push did not reach the remote`;
+  }
   const ended = failure?.timedOutMs ? `the push ran past its ${Math.round(failure.timedOutMs / 60_000)}-minute limit`
     : failure?.signal ? `the push was ended by ${failure.signal}` : "the push was interrupted";
   return `${ended}${phase ? ` in the hook's "${phase}" phase` : ""} and did not reach the remote`;
@@ -1219,7 +1267,7 @@ export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.e
   const env: Partial<NodeJS.ProcessEnv> = {};
   for (const key of Object.keys(source)) {
     if (key === "NODE_ENV" || key === "NEXT_PHASE" || key === "NEXT_RUNTIME" || /^__NEXT_/.test(key)
-      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$)/.test(key))) env[key] = undefined;
+      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$|(?:LLV|DELEGATUS)_(?:AGENT_CPU$|CPU_PRESSURE|WORK_(?:SCOPE_)?CPU_QUOTA$))/.test(key))) env[key] = undefined;
   }
   return env;
 }
@@ -1365,6 +1413,8 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
  * to, which is a different fact from a failed publication and never a stall on
  * its own.
  */
+const PUBLICATION_INSTALL_SUBJECT = "publication install";
+
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
@@ -1460,6 +1510,28 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
     }, 50);
     let failureEvidence: PipelinePublicationFailure | undefined;
+    const showInstallHold = (reason: string | null, replaced: { detail: string | null } | null) => withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      if (!current || !matches(current)) return;
+      if (reason) current.stateDetail = reason;
+      else if (replaced && isCpuPressureDetail(current.stateDetail, PUBLICATION_INSTALL_SUBJECT)) current.stateDetail = replaced.detail;
+      else return;
+      tx.put(current);
+    });
+    const waitForPublicationInstall = async (): Promise<boolean> => {
+      let shown: Promise<void> = Promise.resolve();
+      let replaced: { detail: string | null } | null = null;
+      const admitted = await waitForCpuPressure(machineCpuPressureGate(), { subject: PUBLICATION_INSTALL_SUBJECT, signal: abort.signal,
+        pollMs: machineCpuPressurePollMs(),
+        onReason: (reason) => {
+          replaced ??= { detail: findPipelineRecord(pipeline.id)?.stateDetail ?? null };
+          shown = shown.then(() => showInstallHold(reason, null));
+        } });
+      await shown;
+      // The detail the hold replaced comes back: settlement reads it.
+      if (replaced) await showInstallHold(null, replaced);
+      return admitted && !abort.signal.aborted;
+    };
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
     // lock stays held until that child is gone; takeover must prove it is free.
@@ -1467,10 +1539,28 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       fs.futimesSync(descriptor, new Date(), new Date());
+      const preparingDependencies = command === "bun" && args[0] === "install";
+      // The push runs the repository's pre-push gates; both leave the
+      // production service for a work scope. Its PID, group and the inherited
+      // lock descriptor stay this command's.
+      let launch = { command, args };
+      if ((command === "git" && args[0] === "push") || preparingDependencies) {
+        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : "publish-push" }); }
+        catch (error) {
+          if (!(error instanceof CpuContainmentUnavailable)) throw error;
+          failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+            code: 1, signal: null, durationMs: 0, outputTail: error.message };
+          return { code: 1, stdout: "", stderr: error.message };
+        }
+      }
+      // Preparing dependencies is heavy work that starts only when CPU
+      // pressure allows; the push is held by nothing, its gates take slots
+      // through gate-slot.sh. The lane shows the reason while it waits, and a
+      // close or takeover aborts the wait before any child exists.
+      if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(command, args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
-      const preparingDependencies = command === "bun" && args[0] === "install";
+      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
@@ -1480,11 +1570,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long test diagnostics must not erase the hook's phase markers.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
+        const hookStop = preparingDependencies ? null : hookBudgetStop(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}) };
+          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;
     };
@@ -1509,6 +1600,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const detail = publicationFailureDetail(failureEvidence);
       result = result.ok ? { ...result, failure: failureEvidence, detail }
         : { ...result, failure: failureEvidence, error: detail };
+      // A hook that stopped at its budget judged nothing: retried like a push
+      // its time limit killed, never parked as the stage's own refusal.
+      if (!result.ok && failureEvidence.hookBudgetMs) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.
@@ -1597,7 +1691,7 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
           ? { ok: false, error: failure ? publicationFailureDetail(failure)
             : retained.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
               : redactBounded(redactPublicationText(retained.error), 4500),
-            ...(failure ? { failure } : {}) }
+            ...(failure ? { failure } : {}), ...(!retained.ok && retained.outcome ? { outcome: retained.outcome } : {}) }
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
       if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
       const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
@@ -1695,7 +1789,12 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      or is refused; any other push is the one it always was. The App's
      variables are spread over the hook environment, which removes the
      Viewer's own settings first. */
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv() }, { timeoutMs: 900_000 }));
+  /* The hook is handed the moment it must be done by, a minute before this
+     limit for git to send the pack, so it ends with its own verdict or with
+     a named missing one instead of being killed (scripts/local-gate.ts). */
+  const pushEnv = { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv(),
+    LLV_GATE_PUSH_DEADLINE: String(Date.now() + PUBLICATION_PUSH_TIMEOUT_MS - PUBLICATION_PACK_MARGIN_MS) };
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: PUBLICATION_PUSH_TIMEOUT_MS }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

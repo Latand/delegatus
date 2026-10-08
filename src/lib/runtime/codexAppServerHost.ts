@@ -1,4 +1,4 @@
-import { memoryKillText } from "./agentMemoryState";
+import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import { normalizeNativeQueueObservation } from "./nativeQueueContent";
 import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity";
@@ -25,6 +25,8 @@ import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } fr
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
+import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
+import { nativeCodexActivityMethod } from "./codexSubagentDetection";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -37,7 +39,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtime
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
+import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
   streamingVoiceDelivery,
@@ -1435,7 +1437,17 @@ export class CodexAppServerHost implements EngineHost {
     catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
+    const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
+    let features: ReturnType<typeof readCodexFeatures>;
+    try { features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env); }
+    catch (error) { options.releaseCleanup?.(); throw error; }
+    const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
+    const granted = grantedPlugins(options.plugins);
+    if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     const args = [
+      "-c", `agents.enabled=${options.allowSubagents === true}`,
+      ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
+      ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1447,10 +1459,9 @@ export class CodexAppServerHost implements EngineHost {
       "--enable",
       "realtime_conversation",
     ];
-    const granted = grantedPlugins(options.plugins);
-    let childEnv: NodeJS.ProcessEnv;
+    let telegram: TelegramLaunchGrant;
     try {
-      childEnv = withTelegramConnectorGrant(
+      telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
           options.codexHome,
@@ -1458,15 +1469,16 @@ export class CodexAppServerHost implements EngineHost {
           options.forwardGitHubConfig === true,
         ),
         options.mcpServers,
-        options.validateTelegramGrant,
+        { validateGrant: options.validateTelegramGrant },
       );
     } catch (error) {
       options.releaseCleanup?.();
       throw error;
     }
+    const childEnv = telegram.env;
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {
+      child = spawnProcess(binary, args, {
         cwd: options.cwd,
         env: childEnv,
         detached: true,
@@ -1501,16 +1513,17 @@ export class CodexAppServerHost implements EngineHost {
         provisional.imageInputSupport = "unknown";
       }
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
-      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown } };
+      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
-        options.mcpServers,
+        telegram.mcpServers,
         granted,
         /* The app-server reads the capability header's value from its own
            environment, so only a thread whose app-server holds one goes
            over HTTP. */
         viewerMcpTransportForLaunch(childEnv),
+        features,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       if (memoryHook) {
@@ -1531,12 +1544,30 @@ export class CodexAppServerHost implements EngineHost {
           ? { permissions: options.permissionProfile }
           : { sandbox: options.sandbox ?? "read-only" }),
         approvalPolicy: options.approvalPolicy ?? "never",
+        ...(options.allowSubagents === true ? {} : { approvalsReviewer: "user" }),
       };
+      /* A new thread reads its developer instructions as it builds its first
+         context. A resumed thread keeps the context it already has and sends
+         the model only what changed, so there the line goes into its history
+         below, where the next turn reads it. An engine too old to take a
+         history item still gets the instructions. */
+      const noticeIntoHistory = telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory();
+      /* The thread parameter replaces the account's own developer
+         instructions, so the notice is added to them. */
+      const runNotice = telegram.unavailable && !noticeIntoHistory
+        ? {
+          developerInstructions: [
+            typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
+            TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE,
+          ].filter(Boolean).join("\n\n"),
+        }
+        : {};
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
+          ...runNotice,
           config,
         })
         : await provisional.rpc("thread/start", {
@@ -1544,6 +1575,7 @@ export class CodexAppServerHost implements EngineHost {
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
+          ...runNotice,
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
@@ -1568,6 +1600,9 @@ export class CodexAppServerHost implements EngineHost {
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
       await provisional.initializeNativeQueue();
+      /* Before the queue's head can start a turn, so the first turn of this
+         run already reads it. */
+      if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
       if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
       return provisional;
     } catch (error) {
@@ -1653,6 +1688,19 @@ export class CodexAppServerHost implements EngineHost {
       return;
     }
     if (this.imageInputSupport === "supported") this.setSessionStatus(this.engineStatus, this.activeFlags);
+  }
+
+  /**
+   * One developer line for this run, appended to the resumed thread's history.
+   * It is a courtesy to the agent: a launch that could not place it goes on.
+   */
+  private async injectRunNotice(text: string): Promise<void> {
+    try {
+      await this.rpc("thread/inject_items", {
+        threadId: this.identity.threadId,
+        items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }],
+      }, this.requestTimeoutMs, true);
+    } catch { /* the run starts without the line */ }
   }
 
   private supportsNativeHistory(): boolean {
@@ -2889,7 +2937,7 @@ export class CodexAppServerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
-      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
+      ...memoryField(this.memoryCell),
       activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.supportsNativeHistory() && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
       account: this.account,
       diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery },
@@ -3104,6 +3152,9 @@ export class CodexAppServerHost implements EngineHost {
 
   private emit(event: UnsequencedEvent): void {
     if (this.ledgerFailed) return;
+    if (event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined) {
+      event = { ...event, activityAt: new Date().toISOString() };
+    }
     /* Recorded here rather than at each call site, so every path that ends a
        turn — a terminal notification, a resume that finds it already over, an
        error that terminalizes it — leaves the same evidence for the voice
@@ -3160,7 +3211,9 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private restoreEvents(): number {
-    const stored = this.eventStore.load(this.identity.threadId);
+    const stored = this.eventStore.load(this.identity.threadId).map((event) =>
+      event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
+        ? { ...event, activityAt: null } : event);
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
     this.attentions.clear();
     this.clearVoiceStreamTimers();
@@ -3312,7 +3365,8 @@ export class CodexAppServerHost implements EngineHost {
           completedItems.set(key, recorded - 1);
           continue;
         }
-        this.emit({ kind: "item", turnId, item, phase: "completed" });
+        this.emit({ kind: "item", turnId, item, phase: "completed",
+          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) });
       }
     }
     if (status === "completed" || status === "interrupted" || status === "failed" || status === "error") {
@@ -3945,6 +3999,15 @@ export class CodexAppServerHost implements EngineHost {
        it — or refusing only its `serverRequest/resolved` and stranding the
        attention it opened — would strand work the parent delegated. */
     if (this.foreignThreadNotification(params)) return;
+    if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
+      const reviewId = stringField(params, "reviewId");
+      if (reviewId) this.emit({
+        kind: "item", turnId: turnId ?? this.activeTurnId,
+        item: { type: "autoApprovalReview", id: reviewId },
+        phase: method.endsWith("/started") ? "started" : "completed",
+      });
+      return;
+    }
     if (method === "turn/started" && turnId) {
       if (reconcileBufferedLifecycle) {
         const historicalStart = this.events.some((event) => event.kind === "turn-started" && event.turnId === turnId);

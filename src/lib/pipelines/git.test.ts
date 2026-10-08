@@ -2767,3 +2767,112 @@ test("interrupted checkout recovery refuses a locked same-branch worktree owned 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("publication prepares dependencies and pushes, hooks included, from CPU work scopes", async () => {
+  const { setCpuPortsForTests } = await import("@/lib/runtime/cpuPlacement");
+  const box = await publishSandbox();
+  const previous = process.env.LLV_AGENT_CPU;
+  process.env.LLV_AGENT_CPU = "auto";
+  try {
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), workSlice: "test-agents-work.slice", runner: () => "" });
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
+    const head = await box.commit("accepted.txt", "accepted\n");
+    const launches: string[][] = [];
+    const scoped: ExecPort = async (command, args, cwd, env, options) => {
+      launches.push([command, ...args]);
+      if (command !== "systemd-run") return await realExec(command, args, cwd, env, options);
+      const inner = args.slice(args.indexOf("--") + 1);
+      // The fixture has no dependencies to install.
+      if (inner[0] === "bun") return { code: 0, stdout: "", stderr: "" };
+      return await realExec(inner[0]!, inner.slice(1), cwd, env, options);
+    };
+    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    const work = launches.filter(([command]) => command === "systemd-run").map((launch) => launch.slice(launch.indexOf("--") + 1, launch.indexOf("--") + 3));
+    expect(work).toEqual([["bun", "install"], ["git", "push"]]);
+    for (const launch of launches.filter(([command]) => command === "systemd-run")) expect(launch).toContain("--slice=test-agents-work.slice");
+    expect(launches.filter(([command, verb]) => command === "git" && verb === "push")).toEqual([]);
+
+    // Where the mechanism should exist and is missing, nothing is pushed and the cause is recorded.
+    setCpuPortsForTests({ probe: () => ({ kind: "missing", reason: "the systemd user manager does not delegate the cpu controller" }), runner: () => "" });
+    const next = await box.commit("next.txt", "next\n");
+    const refused = await publishPipelineBranch(box.subject, scoped, { acceptedSha: next });
+    expect(refused.ok).toBe(false);
+    expect(await box.originHead()).toBe(head);
+    expect(JSON.stringify(refused)).toContain("CPU containment for agent work is unavailable");
+  } finally {
+    setCpuPortsForTests(null);
+    if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("publication dependency preparation waits for CPU pressure, starts once in its work scope, and a close cancels the wait", async () => {
+  const { setCpuPortsForTests } = await import("@/lib/runtime/cpuPlacement");
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY, setMachineCpuPressureForTests } = await import("@/lib/runtime/cpuPressure");
+  const { patchPipeline, defaultPipelinePorts } = await import("./engine");
+  const { registerPipelineTick } = await import("./controllerSignal");
+  const restoreTick = registerPipelineTick(async () => {});
+  const box = await publishSandbox();
+  const previous = process.env.LLV_AGENT_CPU;
+  process.env.LLV_AGENT_CPU = "auto";
+  let pressure: number | null = 80; let clock = 0; let samples = 0;
+  // Each sample is one simulated second.
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { samples += 1; clock += 1_000; if (pressure === null) throw new Error("no PSI"); return pressure; }, now: () => clock });
+  const installs: string[][] = []; const pushes: string[][] = [];
+  const scoped: ExecPort = async (command, args, cwd, env, options) => {
+    if (command !== "systemd-run") return await realExec(command, args, cwd, env, options);
+    const inner = args.slice(args.indexOf("--") + 1);
+    if (inner[0] === "bun") { installs.push(args); return { code: 0, stdout: "", stderr: "" }; }
+    pushes.push(args);
+    return await realExec(inner[0]!, inner.slice(1), cwd, env, options);
+  };
+  const until = async (predicate: () => boolean) => {
+    for (let i = 0; i < 400 && !predicate(); i++) await Bun.sleep(5);
+    expect(predicate()).toBe(true);
+  };
+  try {
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), workSlice: "test-agents-work.slice", runner: () => "", cpus: 24 });
+    setMachineCpuPressureForTests(gate, 2);
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
+
+    // Sustained pressure: no install child, the lane shows why.
+    const head = await box.commit("accepted.txt", "accepted\n");
+    const held = publishPipelineBranch(box.subject, scoped, { acceptedSha: head });
+    await until(() => samples >= 5 && findPipelineRecord(box.subject.id)?.stateDetail?.startsWith("publication install held for CPU pressure since ") === true);
+    expect(installs).toEqual([]);
+    expect(pushes).toEqual([]);
+    // Ten seconds below the release threshold admit exactly one install.
+    pressure = 5;
+    expect(await held).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(installs).toHaveLength(1);
+    expect(installs[0]).toEqual(expect.arrayContaining(["--slice=test-agents-work.slice", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms", "CPUWeight=100"]));
+    expect(pushes).toHaveLength(1);
+    expect(findPipelineRecord(box.subject.id)!.stateDetail ?? null).toBeNull();
+
+    // A failed sample starts the install, still in its work scope.
+    pressure = null;
+    const sampled = await box.commit("sampled.txt", "sampled\n");
+    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: sampled })).toEqual({ ok: true, sha: sampled, remote: "published" });
+    expect(installs).toHaveLength(2);
+    expect(installs[1]).toContain("--slice=test-agents-work.slice");
+
+    // Closing the lane while the install waits ends the wait without a child or a push.
+    pressure = 80;
+    const closed = await box.commit("closed.txt", "closed\n");
+    const waiting = publishPipelineBranch(box.subject, scoped, { acceptedSha: closed });
+    await until(() => findPipelineRecord(box.subject.id)?.stateDetail?.startsWith("publication install held for CPU pressure") === true);
+    const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
+    expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
+    expect(await waiting).toMatchObject({ ok: false, error: expect.stringContaining("superseded") });
+    expect(installs).toHaveLength(2);
+    expect(pushes).toHaveLength(2);
+    expect(await box.originHead()).toBe(sampled);
+  } finally {
+    setMachineCpuPressureForTests(undefined);
+    setCpuPortsForTests(null);
+    if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
+    restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});

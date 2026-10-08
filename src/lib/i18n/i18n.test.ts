@@ -4,6 +4,11 @@ import { en } from "./en";
 import { translate } from "./index";
 import { uk } from "./uk";
 
+test("the shared cap says in both locales when memory comes back", () => {
+  expect(translate("en", "memoryPage.reason.capped", { cap: "$5", date: "November 1" })).toEndWith("it resets on November 1.");
+  expect(translate("uk", "memoryPage.reason.capped", { cap: "$5", date: "1 листопада" })).toEndWith("відновиться 1 листопада.");
+});
+
 describe("translation parity between en and uk", () => {
   test("both locales define exactly the same keys", () => {
     expect(Object.keys(uk).sort()).toEqual(Object.keys(en).sort());

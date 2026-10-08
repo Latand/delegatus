@@ -4,7 +4,7 @@ import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClau
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -45,9 +45,10 @@ export async function PATCH(req: NextRequest) {
   if (typeof body.id !== "string") return failure(400, "invalid_account", "Invalid account");
   try {
     const input = providerInput(body.provider);
-    const account = updateProviderClaudeAccount(body.id, input.config, input.token, body.label === undefined ? undefined : body.label as string, input.headers);
+    const account = await withAccountMutationLockAsync(() => updateProviderClaudeAccount(body.id as string, input.config, input.token, body.label === undefined ? undefined : body.label as string, input.headers), { caller: "Claude provider edit", holder: "Claude catalog edit" });
     return NextResponse.json({ account: { id: account.id, label: account.label, provider: account.provider, authPresent: account.authPresent } });
   } catch (error) {
+    if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
     if (error instanceof Error && error.message === "Provider token is required when changing the base URL") return failure(400, "provider_token_required", error.message);
     if (error instanceof Error && error.message === "OpenCode Go model must support Anthropic Messages") return failure(400, "model_route", error.message);
     if (error instanceof UnknownClaudeAccountError) return failure(404, "unknown_account", "Provider account is unavailable");
@@ -81,9 +82,10 @@ export async function POST(req: NextRequest) {
       if (!input.token) return failure(400, "invalid_provider", "Provider token is required");
       validateClaudeProviderModelRoute(input.config);
       const models = await listClaudeProviderModels(input.config, input.token, input.headers);
-      const account = createManagedClaudeAccount(body.label, { config: input.config, token: input.token, headers: input.headers });
+      const account = await withAccountMutationLockAsync(() => createManagedClaudeAccount(body.label as string, { config: input.config, token: input.token!, headers: input.headers }), { caller: "Claude provider create", holder: "Claude catalog create" });
       return NextResponse.json({ account: { id: account.id, label: account.label, kind: account.kind, authPresent: account.authPresent, provider: account.provider }, models }, { status: 201 });
     } catch (error) {
+      if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
       if (error instanceof Error && error.message === "OpenCode Go model must support Anthropic Messages") return failure(400, "model_route", error.message);
       if (error instanceof InvalidClaudeAccountLabelError) return failure(400, "invalid_label", "Invalid account label");
       if (error instanceof CorruptClaudeAccountsError) return failure(409, "accounts_locked", "Claude accounts require registry repair");
@@ -149,8 +151,9 @@ export async function DELETE(req: NextRequest) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return failure(400, "invalid_json", "Invalid JSON object");
   if (body.cleanupOrphans === true) {
     if (body.id !== undefined) return failure(400, "invalid_request", "Cleanup accepts no account id");
-    try { return NextResponse.json(cleanupOrphanedClaudeHomes()); }
+    try { return NextResponse.json(await withAccountMutationLockAsync(() => cleanupOrphanedClaudeHomes(), { caller: "Claude orphan cleanup", holder: "Claude catalog cleanup" })); }
     catch (error) {
+      if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
       if (error instanceof CorruptClaudeAccountsError) return failure(409, "accounts_locked", "Claude accounts require registry repair");
       return failure(500, "cleanup_failed", "Claude orphan cleanup failed");
     }

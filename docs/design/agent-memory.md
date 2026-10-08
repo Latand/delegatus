@@ -492,6 +492,111 @@ Why the hook and why the delivery path was set aside:
 | Engine `UserPromptSubmit` hook | Documented in both engines. Context stays separate from the operator's text. Covers prompts typed in a terminal inside a Delegatus-launched session. Claude launches already get a managed hook file. | Codex requires trust for an unmanaged hook, and hooks under the app-server host are unverified (phase 3 probe). |
 | Delegatus delivery (`src/lib/delivery.ts:728`) | One place, engine-neutral. | Changes the text the operator sent, enters the transcript and the search index as the operator's words, and touches the 32 000-byte envelope and the dedup markers. |
 
+The operator-turn correction supersedes the candidate exclusion in step 2:
+index presence alone gives no evidence that a topic was loaded into this
+conversation. Topic candidates from both engines now reach the decision model.
+The recipient's always-loaded root `MEMORY.md` index (Claude),
+`memory_summary.md` (Codex) and instructions remain outside the candidate pool.
+A Claude index routes to topics; its presence alone does not establish that a
+topic body was loaded. Discovery marks nested indexes as deferred; their references
+remain eligible for the receiving Claude engine. A loaded root retains its
+provenance when duplicate symlinks are discovered first. Verified project namespaces
+precede unresolved account slugs when traversing a shared physical store.
+A matching index pointer resolves
+to its topic when that topic is indexed in the eligible scope, even when only the
+pointer's wording matches the search. A retired target excludes the resolved
+candidate; an absent target leaves the pointer eligible. Exact factual bodies after Unicode
+and whitespace normalization share one place across descriptions when they contain
+at least three distinct words. Shorter generic bodies need matching summaries;
+the near-match threshold still protects distinct short rules. Loaded instructions and Codex
+summary content, retired entries, previous offers and their near matches remain excluded.
+Previously offered pointers resolve through the same topic identity, so a later
+indexed topic and its cross-engine copies cannot repeat that offer.
+Registry keywords remain in FTS search content, separately from the factual body,
+so metadata cannot split a note from its rollout copy. Pointer resolution uses an
+indexed source-path lookup for each match and never materializes the topic inventory.
+Linked topic paths use discovery's canonical filesystem identity; scope and
+retirement still apply after resolution.
+Retrieval reads the canonical alias family and the scanner's cached, verified
+project identity. It considers the directory, local-repository and Claude slug keys derived
+from the recovered repository root, or from the cwd when no root is known, so
+every worktree of one repository shares the same few keys. A deleted worktree whose root
+is known to the scanner's durable map uses that root. A key derived from a
+different, absent checkout path needs a trusted alias into this family; similar
+folder names supply no link. A lossy Claude slug needs a trusted alias or a fresh,
+unique existing-folder resolution, with no preferred-repository guess. The same
+check applies during memory discovery; ambiguous or absent slugs stay unresolved
+until trusted identity data links them. A recognized deleted worktree can use
+its parent's trusted alias or uniquely resolved live folder after a complete
+resolution proves the checkout absent. Ambiguous or unverifiable slugs never
+inherit a parent's identity. The hook never rewrites project rows. Refresh still
+normalizes the derivative separately. Native Codex file fingerprints include the
+scanner's identity revision, so an unchanged source is reattributed after trusted
+alias or worktree evidence changes. A deleted worktree retains an aliased parent
+even when the parent checkout is also gone, through the existing path recognizers
+or recorded sibling-worktree map.
+Filesystem identity proofs and linked-topic resolution use asynchronous reads
+bounded by the same retrieval deadline. A symlinked cwd also considers verified
+physical-folder predecessor keys. A symlink retargeted to a foreign or unverified
+physical project supplies no predecessor keys from that target. Injection bounds asynchronous candidate work
+by the turn deadline and rechecks the switch and traffic owner before reservation.
+Scope writes claim zero SQLite wait at the synchronous write itself, so another
+lookup finishing during an awaited read cannot restore a long writer wait.
+Git metadata stays outside the optional hook path. Normal scanning records a
+linked repository's verified physical root together with its logical cwd, so
+its first recall needs no extra git read; a cold identity cache supplies no new
+predecessor proof. The private derivative retains each key's first verified
+repository ownership across Viewer replacement. Verified directory/local-path
+ownership can advance to the folder's first origin. A subsequent conflicting
+origin cannot take that history; moving its owner requires trusted succession aliases. The same durable verified scope serves recall,
+project-scoped search and opening an offer. Search and open walk nothing: they
+read the recorded keys of the alias family and keep a slug key only while a
+stat of each directory its proof recorded still matches the recorded signature.
+A slug whose proof went stale returns to scope at the next hook that walks it
+again. The scope table holds at most six keys per project and 256 overall.
+A key past either limit is refused. Keys already recorded stay in scope, and
+recall falls back to them. When the write itself fails, the turn keeps the
+keys an earlier turn recorded and drops only the ones it was claiming.
+
+A launch brief reaches the hook with operator origin whatever started it. It
+counts as the operator's turn only when the receipt names no other initiator:
+a turn whose text is the launch echo is skipped without a decision, a last-turn
+row or a counter when its conversation was launched by another conversation,
+holds a pipeline or flow membership, has a delegation depth above 0, or belongs to a board
+maintenance run. A draft from the new-agent form, with or without a role or a
+handed-over conversation, is the operator's turn.
+
+Read-only review of the installation's 7,701-row snapshot found 438 Claude
+entries and zero Codex entries under the current key. The three earlier keys
+derived from the seat's current path held zero entries, and its alias family
+was empty. The 3,685 older Codex entries span 99 `dir-` keys: the previous
+repository root (1 key, 59 entries), 94 deleted sibling pipeline worktrees
+(94 keys, 3,571 entries), and 4 nested worktrees (4 keys, 55 entries).
+Thus 98 of the 99 keys identify deleted worktrees. The old folder slug held
+387 Claude entries; 385 of those Claude entries had exact copies under the
+current key. Those unlinked old-path keys
+remain outside retrieval. The five older-key Codex FTS matches observed in the
+initial investigation also remain outside retrieval. Recovering that history
+requires linking the previous repository root to the current project through
+trusted identity data and recognizing that root's worktrees, so every one of
+the 99 keys resolves to the parent project. The seat regression covers both
+unlinked deleted directory/slug keys (only the current entry is offered) and explicitly aliased ones (both are
+offered), with a similarly named foreign folder excluded in every case.
+
+The confirmed injection blocker was the receiving-engine exclusion. On that
+snapshot, main gave the Claude seat 0–6 candidates from 16 global Codex entries;
+the corrected query gave it up to 30 candidates in at most 43 ms, all from its
+eligible current/global scope. For a Codex recipient, main exhausted the 100 ms
+candidate budget (zero candidates in 101–117 ms); the corrected query took
+4–25 ms. With 430 previous offers, retrieval took at most 56 ms. These are
+snapshot measurements; retrieval retains its 100 ms budget, 30-candidate bound
+and fail-open behavior within the 1,500 ms hook deadline.
+
+A missing Asks-you store is a first reservation; the Asks-you switch does not
+gate shared memory.
+The existing status row includes the last project turn's result, and confirmed
+emission names use the existing offer below that operator message.
+
 ### 4.5 Usefulness: how an entry proves itself or retires
 
 | Signal | How it is read | Weight |

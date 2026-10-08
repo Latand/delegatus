@@ -61,6 +61,23 @@ test("a row survives the write and reads back whole", () => {
   expect(readSeatTickState("other", file)).toMatchObject(emptySeatTickState());
 });
 
+test("recovered authentication notice debt survives persistence and a new seat epoch", () => {
+  const file = path.join(SANDBOX, "auth-notice-debt.json");
+  const lastFailedTs = Date.parse("2026-10-08T00:05:00Z");
+  const notice = { id: "seat-auth:viewer:7:first", seatEpoch: 7, conversationId: CONVERSATION,
+    engine: "claude" as const, accountId: "fixture-account-a", firstFailedAt: new Date(lastFailedTs).toISOString(),
+    lastFailedTs, recoveredThrough: lastFailedTs, credentialStamp: null, text: "Authentication failed",
+    rotation: { state: "held" as const }, notice: null };
+  writeSeatTickState("viewer", { ...row, authNoticesOwed: [notice] }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.authNoticesOwed).toEqual([notice]);
+  const successor = seatTickStateForEpoch(reopened, 8);
+  expect(successor.authIncident).toBeUndefined();
+  expect(successor.authNoticesOwed).toEqual([notice]);
+  writeSeatTickState("viewer", successor, file);
+  expect(readSeatTickState("viewer", file).authNoticesOwed).toEqual([notice]);
+});
+
 test("one project's write leaves the others' rows alone", () => {
   const file = path.join(SANDBOX, "multi.json");
   writeSeatTickState("viewer", row, file);
@@ -428,4 +445,13 @@ test("a released-wake marker survives the legacy import, and a broken one is dro
   expect(readSeatTickState("viewer", file).releasedWake).toEqual(releasedWake);
   expect(readSeatTickState("other", file).releasedWake).toBeNull();
   expect(readSeatTickState("never", file).releasedWake).toBeNull();
+});
+
+test("a disk episode acknowledgment survives persistence and a seat succession", () => {
+  const file = path.join(SANDBOX, "disk-seat-tick.json");
+  const pressure = { ...row, diskPressureShown: "2026-10-06T10:00:00Z" };
+  writeSeatTickState("viewer", pressure, file);
+  const read = readSeatTickState("viewer", file);
+  expect(read.diskPressureShown).toBe(pressure.diskPressureShown);
+  expect(seatTickStateForEpoch(read, 8).diskPressureShown).toBe(pressure.diskPressureShown);
 });
