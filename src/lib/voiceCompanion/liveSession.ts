@@ -6,7 +6,7 @@ import { CompanionAdmission } from "./admission";
 import { CompanionBoardReads } from "./boardReads";
 import { LiveTranscript } from "./liveTranscript";
 import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
-import { withoutCredentials, withoutLocalPaths } from "./redaction";
+import { withoutCredentials, withoutLocalPaths, withoutSeparators } from "./redaction";
 import { backendRequest, type BackendItem } from "./sessionConfig";
 import { runCompanionTool } from "./tools";
 import { backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
@@ -35,14 +35,38 @@ interface ActiveSession {
 }
 interface Options { key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean }
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
-const SPOKEN_LIMIT = 1_500;
+/** `session.commentary.append` takes at most 500 tokens. A token holds at
+ * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
+ * the language. */
+const SPOKEN_LIMIT_BYTES = 500;
+const SPOKEN_CUT = " The rest of the answer was left out.";
+
+/** Text Live can take in one append. A longer one keeps its whole sentences
+ * that fit, or else its clauses or words, and says that the rest was left out. */
+function speakable(text: string): string {
+  if (Buffer.byteLength(text) <= SPOKEN_LIMIT_BYTES) return text;
+  let room = SPOKEN_LIMIT_BYTES - Buffer.byteLength(`…${SPOKEN_CUT}`);
+  let head = "";
+  for (const char of text) {
+    room -= Buffer.byteLength(char);
+    if (room < 0) break;
+    head += char;
+  }
+  const end = (pattern: RegExp) => { let last = -1; for (const match of head.matchAll(pattern)) last = match.index + match[0].length; return last; };
+  const at = [/[.!?…](?=\s|$)/gu, /[,;:—](?=\s|$)/gu, /\S(?=\s)/gu].map(end).find(index => index >= head.length / 3) ?? head.length;
+  const kept = head.slice(0, at).trimEnd().replace(/[,;:—]$/u, ".");
+  return `${/[.!?…]$/u.test(kept) ? kept : `${kept}…`}${SPOKEN_CUT}`;
+}
 
 /** Whether text a provider returned carries a credential in use, whole or a
- * long piece of one. A negotiation answer is never read for credential
- * families: its own ICE password is one by their reading. */
+ * long piece of one, read with its separators taken out: spaces, tabs, line
+ * breaks or invisible format characters between the pieces still spell it.
+ * A negotiation answer is never read for credential families: its own ICE
+ * password is one by their reading. */
 function echoes(text: string, secrets: readonly string[]): boolean {
-  return secrets.some(secret => secret.length >= 8 && (text.includes(secret)
-    || Array.from({ length: Math.max(0, secret.length - 15) }, (_, at) => secret.slice(at, at + 16)).some(piece => piece.length === 16 && text.includes(piece))));
+  const joined = withoutSeparators(text);
+  return secrets.map(withoutSeparators).some(secret => secret.length >= 8 && (joined.includes(secret)
+    || Array.from({ length: Math.max(0, secret.length - 15) }, (_, at) => secret.slice(at, at + 16)).some(piece => piece.length === 16 && joined.includes(piece))));
 }
 
 /** Owns only companion sessions it minted. Provider events arrive on a trusted
@@ -329,7 +353,7 @@ export class CompanionLiveSessions {
   /** Speakable context for Live, tied to its delegation. */
   private say(active: ActiveSession, delegationId: string | null, text: string): void {
     if (active.ended) return;
-    const content = withoutLocalPaths(withoutCredentials(text, active.secrets)).slice(0, SPOKEN_LIMIT);
+    const content = speakable(withoutLocalPaths(withoutCredentials(text, active.secrets)));
     try { active.connection?.send({ type: "session.commentary.append", event_id: randomUUID(), delegation_id: delegationId, content }); }
     catch { /* A lost sideband closes the session through its own handler. */ }
   }

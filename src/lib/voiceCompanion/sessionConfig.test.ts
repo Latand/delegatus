@@ -42,6 +42,7 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
     expect(config.instructions).toContain("delegate their spoken yes or no");
     expect(config.instructions).not.toMatch(/Send tap|Spoken confirmation is disabled/);
     expect(BACKEND_INSTRUCTIONS).toContain("your judgment alone");
+    expect(BACKEND_INSTRUCTIONS).toContain("at most three short sentences");
     expect(BACKEND_INSTRUCTIONS).not.toMatch(/tap alone|sends nothing; the operator/);
     expect(config.client.data_channel.allowed_client_events).toEqual([]);
     expect(backendRequest([]).tools.every(tool => tool.parameters.additionalProperties === false)).toBe(true);

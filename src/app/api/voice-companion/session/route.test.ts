@@ -102,22 +102,30 @@ test("after a restart a new Talk with a new request closes the orphan first; its
 });
 
 test("a mint whose SDP answer or session id echoes the credential is refused, hung up, and stored and answered nowhere", async () => {
-  for (const echo of ["sdp", "id", "piece"] as const) {
+  const key = "synthetic-credential";
+  // A credential laid out in pieces: a space, a tab, a folded line or an invisible format character between them.
+  const spread = (text: string, gap: string) => text.match(/.{1,4}/g)!.join(gap);
+  const separated = { space: " ", tab: "\t", fold: "\r\n ", "zero-width": "\u200b", joiner: "\u2060", bom: "\ufeff", soft: "\u00ad" };
+  const echoes: Record<string, string> = { sdp: key, piece: key.slice(2, 19),
+    ...Object.fromEntries(Object.entries(separated).flatMap(([name, gap]) => [[`${name}-key`, spread(key, gap)], [`${name}-piece`, spread(key.slice(2, 19), gap)]])) };
+  const joined = (text: string) => text.replace(/[\s\u00ad\u200b-\u200f\u2028-\u202f\u205f-\u2064\ufeff]/g, "").replace(/\\u[0-9a-f]{4}|\\[rnt]/gi, "");
+  for (const echo of ["id", ...Object.keys(echoes)]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
-    const key = "synthetic-credential";
     f.provider.answer = () => echo === "id" ? { id: `live_${key}`, sdp: "v=0\r\ns=-\r\n" }
-      : { sdp: `v=0\r\ns=${echo === "sdp" ? key : key.slice(2, 19)}\r\na=ice-pwd:Xc8fT2vQm9pLr4sWd7yZa1bN\r\n` };
+      : { sdp: `v=0\r\ns=fake-answer\r\na=x-note:${echoes[echo]}\r\na=ice-pwd:Xc8fT2vQm9pLr4sWd7yZa1bN\r\n` };
     const answer = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: `echo-${echo}` }));
     const body = await answer.text();
     expect(answer.status, echo).toBeGreaterThanOrEqual(400);
     for (const surface of [body, fs.readFileSync(path.join(root, "state", "voice-companion.json"), "utf8")]) {
-      expect(surface, echo).not.toContain(key);
-      expect(surface, echo).not.toContain(key.slice(2, 19));
+      expect(joined(surface), echo).not.toContain(key);
+      expect(joined(surface), echo).not.toContain(key.slice(2, 18));
     }
     expect(f.provider.hangups, echo).toHaveLength(1);
     expect(f.provider.attached, echo).toBe(0);
-    expect((await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: `echo-${echo}` }))).status, `${echo} retry`).toBeGreaterThanOrEqual(400);
+    const retry = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: `echo-${echo}` }));
+    expect(retry.status, `${echo} retry`).toBeGreaterThanOrEqual(400);
+    expect(joined(await retry.text()), `${echo} retry`).not.toContain(key.slice(2, 18));
     expect(f.provider.sessions, `${echo}: a retry mints nothing more`).toHaveLength(1);
   }
   // A real negotiation answer, its own ICE password included, passes unchanged.

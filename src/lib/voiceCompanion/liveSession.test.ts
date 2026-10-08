@@ -292,6 +292,36 @@ test("a correlated orchestrator report is replayed to its own card and sent for 
   await service.close(s.sessionId);
 });
 
+test("a spoken answer stays within the 500 tokens one commentary append takes, keeps its delegation and ends on a whole sentence", async () => {
+  const sentence = "Оркестратор отримав запит, перевірив план і погодився з ним. ";
+  const answers: Record<string, { text: string; tokens: number }> = {
+    "505 tokens": { text: " a".repeat(505), tokens: 505 },
+    "512 tokens": { text: "The board shows one open task. ".repeat(80), tokens: 512 },
+    "dense Ukrainian": { text: sentence.repeat(12), tokens: 512 },
+    "one unbroken word": { text: "ї".repeat(600), tokens: 501 },
+  };
+  for (const [name, answer] of Object.entries(answers)) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = (_request, index) => backendResponse(`resp_${index}`, [message(answer.text)],
+      { input_tokens: 100, input_tokens_details: { cached_tokens: 0 }, output_tokens: answer.tokens });
+    const s = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0\r\n" });
+    f.provider.replay(s.providerId, said("What is on the board?", 0), delegationCreated(`long-${answer.tokens}`, 600));
+    await f.service.drain(s.sessionId);
+    await Promise.resolve();
+    expect(f.provider.refused, name).toEqual([]);
+    const said_ = spoken(f);
+    expect(said_, name).toHaveLength(1);
+    expect(said_[0].delegation_id, name).toBe(`long-${answer.tokens}`);
+    // A token holds at least one byte: 500 UTF-8 bytes are at most 500 tokens.
+    expect(Buffer.byteLength(String(said_[0].content)), name).toBeLessThanOrEqual(500);
+    expect(String(said_[0].content), name).toMatch(/The rest of the answer was left out\.$/);
+    expect(f.admission.events(s.sessionId, 0).filter(row => row.type === "error" || row.type === "session.closed"), name).toEqual([]);
+    if (name === "dense Ukrainian") expect(String(said_[0].content)).toMatch(new RegExp(`^(${sentence.trim()} )+The rest`));
+    await f.service.close(s.sessionId);
+  }
+});
+
 const KEY = "synthetic-credential";
 const stateFile = () => fs.readFileSync(path.join(root, "state", "voice-companion.json"), "utf8");
 
