@@ -1,0 +1,80 @@
+{
+  "member": {
+    "prompts": [
+      "ff9526ed1521b90643ad6ffecf329d81ff950298f567d382a0993a0a9b0db17e",
+      "1da4efb7296b19edcfa3fc8503e98359ed9cf0a3f18aa499c64ce592b1e19f3b"
+    ],
+    "schemas": [
+      "e8ffd7d2bb29ecdbaac789de1938b328c6261c327611e32f4b62ffb12b3cfced",
+      "e8ffd7d2bb29ecdbaac789de1938b328c6261c327611e32f4b62ffb12b3cfced"
+    ],
+    "calls": [
+      "7fb734613521c4d4dfd626296b5d242855052e3988bfab323d6daf22d07c50e3"
+    ]
+  },
+  "admin": {
+    "prompts": [
+      "b2f5f32308b898d92640179f5e51813ea40e7ae45b0795e4eacddefdd08ea13f",
+      "0cb09eeec960504cfbec1b9529ee176ccfda11b9383321cf16318fee8fc3fe94"
+    ],
+    "schemas": [
+      "2b18c2372f6fb6fec806fbd31e2fadd10dfbd50eb97491c8e502a02510a65ade",
+      "2b18c2372f6fb6fec806fbd31e2fadd10dfbd50eb97491c8e502a02510a65ade"
+    ],
+    "calls": [
+      "7fb734613521c4d4dfd626296b5d242855052e3988bfab323d6daf22d07c50e3"
+    ]
+  },
+  "owner": {
+    "prompts": [
+      "9bc0b819f3167d35f6b34930f7cf642e571156bf6eb7b432ecd8027d352e581a",
+      "67563f48e48958a54d0d7189841ab1a7dbfa79f0468f2f48e765e846e76ea01b"
+    ],
+    "schemas": [
+      "94cceccc92b7a4486e2c9e5a6947e0d4b3085190301dc0c23bb06c845920858d",
+      "94cceccc92b7a4486e2c9e5a6947e0d4b3085190301dc0c23bb06c845920858d"
+    ],
+    "calls": [
+      "7fb734613521c4d4dfd626296b5d242855052e3988bfab323d6daf22d07c50e3"
+    ]
+  },
+  "anonymous_admin": {
+    "prompts": [
+      "bdbe4fb7beaead70ab665ee503335e47e6452e27da77835d9f7a58741e49646c",
+      "825aa1d1276eddcb38a3ecfa4db1a143988472ec9eadf526a1e41c2cffd411c2"
+    ],
+    "schemas": [
+      "2b18c2372f6fb6fec806fbd31e2fadd10dfbd50eb97491c8e502a02510a65ade",
+      "2b18c2372f6fb6fec806fbd31e2fadd10dfbd50eb97491c8e502a02510a65ade"
+    ],
+    "calls": [
+      "7fb734613521c4d4dfd626296b5d242855052e3988bfab323d6daf22d07c50e3"
+    ]
+  },
+  "admin_owner_member": {
+    "prompts": [
+      "57edaf91b225caddca552b38756fc4b6f47cfa6d79345203a5fbbc27d9131717",
+      "6fdb070d3902826a484fe4a6e059c21ed57cda80e47b260bd78ccd29326f22ad"
+    ],
+    "schemas": [
+      "e8ffd7d2bb29ecdbaac789de1938b328c6261c327611e32f4b62ffb12b3cfced",
+      "e8ffd7d2bb29ecdbaac789de1938b328c6261c327611e32f4b62ffb12b3cfced"
+    ],
+    "calls": [
+      "7fb734613521c4d4dfd626296b5d242855052e3988bfab323d6daf22d07c50e3"
+    ]
+  },
+  "actions_off": {
+    "prompts": [
+      "b3cf6aa523c7b27d716570ca1e586e8c117dc4ea7984ec1d6b8843d81fdf3ede",
+      "0e2e1e4013e9d54828aadf3e09d7044df0968c982a6e59160f7456e52218cad3"
+    ],
+    "schemas": [
+      "2b18c2372f6fb6fec806fbd31e2fadd10dfbd50eb97491c8e502a02510a65ade",
+      "2b18c2372f6fb6fec806fbd31e2fadd10dfbd50eb97491c8e502a02510a65ade"
+    ],
+    "calls": [
+      "7fb734613521c4d4dfd626296b5d242855052e3988bfab323d6daf22d07c50e3"
+    ]
+  }
+}

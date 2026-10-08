@@ -12,3 +12,15 @@ tool_call_results 3d34147920af82036e5cfd628f911a5dcd406fb238ce93396c6c368cc4caf5
 tool_call_errors 2c0c9008b8e84c9040ee56a09bce5bda116a9d7d4db598eb687e6d8e2dcb9d71
 tool_index_measurements 5c7e684994ca50c172484f570218c9c364df91cd558d650849b735aeeadc186f
 ```
+
+The same ten service JSON files were fetched at `4a48a759cb59a0159ad519e70713a422341b8149`
+and verified byte-identical for slice 2b. No service fixture was rewritten.
+
+`actions-off-2a-hashes.json` and `actions-off-x2-2a-hashes.json` were captured
+before implementation from the unchanged slice 2a code at `c9a93de8`. They
+pin SHA-256 of each real runner prompt, compact CLI schema and serialized call
+body for the five X1 role runs, the action index degraded to hand-off exactly
+as the service does with actions OFF, and the X2 pending/page run (including
+reversed HTTP arrival order). The runner tests compare these hashes and check
+that read metadata rows carry no effect field. Claim advertisement adds F2;
+it is the sole change in the old X2 and completion wire bodies.

@@ -11,7 +11,8 @@
     ],
     "features": [
       "requester_context",
-      "relay_tool_calls"
+      "relay_tool_calls",
+      "relay_tool_actions"
     ],
     "slots": [
       {
@@ -133,5 +134,229 @@
       "reply_to": "m_b40b71a0a9d43622ee0e2e6a"
     },
     "duration_ms": 0
-  }
+  },
+  "actions": [
+    {
+      "name": "action_and_confirmation",
+      "x1": {
+        "claim": "claimed_tools_actions_admin.json",
+        "claim_sha256": "987b7063a482687ea242dc351333b6e192898b79457306a1f4c2ede00bcae8f0"
+      },
+      "calls": [
+        {
+          "round": 1,
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "LLnVPMX3mpQ-TCpnFo4j092xz7fykjDSDP-FTCQU-dg",
+                "tool": "search_chat_messages",
+                "arguments": {
+                  "query": "spam"
+                }
+              },
+              "x1_sample": "admin",
+              "response": {
+                "call_id": "LLnVPMX3mpQ-TCpnFo4j092xz7fykjDSDP-FTCQU-dg",
+                "tool": "search_chat_messages",
+                "status": "ok",
+                "output": "[]",
+                "truncated": false,
+                "effect": "read",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 15,
+                "audience": "admin"
+              }
+            }
+          ]
+        },
+        {
+          "round": 1,
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "78NWxU96b0_a16DlqEeQJ8moL4TAAs9gS6Z4E_LGXA8",
+                "tool": "react_to_message",
+                "arguments": {
+                  "emoji": "👍",
+                  "message_id": "m_b40b71a0a9d43622ee0e2e6a"
+                }
+              },
+              "x1_sample": "action_ok",
+              "response": {
+                "call_id": "78NWxU96b0_a16DlqEeQJ8moL4TAAs9gS6Z4E_LGXA8",
+                "tool": "react_to_message",
+                "status": "ok",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 14,
+                "output": "Reacted"
+              }
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "2C8qxlOO1FlrdOZuOTGmPYMqwnvt8ikC8mvtQzc5-Ow",
+                "tool": "request_kick_participant",
+                "arguments": {
+                  "reason": "Repeated spam",
+                  "target_message_id": "m_b40b71a0a9d43622ee0e2e6a"
+                }
+              },
+              "x1_sample": "confirmation_pending",
+              "response": {
+                "call_id": "2C8qxlOO1FlrdOZuOTGmPYMqwnvt8ikC8mvtQzc5-Ow",
+                "tool": "request_kick_participant",
+                "status": "confirmation_pending",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": true,
+                "replayed": false,
+                "calls_remaining": 0,
+                "audience": "admin",
+                "confirmation_id": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+                "summary": "Confirm removal",
+                "expires_at": "2026-10-07T12:10:00Z"
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "answered",
+        "answer": {
+          "action": "reply",
+          "text": "Removal is waiting for confirmation in the chat.",
+          "reply_to": null
+        },
+        "duration_ms": 0
+      }
+    },
+    {
+      "name": "delivered_generation",
+      "x1": {
+        "claim": "claimed_tools_actions_admin.json",
+        "claim_sha256": "987b7063a482687ea242dc351333b6e192898b79457306a1f4c2ede00bcae8f0"
+      },
+      "calls": [
+        {
+          "round": 1,
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "gA8fr4mP5CaR6zoF9y0p7sOBOO3avyeXwRCkZI3VVAk",
+                "tool": "generate_image",
+                "arguments": {
+                  "prompt": "A quiet forest"
+                }
+              },
+              "x1_sample": "action_pending",
+              "response": {
+                "call_id": "gA8fr4mP5CaR6zoF9y0p7sOBOO3avyeXwRCkZI3VVAk",
+                "tool": "generate_image",
+                "status": "pending",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 15,
+                "retry_after_s": 5
+              }
+            },
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "gA8fr4mP5CaR6zoF9y0p7sOBOO3avyeXwRCkZI3VVAk",
+                "tool": "generate_image",
+                "arguments": {
+                  "prompt": "A quiet forest"
+                }
+              },
+              "x1_sample": "action_delivered",
+              "response": {
+                "call_id": "gA8fr4mP5CaR6zoF9y0p7sOBOO3avyeXwRCkZI3VVAk",
+                "tool": "generate_image",
+                "status": "ok",
+                "truncated": false,
+                "effect": "action",
+                "delivered": true,
+                "replayed": false,
+                "calls_remaining": 0,
+                "output": "Image sent"
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "answered",
+        "answer": {
+          "action": "ignore",
+          "text": "",
+          "reply_to": null
+        },
+        "duration_ms": 0
+      }
+    },
+    {
+      "name": "outcome_unknown",
+      "x1": {
+        "claim": "claimed_tools_actions_admin.json",
+        "claim_sha256": "987b7063a482687ea242dc351333b6e192898b79457306a1f4c2ede00bcae8f0"
+      },
+      "calls": [
+        {
+          "round": 1,
+          "attempts": [
+            {
+              "request": {
+                "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "arguments": {
+                  "prompt": "A quiet forest at dawn"
+                }
+              },
+              "x1_sample": "outcome_unknown",
+              "response": {
+                "call_id": "1jJ-RDz4FBWBSaiNQ1Qj5Yjp9WNQ4IAF2jwK5yge_FY",
+                "tool": "generate_video",
+                "status": "outcome_unknown",
+                "output": "",
+                "truncated": false,
+                "effect": "action",
+                "delivered": false,
+                "replayed": false,
+                "calls_remaining": 0
+              }
+            }
+          ]
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "answered",
+        "answer": {
+          "action": "reply",
+          "text": "The video may have been sent; I will not try again.",
+          "reply_to": null
+        },
+        "duration_ms": 0
+      }
+    }
+  ]
 }
