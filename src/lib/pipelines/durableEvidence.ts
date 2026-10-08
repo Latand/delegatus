@@ -26,6 +26,10 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
+  /** The newest assistant prose of a turn a native shutdown marker closed.
+      `message` drops it, since unfinished output never settles a verdict; a
+      fresh attempt is told it as what the cut attempt last said. */
+  cutProse?: string | null;
   /** Native human prompt or task start witness, excluding tool results and shutdown markers. */
   turnStartedAt?: number | null;
   /** The verified read covers the complete artifact and contains only Codex's
@@ -37,6 +41,13 @@ export type StageTurnEvidence = {
       assistant message: a delivered prompt and a tool result move this and not
       that. Null when the read found no record carrying a timestamp. */
   lastRecordAt?: number | null;
+  /** Timestamp of the newest record the agent's work wrote: a prompt, a reply,
+      a tool call or its result. The bookkeeping a CLI writes as it exits or
+      resumes (a shutdown interrupt, a replayed meta prompt, a synthetic
+      no-response, Codex token counts and turn aborts) is left out, and so is
+      an undated record, which `lastRecordAt` dates by the file. A move here is
+      work; a move of `lastRecordAt` alone may be neither. */
+  lastAgentEventAt?: number | null;
   /** The provider's own end-of-turn notice, when the record that closed the
       turn is one: a session or model limit, an expired credential, a refusal —
       a message the CLI writes *instead of* the agent's answer, so the turn
@@ -344,6 +355,59 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
+const CODEX_BOOKKEEPING_TYPES = new Set(["token_count", "turn_aborted"]);
+
+/** Index of the newest dated record the agent's own work wrote, or -1. The
+    bookkeeping a CLI writes as it exits or resumes is passed over. */
+export function lastAgentWorkIndex(records: RecordLike[], codex: boolean): number {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!;
+    const at = Date.parse(String(record.timestamp ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (codex) {
+      const type = stringValue(recordValue(record.payload)?.type);
+      if (type && !CODEX_BOOKKEEPING_TYPES.has(type)) return index;
+      continue;
+    }
+    if (record.type !== "user" && record.type !== "assistant") continue;
+    const message = recordValue(record.message);
+    if (record.isMeta === true || message?.model === "<synthetic>") continue;
+    if (claudeInterruptMarker(record)) continue;
+    return index;
+  }
+  return -1;
+}
+
+function claudeInterruptMarker(record: RecordLike): boolean {
+  if (record.type !== "user") return false;
+  const content = stringValue(recordValue(record.message)?.content) ?? claudeAssistantText(record);
+  return record.interruptedByShutdown === true || "interruptedMessageId" in record
+    || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content);
+}
+
+/** The records left once the bookkeeping a CLI writes as it exits or resumes
+    is removed, record by record: Codex token counts and turn aborts, and for
+    Claude meta prompts, shutdown and interrupt markers and the synthetic
+    no-response no-op. A provider failure record stays: it is how a turn the
+    provider closed is told from one a restart cut. */
+export function withoutExitBookkeeping(records: RecordLike[], codex: boolean): RecordLike[] {
+  return records.filter((record) => {
+    if (codex) {
+      const type = stringValue(recordValue(record.payload)?.type);
+      return !type || !CODEX_BOOKKEEPING_TYPES.has(type);
+    }
+    if (record.type === "user") return record.isMeta !== true && !claudeInterruptMarker(record);
+    if (record.type !== "assistant" || record.isApiErrorMessage === true) return true;
+    return recordValue(record.message)?.model !== "<synthetic>"
+      || !/^no response requested\.?$/i.test(claudeAssistantText(record).trim());
+  });
+}
+
+function agentEventAt(records: RecordLike[], codex: boolean): number | null {
+  const index = lastAgentWorkIndex(records, codex);
+  return index < 0 ? null : Date.parse(String(records[index]!.timestamp));
+}
+
 /** Whether a Claude stage attempt ended on a provider failure the CLI gave up
     on: its newest prompt or assistant record is a flagged API error stamped
     with a closing stop reason. The shared turn projection keeps such a turn
@@ -356,6 +420,13 @@ function claudeApiErrorClosedAttempt(records: RecordLike[]): boolean {
   if (newest?.type !== "assistant" || newest.isApiErrorMessage !== true) return false;
   const stop = stringValue(recordValue(newest.message)?.stop_reason);
   return stop === "end_turn" || stop === "stop_sequence";
+}
+
+/** Whether a Claude transcript's turn ended on a provider failure the CLI gave
+    up on, read past the bookkeeping a shutdown appends after it. A service
+    restart did not cut such a turn: the provider had ended it already. */
+export function claudeTurnClosedByProviderFailure(records: RecordLike[]): boolean {
+  return claudeApiErrorClosedAttempt(providerTurnRecords(records, false));
 }
 
 /** The widest verified read spent looking for a reported attempt's prose. A
@@ -434,8 +505,10 @@ export async function durableStageTurnEvidence(
   return {
     turn: terminal ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
+    ...(nativeCut ? { cutProse: message?.text ?? null } : {}),
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
+    lastAgentEventAt: agentEventAt(evidenceRead.records, codex),
     turnStartedAt,
     launchOnly: codex
       && !evidenceRead.prefixTruncated

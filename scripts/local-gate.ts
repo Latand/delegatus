@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -12,6 +12,13 @@ export interface Step {
   isolated?: boolean;
   pinned?: boolean;
   codex?: string;
+  /** Passed after the optional Codex fixture path. */
+  selection?: string;
+  /** Consecutive steps with the same group run at once, under one phase marker. */
+  group?: string;
+  /** A check the hosted job also runs: stopped at a caller's deadline, it is
+      named as left to that job, never failed or dropped. */
+  deferrable?: boolean;
 }
 export interface PlanEnvironment {
   base: string;
@@ -30,6 +37,8 @@ const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.inc
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 /** Prose the compiler never reads. Anything else can change what it checks. */
 const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
+
+export const NATIVE_GROUP = "native Codex";
 
 /** Pure planning: discovery and process execution happen outside this function. */
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
@@ -87,7 +96,14 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
       { name: "runtime negative controls", command: ["bun", "scripts/verify-bun-runtime-controls.ts"], capped: true, isolated: true, pinned: true },
     );
   }
-  if (env.native) for (const version of env.codexVersions) steps.push({ name: `native Codex ${version}`, command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, codex: version });
+  if (env.native && env.codexVersions.length) {
+    // Only the engine files start the Codex executable, so only they run once
+    // per supported version. The shared contracts read no executable: one run
+    // judges them, and it is the long tail the hosted job can take.
+    const native = { command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, group: NATIVE_GROUP };
+    for (const version of env.codexVersions) steps.push({ ...native, name: `native Codex ${version}`, codex: version, selection: "--engine-only" });
+    steps.push({ ...native, name: "native Codex shared contracts", selection: "--shared-only", deferrable: true });
+  }
   if (supplyChainChanged) {
     steps.push({ name: "audit retry tests", command: ["bun", "test", "./scripts/audit-with-retry.test.ts", "./scripts/supply-chain-check.test.ts"], capped: true, isolated: true });
     steps.push({ name: "supply chain", command: ["bun", "scripts/supply-chain-check.ts", "--base", env.base], capped: true });
@@ -202,11 +218,6 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   return env;
 }
 
-function run(command: string[], root: string, env = process.env): void {
-  const result = spawnSync(command[0]!, command.slice(1), { cwd: root, env, stdio: "inherit" });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command[0]} failed (${result.status ?? result.signal})`);
-}
 function git(root: string, args: string[]): string {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
@@ -217,34 +228,371 @@ export function pinnedBunVersion(dockerfile: string): string {
   if (pins.size !== 1) throw new Error("Dockerfile must carry exactly one Bun pin");
   return [...pins][0]!;
 }
-function pinnedRuntime(root: string, cache: string): string {
+/** A cold cache installs under machine admission, which can hold it for as
+    long as the machine is busy: the install ends by the push deadline too. */
+async function install(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, cancel?: AbortSignal): Promise<void> {
+  const outcome = await execute(command, root, env, until, undefined, cancel);
+  if (outcome.leaked) throw new ContainmentFailed(`installing ${command.at(-1)}`, outcome.leaked, outcome.cancelled);
+  if (outcome.stopped) throw new StoppedPreparing(outcome.ranMs ?? 0);
+  if (outcome.code !== 0) throw new Error(`installing ${command.at(-1)} failed (${outcome.code})`);
+}
+async function pinnedRuntime(root: string, cache: string, until: number, cancel?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const version = pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8"));
   const current = spawnSync(process.execPath, ["--version"], { encoding: "utf8" });
   if (current.status === 0 && current.stdout.trim() === version) return process.execPath;
   const prefix = path.join(cache, `bun-${version}`);
   const binary = path.join(prefix, "node_modules/.bin/bun");
-  if (!existsSync(binary)) run(["bash", "scripts/gate-slot.sh", "npm", "install", "--prefix", prefix, "--no-save", `bun@${version}`], root);
+  if (!existsSync(binary)) await install(["bash", "scripts/gate-slot.sh", "npm", "install", "--prefix", prefix, "--no-save", `bun@${version}`], root, env, until, cancel);
   const actual = spawnSync(binary, ["--version"], { encoding: "utf8" });
   if (actual.status !== 0 || actual.stdout.trim() !== version) throw new Error("cached Bun does not match Dockerfile pin");
   return binary;
 }
-function codexFixture(root: string, cache: string, version: string): string {
+export async function codexFixture(root: string, cache: string, version: string, until: number, env: NodeJS.ProcessEnv = process.env, cancel?: AbortSignal): Promise<string> {
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) throw new Error("native Codex local gate currently requires Linux x64/arm64");
   const prefix = path.join(cache, `codex-${version}`);
   const target = process.arch === "x64" ? "x86_64" : "aarch64";
   const binary = path.join(prefix, `node_modules/@openai/codex-linux-${process.arch}/vendor/${target}-unknown-linux-musl/bin/codex`);
-  if (!existsSync(binary)) run(["bash", "scripts/gate-slot.sh", "npm", "install", "--prefix", prefix, "--no-save", "--ignore-scripts", `@openai/codex@${version}`], root);
+  if (!existsSync(binary)) await install(["bash", path.join(root, "scripts/gate-slot.sh"), "npm", "install", "--prefix", prefix, "--no-save", "--ignore-scripts", `@openai/codex@${version}`], root, env, until, cancel);
   if (!existsSync(binary)) throw new Error("native Codex fixture was not installed");
   return binary;
 }
+/** Brings origin/main up to date unless the deadline comes first; planning
+    then uses the origin/main already present. */
+export async function fetchMain(root: string, until: number): Promise<"fetched" | "failed" | "stopped"> {
+  const outcome = await execute(["git", "fetch", "origin", "main", "--quiet"], root, process.env, until, null);
+  if (outcome.leaked) throw new ContainmentFailed("fetching origin/main", outcome.leaked);
+  return outcome.stopped ? "stopped" : outcome.code === 0 ? "fetched" : "failed";
+}
 
-function main(mode: Mode): void {
+export interface PushDeadline { at: number; startedAt: number }
+
+/** `LLV_GATE_PUSH_DEADLINE` (Unix ms) is set by a caller that kills the push
+    at a limit of its own, as the controller's publication does. Everything
+    that can wait on the network, on machine admission or on a check then ends
+    by it: the fetch of origin/main, a cold-cache Bun or Codex install, and
+    every step. Nothing starts once it has passed. Only local reads (git's own
+    plumbing, planning) run outside it. Without it nothing is stopped and every
+    step reaches its verdict. */
+export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number): PushDeadline | null {
+  const raw = env.LLV_GATE_PUSH_DEADLINE;
+  if (raw === undefined || raw === "") return null;
+  const at = Number(raw);
+  if (!Number.isSafeInteger(at) || at <= 0) throw new Error("LLV_GATE_PUSH_DEADLINE must be a Unix time in milliseconds");
+  return { at, startedAt };
+}
+const seconds = (ms: number) => `${Math.max(0, Math.round(ms / 1000))} s`;
+export function budgetSeconds(deadline: PushDeadline): number {
+  return Math.max(0, Math.round((deadline.at - deadline.startedAt) / 1000));
+}
+/** Said for every check the push budget left to the hosted job. The colon
+    keeps it from reading as a phase marker. */
+export function deferredLine(mode: Mode, step: Step, deadline: PushDeadline, outcome: Pick<Outcome, "ranMs" | "preparing">, ref = "<branch>"): string {
+  const when = outcome.ranMs === null ? "before it could start"
+    : outcome.preparing ? `while it was being prepared after ${seconds(outcome.ranMs)}` : `after it had run ${seconds(outcome.ranMs)}`;
+  return `${mode}: left to the hosted job: "${step.name}" was stopped ${when}, when the push budget of ${budgetSeconds(deadline)} s ran out; `
+    + `its verdict comes from the "Bun runtime pin" workflow (gh workflow run bun-runtime.yml --ref ${ref})`;
+}
+/** A decisive step the caller's deadline stopped. The publication reads this
+    line as an interrupted push (src/lib/pipelines/git.ts), not as a refusal. */
+export const NO_VERDICT_PREFIX = "no verdict within the push budget of ";
+export class NoVerdict extends Error {
+  constructor(step: Step, deadline: PushDeadline, outcome: Pick<Outcome, "ranMs" | "preparing">) {
+    const what = outcome.ranMs === null ? "could not start"
+      : outcome.preparing ? `was stopped while it was being prepared after ${seconds(outcome.ranMs)}`
+        : `was still running after ${seconds(outcome.ranMs)} and was stopped`;
+    super(`${NO_VERDICT_PREFIX}${budgetSeconds(deadline)} s: "${step.name}" ${what}; nothing was judged`);
+  }
+}
+/** A stopped step whose processes outlived the stop: the push fails, since a
+    retry would start beside them. */
+export class ContainmentFailed extends Error {
+  constructor(what: string, leaked: string, cancelled = false) {
+    super(`${what} was stopped ${cancelled ? "when another check in its group failed" : "at the push deadline"}, but ${leaked}; stop them before pushing again`);
+  }
+}
+class StoppedPreparing extends Error {
+  constructor(readonly ranMs: number) { super("stopped while preparing"); }
+}
+
+function cgroupOf(pid: number | "self"): string | null {
+  try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
+  catch { return null; }
+}
+/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
+    zombie (exited, waiting to be reaped) from a running process; unreadable
+    metadata proves nothing, so the process counts as running. */
+function live(pid: number): boolean {
+  try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+}
+function procEntries(): number[] | null {
+  try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
+}
+/** The wall-clock end of one stop. A process-table query is a synchronous
+    `ps` where there is no /proc, so each one is capped by what is left. */
+interface Cleanup { ends: number; late: boolean }
+/** `ps` where there is no /proc (macOS); null when it cannot be read either,
+    or not before the cleanup ends. */
+function ps(columns: string[], cleanup: Cleanup, environment = false): string[] | null {
+  const timeout = cleanup.ends - Date.now();
+  if (timeout <= 0) { cleanup.late = true; return null; }
+  const args = ["-A", "-ww", ...columns.flatMap(column => ["-o", `${column}=`])];
+  // BSD ps appends the environment with -E, procps with the BSD-style `e`.
+  if (environment) args.push(process.platform === "linux" ? "e" : "-E");
+  const result = spawnSync("ps", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout, killSignal: "SIGKILL" });
+  if (result.status !== 0 && Date.now() >= cleanup.ends) cleanup.late = true;
+  return result.status === 0 ? result.stdout.split("\n").filter(line => line.trim()) : null;
+}
+/** Every process that inherited this step's token, wherever it was reparented;
+    null when no process table could be read. */
+function holders(token: string, cleanup: Cleanup): number[] | null {
+  const entries = procEntries();
+  if (!entries) {
+    const mark = ` ${STEP_TOKEN}=${token}`;
+    return ps(["pid", "command"], cleanup, true)?.flatMap(line => {
+      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
+      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
+    }) ?? null;
+  }
+  const mark = `\0${STEP_TOKEN}=${token}\0`;
+  return entries.filter(pid => {
+    try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
+  });
+}
+function scopeMembers(scope: string): number[] {
+  try { return readFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; }
+}
+/** The tree under `root`; null when no process table could be read. */
+function descendants(root: number, cleanup: Cleanup): number[] | null {
+  const children = new Map<number, number[]>();
+  const adopt = (pid: number, parent: number) => children.set(parent, [...(children.get(parent) ?? []), pid]);
+  const entries = procEntries();
+  if (!entries) {
+    const table = ps(["pid", "ppid"], cleanup);
+    if (!table) return null;
+    for (const line of table) { const [pid, parent] = line.trim().split(/\s+/).map(Number); adopt(pid!, parent!); }
+  }
+  for (const pid of entries ?? []) {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      adopt(pid, Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]));
+    } catch { /* exited while listed */ }
+  }
+  const found: number[] = [];
+  for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
+  return found;
+}
+/** Each started step carries a token of its own in its environment. */
+const STEP_TOKEN = "LLV_GATE_STEP";
+/** Stops the step this hook started: its process tree, every process that
+    inherited its token, and every transient scope those run in. The work can
+    run in a run-*.scope the step's first PID is not in (gate-slot under a
+    wrapper or nested in the step), so scopes are read from every member, and
+    this hook's own cgroup is never one of them. Resolves by CLEANUP_MS,
+    process-table queries included, with what survived, or null once nothing
+    did. A process counts as gone only when that is proven: when no process
+    table can be read in time, the step's helpers cannot be found, and that
+    is what it resolves with. */
+const CLEANUP_MS = 3_000;
+async function stopStep(pid: number, token: string): Promise<string | null> {
+  const own = cgroupOf("self");
+  const scopes = new Set<string>(), signalled = new Set<number>([pid]);
+  const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
+  let blind = false;
+  const sweep = () => {
+    const tree = descendants(pid, cleanup), inherited = holders(token, cleanup);
+    if (!tree || !inherited) blind = true;
+    const members = [...new Set([pid, ...tree ?? [], ...inherited ?? []])].filter(live);
+    for (const member of members) {
+      signalled.add(member);
+      const scope = cgroupOf(member);
+      if (scope && scope !== own && scope.endsWith(".scope")) scopes.add(scope);
+    }
+    for (const member of members) { try { process.kill(member, "SIGKILL"); } catch { /* already gone, or refused: still counted below */ } }
+    // Reaches helpers that left the tree and dropped the token as well.
+    for (const scope of scopes) { try { writeFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.kill"), "1"); } catch { /* gone, or no cgroup.kill */ } }
+  };
+  sweep();
+  const left = () => {
+    const inherited = holders(token, cleanup);
+    if (!inherited) blind = true;
+    return [...new Set([...signalled, ...inherited ?? [], ...[...scopes].flatMap(scopeMembers)])].filter(live);
+  };
+  let survivors = left();
+  for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
+    await Bun.sleep(Math.min(50, cleanup.ends - Date.now()));
+    survivors = left();
+    if (attempt % 10 === 0 && survivors.length) sweep();
+  }
+  const unlisted = blind ? `the processes it started could not be listed (no /proc, and ps ${cleanup.late ? `did not answer within ${seconds(CLEANUP_MS)}` : "failed"}), so they could not be proven stopped` : null;
+  if (survivors.length) return `${survivors.length} of its processes (${survivors.slice(0, 8).join(", ")}) are still running${scopes.size ? ` in ${[...scopes].join(", ")}` : ""}${unlisted ? `, and ${unlisted}` : ""}`;
+  return unlisted;
+}
+
+/** `cancelled`: stopped by `cancel`, never by the deadline. */
+interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean }
+/** `log` names the file for the step's output; null discards it; absent shows
+    it. `cancel` stops the step at once, as the deadline would. */
+async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, log?: string | null, cancel?: AbortSignal): Promise<Outcome> {
+  if (cancel?.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
+  if (until <= Date.now()) return { code: null, stopped: true, ranMs: null };
+  const started = Date.now();
+  const fd = log ? openSync(log, "w") : undefined;
+  const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
+  let stopping = false, cancelled = false, timer: ReturnType<typeof setTimeout> | undefined, onCancel: (() => void) | undefined;
+  try {
+    const output = fd ?? (log === null ? "ignore" : "inherit");
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...env, [STEP_TOKEN]: token }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
+    let stopped!: (leaked: string | null) => void;
+    const stop = new Promise<string | null>(resolve => { stopped = resolve; });
+    // A child that already exited keeps nothing to stop, and its PID may be reused.
+    const halt = (byCancel: boolean) => {
+      if (stopping || child.exitCode !== null || child.signalCode) return;
+      stopping = true; cancelled = byCancel;
+      void stopStep(child.pid, token).then(stopped);
+    };
+    if (Number.isFinite(until)) timer = setTimeout(() => halt(false), Math.max(0, until - Date.now()));
+    if (cancel) cancel.addEventListener("abort", onCancel = () => halt(true), { once: true });
+    // The stop's own answer is bounded; the child's exit is not when it refuses
+    // the signal, so whichever comes first ends the wait.
+    const code = await Promise.race([child.exited, stop.then(() => null)]);
+    if (!stopping) return { code, stopped: false, ranMs: Date.now() - started };
+    const leaked = await stop;
+    // A survivor must not hold this hook open: the push ends with its report.
+    if (leaked) child.unref();
+    else await child.exited;
+    return { code: null, stopped: true, ranMs: Date.now() - started, ...(leaked ? { leaked } : {}), ...(cancelled ? { cancelled } : {}) };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onCancel) cancel!.removeEventListener("abort", onCancel);
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv }
+/** Prepares a step without running it past `until`; an installation the
+    deadline stops is reported as a step that was being prepared. */
+async function prepared(prepare: RunOptions["prepare"], step: Step, until: number, cancel?: AbortSignal): Promise<Prepared | Outcome> {
+  if (cancel?.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
+  if (until <= Date.now()) return { code: null, stopped: true, ranMs: null };
+  try { return await prepare(step, until, cancel); }
+  catch (error) {
+    if (error instanceof StoppedPreparing) return { code: null, stopped: true, ranMs: error.ranMs, preparing: true, ...(cancel?.aborted ? { cancelled: true } : {}) };
+    throw error;
+  }
+}
+const isOutcome = (value: Prepared | Outcome): value is Outcome => "stopped" in value;
+interface RunOptions {
+  root: string; deadline: PushDeadline | null; logDir: string; say?: (line: string) => void; ref?: string;
+  /** Anything it waits on ends by `until`, or at once on `cancel`, through the
+      installers above. */
+  prepare: (step: Step, until: number, cancel?: AbortSignal) => Prepared | Promise<Prepared>;
+}
+/** Runs the plan in order. A group runs at once and is reported once all of
+    it has settled. Resolves with the checks left to the hosted job. A member's
+    own verdict carries a colon, so the publication never reads it as the
+    phase the hook was in. */
+export async function runSteps(mode: Mode, steps: readonly Step[], options: RunOptions): Promise<string[]> {
+  const { root, deadline, logDir, prepare } = options;
+  const say = options.say ?? ((line: string) => console.error(line));
+  const deferred: string[] = [];
+  // A stopped step is deferred when the hosted job also runs it, and is a
+  // missing verdict otherwise.
+  const until = deadline?.at ?? Infinity;
+  const settle = (step: Step, outcome: Outcome) => {
+    if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
+    if (!outcome.stopped || !deadline) return outcome.code === 0;
+    if (!step.deferrable) throw new NoVerdict(step, deadline, outcome);
+    say(deferredLine(mode, step, deadline, outcome, options.ref));
+    deferred.push(step.name);
+    return true;
+  };
+  for (let index = 0; index < steps.length;) {
+    const step = steps[index]!;
+    let end = index + 1;
+    if (step.group) while (end < steps.length && steps[end]!.group === step.group) end++;
+    const group = steps.slice(index, end);
+    index = end;
+    say(`${mode}: ${step.group ?? step.name}`);
+    if (!step.group) {
+      const ready = await prepared(prepare, step, until);
+      const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, ready.env, until);
+      if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+      continue;
+    }
+    // Grouped steps take their machine admission together and wait for none
+    // of each other; each writes its own log, shown when it failed.
+    const members = group.map(member => ({ member, log: path.join(logDir, `${member.name.replace(/[^\w.-]+/g, "-")}.log`) }));
+    // A member that cannot be prepared or started stops the rest of its group,
+    // and the group is reported once every member has settled: nothing a
+    // member started may outlive the hook unreported.
+    const cancel = new AbortController(), errors = new Map<number, unknown>();
+    const outcomes = await Promise.all(members.map(async ({ member, log }, at) => {
+      try {
+        const ready = await prepared(prepare, member, until, cancel.signal);
+        return isOutcome(ready) ? ready : await execute(ready.command, root, ready.env, until, log, cancel.signal);
+      } catch (error) { errors.set(at, error); cancel.abort(); return null; }
+    }));
+    if (errors.size) {
+      const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
+      const reason = error instanceof Error ? error.message : String(error);
+      say(`${mode}: ${culprit}: failed (${reason})`);
+      let leak: ContainmentFailed | undefined;
+      members.forEach(({ member }, at) => {
+        const outcome = outcomes[at], other = errors.get(at);
+        if (at !== first && other instanceof ContainmentFailed) leak ??= other;
+        if (outcome?.leaked) leak ??= new ContainmentFailed(`"${member.name}"`, outcome.leaked, outcome.cancelled);
+        if (outcome?.cancelled) say(`${mode}: ${member.name}: stopped when "${culprit}" failed; nothing was judged`);
+      });
+      if (leak) throw leak;
+      if (error instanceof ContainmentFailed) throw error;
+      throw new Error(`"${culprit}" failed: ${reason}`);
+    }
+    const failed: string[] = [];
+    let missing: NoVerdict | undefined;
+    members.forEach(({ member, log }, at) => {
+      const outcome = outcomes[at]!;
+      try {
+        if (settle(member, outcome)) {
+          if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(outcome.ranMs ?? 0)}`);
+          return;
+        }
+      } catch (error) { if (error instanceof NoVerdict) { missing ??= error; return; } throw error; }
+      failed.push(member.name);
+      if (existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+      say(`${mode}: ${member.name}: failed (${outcome.code}) after ${seconds(outcome.ranMs ?? 0)}`);
+    });
+    if (failed.length) throw new Error(`${failed.join(", ")} failed`);
+    if (missing) throw missing;
+  }
+  if (deferred.length) say(`${mode}: passed; left to the hosted job: ${deferred.join(", ")}`);
+  return deferred;
+}
+
+/** The hook's last line and exit code for what stopped it: a missing verdict
+    exits 75, anything else fails the gate. */
+export function endingOf(mode: Mode, error: unknown): { line: string; code: number } {
+  if (error instanceof NoVerdict) return { line: `${mode}: ${error.message}`, code: 75 };
+  return { line: `${mode}: ${error instanceof Error ? error.message : error}; gate failed`, code: 1 };
+}
+
+/** Exits at once: a stopped step's survivor must not hold the push open. */
+export function endHook(mode: Mode, error: unknown): never {
+  const { line, code } = endingOf(mode, error);
+  console.error(line);
+  process.exit(code);
+}
+
+async function main(mode: Mode): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
+  const deadline = pushDeadline(process.env, Date.now());
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
+  const until = deadline?.at ?? Infinity;
   if (mode === "pre-push") {
-    const fetch = spawnSync("git", ["fetch", "origin", "main", "--quiet"], { cwd: root, stdio: "ignore" });
-    if (fetch.status !== 0) console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
+    const fetch = await fetchMain(root, until);
+    if (fetch === "failed") console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
+    if (fetch === "stopped") console.warn("pre-push: fetch stopped at the push deadline; using the last origin/main");
     base = git(root, ["merge-base", "HEAD", "origin/main"]);
     const behind = Number(git(root, ["rev-list", "--count", "HEAD..origin/main"]));
     if (behind) console.warn(`pre-push: branch is ${behind} commit(s) behind origin/main; the hosted privacy gate may flag main-only commits. Merge origin/main before pushing.`);
@@ -265,7 +613,9 @@ function main(mode: Mode): void {
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
-  const runtime = steps.some(step => step.pinned) ? pinnedRuntime(root, cache) : process.execPath;
+  // Installed on first use, inside the step that needs it and by its deadline.
+  let runtime: Promise<string> | undefined;
+  const fixtures = new Map<string, Promise<string>>();
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-local-gate-"));
   try {
     const isolated = isolatedEnvironment(sandbox, process.env);
@@ -274,17 +624,22 @@ function main(mode: Mode): void {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
       LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
     };
-    for (const step of steps) {
-      console.error(`${mode}: ${step.name}`);
+    const prepare = async (step: Step, until: number, cancel?: AbortSignal) => {
       const command = [...step.command];
       const env = { ...(step.isolated ? isolated : process.env) };
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
-        command[0] = runtime;
-        env.PATH = `${path.dirname(runtime)}${path.delimiter}${env.PATH ?? ""}`;
+        runtime ??= pinnedRuntime(root, cache, until, cancel);
+        command[0] = await runtime;
+        env.PATH = `${path.dirname(command[0])}${path.delimiter}${env.PATH ?? ""}`;
       }
-      if (step.name === "runtime host") command.push("--runtime", runtime);
-      if (step.codex) command.push(codexFixture(root, cache, step.codex));
+      if (step.name === "runtime host") command.push("--runtime", command[0]!);
+      if (step.codex) {
+        // Members of one group share a version's install instead of racing on its prefix.
+        if (!fixtures.has(step.codex)) fixtures.set(step.codex, codexFixture(root, cache, step.codex, until, process.env, cancel));
+        command.push(await fixtures.get(step.codex)!);
+      }
+      if (step.selection) command.push(step.selection);
       if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {
@@ -293,8 +648,10 @@ function main(mode: Mode): void {
           if (!isTest(file) || !existsSync(path.resolve(root, file))) throw new Error(`missing or invalid test path: ${file}`);
         }
       }
-      run(step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, root, env);
-    }
+      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env };
+    };
+    const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
+    await runSteps(mode, steps, { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) });
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
@@ -303,8 +660,5 @@ function main(mode: Mode): void {
 if (import.meta.main) {
   const mode = process.argv[2];
   if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push");
-  try { main(mode); } catch (error) {
-    console.error(`${mode}: ${error instanceof Error ? error.message : error}; gate failed`);
-    process.exitCode = 1;
-  }
+  try { await main(mode); } catch (error) { endHook(mode, error); }
 }

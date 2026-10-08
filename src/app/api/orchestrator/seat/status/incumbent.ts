@@ -72,7 +72,7 @@ export interface OrchestratorIncumbentBody {
 
 /** Same sentence `get_orchestrator` carries, for the same reason: a reader of
     this payload must never be able to mistake it for an instruction. */
-export const ROTATION_NOTE = "recommendation only — rotation never happens automatically; call rotate_orchestrator explicitly";
+export const ROTATION_NOTE = "recommendation only — call rotate_orchestrator explicitly; the seat tick automatically rotates only after authentication failure onto another allowed account";
 
 export interface IncumbentReadDependencies {
   conversation: (id: ViewerConversationId) => RegistryConversation | null;
