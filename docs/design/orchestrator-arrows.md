@@ -312,14 +312,21 @@ starts its minute again, including during the fade. Several recent actions show
 several wires at once. More than `ORCHESTRATOR_BURST_LIMIT` (six) actions in one
 board update draw nothing, the rule §4 gives for a sweep.
 
-**The look.** The seat is the source node. At the side its port sits on its
-right edge at the height of the bus, the gap above the columns; the wire runs
-along the bus, down the gutter left of the card's column and into a port on the
-card, with rounded corners. With the seat on top the wire leaves the foot of the
-seat's left edge, runs down the board's left margin (clear of the row of column
-links under the seat) and joins the same bus. On the phone the left margin is
-the gutter of the open tab: a spine from the seat card into each acted-on card
-of that tab. A wire to a card with a running lane flows the way the card's own
+**The look.** The seat is the source node. A wire ends down the gutter left of
+the card's column and into a port on the card, with rounded corners, and takes
+the route with the fewest bends, then the shortest, that crosses no other
+column, nothing of the seat and no line of text
+(`docs/design/orchestrator-wire-routing.md` §5): straight into a card of the
+column beside a seat at the side, along the bus above the columns to a farther
+one; with the seat on top, down from its bottom edge when it spans the gutter,
+out of its facing side when it does not, round the row of column links along
+the bus when a link stands in the way, and down the board's left margin only
+under a row of tabs as wide as the board. Folded on top with no frame, the seat
+is its avatar and title, so its wires leave the avatar's side or the space just
+past the title. The seat has a port where each route
+leaves it; wires that leave at the same port run together from it as one trunk
+until each turns down its own gutter, and share nothing after that. On the phone the left margin is the gutter of the open tab: a spine
+from the seat card into each acted-on card of that tab. A wire to a card with a running lane flows the way the card's own
 live edge does; a card that needs the operator takes the warning colour. A card
 the column has scrolled past is counted at the column's edge (`↓ +3`) with one
 dashed wire; a card in another phone tab, a column out of view or a hidden group
