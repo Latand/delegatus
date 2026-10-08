@@ -128,8 +128,10 @@
 .pblock .pb-chain.has-finish { flex-wrap: wrap; row-gap: 4px; }
 .pblock .pb-chain > .pb-pills { flex: 1 1 auto; }
 /* The chips end the chain line; they wrap under each other rather than
-   squeeze the pills, and never take more than half the row. */
-.pblock .pb-links { flex: 0 1 auto; justify-content: flex-end; margin-top: 2px; max-width: 50%; }
+   squeeze the pills, and never take more than half the row. They keep at
+   least their widest chip's width: squeezed under it, a chip ran into the
+   tail's graph toggle. */
+.pblock .pb-links { flex: 0 1 auto; justify-content: flex-end; margin-top: 2px; max-width: 50%; min-width: min-content; }
 .pblock .pb-links.end { max-width: none; }
 /* The head's tail on the chain row: the graph toggle, then the age and the
    way into the stages, whose chevron ends the row at the card's edge. */
