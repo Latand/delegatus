@@ -105,6 +105,9 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (!result.replayed) remaining = Math.min(remaining, result.calls_remaining);
         // R6 zero ends new actions even on replay; an admitted pending call still polls below.
         if (action && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
+        // Switch-off withholding can deny an action after it executed. Keep the
+        // denial, but close calls; only unavailable guarantees a safe wire retry.
+        if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
         if (action && result.status === "outcome_unknown") sawUnknown = true;
         if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
         if (result.status === "pending") {
@@ -132,7 +135,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             rejected.abort();
           }
           if (action && error.status === 409 && error.code === "call_conflict") return unknown();
-          if ([400, 401, 409, 413, 426].includes(error.status))
+          if ([400, 401, 413, 426].includes(error.status) || !action && error.status === 409)
             return refused(error.code);
           if (error.status === 429) {
             if (++failures > 3) return refused(error.code);
@@ -140,7 +143,9 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             continue;
           }
         }
-        if (!(error instanceof ExternalRelayError) || error.status === 0 || error.status === 200 || error.status >= 500) ambiguous = true;
+        // Only the wire-defined refusals above prove non-admission. Any other
+        // response (including a redirect or HTTP timeout) leaves fate unresolved.
+        ambiguous = true;
         if (++failures > 3) return action ? unknown() : refused();
         await wait(1000 * 2 ** (failures - 1));
       }

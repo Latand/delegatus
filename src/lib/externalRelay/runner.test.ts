@@ -1480,6 +1480,32 @@ const actionResponse = (sample: string, body: WireCall) => ({ body: {
   ...x1Results[sample]!, call_id: body.call_id, tool: "tool" in body ? body.tool : x1Results[sample]!.tool,
 } });
 
+test("a post-execution switch-off denial prevents a changed-reason ban after switch-on", async () => {
+  let actionsEnabled = true;
+  const executed = new Set<string>();
+  const run = await runLoopCase({ role: "actions_admin",
+    plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call('ban_participant',{
+      target_message_id:'m_b40b71a0a9d43622ee0e2e6a',reason:round===1?'Spam':'Repeated spam'})]}:reply;`,
+    response: (body) => {
+      expect(actionsEnabled).toBe(true);
+      executed.add(body.call_id);
+      actionsEnabled = false;
+      // Exact output of Celestia's withhold_action_result at dcc35137,
+      // apps/backend/application/usecase/clones/relay_tool_call.py:115.
+      const withheld = { call_id: body.call_id, tool: "ban_participant", status: "denied", output: "",
+        truncated: false, effect: "action", delivered: false, replayed: false, calls_remaining: 15, code: "not_permitted" };
+      actionsEnabled = true;
+      return { body: withheld };
+    } });
+  expect(executed.size).toBe(1);
+  expect(run.calls).toHaveLength(1);
+  expect(projectionsOf(run)[0]).toMatchObject({ status: "denied", code: "not_permitted", effect: "action" });
+  expect(run.rounds[1].schema).toEqual(answerSchema);
+  // Even a model that ignores the final schema cannot issue another ban or hand off.
+  expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+  expect(run.completions).toHaveLength(1);
+});
+
 for (const sample of ["action_ok", "action_error", "action_denied", "confirmation_pending", "outcome_unknown", "action_replayed", "action_delivered"])
   test(`X1 ${sample} crosses the real action loop`, async () => {
     const wire = x1Results[sample]!;
@@ -1491,7 +1517,7 @@ for (const sample of ["action_ok", "action_error", "action_denied", "confirmatio
     const schema = run.rounds[1].schema;
     expect(schema.properties.action.enum).not.toContain("handoff");
     if (sample === "outcome_unknown") expect(schema).toEqual(replyAnswerSchema);
-    else if (wire.delivered || wire.status === "confirmation_pending") expect(schema).toEqual(answerSchema);
+    else if (wire.delivered || wire.status === "confirmation_pending" || wire.status === "denied") expect(schema).toEqual(answerSchema);
     else expect(schema.properties.action.enum).toContain("call");
     if (wire.delivered) expect(projectionsOf(run)[0].delivered).toBe(true);
     if (sample === "confirmation_pending") {
@@ -1577,6 +1603,32 @@ for (const failure of ["transport", "malformed", "503_then_400", "call_conflict"
     if (["transport", "malformed"].includes(failure)) expect(run.calls).toHaveLength(4);
     if (failure === "pending_deadline") expect(clock).toBe(330000);
   });
+
+for (const unresolved of [302, 408, 418, 409])
+  for (const refusal of [400, 401, 413, 426, 429])
+    test(`an unresolved ${unresolved} then ${refusal} prevents a changed-reason ban`, async () => {
+      const executed = new Set<string>();
+      const run = await runLoopCase({ role: "actions_admin",
+        plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call('ban_participant',{
+          target_message_id:'m_b40b71a0a9d43622ee0e2e6a',reason:round===1?'Spam':'Repeated spam'})]}:reply;`,
+        response: (body, attempt) => {
+          if (attempt === 1) {
+            executed.add(body.call_id);
+            return { status: unresolved, body: { error: { code: "unexpected_response" } } };
+          }
+          if (body.call_id === [...executed][0]) return { status: refusal, body: { error: { code: "refused" } } };
+          executed.add(body.call_id);
+          return actionResponse("action_ok", body);
+        } });
+      expect(executed.size).toBe(1);
+      expect(run.calls).toHaveLength(refusal === 429 ? 4 : 2);
+      expect(new Set(run.calls.map((body) => JSON.stringify(body))).size).toBe(1);
+      expect(projectionsOf(run)[0]).toMatchObject({ status: "outcome_unknown", effect: "action" });
+      expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+      expect(run.rounds).toHaveLength(2);
+      expect(run.record!.toolCalls![0]).toMatchObject({ status: "outcome_unknown", local: true });
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+    });
 
 for (const status of [400, 413, 429, 401, 426])
   test(`pre-admission ${status} alone remains an action error`, async () => {
