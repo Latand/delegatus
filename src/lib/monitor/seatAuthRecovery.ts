@@ -158,7 +158,11 @@ export async function recoverSeatAuthentication(
       }
     } else if (!incident.notice && current?.intent.clientRequestId === seatAuthRotationKey(incident.id)) {
       incident.rotation = { ...incident.rotation, state: "rotated", successorConversationId: current.conversationId ?? undefined };
-    } else if (incident.rotation.state !== "rotated" || (incident.notice?.card && !provisionalSuccessor())) close();
+    } else if (incident.rotation.state !== "rotated" || (incident.notice && !provisionalSuccessor())) {
+      // A completed notice attempt leaves board delivery in authCardsOwed.
+      // The readable successor can now be judged independently.
+      close();
+    }
   }
   if (incident && incident.seatEpoch === (seat?.seatEpoch ?? null)) {
     const stamp = seatAuthCredentialStamp(incident.engine, incident.accountId, incident.id);
@@ -333,7 +337,7 @@ export async function recoverSeatAuthentication(
     close(incident.recoveredThrough ?? closingThrough, true);
     if (!incident) return recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, ports);
   }
-  if (incident.notice?.card && incident.seatEpoch !== seat?.seatEpoch && !provisionalSuccessor()) {
+  if (incident.notice && incident.seatEpoch !== seat?.seatEpoch && !provisionalSuccessor()) {
     // Finish the predecessor's independent notice, then judge the successor's
     // own turn in this same check. Its failure cannot advance the old boundary.
     close();

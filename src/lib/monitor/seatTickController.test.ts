@@ -8111,6 +8111,87 @@ describe("seat authentication recovery through production seams", () => {
     });
   });
 
+  test.each(["full", "throws"] as const)("a readable authentication successor wakes while its predecessor's board notice %s", async (failure) => {
+    await authFixture(true, async (f) => {
+      f.rig.deps.ensureCard = () => {
+        if (failure === "throws") throw new Error("fixture board writer unavailable");
+        return false;
+      };
+      await f.check();
+      const id = f.row().authIncident!.id;
+      expect(f.seat().conversationId).toBe(f.successor.id);
+      expect(f.row().authCardsOwed?.map(card => card.id)).toEqual([id]);
+      if (failure === "full") expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.rig.sent.every(message => message.conversationId === f.successor.id)).toBe(true);
+      const restarted = await f.restartAuthentication();
+      expect(restarted.authIncident).toBeUndefined();
+      expect(restarted.authCardsOwed?.map(card => ({ id: card.id, state: card.state }))).toEqual([{ id, state: "resolved" }]);
+      expect(f.cards()).toHaveLength(0);
+      delete f.rig.deps.ensureCard;
+      await f.check(); await f.check();
+      expect(f.row().authCardsOwed).toEqual([]);
+      expect(f.cards()).toHaveLength(1);
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.reports()).toHaveLength(1);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.spawns).toHaveLength(1);
+    });
+  });
+
+  test.each(["reported", "drain-held"] as const)("a failed authentication successor gets its own notice while its predecessor's %s board card is owed", async (noticeState) => {
+    await authFixture(true, async (f) => {
+      f.rig.deps.ensureCard = () => false;
+      const rotate = f.rig.deps.seatAuth!.rotate!;
+      f.rig.deps.seatAuth!.rotate = async (...args) => {
+        const result = await rotate(...args);
+        if (noticeState === "drain-held") writeDrain(drainFile(), { id: "auth-board-debt-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+        return result;
+      };
+      try {
+        await f.check();
+        const predecessorId = f.row().authIncident!.id;
+        const transcript = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        const at = "2026-10-08T00:08:00Z";
+        fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "initial mandate" } }) + "\n"
+          + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+            message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+        releaseDrain(drainFile(), "auth-board-debt-drain");
+        let successorRotations = 0;
+        f.rig.deps.seatAuth!.rotate = async () => {
+          successorRotations++;
+          return { status: 503, body: { error: "fixture successor rotation refused" } };
+        };
+        await f.check();
+        expect(f.row().authIncident?.conversationId).toBe(f.successor.id);
+        const successorId = f.row().authIncident!.id;
+        expect(successorId).not.toBe(predecessorId);
+        await f.check();
+        const restarted = await f.restartAuthentication();
+        expect(restarted.authIncident?.id).toBe(successorId);
+        expect(restarted.authIncident?.lastFailedTs).toBe(Date.parse(at));
+        expect(restarted.authCardsOwed?.map(card => ({ id: card.id, state: card.state }))).toEqual([
+          { id: predecessorId, state: "resolved" }, { id: successorId, state: "open" },
+        ]);
+        expect(f.reports()).toHaveLength(2);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.rig.sent).toHaveLength(0);
+        expect(successorRotations).toBe(1);
+        delete f.rig.deps.ensureCard;
+        await f.check(); await f.check();
+        expect(f.row().authCardsOwed).toEqual([]);
+        expect(f.cards()).toHaveLength(2);
+        expect(f.cards().map(card => card.status).sort()).toEqual(["done", "inbox"]);
+        expect(f.row().authIncident?.id).toBe(successorId);
+        expect(f.reports()).toHaveLength(2);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(successorRotations).toBe(1);
+      } finally { releaseDrain(drainFile(), "auth-board-debt-drain"); }
+    });
+  });
+
   test("a successor authentication failure stays independent of its predecessor's held notice", async () => {
     await authFixture(true, async (f) => {
       const rotate = f.rig.deps.seatAuth!.rotate!;
