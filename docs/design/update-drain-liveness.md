@@ -726,14 +726,14 @@ that names no writer on the owner's own row, whatever it does to the row's
 status: a predecessor's delayed `turn-started` or `turn-ended`, a late send
 outcome, an interrupt request, a spawn placeholder.
 
-One kind of write by another process reaches an owner's evidence, and only by
-taking it away: the journal keeps one row per conversation, so a later
-publication for another writer, or a copy of the registry, replaces the
-owner's published statement. The owner is then judged on its handle, its row
-reference and its tail, and its row reference carries the turn its writer
-wrote under the same claim on the same change of state
-(`bindStructuredHostPersistence`). No write by another process can add a
-sign of work to an owner.
+A later fenced host publication replaces the row's retained mark. Its key
+and writer epoch still prevent it speaking for another owner. A registry
+fallback or late event keeps the owner's retained statement, even when it
+clears the row's fence. The registry checkpoint may legally lag behind
+captured termination, so the row reference need not carry the later running
+turn yet. That owner's retained running statement holds over an older
+settled tail until its own idle evidence or proven death/PID reuse (R8).
+No write by another process can add a sign of work to an owner.
 
 This is the property the last fourteen rounds attacked one instance at a
 time. It is checked directly: for a fixture owner, every verdict in R7 is
@@ -829,7 +829,7 @@ onto it. Key B and epoch 1 both match B, so the epoch rule alone held B as
 | B under its own key at its first claim, epoch 1, idle, no row reference, settled tail, no handle; the fallback relabels A's row to key B, and a late turn event writes a turn id | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5, "How a journal row names its writer": the copy wrote `null`, so the row names no writer and speaks for no owner. R7 releases B. R9 counts the row |
 | as above, with the row relabelled before the build (key B, A's fence) and the build's Viewer started over it | released at once | the start's fallback pass rewrites a copy that still carries a fence (R5) |
 | B's writer publishes its own row under key B at epoch 1 with a turn id, tail settled | holds, `turn-claimed`, with no bound | R5 source 3: B's own key, epoch and status mark |
-| B's own row, then a copy of the registry over it, then a late turn event; B idle, no row reference, settled tail | released at once | the copy names no writer, so B is judged on its handle, row reference and tail (R7). The fence rule alone held B here |
+| B's own idle publication, then a copy of the registry over it, then a late turn event; no row reference, settled tail | released at once | B's retained mark still reports its own idle state (R5, R7). A retained running publication instead holds (R8) |
 | B's handle reports a turn | holds, `host-turn` | R5 source 1, R7 |
 | B's row reference names a turn | holds, `turn-claimed` | R5 source 2, R7 |
 | B's tail is open | holds, `turn-open` | R5 source 4, R7 |
@@ -1128,8 +1128,9 @@ against this specification with a fresh one.
      before and after B's own `turn-started` for that turn, and after A's
      delayed `turn-ended`, A's `turn-started` under another turn id, an
      interrupt request and a spawn placeholder that moves the row to another
-     key; a copy of the registry over it leaves B to its handle, row
-     reference and tail. A registration
+     key; a copy of the registry over it keeps B's retained running mark,
+     including when captured termination defers its registry checkpoint and
+     the tail contains an older completion (R8). A registration
      seated for A publishes nothing after B's claim, driven through the real
      controller with a host whose state listener the test fires, and a seat
      carried through a controller swap keeps the epoch it was seated at;
@@ -1567,8 +1568,8 @@ Known limits of this specification:
   publishes events through this Viewer, so the turn events that reach that
   row are late ones. A tmux host publishes no turn events at all. A turn the
   host starts anyway, such as a CLI that continues on a background-command
-  notification (Deferred), holds through its open tail from its first
-  transcript record and shows nothing before it.
+  notification (Deferred), holds through its open tail or its confirmed
+  durable host identity when the tail is unreadable (R8).
 - A host's own turn event counts through its publication only. Between a
   `turn-started` and the publication for the same turn the mark still
   records the host's previous, idle publication, and it stays so when that
@@ -1577,26 +1578,26 @@ Known limits of this specification:
   claim by the same state change, and the handle show that turn. At a turn's
   end the same gap runs the other way: a host whose idle publication failed
   keeps its running statement, and holds, until it publishes again. The
-  handle says idle in the Viewer that holds it, and a Viewer that holds no
-  handle for the host copies its row at its start (R5), after which the row
-  reference and the tail decide.
+  handle says idle in the Viewer that holds it. A Viewer that holds no
+  handle copies its row at startup (R5), preserving the retained running
+  mark until the host's own idle evidence or proven death/PID reuse (R8).
 - A host's own last statement holds for as long as its process lives and
   nothing publishes for it. That is the acceptance of this design (a host's
   own current claim holds until its own idle evidence or its exit), and
   `main` pins the same hold for a turn id over a settled transcript.
-- A publication for another writer, or a copy of the registry, replaces a
-  host's own statement, since the journal keeps one row per conversation.
-  The host is then judged on its handle, row reference and tail, and its row
-  reference carries the turn its writer wrote under the same claim. No other
-  write by another process reaches that statement.
+- A fenced host publication replaces the retained mark. A registry copy or
+  late event keeps it. The row reference may lag under captured termination;
+  the retained own running mark protects that turn over an older settled
+  tail (R8), with successor isolation still enforced by key and writer epoch.
 - A Viewer from before the build that still runs beside the new one
   publishes by session key as `main` does, so its registration can still put
   a predecessor's status under a successor's fence, and the journal records
   that publication like any other. It lasts while that process runs, during
   the first deployment of the build, and the successor it would hold is one
   the new Viewer claimed and holds a handle for.
-- A runtime host from before the build records no mark, so a row published
-  under it holds for the bound of R8 at most (`turn-unattributed`). Every
+- A runtime host from before the build records no mark, so its unattributed
+  claim holds while its durable host identity is confirmed. An unconfirmed
+  launch keeps R8's bounded grace (`turn-unattributed`). Every
   web-first deployment passes through that state until the host hands over. A
   row published then stays without a mark until its host publishes again or a
   Viewer start rewrites it.

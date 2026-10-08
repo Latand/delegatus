@@ -164,7 +164,7 @@ export function ownerCensusReader(
   });
   const heldHosts = options.heldHosts ?? structuredDeliveryHeldHosts;
   const viewer = options.viewerIdentity ?? (() => viewerIdentity === undefined ? (viewerIdentity = captureProcessIdentity(process.pid)) : viewerIdentity);
-  return async (sessions) => {
+  return async (sessions, _probe, read = (_reference, reading) => reading()) => {
     base ??= sources();
     const liveness = probeSources(base);
     const registry = liveness.registrySnapshot();
@@ -178,7 +178,8 @@ export function ownerCensusReader(
     for (const conversation of Object.values(registry.conversations)) {
       for (const generation of conversation.generations) engines.set(generation.path, conversation.engine);
     }
-    /* A missing file or a torn tail reads as null, which R8 bounds. A read
+    /* A missing file or a torn tail reads as null: R8 holds a confirmed
+       owner and bounds an unconfirmed launch. A read
        that fails on anything else (a denied open, an I/O error) is no
        verdict: the strict read throws it, it reaches the probe as
        `unreadable`, and the next probe reads again (R7). The description
@@ -254,54 +255,60 @@ export function ownerCensusReader(
     const spoken = new Set<string>();
     const gone: { key: string; identity: ProcessIdentity }[] = [];
     for (const owner of census.owners) {
-      const alive = ownerProcessAlive(owner, probe);
-      const reading: OwnerReading = { ...place(owner), role: owner.role, process: alive ? "alive" : "gone" };
-      if (!alive && owner.entryKey) for (const identity of owner.identities) gone.push({ key: owner.entryKey, identity });
-      if (alive && owner.role === "host") {
-        let handle: "busy" | "idle" | null = null;
-        if (owner.structuredHost && owner.entryKey && held.has(owner.entryKey)) {
-          const state = await health(owner.entryKey);
-          if (state && (state.pid === null || state.pid === owner.pid)) {
-            handle = handleTurn(state);
-            spoken.add(owner.entryKey);
+      await read({ conversationId: owner.binding, artifactPath: owner.artifactPath }, async () => {
+        const alive = ownerProcessAlive(owner, probe);
+        const reading: OwnerReading = { ...place(owner), role: owner.role, process: alive ? "alive" : "gone" };
+        if (!alive && owner.entryKey) for (const identity of owner.identities) gone.push({ key: owner.entryKey, identity });
+        if (alive && owner.role === "host") {
+          let handle: "busy" | "idle" | null = null;
+          if (owner.structuredHost && owner.entryKey && held.has(owner.entryKey)) {
+            const state = await health(owner.entryKey);
+            if (state && (state.pid === null || state.pid === owner.pid)) {
+              handle = handleTurn(state);
+              spoken.add(owner.entryKey);
+            }
           }
+          reading.handle = handle;
+          // Recording the host's pid and start identity confirms its launch.
+          // The evidence survives a Viewer restart and an unreadable transcript;
+          // only the owner's own idle/settlement or proven death can release it.
+          reading.confirmed = owner.identities.some((identity) => identity.startIdentity !== null && identityAlive(identity, probe));
+          reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
+          reading.journal = owner.writerEpoch === null ? null : journalStatement(await rowsFor(owner), owner);
+          reading.tail = await tail(owner.artifactPath, owner.engine);
         }
-        reading.handle = handle;
-        // Recording the host's pid and start identity confirms its launch.
-        // The evidence survives a Viewer restart and an unreadable transcript;
-        // only the owner's own idle/settlement or proven death can release it.
-        reading.confirmed = owner.identities.some((identity) => identity.startIdentity !== null && identityAlive(identity, probe));
-        reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
-        reading.journal = owner.writerEpoch === null ? null : journalStatement(await rowsFor(owner), owner);
-        reading.tail = await tail(owner.artifactPath, owner.engine);
-      }
-      owners.push(reading);
+        owners.push(reading);
+      });
     }
     for (const [key] of held) {
       if (spoken.has(key)) continue;
-      const state = await health(key);
-      const turn = handleTurn(state);
-      if (!state || !turn) continue;
-      /* R4 for the handle: health that names a process a record under the
-         same key holds, and that the census found gone, is stale and speaks
-         for nobody. Health that names another process is that process's
-         owner, alive only while its own pid and start identity answer. */
-      if (state.pid !== null) {
-        const pid = state.pid, start = state.processStartIdentity;
-        if (gone.some((record) => record.key === key && record.identity.pid === pid
-          && (start === null || record.identity.startIdentity === null || record.identity.startIdentity === start))) continue;
-        if (!identityAlive({ pid, startIdentity: start }, probe)) continue;
-      }
       const entry = registry.entries[key] ?? null;
       const binding = entry ? index.conversation({ sessionKey: entry.key, artifactPath: entry.artifactPath }) : null;
-      owners.push({ id: `handle:${key}:${state.pid ?? ""}`, binding, artifactPath: entry?.artifactPath ?? null, entryKey: key,
-        launchId: null, engine: entry?.key.engine ?? null, cwd: entry?.cwd ?? null,
-        role: "host", process: "alive", handle: turn, rowReference: false, journal: null,
-        tail: await tail(entry?.artifactPath ?? null, entry?.key.engine) });
+      await read({ conversationId: binding, artifactPath: entry?.artifactPath ?? null }, async () => {
+        const state = await health(key);
+        const turn = handleTurn(state);
+        if (!state || !turn) return;
+        /* R4 for the handle: health that names a process a record under the
+           same key holds, and that the census found gone, is stale and speaks
+           for nobody. Health that names another process is that process's
+           owner, alive only while its own pid and start identity answer. */
+        if (state.pid !== null) {
+          const pid = state.pid, start = state.processStartIdentity;
+          if (gone.some((record) => record.key === key && record.identity.pid === pid
+            && (start === null || record.identity.startIdentity === null || record.identity.startIdentity === start))) return;
+          if (!identityAlive({ pid, startIdentity: start }, probe)) return;
+        }
+        owners.push({ id: `handle:${key}:${state.pid ?? ""}`, binding, artifactPath: entry?.artifactPath ?? null, entryKey: key,
+          launchId: null, engine: entry?.key.engine ?? null, cwd: entry?.cwd ?? null,
+          role: "host", process: "alive", handle: turn, rowReference: false, journal: null,
+          tail: await tail(entry?.artifactPath ?? null, entry?.key.engine) });
+      });
     }
     const ownerless: OwnerlessReading[] = [];
     for (const record of census.ownerless) {
-      ownerless.push({ ...place(record), kind: record.kind, updatedAt: record.updatedAt, tail: await tail(record.artifactPath, record.engine) });
+      await read({ conversationId: record.binding, artifactPath: record.artifactPath }, async () => {
+        ownerless.push({ ...place(record), kind: record.kind, updatedAt: record.updatedAt, tail: await tail(record.artifactPath, record.engine) });
+      });
     }
     const everything = [...owners, ...ownerless];
     return {

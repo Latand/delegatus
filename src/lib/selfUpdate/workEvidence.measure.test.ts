@@ -1,7 +1,7 @@
 /* #2594, acceptance 1: where an observational probe spends its time on an
    installation shaped like a long-lived one — many retained flows, each with
    the reviewer rounds it moved past, a few running lanes and open journal
-   rows. The custody reader is the production one (`turnEvidenceReader` over
+   rows. The custody reader is the production one (`ownerCensusReader` over
    `productionLivenessSources`), reading a real registry and real transcripts
    under a temp root; only the journal rows and the pipeline list are handed in.
 
@@ -17,7 +17,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import type { Flow } from "@/lib/flows/types";
 
-import { turnEvidenceReader } from "./instance";
+import { ownerCensusReader } from "./instance";
 import type { QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 import { ObservedWork } from "./workEvidence";
@@ -94,7 +94,7 @@ test("instrumentation names the dominant phase of one observational probe on lon
     registryHealth: () => [],
     seats: () => [],
     controllerBusyReason: async () => null,
-    turnLiveness: turnEvidenceReader(sources),
+    owners: ownerCensusReader(sources, { readSession: async () => null, heldHosts: () => new Map() }),
   };
   const observed = new ObservedWork(ports, () => Date.now(), () => {});
   expect(observed.observe(snapshot).evidence.state).toBe("pending");
@@ -103,7 +103,9 @@ test("instrumentation names the dominant phase of one observational probe on lon
   const phases = evidence.phases!;
   console.info(`[#2594] ${FLOWS} retained flows × ${ROUNDS} rounds, ${LANES} lanes, ${TURNS} open journal rows: ${JSON.stringify(phases)}`);
   expect(evidence.state).toBe("ready");
-  expect(phases.readings).toEqual({ pipelines: LANES, flows: FLOWS, historicalReviewers: FLOWS * (ROUNDS - 1), turns: TURNS });
+  // Known conversations without a recorded process discount their journal
+  // rows; only a stage's custody needs their transcript here (R9).
+  expect(phases.readings).toEqual({ pipelines: LANES, flows: FLOWS, historicalReviewers: FLOWS * (ROUNDS - 1), turns: 0 });
   const parts = phases.journalMs + phases.pipelinesMs + phases.flowsMs + phases.historicalReviewersMs + phases.turnsMs + phases.otherMs + phases.yieldedMs + phases.judgingMs;
   expect(Math.abs(parts - phases.totalMs)).toBeLessThan(1);
 }, 600_000);

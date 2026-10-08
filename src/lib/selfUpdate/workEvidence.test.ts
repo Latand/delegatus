@@ -17,11 +17,12 @@ import { join } from "node:path";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { loadPipelinesForList, pipelineRegistryHealth } from "@/lib/pipelines/store";
+import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 
 import { activeDrain } from "./drain";
 import { initialAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
-import { setSelfUpdateServiceForTests } from "./instance";
+import { ownerCensusReader, setSelfUpdateServiceForTests } from "./instance";
 import type { LauncherRecord } from "./launcher";
 import type { QuietPorts } from "./quiet";
 import { getEvents, getSnapshot } from "./routes";
@@ -522,22 +523,32 @@ test("a stream never replaces a newer state with an older reading that finished 
    settled promise, and no timer or socket runs between them unless the reading
    gives the loop back. The installation is served by a real server on port 0,
    and the callers are another process, so their clock is not the one held. */
-test("a new GET and a new SSE subscription arriving after the reading has begun answer before it finishes", async () => {
+for (const recorded of [true, false]) test(`a new GET and SSE subscription answer during ${recorded ? "recorded owner" : "unregistered transcript"} reads`, async () => {
   const OWNERS = 3_000;
-  const sessions = Array.from({ length: OWNERS }, (_, index) => ({ conversationId: `conversation_${index}`, sessionKey: { engine: "codex" },
-    cwd: null, artifactPath: null, host: "hosted", turn: "running" }));
+  const sessions = Array.from({ length: OWNERS }, (_, index) => ({ conversationId: `conversation_${index}`,
+    sessionKey: { engine: "codex", sessionId: `session_${index}` },
+    cwd: null, artifactPath: `fixture-${index}.jsonl`, host: "hosted", turn: "running" }));
   let began = 0;
   let finished = 0;
   let readings = 0;
   const h = managed({ quiet: {
     runtimeSnapshot: async () => ({ sessions }) as never,
-    // About a millisecond of reading per owner, answered without any I/O.
-    turnLiveness: async () => {
-      if (!readings++) began = Date.now();
-      blockFor(1);
-      if (readings === OWNERS) finished = Date.now();
-      return null as never;
-    },
+    owners: ownerCensusReader(() => ({ ...productionLivenessSources(),
+      registrySnapshot: () => ({ conversations: {}, receipts: {}, entries: recorded ? Object.fromEntries(sessions.map((session, index) =>
+        [`codex:${session.sessionKey.sessionId}`, { key: session.sessionKey, artifactPath: session.artifactPath, cwd: null, status: "live",
+          host: { kind: "tmux", agent: { pid: index + 1, startIdentity: "fixture" }, panePid: null } }])) : {} }) as never,
+      flows: () => [], pipelines: () => [],
+      probe: { now: () => Date.now(), pidAlive: () => true, processIdentity: () => "fixture" },
+      describeTranscript: async () => ({ engine: "codex" }) as never,
+      // About a millisecond per tail, answered without any I/O. The real
+      // census reaches this both during its owner pass and through tail().
+      transcriptEvidence: async () => {
+        if (!readings++) began = Date.now();
+        blockFor(1);
+        if (readings === OWNERS) finished = Date.now();
+        return null;
+      },
+    }), { heldHosts: () => new Map(), viewerIdentity: () => null }),
   } });
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) =>
     new URL(request.url).pathname.endsWith("/events") ? getEvents(request) : getSnapshot(request) });

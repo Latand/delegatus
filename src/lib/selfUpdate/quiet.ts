@@ -131,6 +131,10 @@ export interface OwnerCensusReading {
   tail(reference: OwnerReference): Promise<TailReading | null>;
 }
 
+/** An observational reader can time and yield between individual reads.
+    Admission leaves this unset and reads the same evidence directly. */
+export type OwnerRead = <T>(reference: OwnerReference, read: () => Promise<T>) => Promise<T>;
+
 export interface QuietPorts {
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
   dispatchVersion?(): string;
@@ -138,7 +142,7 @@ export interface QuietPorts {
   /** Every recorded owner with its own evidence. `probe` is one object per
       probe, so a reader can share what it loads across one probe and no
       further. A reading that throws holds admission through `unreadable`. */
-  owners?(sessions: readonly RuntimeSession[], probe: object): Promise<OwnerCensusReading>;
+  owners?(sessions: readonly RuntimeSession[], probe: object, read?: OwnerRead): Promise<OwnerCensusReading>;
   pipelines(): readonly Pipeline[];
   flows?(): readonly Flow[];
   presence(now: number): readonly StoredViewSession[];
