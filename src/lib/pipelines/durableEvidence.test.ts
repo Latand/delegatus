@@ -862,7 +862,44 @@ for (const engine of ["claude", "codex"] as const) {
     expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, later + 1500))
       .toMatchObject({ firstProviderCutAt: later, externalPromptAfterCut: true, requestedCutOpen: true, promptHistoryComplete: true });
   });
+
+  const toolResult = (at: number, bytes: number) => engine === "claude"
+    ? { type: "user", timestamp: new Date(at).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "large-tool", content: "x".repeat(bytes) }] } }
+    : { type: "response_item", timestamp: new Date(at).toISOString(), payload: { type: "function_call_output", call_id: "large-call", output: "x".repeat(bytes) } };
+
+  test(`${engine} one record over the bound in closed history leaves the next chain verified`, async () => {
+    const file = writeTranscript(`chain-large-record-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
+      toolResult(cut + 3000, 9 * 1024 * 1024), output(cut + 4000), notice(later)]);
+    for (const requested of [cut, undefined]) {
+      expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, requested))
+        .toMatchObject({ firstProviderCutAt: later, promptHistoryComplete: true, ...(requested ? { requestedCutOpen: false } : {}) });
+    }
+    const open = writeTranscript(`chain-large-record-open-${engine}.jsonl`, [output(cut - 500), notice(cut),
+      toolResult(cut + 3000, 9 * 1024 * 1024), notice(later)]);
+    expect((await durableStageTurnEvidence(engine, open, undefined, startedAt, undefined, cut))?.promptHistoryComplete).toBe(false);
+  });
+
+  test(`${engine} a torn historical record keeps the recovery window unverified`, async () => {
+    const filler = JSON.stringify({ type: "queue-operation", timestamp: new Date(cut + 3000).toISOString(), padding: "x".repeat(1100) }) + "\n";
+    const file = writeTranscript(`chain-torn-history-${engine}.jsonl`, [notice(cut)]);
+    fs.appendFileSync(file, "{\"type\":\"user\",\"timestamp\":\n" + JSON.stringify(output(cut + 2000)) + "\n" + filler.repeat(8500) + JSON.stringify(notice(later)) + "\n");
+    expect((await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))?.promptHistoryComplete).toBe(false);
+  });
 }
+
+test.each(["end_turn", null] as const)("a Claude API error closing with %s after large work reads its own window", async stop => {
+  const start = Date.parse("2026-10-05T17:00:00Z");
+  const file = writeTranscript(`claude-closing-api-error-${stop}.jsonl`, [
+    { type: "user", timestamp: new Date(start + 1000).toISOString(), message: { role: "user", content: "run the stage" } },
+    { type: "assistant", timestamp: new Date(start + 2000).toISOString(), message: { model: "claude-opus", stop_reason: "tool_use", content: [{ type: "tool_use", id: "large-tool", name: "Read", input: {} }] } },
+    { type: "user", timestamp: new Date(start + 3000).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "large-tool", content: "x".repeat(150_000) }] } },
+    { type: "assistant", timestamp: new Date(start + 4000).toISOString(), isApiErrorMessage: true, error: "overloaded",
+      message: { model: "<synthetic>", stop_reason: stop, content: [{ type: "text", text: "API Error: Repeated 529 Overloaded errors" }] } },
+  ]);
+  const evidence = await durableStageTurnEvidence("claude", file, undefined, new Date(start).toISOString());
+  if (stop) expect(evidence).toMatchObject({ turn: "terminal", firstProviderCutAt: start + 4000, promptHistoryComplete: true, terminalProviderMessage: { errorClass: "overloaded" } });
+  else expect(evidence).toMatchObject({ turn: "busy", terminalProviderMessage: null, firstProviderCutAt: null });
+});
 
 for (const engine of ["claude", "codex"] as const) {
   test(`${engine} exposes the native turn start before an early final answer`, async () => {

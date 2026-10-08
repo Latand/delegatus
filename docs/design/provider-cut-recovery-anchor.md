@@ -817,3 +817,36 @@ four changes on main and settled them as follows:
   selected target, and the wait while a persisted migration or reseat target is
   no longer allowed. Main's two Codex reseat cases now assert the fresh launch
   and the fence.
+
+## Review of the build (three P2, 2026-10-08)
+
+An independent correctness pass found three places where the build applied
+the rule to less than the rule names. Each is fixed, with engine cases in the
+seam (fake clock, real reader, both engines, pinned and pool) that failed
+before the fix:
+
+- **A large record in closed history.** `readRecoveryWindow` refused any line
+  over 8 MiB, before it knew whether the line was inside the open chain. A
+  9 MiB native tool result between a continuation's tool call and its answer
+  then kept every later cut incomplete, and the lane parked ten minutes after
+  cut 2. The window now parses a record of any size and applies the bound to
+  retained bytes only, which count from the open chain's first cut. Over 8 MiB
+  inside a chain that stays open, and a torn record anywhere, still leave the
+  history incomplete. "quota continuation waits for a decision when prompt
+  history exceeds the read bound" now writes the saved cut at the head of its
+  fixture: without it, its 9 MiB record lay before the only cut in the file,
+  in closed history.
+- **A chain closed by tool or reasoning output.** The tick removed the
+  closed chain's budget only when a newer text message followed the cut, or
+  when the next cut was already written. A turn that ended on a tool call or
+  on reasoning alone left the spent tries for the next chain, and a capacity
+  cut after it parked "after 3 tries". The budget now goes whenever the reader
+  proves the saved wait's chain closed (`requestedCutOpen === false`); the
+  wait itself still goes only once a newer chain is open, as before.
+- **A closing Claude API error on the first tick.** The coverage trigger read
+  the shared turn projection, which keeps an overloaded error busy, while the
+  chain tracker and the final turn read the same record as the end of the
+  attempt (`claudeApiErrorClosedAttempt`). After more than 128 KiB of work the
+  first tick therefore saw incomplete history and parked. The trigger now uses
+  the final turn's reading. A Claude API error with no closing stop reason
+  stays busy, and a reply after the cut still cancels.

@@ -489,7 +489,8 @@ function transcriptSnapshot(pathname: string): string | null {
 
 /** Verify history in physical order while retaining only the open cut chain.
     Older rows are validated too: backdated context cannot hide a cut or the
-    output that closed it. The byte bound counts from the chain's first cut. */
+    output that closed it. The byte bound counts from the chain's first cut, so
+    a record of any size before it is parsed and dropped. */
 async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: number, requestedAt: number | undefined,
   fallbackTs: number, snapshot: string | null): Promise<{ records: RecordLike[]; requestedCutOpen?: boolean } | null> {
   if (!snapshot) return null;
@@ -503,9 +504,9 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     const chain = cutChain(codex, startedAt, requestedAt, fallbackTs);
     let records: RecordLike[] = [];
     let retainedBytes = 0;
-    let pending = Buffer.alloc(0);
+    // A line spanning reads is kept as its parts and joined once at its end.
+    let pending: Buffer[] = [];
     const consume = (bytes: Buffer): boolean => {
-      if (bytes.length > MAX_REPORT_EVIDENCE_BYTES) return false;
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
       if (!text) return true;
       const value = JSON.parse(text);
@@ -529,16 +530,16 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
       const read = await handle.read(buffer, 0, buffer.length, offset);
       if (read.bytesRead !== buffer.length) return null;
       offset += read.bytesRead;
-      const bytes = pending.length ? Buffer.concat([pending, buffer]) : buffer;
       let begin = 0;
-      for (let end = bytes.indexOf(10); end >= 0; end = bytes.indexOf(10, begin)) {
-        if (!consume(bytes.subarray(begin, end))) return null;
+      for (let end = buffer.indexOf(10); end >= 0; end = buffer.indexOf(10, begin)) {
+        const line = buffer.subarray(begin, end);
+        if (!consume(pending.length ? Buffer.concat([...pending, line]) : line)) return null;
+        pending = [];
         begin = end + 1;
       }
-      pending = bytes.subarray(begin);
-      if (pending.length > MAX_REPORT_EVIDENCE_BYTES) return null;
+      if (begin < buffer.length) pending.push(buffer.subarray(begin));
     }
-    if (pending.length && !consume(pending)) return null;
+    if (pending.length && !consume(Buffer.concat(pending))) return null;
     const after = await handle.stat({ bigint: true });
     if (retainedBytes > MAX_REPORT_EVIDENCE_BYTES || [after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
       || transcriptSnapshot(pathname) !== snapshot) return null;
@@ -584,10 +585,11 @@ export async function durableStageTurnEvidence(
     message = lastAssistantMessageFromRecords(turnRecords, codex ? "codex-sessions" : "claude-projects", fallbackTs);
     turn = turnStateFromRecords(turnRecords, codex ? "codex" : "claude");
     // Before a wait has been saved, the attempt's history owns cancellation.
-    // Expand only for a native terminal provider failure; ordinary stages keep
-    // their cheap tail read.
+    // Expand only for a provider failure that ends the attempt, read as the
+    // final turn below reads it; ordinary stages keep their cheap tail read.
     if (!Number.isFinite(promptBoundary) && Number.isFinite(startedTime)
-      && turn.state === "terminal" && terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs)) {
+      && (turn.state === "terminal" || !codex && claudeApiErrorClosedAttempt(turnRecords))
+      && terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs)) {
       promptBoundary = startedTime;
     }
     if (Number.isFinite(reportTime)) {

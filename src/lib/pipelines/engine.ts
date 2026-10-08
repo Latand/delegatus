@@ -5990,11 +5990,11 @@ async function tickRunStage(
       return;
     }
     // Agent output closed the saved wait's chain, or the chain a zero-time
-    // successor inherited. The open chain owes its own recovery, budget and
-    // cancellation test.
-    if (attempt.providerWait && durable?.requestedCutOpen === false && durable.firstProviderCutAt) {
-      delete attempt.providerWait;
+    // successor inherited, and its budget goes with it. An open chain owes its
+    // own recovery, budget and cancellation test.
+    if (attempt.providerWait && durable?.requestedCutOpen === false) {
       delete attempt.providerRecoveryBudget;
+      if (durable.firstProviderCutAt) delete attempt.providerWait;
     }
     if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
       && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) > durable.firstProviderCutAt) {
