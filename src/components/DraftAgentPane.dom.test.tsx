@@ -251,6 +251,34 @@ test("Send launches at once in the directory the draft was opened with, with wha
   expect(host.textContent).not.toContain("confirming the agent");
 });
 
+test("a restored old-form reviewer draft keeps its prompt and directory and launches without role wiring", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  const draftId = "restored-reviewer-draft";
+  for (const [name, value] of Object.entries({
+    text: "Review the export change",
+    cwd: "/repos/atlas",
+    role: "reviewer",
+    roleParams: JSON.stringify({ mode: "security", size: "trivial" }),
+    reviews: "conversation_review_target",
+    confirm: "approved",
+    engine: "codex",
+    model: "gpt-6-astra",
+  })) sessionStorage.setItem(`llvDraftPane:${draftId}:${name}`, value);
+
+  const host = mount(draftId);
+  await settle();
+  expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Review the export change");
+  expect(host.querySelector("[data-runtime-pill]")!.textContent).toContain("Codex · 6-Astra");
+  expect(host.querySelectorAll("select, [data-directory-trigger]")).toHaveLength(0);
+  submit(host);
+  await settle();
+
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ prompt: "Review the export change", cwd: "/repos/atlas", engine: "codex", model: "gpt-6-astra" });
+  for (const dropped of ["role", "roleParams", "reviews", "confirm"]) expect(posts[0]).not.toHaveProperty(dropped);
+});
+
 /* A launch that carried a picture, restored mid-launch: the attempt the pane keeps across a reload, with
    the launch still unanswered. */
 function seedPictureLaunch(draftId: string, words: string) {

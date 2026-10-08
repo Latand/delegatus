@@ -414,3 +414,49 @@ Evidence: the block «creating a new agent» in
 `evidence/new-agent-redesign/built.json`. `NEW_AGENT_TODAY` names the frames of
 the old form (shot by the design lane at the last commit that had it) for the
 comparison sheets.
+
+## 11. Main integration: the 16 batch-B cases
+
+Main `5e512c7da5f3f82b8ef92da0cec23a9c680b7ec1` was merged into the
+reviewed head `47f2b56ad92e1f5c58426528fa8f81a366e38273` by ordinary merge
+`5f569f63f7312c5dbe7126e5333b20dd3e6cb318`. No conflict resolution was needed.
+Main's account-switch implementation (#2597) remains in the merged branch.
+
+Replaying main's seven test files against that merged form reproduced all
+16 failures reported by batch B: 4 accounts, 5 form, 2 launch outbox,
+1 receipt attachment, 1 static render, 2 transport copy and 1 board draft.
+The PR's composer versions of the same files then passed all 50 tests.
+Each file ran in its own process with a fresh HOME, TMPDIR, config and
+LLV_STATE_DIR; LLV_VIEWER_CONTROL_URL pointed at closed loopback port 1.
+The earlier tests were restored only for this reproduction and were then
+replaced with the PR's versions before any further work.
+
+The decisions below follow the operator's explicit role and directory decisions
+in this document. Required behaviour stays covered through the composer.
+The updates named here were already present in the reviewed PR. This integration
+adds coverage for an old reviewer draft restored from storage and for Ukrainian
+sign-in recovery; it needs no further product change.
+
+| # | Batch-B case (file stem and exact test name) | Decision and composer coverage |
+| --- | --- | --- |
+| 1 | `DraftAgentPane.accounts.dom`: a Claude draft lists stored profiles, marks the active default, disables signed-out ones, and launches on the chosen account | Keep account choice and the active default. Test the runtime pill's Account panel, its starts-on line, selected-account arrow and posted account. The removed select's disabled historical options become the pill's signed-in choices; the phone sheet still exposes sign-in for signed-out profiles. |
+| 2 | `DraftAgentPane.accounts.dom`: flipping the engine re-defaults the launch account to the target engine's active profile | Keep. Pick the other engine's model in the pill, then assert its active account and engine/model/account in the launch request. Engine radios were removed. |
+| 3 | `DraftAgentPane.accounts.dom`: the ukrainian locale localizes the default and sign-in markers | Keep localization. Assert the pill's Ukrainian default tier and starts-on line, the phone's localized account/sign-in accessible names and Ukrainian blocked-send sign-in recovery. The select's markers were removed. |
+| 4 | `DraftAgentPane.accounts.dom`: a draft on a signed-out account opens that account's sign-in instead of launching, and launches once it signs in | Keep. Seed a real project directory, exercise Enter and the sign-in button, assert the account-specific sign-in event and no spawn, refresh the catalog after sign-in and assert one spawn. Run in en and uk. The old test stopped at its removed select. |
+| 5 | `DraftAgentPane.dom`: malformed capability retry adopts structured image limits for Claude and Codex | Keep image capability recovery and engine choice. Assert the oversized-image rejection after retry, choose Codex in the pill's model list and assert its engine and enabled image control. The failing assertion used an engine radio. |
+| 6 | `DraftAgentPane.dom`: Reviewer role persists and submits the reviewed conversation | Remove this old-form behaviour by the operator's explicit decision: roles belong to orchestrators. Assert no role control and no role/reviews/confirmation in a composer launch, including a restored old reviewer draft. The shared RoleSection remains available to orchestration UI. |
+| 7 | `DraftAgentPane.dom`: an admitted structured spawn adopts its provisional card in the same mount | Keep. Seed the project's directory in the fixture, launch, update the files in the same mount and assert the provisional card is adopted once with one POST. A list of suggested directories alone cannot authorize an unseen working directory. |
+| 8 | `DraftAgentPane.dom`: a recovered directory launches without a confirmation, and the picker's choice is what launches (#887) | Keep launch in the draft's known directory without confirmation; remove the picker and its alternate-directory choice by the operator's decision. Assert the seeded/restored cwd is posted, no path control appears, and an unresolved project blocks Send until its directory resolves. |
+| 9 | `DraftAgentPane.dom`: a reviewer lens change keeps the model the operator picked; only a size change moves it | Remove reviewer lens/size controls with roles. Keep the operator's model selection in the runtime pill and request; test model/effort compatibility and a restored old reviewer draft's chosen model. |
+| 10 | `DraftAgentPane.launchOutbox.dom`: a launched spawn seeds the prompt as the conversation's first launch-owned bubble | Keep. Seed a project cwd so the fixture can launch, then assert the request title and the launch-owned outbox row. |
+| 11 | `DraftAgentPane.launchOutbox.dom`: the seeded launch bubble adopts into the materialized conversation window | Keep. Seed the cwd, launch and adopt the outbox into the materialized identity; assert the original prompt remains launch-owned. |
+| 12 | `DraftAgentPane.receiptAttach.dom`: a stream reconnect during the watch resets the window | Keep the reset and continuing watch; remove the routine confirming sentence as the redesign requires. Assert the slow and attention copy clears and the opening feed skeleton remains. |
+| 13 | `DraftAgentPane.render`: a fresh draft renders the composer with no frozen launch status | Keep the live composer and absence of frozen status. Give SSR a project file with a known root; assert the runtime pill and Send, no selects or role field, and no frozen launch wording. The old assertion demanded the removed role field. |
+| 14 | `DraftAgentPane.structuredCopy.dom`: a structured spawn drops the tmux wording from the composer hint, placeholder, and frozen card (#266) | Keep transport-correct wording. Assert the structured placeholder, opening message and absence of tmux text. Remove the redundant hint and routine frozen-status sentence. |
+| 15 | `DraftAgentPane.structuredCopy.dom`: a legacy tmux spawn keeps the pane, window, and target wording (#266) | Keep the tmux-specific placeholder. Remove the pane/window hint and routine status line with the old form's explanatory chrome. Slow/failure status still uses the negotiated transport. |
+| 16 | `KanbanDrafts.dom`: a draft is drawn inside the card that holds it, is never sent to Conversations, and its close hands the id back | Keep card ownership, exclusion from Conversations and dismissal. Exercise Escape in the empty composer and assert the closed draft id; the form's close button was explicitly removed. |
+
+The additional restored-draft test retains text, cwd, engine and model from
+storage while asserting that obsolete role wiring is absent from the request.
+It protects the migration edge described in the PR without reintroducing fields
+the operator removed.
