@@ -5,10 +5,28 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { codexFixture, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { nativeBatches } from "./verify-native-codex-runtime";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
-afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+const owned: ProcessIdentity[] = [];
+async function recordFixtureIdentities(files: string[]): Promise<ProcessIdentity[]> {
+  const until = Date.now() + 2_000;
+  const identities: ProcessIdentity[] = [];
+  for (const file of files) {
+    while (!existsSync(file) && Date.now() < until) await Bun.sleep(10);
+    const identity = captureProcessIdentity(Number(readFileSync(file, "utf8")));
+    owned.push(identity);
+    identities.push(identity);
+    expect(processIdentityStatus(identity), "fixture reported with live PID/start/boot identity").toBe("alive");
+  }
+  return identities;
+}
+afterEach(async () => {
+  for (const identity of owned.splice(0)) await stopFixtureIdentity(identity);
+  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 function context(overrides: Partial<PlanEnvironment> = {}): PlanEnvironment {
   return { base: "base", existing: new Set(["src/example.ts", "src/example.test.ts", "src/example.integration.test.ts", "src/example.browser.test.tsx", "image.png", "package.json"]), tests: ["src/example.test.ts", "src/example.integration.test.ts", "src/example.browser.test.tsx"], skippedMedia: [], linux: false, runtime: false, native: false, linuxTests: ["src/platform.test.ts"], runtimeTests: ["scripts/runtime.test.ts"], codexVersions: ["0.154.0", "0.159.0"], ...overrides };
 }
@@ -282,9 +300,10 @@ await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: ${J
 `);
   const started = performance.now();
   const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
+  const [identity] = await recordFixtureIdentities([rootPid]);
   const code = await hook.exited;
   const elapsed = performance.now() - started;
-  const pid = Number(readFileSync(rootPid, "utf8"));
+  const pid = identity!.pid;
   try {
     // The deadline, the three-second cleanup allowance and Bun's start-up; never the child's own nine seconds.
     expect(elapsed).toBeLessThan(5_500);
@@ -296,7 +315,7 @@ await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: ${J
     expect(hookBudgetStop(said)).toBeNull();
     expect(alive(pid), "the survivor really was left running").toBeTrue();
   } finally {
-    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    await stopFixtureIdentity(identity!);
   }
 }, 30_000);
 for (const budget of [null, 60_000]) test(`a group member that cannot be prepared stops the rest of its group before the hook exits (deadline: ${budget ?? "none"})`, async () => {
@@ -311,15 +330,18 @@ const members = ["native Codex 0.154.0", "native Codex 0.159.0"].map(name => ({ 
 await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: budget === null ? null : { at: startedAt + budget, startedAt }, logDir: ${JSON.stringify(dir)},
   prepare: async step => {
     if (step.name.endsWith("0.154.0")) return { command: ["bash", "-c", "echo $$ > ${pidFile("root")}; sleep 15 & echo $! > ${pidFile("helper")}; wait"], env: process.env };
-    while (!existsSync(${JSON.stringify(pidFile("helper"))})) await Bun.sleep(10);
+    while (!existsSync(${JSON.stringify(path.join(dir, "release"))})) await Bun.sleep(10);
     throw new Error("installing @openai/codex@0.159.0 failed (1)");
   } }).catch((error: unknown) => endHook("pre-push", error));
 `);
   const started = performance.now();
   const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
+  let identities: ProcessIdentity[];
+  try { identities = await recordFixtureIdentities(["root", "helper"].map(pidFile)); }
+  finally { writeFileSync(path.join(dir, "release"), "ready"); await hook.exited; }
   const code = await hook.exited;
   const elapsed = performance.now() - started;
-  const pids = ["root", "helper"].map(name => Number(readFileSync(pidFile(name), "utf8")));
+  const pids = identities.map(identity => identity.pid);
   try {
     // The cleanup allowance and Bun's start-up; never the helper's fifteen seconds or the deadline.
     expect(elapsed).toBeLessThan(5_500);
@@ -335,7 +357,7 @@ await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: bu
     expect(publicationFailurePhase({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1_000, outputTail: said })).toBe("native Codex 0.159.0");
     expect(hookBudgetStop(said)).toBeNull();
   } finally {
-    for (const pid of pids) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    for (const identity of identities) await stopFixtureIdentity(identity);
   }
 }, 30_000);
 test("a native Codex group names its unfinished or failed version, never a member that passed", async () => {

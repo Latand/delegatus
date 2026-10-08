@@ -10,12 +10,16 @@ const audit = read("docs/verification/test-child-lifetime.md").split("## Process
  * Include JavaScript and helper paths named by tests, even when a caller
  * launches a helper through a string rather than a module import.
  */
-function launchReferences(file: string, source: string): boolean {
+function launchReferences(file: string, source: string, sites?: number[]): boolean {
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const primitives = new Set(["spawn", "fork", "exec", "execFile", "spawnSync", "execSync", "execFileSync"]);
   const aliases = new Set<string>();
   const namespaces = new Set<string>();
   let found = false;
+  const record = (node: ts.Node) => {
+    found = true;
+    sites?.push(tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1);
+  };
   const collect = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
       && /^(?:node:)?child_process$/.test(node.moduleSpecifier.text) && !node.importClause?.isTypeOnly) {
@@ -38,10 +42,10 @@ function launchReferences(file: string, source: string): boolean {
   collect(tree);
   const visit = (node: ts.Node) => {
     if (ts.isIdentifier(node) && aliases.has(node.text)
-      && !ts.isImportSpecifier(node.parent) && !ts.isBindingElement(node.parent)) found = true;
+      && !ts.isImportSpecifier(node.parent) && !ts.isBindingElement(node.parent)) record(node);
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
       && ((node.expression.text === "Bun" && ["spawn", "spawnSync"].includes(node.name.text))
-        || (namespaces.has(node.expression.text) && primitives.has(node.name.text)))) found = true;
+        || (namespaces.has(node.expression.text) && primitives.has(node.name.text)))) record(node);
     ts.forEachChild(node, visit);
   };
   visit(tree);
@@ -49,6 +53,9 @@ function launchReferences(file: string, source: string): boolean {
 }
 
 test("launch discovery includes JavaScript aliases, CommonJS namespaces and forwarded primitives", () => {
+  const sites: number[] = [];
+  expect(launchReferences("helper.ts", 'import { spawnSync } from "node:child_process";\nspawnSync("tool");', sites)).toBe(true);
+  expect(sites).toEqual([2]);
   expect(launchReferences("helper.js", 'import { spawn as launch } from "node:child_process"; launch("tool");')).toBe(true);
   expect(launchReferences("helper.cjs", 'const cp = require("child_process"); cp.spawn("tool");')).toBe(true);
   expect(launchReferences("helper.mjs", 'const cp = await import("node:child_process"); promisify(cp.execFile)("tool");')).toBe(true);
@@ -105,7 +112,7 @@ function unfencedSignals(file: string, source: string): string[] {
         if (!condition.includes("||") && !condition.trim().startsWith("!") && pid?.endsWith(".pid") && (condition.includes(`processIdentityStatus(${pid.slice(0, -4)}) === "alive"`)
           || condition.includes(`procBackend.processIdentity(${pid}) === ${pid.slice(0, -4)}.startIdentity`))) fenced = true;
       }
-      if (!fenced) unsafe.push(`${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`);
+      if (!fenced) unsafe.push(`${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}: destructive PID signal requires the recorded PID/start identity fence or an owned fixture cleanup helper`);
     }
     ts.forEachChild(node, visit);
   };
@@ -115,7 +122,9 @@ function unfencedSignals(file: string, source: string): string[] {
 
 test("teardown signal audit rejects historical PIDs independently of the launch census", () => {
   expect(unfencedSignals("helper.test.ts", 'const ordinary = () => 1; ordinary();')).toEqual([]);
-  expect(unfencedSignals("helper.test.ts", 'try { process.kill(oldPid, "SIGKILL"); } catch {}')).toHaveLength(1);
+  expect(unfencedSignals("helper.test.ts", 'try { process.kill(oldPid, "SIGKILL"); } catch {}')).toEqual([
+    "helper.test.ts:1: destructive PID signal requires the recorded PID/start identity fence or an owned fixture cleanup helper",
+  ]);
   expect(unfencedSignals("helper.test.ts", 'process /* spacing */ . kill(oldPid, "SIGKILL");')).toHaveLength(1);
   expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGTERM");')).toEqual([]);
   expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive") {} else process.kill(identity.pid, "SIGKILL");')).toHaveLength(1);
@@ -133,15 +142,24 @@ test("teardown signal audit rejects historical PIDs independently of the launch 
   expect(unsafe).toEqual([]);
 }, 30_000);
 
+function missingCensusRow(file: string, source: string): string {
+  const sites: number[] = [];
+  launchReferences(file, source, sites);
+  return `${file}:${sites[0]}: process launch requires a census row with its ownership or synchronous containment disposition in docs/verification/test-child-lifetime.md`;
+}
+
 test("the launch audit discovers JavaScript helpers rather than relying on existing row totals", () => {
   const helpers = discoveredHelpers();
   expect(helpers).toContain("scripts/npm-package-smoke.mjs");
   expect(helpers).toContain("scripts/verify-native-codex-delivery.mjs");
   expect(helpers).toContain("scripts/verify-native-codex-injection-races.mjs");
   const missing = (body: string) => helpers.filter(file => !body.includes(`| \`${file}\` |`));
-  expect(missing(audit)).toEqual([]);
+  const missingRows = missing(audit).map(file => missingCensusRow(file, read(file)));
+  expect(missingRows).toEqual([]);
   const removed = audit.split("\n").filter(line => !line.startsWith("| `scripts/npm-package-smoke.mjs` |")).join("\n");
   expect(missing(removed)).toContain("scripts/npm-package-smoke.mjs");
+  expect(missingCensusRow("scripts/npm-package-smoke.mjs", read("scripts/npm-package-smoke.mjs")))
+    .toMatch(/^scripts\/npm-package-smoke\.mjs:\d+: process launch requires a census row/);
 }, 10_000);
 
 test("the child audit includes dynamically imported synchronous Git launches", () => {

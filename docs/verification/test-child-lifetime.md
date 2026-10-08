@@ -224,6 +224,8 @@ wait. Ordinary Node/Bun children retain their original handles.
 | `src/lib/pipelines/engine.test.ts` | Release fault injection uses the original child handle; every fixture teardown awaits its exit. |
 | `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; every shutdown waits for that identity to be reaped before returning. |
 | `scripts/owned-runner.integration.test.ts` | Hard-kill fault injection uses the shared identity signal; recovery already retains original identities. |
+| `scripts/local-gate.test.ts` | Refused-root and group-preparation fixtures capture PID/start/boot identities from live launch reports before awaiting hook exit; group fault release follows capture, and bounded cleanup revalidates each original identity. |
+| `scripts/local-gate.noproc.test.ts` | Root/helper identities are captured while alive before awaiting the step deadline. Lifetime capture and bounded cleanup use real OS evidence outside the injected missing-/proc and ps faults; original root handles are retained from spawn and reaped before runner teardown. |
 | `src/lib/testing/fixtureProcess.ts` | Shared bounded cleanup checks the recorded start/boot identity before TERM and KILL; report failure stops a registered tree before its root. |
 | `src/lib/runtime/cpuPlacement.scope.test.ts` | Private tmux server identity is captured before scope/readiness assertions; pane, agent, descendant and orphan identities are captured while alive. Cleanup awaits bounded identity-checked TERM/KILL for every record. |
 | `src/components/kanban/kanbanBoard.browser.test.tsx` | Sidebar browser server identity is captured before connecting. After Playwright closes its handles, recovery awaits bounded identity-checked cleanup before recording the process as closed. |
@@ -293,7 +295,7 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 254 files: 167 with asynchronous primitives and
+The reconciled census contains 256 files: 169 with asynchronous primitives and
 87 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
@@ -334,6 +336,8 @@ repeated for this inventory correction.
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 37, 53, 55 | owned |
 | `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
+| `scripts/local-gate.noproc.test.ts` | 38; forwarded synchronous ps probes | owned; deadline root handles retained from spawn and reaped after bounded identity cleanup; helper PID/start/boot identity captured while alive |
+| `scripts/local-gate.test.ts` | 253, 302, 338; synchronous Git/verifier commands | owned; launch handles registered by preload; refused-root and group fixtures retain live PID/start/boot identities and await bounded cleanup |
 | `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 187, 204, 205, 209, 272, 285, 289, 316, 328, 329, 331, 332, 334, 378, 407, 536, 561 | owned |
 | `scripts/newcomer-install.mjs` | 67 | contained helper; synchronous installers have 120-second deadlines, readiness is bounded, the launched CLI is stopped through its original handle in finally. Its standalone installation campaign is outside a test run |
 | `scripts/npm-package-smoke.mjs` | 109, 485, 520 | contained helper; commands have a 30-second handle timeout, startup/restart waits 30 seconds, observation 60 seconds, and the caller has a 150-second deadline. Direct and CLI server handles stop with bounded TERM/KILL; runtime-host restart pins the fence start identity. The owning service contains descendants on interruption |
@@ -504,7 +508,6 @@ repeated for this inventory correction.
 | `scripts/eslint-changes.test.ts` | 13 | synchronous |
 | `scripts/harness-ledger.ts` | 673, 796 | synchronous |
 | `scripts/local-gate-tests.ts` | 158, 198 | synchronous |
-| `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
 | `scripts/merge-batch.test.ts` | 222, 303 | synchronous |
 | `scripts/package-revision.mjs` | 17 | synchronous; finite Git HEAD probe used by package verification; the calling test service supplies interruption and the outer deadline |
 | `scripts/privacy-media-workflow.test.ts` | 46, 77 | synchronous |
@@ -541,6 +544,7 @@ repeated for this inventory correction.
 | `src/lib/orchestrator/seatProjectIdentity.test.ts` | 22 | synchronous |
 | `src/lib/pipelines/controllerArtifacts.test.ts` | 22, 129 | synchronous |
 | `src/lib/pipelines/remoteActions.test.ts` | 75, 155, 212, 663, 721 | synchronous |
+| `src/lib/pipelines/stageCommitRepair.test.ts` | 62, 825 | synchronous; fixture Git and hook commands are awaited; the runner contains interrupted descendants |
 | `src/lib/pipelines/stageInput.test.ts` | 18, 142, 183, 211, 268 | synchronous |
 | `src/lib/projects/succession.test.ts` | 55 | synchronous |
 | `src/lib/prototypeReview/fences.test.ts` | 103 | synchronous; private FIFO creation is awaited and runner-contained |
@@ -591,7 +595,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/telegram/reportRunner.test.ts` | A substituted launch port creates synthetic reports. |
 
 Referenced production and operational companions are explicitly excluded from
-the 254-file test/helper census. They remain reconciled by the independent
+the 256-file test/helper census. They remain reconciled by the independent
 reference scan. Their execution by a test is contained by the same service;
 this disposition does not change their production process contract.
 
