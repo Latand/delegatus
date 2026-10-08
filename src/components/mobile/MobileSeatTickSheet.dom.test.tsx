@@ -54,6 +54,7 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOSt
 
 function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
   return {
+    autoRotate: { enabled: false, thresholdPercent: 50, defaultPercent: 50, minPercent: 50, maxPercent: 90, windowKnown: true, lastAttempt: null, setBy: null, updatedAt: null, why: null },
     maintenance: {
       enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
       updatedAt: null, setBy: null, live: null, lastRun: null,
@@ -556,4 +557,40 @@ test("a drag made while the row's previous write is in flight is written after i
   ]);
   expect(rowSwitch().textContent).toBe("off");
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
+});
+
+
+test("auto-rotation shares Save and adopts the stored threshold", async () => {
+  const root = await mount(); await openTick(root);
+  press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
+  type(body().querySelector("[data-seat-tick-auto-rotate-threshold]") as HTMLInputElement, "60");
+  const stored = record({ changed: true });
+  stored.autoRotate = { ...stored.autoRotate!, enabled: true, thresholdPercent: 60, updatedAt: ago(0) };
+  putAnswers = [{ status: 200, body: stored }];
+  press(save()); await settle(root);
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, autoRotate: { enabled: true, thresholdPercent: 60 } });
+  expect((body().querySelector("[data-seat-tick-auto-rotate-threshold]") as HTMLInputElement).value).toBe("60");
+  expect(save()).toBeNull();
+});
+
+test("an auto-rotation refusal is shown beside Save and conditional captions follow the record", async () => {
+  getAnswer = record();
+  getAnswer.autoRotate = { ...getAnswer.autoRotate!, windowKnown: false, lastAttempt: {
+    id: "fixture-attempt", seatEpoch: 1, conversationId: "conversation_fixture", startedAt: ago(5), tokens: 720000, windowTokens: 1000000,
+    thresholdPercent: 60, state: "failed", error: "fixture launch refused", told: { report: true, card: true }, nextAttemptAt: ago(-55),
+  } };
+  const root = await mount(); await openTick(root);
+  expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).not.toBeNull();
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).toContain("fixture launch refused");
+  press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
+  putAnswers = [{ status: 400, body: { error: "autoRotate.enabled must be a boolean" } }];
+  press(save()); await settle(root);
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toContain("autoRotate.enabled must be a boolean");
+});
+
+test("auto-rotation captions are absent without a failure or an unknown window", async () => {
+  const root = await mount(); await openTick(root);
+  expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).toBeNull();
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")).toBeNull();
 });

@@ -157,3 +157,12 @@ describe("rollback mirror", () => {
     expect(readSeatTickSettings("repo-alpha")).toEqual(newer);
   });
 });
+
+test("auto-rotation survives a SQLite round trip beside legacy rows that remain off", () => {
+  const project = "auto-rotation-fixture";
+  const row = { ...defaultSeatTickSettings(project), autoRotate: { enabled: true, thresholdPercent: 60, updatedAt: "2026-10-09T03:00:00.000Z",
+    setBy: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null }, why: null } };
+  writeSeatTickSettings(project, row, file);
+  expect(readSeatTickSettings(project, file)).toEqual(row);
+  expect(readSeatTickSettings("old-fixture-row", file).autoRotate).toBeUndefined();
+});

@@ -10,7 +10,8 @@ import type { ApiError } from "@/lib/types";
    `@/lib/orchestrator/seatCommand`; a route module may export only the
    documented route fields. This route runs when explicitly called. The seat tick
    also calls the command in-process after an authentication failure, onto
-   another allowed account. Context pressure elsewhere only recommends.
+   another allowed account, and at the project's context threshold when
+   auto-rotation is enabled. The advisory remains a read.
 
    Authority lives there too, in ONE contract this route and the
    `rotate_orchestrator` MCP tool share (#1402): the tool posts here, so

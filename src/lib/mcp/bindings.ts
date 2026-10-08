@@ -1,3 +1,5 @@
+import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
+import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
@@ -4058,14 +4060,14 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
          from a pure function. Nothing on this code path spawns, delivers,
          designates, revokes, interrupts, or calls the control plane at all —
          crossing the threshold changes what this payload SAYS and nothing
-         else. Rotation happens only through an explicit rotate_orchestrator. */
+         else. The opted-in seat tick reads context usage independently. */
       ...rotationRecommendation({
         context,
         facts,
         activity: liveness?.lifecycle === "gone" ? "dead" : liveness?.lifecycle ?? null,
         policy: windowPolicy,
       }),
-      note: "recommendation only — rotation never happens automatically; call rotate_orchestrator explicitly",
+      note: ROTATION_NOTE,
     },
   });
 }
@@ -4128,6 +4130,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
   if (args.enabled !== undefined) change.enabled = args.enabled as boolean;
   if (args.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = args.wakeIntervalMinutes as number | null;
@@ -4186,6 +4189,7 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const verbose = args.verbose === true || args.full === true;
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
+  delete settingsWithoutPrompt.autoRotate;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4245,6 +4249,9 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
+    autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
+      ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
+      ...autoRotationFailureAnswer(project) },
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a

@@ -27,8 +27,9 @@ import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings
  *      matter for the draft in hand;
  *   4. BOARD MAINTENANCE (#2162), editable: its switch, its interval and the
  *      agent that runs it — one source of truth with Settings → agent mapping;
- *   5. one Save for all of it, shown only while something changed;
- *   6. Details, closed — the board card, who set it, the monitor prompt, the
+ *   5. AUTO-ROTATION: its switch and context threshold;
+ *   6. one Save for all of it, shown only while something changed;
+ *   7. Details, closed — the board card, who set it, the monitor prompt, the
  *      last delivery.
  *
  * Two things differ by surface and nothing else does. Control sizing: the
@@ -149,12 +150,34 @@ function maintenanceChangeOf(draft: MaintenanceDraft, maintenance: BoardMaintena
   return change;
 }
 
+export interface AutoRotateDraft { enabled: boolean; percent: string }
+function autoRotateDraftOf(record: SeatTickSettingsAnswer | null): AutoRotateDraft {
+  return { enabled: record?.autoRotate?.enabled ?? false, percent: String(record?.autoRotate?.thresholdPercent ?? 50) };
+}
+function autoRotateSignatureOf(record: SeatTickSettingsAnswer | null): string {
+  const a = record?.autoRotate;
+  return a ? [record?.project, a.enabled, a.thresholdPercent, a.updatedAt].join("") : "";
+}
+function autoRotateChangeOf(draft: AutoRotateDraft, record: SeatTickSettingsAnswer | null): NonNullable<SeatTickChange["autoRotate"]> {
+  const current = autoRotateDraftOf(record);
+  const change: NonNullable<SeatTickChange["autoRotate"]> = {};
+  if (draft.enabled !== current.enabled) change.enabled = draft.enabled;
+  if (draft.percent.trim() !== current.percent) {
+    const raw = draft.percent.trim();
+    const parsed = Number(raw);
+    change.thresholdPercent = raw === "" ? null : Number.isFinite(parsed) ? parsed : raw;
+  }
+  return change;
+}
+
 const sameRuntime = (left: MaintainerRuntime, right: MaintainerRuntime) =>
   left.engine === right.engine && left.model === right.model && left.effort === right.effort;
 
 export interface SeatTickDraftState {
   draft: SeatTickDraft;
   setDraft: Dispatch<SetStateAction<SeatTickDraft>>;
+  autoRotate: AutoRotateDraft;
+  setAutoRotate: Dispatch<SetStateAction<AutoRotateDraft>>;
   maintenance: MaintenanceDraft;
   setMaintenance: Dispatch<SetStateAction<MaintenanceDraft>>;
   /** The maintainer's runtime as drafted: the stored one until the operator
@@ -203,6 +226,10 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setMaintenance(maintenanceDraftOf(record?.maintenance));
   }
 
+  const [autoRotate, setAutoRotate] = useState(() => autoRotateDraftOf(record));
+  const [autoAdopted, setAutoAdopted] = useState(() => autoRotateSignatureOf(record));
+  const autoSignature = autoRotateSignatureOf(record);
+  if (autoSignature !== autoAdopted) { setAutoAdopted(autoSignature); setAutoRotate(autoRotateDraftOf(record)); }
   const maintainer = useMaintainerRole(true);
   const [runtimeDraft, setRuntimeDraft] = useState<MaintainerRuntime | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -216,7 +243,8 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const tickChange = changeOf(draft, record);
   const maintenanceChange = maintenanceChangeOf(maintenance, record?.maintenance);
   const maintenanceDirty = Object.keys(maintenanceChange).length > 0;
-  const change: SeatTickChange = { ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}) };
+  const autoChange = autoRotateChangeOf(autoRotate, record);
+  const change: SeatTickChange = { ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
   const requestDirty = Object.keys(change).length > 0;
 
   const save = async () => {
@@ -239,6 +267,8 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setDraft,
     maintenance,
     setMaintenance,
+    autoRotate,
+    setAutoRotate,
     runtime,
     setRuntime: (next) => {
       setRuntimeError(null);
@@ -612,6 +642,8 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         />
       ) : null}
 
+      {record?.autoRotate ? <SeatTickAutoRotate value={record.autoRotate} state={state} control={control} row={row} phone={phone} now={now} locale={locale} /> : null}
+
       {/* On the desktop the popover scrolls under its own cap, so the Save
           sticks to the bottom edge of what is visible; the phone's sits in
           the sheet's footer. */}
@@ -623,6 +655,34 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
       {record ? <SeatTickDetails record={record} lastDelivery={reading.lastDelivery} now={now} locale={locale} phone={phone} /> : null}
     </div>
   );
+}
+
+function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: {
+  value: NonNullable<SeatTickSettingsAnswer["autoRotate"]>; state: SeatTickDraftState;
+  control: string; row: string; phone: boolean; now: number; locale: string;
+}) {
+  const { t } = useLocale();
+  const { autoRotate: draft, setAutoRotate: setDraft } = state;
+  return <div data-seat-tick-auto-rotate className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    <div className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.autoRotate.head")}</p>
+      <Toggle on={draft.enabled} label={t(draft.enabled ? "seatTick.autoRotate.disableAria" : "seatTick.autoRotate.enableAria")}
+        phone={phone} disabled={state.saving} attr={{ "data-seat-tick-auto-rotate-enabled": String(draft.enabled) }}
+        onToggle={() => setDraft(previous => ({ ...previous, enabled: !previous.enabled }))} />
+    </div>
+    {draft.enabled ? <label className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <span className="min-w-0 flex-1 text-ui text-primary">{t("seatTick.autoRotate.thresholdLabel")}</span>
+      <input type="number" min={value.minPercent} max={value.maxPercent} step={1} inputMode="numeric" data-seat-tick-auto-rotate-threshold
+        value={draft.percent} disabled={state.saving} placeholder={t("seatTick.autoRotate.thresholdPlaceholder", { percent: value.defaultPercent })}
+        onChange={event => setDraft(previous => ({ ...previous, percent: event.target.value }))}
+        className={`${control} ${phone ? "w-24" : "w-20"} shrink-0 text-right tabular-nums disabled:opacity-50`} />
+    </label> : null}
+    {value.lastAttempt ? <p data-seat-tick-auto-rotate-failed role="status" className="min-w-0 break-words text-caption leading-4 text-warning">
+      {t("seatTick.autoRotate.lastFailed", { time: seatTickLocalTime(value.lastAttempt.startedAt, now, locale) ?? t("seatTick.unknown"),
+        error: value.lastAttempt.error ?? t("seatTick.unknown"), next: seatTickLocalTime(value.lastAttempt.nextAttemptAt, now, locale) ?? t("seatTick.unknown") })}
+    </p> : null}
+    {value.windowKnown === false ? <p data-seat-tick-auto-rotate-window-unknown role="status" className="min-w-0 break-words text-caption leading-4 text-warning">{t("seatTick.autoRotate.windowUnknown")}</p> : null}
+  </div>;
 }
 
 function SeatTickMaintenance({ maintenance, view, state, control, row, phone, onOpenedCard }: {
@@ -867,6 +927,10 @@ function SeatTickDetails({ record, lastDelivery, now, locale, phone }: {
             })
             : t("seatTick.setByNobody")}
         </p>
+        {record.autoRotate?.setBy ? <p data-seat-tick-auto-rotate-set-by className="min-w-0 break-words text-caption leading-4 text-muted">
+          {t("seatTick.autoRotate.setBy", { who: t(ACTORS[record.autoRotate.setBy.kind]), at: seatTickLocalTime(record.autoRotate.updatedAt, now, locale) ?? t("seatTick.unknown"),
+            why: record.autoRotate.why ? `: «${record.autoRotate.why}»` : "" })}
+        </p> : null}
         {prompt ? (
           <div className="flex min-w-0 flex-col gap-1">
             <p className="text-caption font-semibold text-muted">{t("seatTick.promptHead", { chars: record.monitorPromptLength })}</p>

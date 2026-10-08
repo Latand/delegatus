@@ -1406,7 +1406,8 @@ function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
  *
  * Context pressure only produces a recommendation (`./health`). The seat tick
  * automatically calls this path after an authentication failure, selecting
- * another allowed account; all other rotations are explicitly requested.
+ * another allowed account, and at the project's context threshold when
+ * auto-rotation is enabled. Other rotations are explicitly requested.
  */
 export function executeOrchestratorRotation(
   rawBody: Record<string, unknown>,

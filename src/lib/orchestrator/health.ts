@@ -5,11 +5,10 @@ import { ROTATION_THRESHOLD_FRACTION, type ContextWindowPolicy } from "./context
 /* get_orchestrator's reporting core (two-axis contract).
  *
  * Everything here is a READ and a RECOMMENDATION. Context pressure produces a
- * recommendation with reasons and nothing else: no heuristic in this module —
- * or anywhere downstream of it — may retire, rotate or replace an orchestrator
- * on its own. Numbers that are inferred rather than measured are CLEARLY
- * labelled estimates, with the basis spelled out, so an operator never mistakes
- * a bytes-derived guess for a provider-reported token count.
+ * recommendation with reasons. The seat tick independently reads the same
+ * context under an explicit per-project auto-rotation setting. Numbers that
+ * are inferred rather than measured are labelled estimates, with the basis
+ * spelled out, so an operator never mistakes a bytes-derived guess for a provider-reported token count.
  *
  * Pure over gathered facts; the transcript-reading helpers are the only I/O and
  * are separately injectable.
@@ -332,7 +331,7 @@ export function contextReading(input: {
 export const STRONGLY_RECOMMEND_ROTATION = "STRONGLY_RECOMMEND_ROTATION" as const;
 
 export interface RotationRecommendation {
-  /** A recommendation and NOTHING more: no caller may act on it automatically. */
+  /** Advisory data; the opted-in tick judges the context reading independently. */
   recommended: boolean;
   /** `strongly_recommend` exactly when provider-reported usage reached the
       configured threshold; `recommend` for an estimate over it and for
@@ -368,8 +367,9 @@ const MAX_REASONS = 4;
  * context threshold changes exactly ONE thing: what this function SAYS —
  * `strongly_recommend` with the {@link STRONGLY_RECOMMEND_ROTATION} advisory.
  * The return value is plain serializable data with no action, no target and
- * no side effect on any path; rotation happens only when rotate_orchestrator
- * is explicitly called. Every reason names its threshold and whether the
+ * no side effect on any path; the opted-in tick calls the normal rotation
+ * command from its own safe-point decision. Every reason names its threshold
+ * and whether the
  * number behind it is an estimate. An estimate over the threshold is an
  * ordinary `recommend`: only a provider-reported count can make it strong.
  */

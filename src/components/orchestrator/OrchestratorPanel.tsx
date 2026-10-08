@@ -1365,9 +1365,8 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
 
 /**
  * The advisory, and NOTHING else. It says what the server recommends and why;
- * the Rotate button in the header above is the only thing that acts, and only
- * when the operator presses it. Reaching a threshold has never rotated anything
- * and does not start here.
+ * the Rotate button acts when the operator presses it. Automatic rotation
+ * belongs to the opted-in seat tick controller.
  */
 function RotationBanner({ rotation }: { rotation: RotationHint }) {
   const { t, locale } = useLocale();

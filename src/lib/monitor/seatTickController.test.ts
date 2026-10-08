@@ -7,7 +7,8 @@ import { spawn } from "node:child_process";
 import { Database } from "bun:sqlite";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-controller-"));
-const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
+const RESTORE = { LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
+process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
 process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
@@ -8557,4 +8558,212 @@ describe("seat authentication recovery through production seams", () => {
       await f.check(); expect(f.spawns).toHaveLength(0); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
     });
   });
+});
+
+// Real context reader, registry, seat command, board and bridge. The controller
+// owns a fake clock; process launch is the only rotation effect replaced.
+describe("seat auto-rotation through production seams", () => {
+  const AT = "2026-10-09T03:00:00.000Z";
+  const TS = Date.parse(AT);
+  async function fixture(run: (f: Awaited<ReturnType<typeof makeFixture>>) => Promise<void>, tokens: number | null = 720_000, enabled = true) {
+    const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL };
+    const dir = fs.mkdtempSync(path.join(SANDBOX, "auto-case-"));
+    process.env.LLV_STATE_DIR = path.join(dir, "state");
+    process.env.LLV_CLAUDE_HOME = path.join(dir, "legacy-claude");
+    process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
+    try { await run(await makeFixture(dir, tokens, enabled)); }
+    finally {
+      setAgentRegistryForTests(null);
+      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
+  }
+  async function makeFixture(dir: string, tokens: number | null, enabled: boolean) {
+    const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+    const { executeOrchestratorRotation, productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");
+    const { defaultSeatTickSources } = await import("./seatTickSources");
+    const { writeSeatTickSettings, readSeatTickSettings } = await import("./seatTickSettings");
+    const { readBridgeReportLog } = await import("@/lib/bridge/store");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const account = createManagedClaudeAccount("Account A");
+    fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: account.id, project: PROJECT, createdAt: AT }] });
+    const transcript = path.join(account.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
+    fs.mkdirSync(path.dirname(transcript), { recursive: true }); fs.writeFileSync(transcript, "");
+    function appendUsage(count: number) {
+      fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: AT, message: { role: "assistant", model: "opus", stop_reason: "end_turn",
+        usage: { input_tokens: count, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 }, content: [{ type: "text", text: "Work is complete." }] } }) + "\n");
+    }
+    if (tokens !== null) { fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: AT, message: { role: "user", content: "Report the board" } }) + "\n"); appendUsage(tokens); }
+    else fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: AT, message: { role: "user", content: "x".repeat(6 * 1024 * 1024) } }) + "\n");
+    const registry = new AgentRegistry(path.join(dir, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    registry.setEngineRouting("claude", account.id);
+    const now = Date.now();
+    registry.recordQuotaObservation({ engine: "claude", accountId: account.id, authenticated: true, authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "rotation-fixture",
+      limits: { session: { usedPercent: 5, resetsAt: Math.floor(now / 1000) + 3600 }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1000) }, provenance: { source: "live", reason: null, staleSince: null } });
+    const conversation = registry.ensureConversation("claude", transcript, null);
+    let clock = TS;
+    let busy = false;
+    const profile = emptyLaunchProfile({ cwd: dir, model: "opus" });
+    function turn(value: boolean) {
+      busy = value;
+      registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: account.id, launchProfile: profile,
+        turn: { state: value ? "busy" : "idle", source: value ? "tool" : "assistant", terminalAt: value ? null : new Date(clock).toISOString() }, observedAt: new Date(clock).toISOString() }]);
+    }
+    turn(false); setAgentRegistryForTests(registry);
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results.", engine: "claude", model: "opus", clientRequestId: "seed_rotation_fixture", mode: "spawn", now: AT });
+    completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "seed_rotation_fixture", conversationId: conversation.id, path: transcript, now: AT });
+    const original = orchestratorSeatFor(PROJECT).active!;
+    writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Keep reporting owed work", ...(enabled ? {
+      autoRotate: { enabled: true, thresholdPercent: 60, updatedAt: AT, setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, why: null },
+    } : {}) });
+    const settingsBefore = JSON.stringify(readSeatTickSettings(PROJECT));
+    let spawnStatus = 200;
+    const spawns: Record<string, unknown>[] = [];
+    const command: import("@/lib/orchestrator/seatCommand").SeatCommandDependencies = {
+      ...productionSeatCommandDependencies,
+      spawn: async body => {
+        spawns.push(body);
+        if (spawnStatus !== 200) return { status: spawnStatus, body: { ok: false, error: "fixture spawn refused" } };
+        const successorPath = path.join(account.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
+        fs.writeFileSync(successorPath, "");
+        const successor = registry.ensureConversation("claude", successorPath, null);
+        registry.reconcileConversations([{ engine: "claude", path: successorPath, accountId: account.id, launchProfile: profile,
+          turn: { state: "idle", source: "assistant", terminalAt: new Date(clock).toISOString() }, observedAt: new Date(clock).toISOString() }]);
+        return { status: 200, body: { ok: true, conversationId: successor.id, path: successorPath } };
+      },
+      now: () => new Date(clock).toISOString(),
+    };
+    const rig = harness({ registry, now: clock });
+    const defaults = defaultSeatTickSources();
+    rig.deps.sources!.seatFor = orchestratorSeatFor;
+    rig.deps.sources!.settings = readSeatTickSettings;
+    rig.deps.sources!.seatContextUsage = defaults.seatContextUsage;
+    rig.deps.sources!.seatTurnOutcome = defaults.seatTurnOutcome;
+    rig.deps.sources!.now = () => clock;
+    rig.deps.sources!.liveness = async () => busy ? [{ conversationId: original.conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as AgentLivenessRecord] : [];
+    rig.deps.readState = readSeatTickState; rig.deps.writeState = writeSeatTickState;
+    rig.deps.reconcileSeat = () => null; delete rig.deps.ensureCard;
+    rig.deps.seatAutoRotation = { rotate: (body, _deps, actor, admission) => executeOrchestratorRotation(body, command, actor, admission) };
+    const cards = () => loadTasks(statePath("tasks.json")).filter(t => t.text.includes("monitor-ref: seat-auto-rotation"));
+    const reports = () => readBridgeReportLog().reports;
+    return { rig, original, spawns, command, settingsBefore, appendUsage, turn, cards, reports, registry,
+      active: () => orchestratorSeatFor(PROJECT).active!, settings: () => readSeatTickSettings(PROJECT), state: () => readSeatTickState(PROJECT),
+      advance: (minutes: number) => { clock += minutes * MINUTE; }, refuse: (status: number) => { spawnStatus = status; },
+      check: () => runSeatTickCheck(PROJECT, rig.deps), rotate: executeOrchestratorRotation };
+  }
+  test("idle reported usage rotates through the normal command once, preserving handoff, lineage and project settings", () => fixture(async f => {
+    const record = await f.check();
+    expect(f.spawns).toHaveLength(1); const successor = f.active();
+    expect(successor.seatEpoch).toBe(f.original.seatEpoch + 1);
+    expect(successor.predecessorConversationId).toBe(f.original.conversationId);
+    expect(successor.intent.clientRequestId).toStartWith("seat-autorotate-");
+    expect(successor.mandate).toContain("Own the board and report results.");
+    expect(successor.mandate).toContain("conversation_messages");
+    expect(successor.mandate).toContain(f.original.conversationId!);
+    expect(JSON.stringify(f.settings())).toBe(f.settingsBefore);
+    expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");
+    expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("status");
+    for (const text of [f.cards()[0]!.text, f.reports()[0]!.body]) {
+      expect(text).toContain("72%"); expect(text).toContain("60%"); expect(text).toContain(f.original.conversationId!); expect(text).toContain(successor.conversationId!);
+    }
+    expect(record?.detail).toContain("auto-rotation: rotated");
+    for (let i = 0; i < 3; i++) { f.advance(5); await f.check(); }
+    expect(f.spawns).toHaveLength(1); expect(f.cards()).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+  }));
+  test("busy seat receives one steer-or-queue nudge at fifteen minutes and rotates only after the turn ends", () => fixture(async f => {
+    f.turn(true);
+    for (let i = 0; i < 3; i++) { await f.check(); f.advance(5); }
+    expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+    await f.check(); f.advance(5); await f.check();
+    const nudges = f.rig.sent.filter(m => m.clientMessageId?.startsWith("seat-autorotate-nudge-"));
+    expect(nudges).toHaveLength(1); expect(nudges[0]!.policy).toBe("steer-or-queue");
+    expect(f.spawns).toHaveLength(0); f.turn(false); await f.check(); expect(f.spawns).toHaveLength(1);
+  }));
+  test("a large estimate waits until the transcript reports usage", () => fixture(async f => {
+    for (let i = 0; i < 3; i++) { expect((await f.check())?.detail).toContain("waiting for a provider-reported figure"); f.advance(5); }
+    expect(f.spawns).toHaveLength(0); f.appendUsage(720_000); await f.check(); expect(f.spawns).toHaveLength(1);
+  }, null));
+  test("failures keep the incumbent, report once per epoch and retry after the persisted cooldown", () => fixture(async f => {
+    f.refuse(500); await f.check();
+    expect(f.active().conversationId).toBe(f.original.conversationId); expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("inbox");
+    expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("failed");
+    f.advance(59); await f.check(); expect(f.spawns).toHaveLength(1);
+    // Recreate the controller dependencies over the same SQLite row.
+    await runSeatTickCheck(PROJECT, { ...f.rig.deps, sources: { ...f.rig.deps.sources! } }); expect(f.spawns).toHaveLength(1);
+    f.advance(1); await f.check(); expect(f.spawns).toHaveLength(2); expect(f.cards()).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+    f.advance(60); f.refuse(200); await f.check(); expect(f.spawns).toHaveLength(3);
+    expect(f.cards()).toHaveLength(2); expect(f.cards().every(c => c.status === "done")).toBe(true);
+    expect(f.reports()).toHaveLength(2); expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
+  }));
+  test("off by default reads no usage and keeps the ordinary controller journal identical", () => fixture(async f => {
+    let reads = 0;
+    f.rig.deps.sources!.seatContextUsage = () => { reads++; throw new Error("off must not read usage"); };
+    const actual = await f.check(); expect(reads).toBe(0); expect(f.spawns).toHaveLength(0); expect(f.cards()).toHaveLength(0); expect(f.reports()).toHaveLength(0);
+    const ordinary = harness({ seat: { conversationId: f.original.conversationId!, seatEpoch: f.original.seatEpoch, path: f.original.path }, now: TS });
+    const baseline = await runSeatTickCheck(PROJECT, ordinary.deps);
+    expect(actual?.detail).toBe(baseline?.detail);
+  }, 860_000, false));
+  test("a lost outcome write recovers the accepted key and finishes a refused card without a second rotation", () => fixture(async f => {
+    let lose = true;
+    f.rig.deps.writeState = (project, state) => {
+      if (lose && state.autoRotation?.lastAttempt?.state === "rotated") { lose = false; throw new Error("fixture lost checkpoint"); }
+      writeSeatTickState(project, state);
+    };
+    await f.check(); expect(f.spawns).toHaveLength(1); expect(f.state().autoRotation?.lastAttempt?.state).toBe("pending");
+    f.rig.deps.ensureCard = () => false;
+    await f.check(); expect(f.state().autoRotation?.lastAttempt).toMatchObject({ state: "rotated", told: { report: true, card: false } });
+    expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(0);
+    delete f.rig.deps.ensureCard;
+    await f.check(); await f.check();
+    expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");
+  }));
+  test("wakes off withholds the busy nudge and still permits idle automatic rotation", () => fixture(async f => {
+    const { writeSeatTickSettings } = await import("./seatTickSettings");
+    writeSeatTickSettings(PROJECT, { ...f.settings(), enabled: false, reason: "operator paused wakes" });
+    f.turn(true); await f.check(); f.advance(15); await f.check();
+    expect(f.rig.sent).toHaveLength(0); expect(f.spawns).toHaveLength(0);
+    f.turn(false); await f.check(); expect(f.spawns).toHaveLength(1);
+  }));
+  test("a provisional successor rollback is reported once and its failure card stays open until disabled", () => fixture(async f => {
+    const { abandonStillbornOrchestratorSeat } = await import("@/lib/orchestrator/seats");
+    const { writeSeatTickSettings } = await import("./seatTickSettings");
+    f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted", conversationId: "conversation_rotation_pending", launchId: "launch_rotation_pending" } });
+    await f.check(); const key = f.active().intent.clientRequestId;
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
+    expect(abandonStillbornOrchestratorSeat({ project: PROJECT, clientRequestId: key, error: "fixture asynchronous launch failure" })?.restored?.conversationId).toBe(f.original.conversationId);
+    await f.check(); await f.check();
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("failed"); expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("inbox");
+    expect(f.reports().map(r => r.class)).toEqual(["status", "failed"]);
+    writeSeatTickSettings(PROJECT, { ...f.settings(), autoRotate: { ...f.settings().autoRotate!, enabled: false } });
+    await f.check(); await f.check(); expect(f.cards()[0]!.status).toBe("done");
+  }));
+  test("a manual rotation winning between decision and command supersedes the automatic attempt", () => fixture(async f => {
+    f.rig.deps.seatAutoRotation = { rotate: async (body, _deps, actor, admission) => {
+      await f.rotate({ project: PROJECT, clientRequestId: "manual_rotation_fixture", handoffNotes: "operator requested" }, f.command);
+      return f.rotate(body, f.command, actor, admission);
+    } };
+    await f.check(); expect(f.spawns).toHaveLength(1); expect(f.state().autoRotation?.lastAttempt?.state).toBe("superseded");
+    expect(f.cards()).toHaveLength(0); expect(f.reports()).toHaveLength(0);
+  }));
+  test("an update-held launch replays its own pending intent and key at the next safe check", () => fixture(async f => {
+    const spawn = f.command.spawn;
+    let held = true;
+    const keys: unknown[] = [];
+    f.command.spawn = async (...args) => {
+      keys.push(args[0].clientAttemptId);
+      if (held) return { status: 409, body: { code: "AUTO_UPDATE_DRAIN", error: "fixture update hold" } };
+      return spawn(...args);
+    };
+    await f.check();
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("pending");
+    expect(f.active().conversationId).toBe(f.original.conversationId);
+    expect(f.cards()).toHaveLength(0); expect(f.reports()).toHaveLength(0);
+    f.advance(5); held = false; await f.check();
+    expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
+    expect(f.spawns).toHaveLength(1); expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
+    expect(f.cards()).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+  }));
 });

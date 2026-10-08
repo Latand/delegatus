@@ -8,8 +8,8 @@
  * as a confident wrong number.
  *
  * The rotation block here is WORDS. Nothing in this module, and nothing that
- * consumes it, may act on it: the only rotation in the product is the one the
- * operator explicitly confirms in the rotate draft.
+ * consumes it, acts on it. Automatic rotation belongs to the opted-in seat
+ * tick controller, which reads context independently.
  */
 
 export interface IncumbentContext {

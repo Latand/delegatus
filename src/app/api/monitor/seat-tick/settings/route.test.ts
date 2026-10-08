@@ -435,3 +435,11 @@ test("maintenance-only write needs no reason and exposes the same run records th
   delete same.nextRunAt;
   expect(tool.maintenance).toMatchObject({ ...same, lastRunLog: { leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
 });
+
+test("the browser can enable automatic rotation without a why and records gateway attribution", async () => {
+  const response = await put({ project: PROJECT, autoRotate: { enabled: true, thresholdPercent: 60 } });
+  expect(response.status).toBe(200);
+  const answer = await response.json() as SeatTickSettingsAnswer;
+  expect(answer.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, defaultPercent: 50, minPercent: 50, maxPercent: 90, why: null, setBy: { kind: "gateway" } });
+  expect(readSeatTickSettings(PROJECT).autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, why: null, setBy: { kind: "gateway" } });
+});

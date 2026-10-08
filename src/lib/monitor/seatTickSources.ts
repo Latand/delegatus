@@ -1,4 +1,7 @@
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
+import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
+import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -463,6 +466,7 @@ export async function withdrawRuntimeWake(
 
 export interface SeatTickSources {
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
+  seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
@@ -629,6 +633,14 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    seatContextUsage: (conversationId) => {
+      const conversation = agentRegistry().conversation(conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
+      const model = generation.launchProfile?.model ?? null;
+      const reading = contextReading({ policy: contextWindowPolicyFor(conversation.engine, model), facts: readOrchestratorTranscriptFacts(generation.path, null) });
+      return { engine: conversation.engine, model, tokens: reading.tokens, windowTokens: reading.limit, estimated: reading.estimated };
+    },
     seatTurnOutcome: async (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as never);
       const generation = conversation?.generations.at(-1);

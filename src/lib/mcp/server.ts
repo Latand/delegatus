@@ -4132,6 +4132,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
+      .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
     maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
       .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
     clientRequestId: clientRequestIdSchema,
