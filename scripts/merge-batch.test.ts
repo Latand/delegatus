@@ -1519,6 +1519,50 @@ for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"
   }, 60_000);
 }
 
+for (const mainCase of ["absent", "unreported", "skipped"] as const) {
+  test(`resolution withholds a failing case in native main's incomplete file (${mainCase})`, async () => {
+    const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+      ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+    const imports = "const { test, expect } = require('bun:test');\n";
+    f.seed("story.js", "exports.value = 'first';\n");
+    f.seed("story.test.ts", imports + (mainCase === "unreported"
+      ? "test('new resolution assertion', () => process.exit(1));\n"
+      : "test('main abort', () => process.exit(1));\n"
+        + (mainCase === "skipped" ? "test.skip('new resolution assertion', () => expect(false).toBe(true));\n" : "")));
+    f.addPr(13, "story.js", "exports.value = 'alternative';\n");
+    git(f.repo, ["checkout", "topic-13"]);
+    writeFileSync(join(f.repo, "story.test.ts"), imports + "test('new resolution assertion', () => expect(false).toBe(true));\n");
+    git(f.repo, ["commit", "-am", "New resolution assertion"]);
+    const conflict = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${conflict}:refs/pull/13/head`, `${conflict}:refs/heads/topic-13`]);
+    f.views.get(13)!.headRefOid = conflict;
+    f.seed("story.js", "exports.value = 'accepted';\n");
+    const clean = f.addPr(12, "healthy.txt", "healthy\n");
+    await f.batch.build(`12@${clean},13@${conflict}`);
+    await f.batch.gate(); await f.batch.land();
+    const state = await f.batch.resolve(13), work = state.resolving!.work;
+    writeFileSync(join(work, "story.js"), "exports.value = 'resolved';\n");
+    git(work, ["add", "story.js"]);
+
+    await expect(f.batch.resolve(13)).rejects.toThrow(mainCase === "absent"
+      ? "Resolution failed tests; no branch pushed" : "Resolution test comparison incomplete; no branch pushed");
+    const result = f.batch.read(), row = result.rows[1]!, receipt = row.resolutionTests!;
+    expect(row.status).toBe("deferred");
+    expect(receipt.main).toBe(state.resolving!.main);
+    if (mainCase === "absent") {
+      expect(receipt.decision.uncompared).toEqual([]);
+      expect(receipt.confirmed.map(entry => [entry.test.name, entry.confirmation]))
+        .toEqual([["new resolution assertion", ["fail", "fail", "fail"]]]);
+      expect(report(result)).toContain("New resolution failures (publication withheld):\n- story.test.ts");
+    } else {
+      expect(receipt.decision.uncompared!.map(site => site.name)).toEqual(["new resolution assertion"]);
+      expect(receipt.confirmed).toEqual([]);
+      expect(report(result)).toContain("Unresolved resolution failures (publication withheld):\n- story.test.ts");
+    }
+    expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(conflict);
+  }, 60_000);
+}
+
 test("PR removal keeps the reviewed regression test when its author is healthy", async () => {
   const f = fixture();
   f.seed("adder.js", "exports.add = (a, b) => a + b;\n");
