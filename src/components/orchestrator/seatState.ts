@@ -670,7 +670,31 @@ export function deriveOrchestratorPanelState(input: {
     };
   }
   if (!status) return input.statusFailed ? { kind: "unavailable" } : { kind: "loading" };
-  return { kind: "draft", vacated: Boolean(status.seat) && !status.exists };
+  return { kind: "draft", vacated: seatVacated(status) };
+}
+
+/**
+ * The seat is vacated: its record still stands, its conversation is gone from
+ * disk. Both create forms (the dock's panel and the phone's sheet) ask this of
+ * the status READ, never of the panel state a failed attempt has moved to, so
+ * they cannot disagree about it and a retry sees the same answer as the first
+ * attempt.
+ */
+export function seatVacated(status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null): boolean {
+  return status !== null && Boolean(status.seat) && !status.exists;
+}
+
+/**
+ * The create body's fragment for a vacated seat. The seat command refuses a
+ * spawn over a designated seat as an accidental rotation unless the body says
+ * `replaceIncumbent`; over a vacated seat that is exactly what the operator
+ * means. Empty for a live seat and for no seat: replacing a live orchestrator
+ * is the rotate flow's job, never a create form's.
+ */
+export function vacatedSeatReplacement(
+  status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null,
+): { replaceIncumbent: true } | Record<string, never> {
+  return seatVacated(status) ? { replaceIncumbent: true } : {};
 }
 
 /** The warning is eligible only after the mandate has produced a visible
