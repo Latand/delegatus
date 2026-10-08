@@ -2115,6 +2115,7 @@ export const en = {
   "voiceCompanion.refused": "Nothing was sent: I heard no explicit request to the orchestrator.",
   "voiceCompanion.withdrawn": "You took this back, so nothing was sent. Ask once more and I will send it.",
   "voiceCompanion.confirmHint": "Say yes or no, or tap.",
+  "voiceCompanion.moreBelow": "Show the rest",
   "voiceCompanion.declined": "You declined, so nothing was sent.",
   "voiceCompanion.unanswered": "No answer came, so nothing was sent.",
   "voiceCompanion.call.running": "running",

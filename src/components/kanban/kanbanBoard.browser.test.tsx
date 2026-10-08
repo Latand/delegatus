@@ -19180,6 +19180,126 @@ describe("floating voice companion", () => {
     return { maxStep, where, pairs, rows: `${at.top}..${at.bottom}`, columns: `${at.left}..${at.right}` };
   };
 
+  /* Every frame in which the character (its block or its tile) stands somewhere else than in the frame before,
+     read against the page's text as it is in that frame: a move the companion makes by itself never carries what
+     can be seen of it over a line of text. */
+  const startTravelProbe = (page: Page) => page.evaluate(() => {
+    const out = { travelFrames: 0, overTextFrames: 0, overTextMaxPx2: 0, overText: "" };
+    (window as unknown as { __voiceTravel: typeof out }).__voiceTravel = out;
+    const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+    const boxed = (element: Element) => { let at = element; while (at.parentElement && getComputedStyle(at).display === "contents") at = at.parentElement; return at; };
+    const lines = () => {
+      const found: Array<{ left: number; top: number; right: number; bottom: number; text: string }> = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || !node.nodeValue?.trim() || root.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT" || !boxed(parent).checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+        range.selectNodeContents(node);
+        for (const line of range.getClientRects()) {
+          const rect = { left: Math.max(line.left, 0), top: Math.max(line.top, 0), right: Math.min(line.right, innerWidth), bottom: Math.min(line.bottom, innerHeight) };
+          for (let at: Element | null = parent; at; at = at.parentElement) {
+            const style = getComputedStyle(at);
+            if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+            const clip = at.getBoundingClientRect();
+            rect.left = Math.max(rect.left, clip.left); rect.top = Math.max(rect.top, clip.top); rect.right = Math.min(rect.right, clip.right); rect.bottom = Math.min(rect.bottom, clip.bottom);
+          }
+          if (rect.right - rect.left >= 1 && rect.bottom - rect.top >= 1) found.push({ ...rect, text: node.nodeValue.trim().slice(0, 32) });
+        }
+      }
+      return found;
+    };
+    let last = "";
+    let live = true;
+    const frame = () => {
+      if (!live) return;
+      const node = root.querySelector<HTMLElement>(".vc-block, .vc-shape");
+      if (node) {
+        const box = node.getBoundingClientRect();
+        const key = `${node.className}:${Math.round(box.x)},${Math.round(box.y)}`;
+        if (last && key !== last) {
+          out.travelFrames += 1;
+          let opacity = 1;
+          for (let at: Element | null = node; at && at !== document.body; at = at.parentElement) opacity *= Number(getComputedStyle(at).opacity);
+          if (opacity >= 0.05) {
+            let area = 0;
+            let first = "";
+            for (const line of lines()) {
+              const over = Math.max(0, Math.min(box.right, line.right) - Math.max(box.left, line.left)) * Math.max(0, Math.min(box.bottom, line.bottom) - Math.max(box.top, line.top));
+              if (over > 0) { area += over; first ||= line.text; }
+            }
+            if (area > 0) { out.overTextFrames += 1; out.overTextMaxPx2 = Math.max(out.overTextMaxPx2, Math.round(area)); out.overText ||= `${first} at ${Math.round(box.x)},${Math.round(box.y)}`; }
+          }
+        }
+        last = key;
+      }
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    (window as unknown as { __voiceTravelStop: () => void }).__voiceTravelStop = () => { live = false; };
+  });
+  const stopTravelProbe = (page: Page) => page.evaluate(() => {
+    (window as unknown as { __voiceTravelStop: () => void }).__voiceTravelStop();
+    return (window as unknown as { __voiceTravel: { travelFrames: number; overTextFrames: number; overTextMaxPx2: number; overText: string } }).__voiceTravel;
+  });
+
+  /* What of a card that waits for the operator reads where it stands: the lines of its reason and of the request
+     that its body shows whole, every line the body's edge cuts, the spoken hint or the sign that more is below,
+     and whether the room the lane leaves the body could hold the whole reason and the request's first line. */
+  const waitingCardView = (page: Page) => page.evaluate(() => {
+    const card = document.querySelector<HTMLElement>('[data-companion-delegation][data-stage="awaiting-confirmation"]')!;
+    const body = card.querySelector<HTMLElement>("[data-companion-confirm-body]")!;
+    body.scrollTop = 0;
+    const view = body.getBoundingClientRect();
+    const range = document.createRange();
+    const linesOf = (element: Element | null) => {
+      const tops = new Map<number, { top: number; bottom: number }>();
+      if (element) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          range.selectNodeContents(node);
+          for (const line of range.getClientRects()) {
+            if (line.width < 1) continue;
+            const key = Math.round(line.top);
+            const was = tops.get(key);
+            tops.set(key, { top: Math.min(was?.top ?? line.top, line.top), bottom: Math.max(was?.bottom ?? line.bottom, line.bottom) });
+          }
+        }
+      }
+      const all = [...tops.values()];
+      const shown = all.filter((line) => line.top >= view.top - 0.5 && line.bottom <= view.bottom + 0.5).length;
+      const cut = all.filter((line) => line.bottom > view.top + 0.5 && line.top < view.bottom - 0.5 && !(line.top >= view.top - 0.5 && line.bottom <= view.bottom + 0.5)).length;
+      return { total: all.length, shown, cut };
+    };
+    const reasonNode = body.querySelector("[data-companion-confirm-reason]");
+    const instructionNode = body.querySelector<HTMLElement>("[data-companion-instruction]")!;
+    const reason = linesOf(reasonNode);
+    const instruction = linesOf(instructionNode);
+    const hint = linesOf(body.querySelector("[data-companion-confirm-hint]"));
+    const cue = card.querySelector<HTMLElement>("[data-companion-more-below]");
+    const cueBox = cue?.getBoundingClientRect();
+    const cueHit = cueBox ? document.elementFromPoint(cueBox.left + cueBox.width / 2, cueBox.top + cueBox.height / 2) : null;
+    const lane = document.querySelector<HTMLElement>("[data-companion-lane]")!.getBoundingClientRect();
+    const buttons = [...card.querySelectorAll<HTMLElement>("[data-companion-send], [data-companion-cancel]")].map((button) => {
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return box.top >= lane.top - 1 && box.bottom <= lane.bottom + 1 && !!hit && button.contains(hit);
+    });
+    /* The body's room: the lane's room for the card less what of the card is not its body. */
+    const room = Number.parseFloat(getComputedStyle(card).getPropertyValue("--vc-room")) - (card.getBoundingClientRect().height - view.height);
+    const firstLine = (() => {
+      range.selectNodeContents(instructionNode);
+      const line = [...range.getClientRects()].find((part) => part.width >= 1);
+      return line ? line.bottom - (reasonNode ?? instructionNode).getBoundingClientRect().top : 0;
+    })();
+    return {
+      reason, instruction, hint, cutLines: reason.cut + instruction.cut + hint.cut,
+      cue: cue ? { shown: !!cueBox && cueBox.width >= 1 && !!cueHit && cue.contains(cueHit) } : null,
+      hintOrCue: hint.shown === hint.total && hint.total > 0 || (!!cueHit && !!cue && cue.contains(cueHit)),
+      buttons, bodyPx: Math.round(view.height), bodyRoomPx: Math.round(room), reasonAndFirstLinePx: Math.round(firstLine), canHold: room >= firstLine - 0.5,
+    };
+  });
+
   const startMotionProbe = (page: Page) => page.evaluate(() => {
     const probe = {
       frames: 0, entries: 0, entriesAwayFromCharacter: 0, entryAwayMaxPx: 0, towardCharacterFrames: 0, towardCharacterMaxPx: 0, awayMaxStepPx: 0,
@@ -19782,8 +19902,15 @@ describe("floating voice companion", () => {
           expect((await voiceOf(page)).dispatches, `${label}: nothing sent while asking`).toBe(0);
           const placed = await readCompanion(page);
           expect(placed.floatersInsideLane, `${label}: the waiting card inside the lane (lane ${JSON.stringify(placed.lane)})`).toBe(true);
+          expect(placed.textUnderLane, `${label}: page text under the lane`).toBe(0);
+          /* As it stands, before any scroll: the reason and at least the request's first line read whole, no line is
+             cut by the body's edge, and the spoken hint or the sign that more is below is in view with both buttons. */
+          const shown = await waitingCardView(page);
+          expect({ canHold: shown.canHold, reasonWhole: shown.reason.shown === shown.reason.total, firstRequestLine: shown.instruction.shown >= 1, cutLines: shown.cutLines, hintOrCue: shown.hintOrCue, buttons: shown.buttons },
+            `${label}: the waiting card as it stands (${JSON.stringify(shown)})`)
+            .toEqual({ canHold: true, reasonWhole: true, firstRequestLine: true, cutLines: 0, hintOrCue: true, buttons: [true, true] });
           expect(pageErrors, label).toEqual([]);
-          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, ...reading, floatersInsideLane: placed.floatersInsideLane, lane: placed.lane });
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, ...reading, floatersInsideLane: placed.floatersInsideLane, lane: placed.lane, textUnderLane: placed.textUnderLane, asItStands: shown });
           await page.screenshot({ path: path.join(HANDOFF, `proposal-${label}.png`) });
         } finally { await context.close(); }
       }
@@ -19954,7 +20081,7 @@ describe("floating voice companion", () => {
             const style = getComputedStyle(element);
             const box = element.getBoundingClientRect();
             return {
-              background: style.backgroundColor, border: style.borderTopColor, radius: style.borderTopLeftRadius, width: Math.round(box.width), height: Math.round(box.height), buttons: element.querySelectorAll("button").length, text: element.innerText.replace(/\s+/gu, " ").trim(),
+              background: style.backgroundColor, border: style.borderTopColor, radius: style.borderTopLeftRadius, width: Math.round(box.width), height: Math.round(box.height), buttons: element.querySelectorAll("[data-companion-send], [data-companion-cancel]").length, text: element.innerText.replace(/\s+/gu, " ").trim(),
               tool: element.dataset.tool, status: element.dataset.status, instruction: element.querySelector<HTMLElement>("[data-companion-instruction]")?.innerText.trim() ?? null,
             };
           }, selector);
@@ -20004,6 +20131,15 @@ describe("floating voice companion", () => {
           });
           expect({ headInLane: fit.headInLane, buttons: fit.buttons, focusable: fit.focusable, lastLineReached: fit.lastLineReached, reason: fit.reason }, `${label}: the waiting card reads whole inside the lane`)
             .toEqual({ headInLane: true, buttons: [true, true], focusable: true, lastLineReached: true, reason: long ? scenarioText(lang).unsureLong : scenarioText(lang).unsure });
+          /* As it stands, before any scroll: wherever the body's room holds them, the whole reason and the request's
+             first line; where it cannot (a reason longer than the room), the reason's first lines. No line is cut by
+             the body's edge, and the spoken hint or the sign that more is below is in view with both buttons. */
+          const shown = await waitingCardView(page);
+          expect({ reasonShown: shown.canHold ? shown.reason.shown === shown.reason.total : shown.reason.shown >= 1, firstRequestLine: shown.canHold ? shown.instruction.shown >= 1 : true, cutLines: shown.cutLines, hintOrCue: shown.hintOrCue, buttons: shown.buttons },
+            `${label}: the waiting card as it stands (${JSON.stringify(shown)})`)
+            .toEqual({ reasonShown: true, firstRequestLine: true, cutLines: 0, hintOrCue: true, buttons: [true, true] });
+          if (!long) expect(shown.canHold, `${label}: the short request's reason and first line fit the body's room`).toBe(true);
+          Object.assign(fit, { asItStands: shown });
           expect(pageErrors, label).toEqual([]);
           await page.screenshot({ path: path.join(HANDOFF, `cards-read-and-delegation-${label}.png`) });
           sideBySide.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, script, ...reading, floatersInsideLane: placed.floatersInsideLane, lane: placed.lane, textUnderLane: placed.textUnderLane, fit });
@@ -20312,7 +20448,7 @@ describe("floating voice companion", () => {
           const idleFrom = await page.evaluate(() => performance.now());
           await page.waitForTimeout(1_500);
           const idleTo = await page.evaluate(() => performance.now());
-          if (recorded) { await startSampler(page); await startMotionProbe(page); }
+          if (recorded) { await startSampler(page); await startMotionProbe(page); await startTravelProbe(page); }
           /* The delegated row in the orchestrator's conversation, read in the frame it appears: how much of what
              can be seen of it lies under the lane's elements and under the character. */
           if (recorded && name === "delegation") await page.evaluate(() => {
@@ -20353,8 +20489,21 @@ describe("floating voice companion", () => {
           const blockOf = () => page.evaluate(() => { const box = document.querySelector<HTMLElement>("[data-voice-companion] .vc-block, [data-voice-companion] .vc-shape")!.getBoundingClientRect(); return { x: Math.round(box.x), y: Math.round(box.y) }; });
           const characterAtTalk = await blockOf();
           const places = new Set<string>();
-          /* Where it stood once the delegated row was in the conversation, read by read: it may make way for that row once. */
+          /* Where it stood once the request was sent, read by read: it may make way for the row the request brings once,
+             before that row arrives. */
           const placesAfterRow: string[] = [];
+          /* The card's first showing of the request, read as it renders: where the companion makes way at once, the
+             card is on the page for the moment the lane takes to empty, which no read every 250 ms is sure to meet. */
+          if (name === "delegation") await page.evaluate(() => {
+            const seen = { stage: null as string | null, text: null as string | null, buttons: 0 };
+            (window as unknown as { __voiceSendShown: typeof seen }).__voiceSendShown = seen;
+            const look = () => {
+              const node = document.querySelector<HTMLElement>("[data-voice-companion] [data-companion-instruction]");
+              if (node && seen.text === null) { seen.text = (node.textContent ?? "").trim(); seen.stage = node.closest<HTMLElement>("[data-companion-delegation]")?.dataset.stage ?? null; }
+              seen.buttons = Math.max(seen.buttons, document.querySelectorAll("[data-companion-send], [data-companion-cancel]").length);
+            };
+            new MutationObserver(look).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-stage"] });
+          });
           await page.locator("[data-companion-talk]").click();
           let peak = 0;
           /* `proposal` stays null: no scenario of the eleven asks the operator to confirm. */
@@ -20365,11 +20514,13 @@ describe("floating voice companion", () => {
             await page.waitForTimeout(recorded ? 250 : 400);
             /* The request goes out by itself: the driver taps nothing after Talk, and no button is ever offered. */
             if (name === "delegation") buttonsOffered = Math.max(buttonsOffered, await page.locator("[data-companion-send], [data-companion-cancel]").count());
-            if (name === "delegation" && sent === null && await page.locator("[data-companion-instruction]").count()) {
-              const stage = await page.locator("[data-companion-delegation]").first().getAttribute("data-stage");
-              expect((await page.locator("[data-companion-instruction]").first().innerText()).trim(), `${label}: the card shows the whole request that was sent`).toBe(demoInstruction(lang));
-              sent = { firstStageShown: stage, taps: 0 };
-              await shot("sending");
+            if (name === "delegation" && sent === null) {
+              const seen = await page.evaluate(() => (window as unknown as { __voiceSendShown: { stage: string | null; text: string | null } }).__voiceSendShown);
+              if (seen.text !== null) {
+                expect(seen.text, `${label}: the card shows the whole request that was sent`).toBe(demoInstruction(lang));
+                sent = { firstStageShown: seen.stage, taps: 0 };
+                if (await page.locator("[data-companion-instruction]").count()) await shot("sending");
+              }
             }
             if (recorded) {
               const count = await page.locator("[data-floater]").count();
@@ -20377,9 +20528,9 @@ describe("floating voice companion", () => {
               if (name === "delegation" && !shots.some((file) => file.endsWith("answered.png")) && await page.locator('[data-voice-companion][data-delegation-stage="answered"]').count()) await shot("answered");
               if (name === "interrupt" && !shots.some((file) => file.endsWith("cut.png")) && await page.locator("[data-companion-cut]").count()) await shot("cut");
             }
+            const afterSend = name === "delegation" && await page.locator("[data-voice-companion]").evaluate((node) => ["sending", "queued", "delivered", "unknown", "answered"].includes((node as HTMLElement).dataset.delegationStage ?? ""));
             const at = await blockOf();
-            const rowIn = name === "delegation" && await page.locator("[data-voice-relay]").count() > 0;
-            if (rowIn) placesAfterRow.push(`${at.x},${at.y}`);
+            if (afterSend) placesAfterRow.push(`${at.x},${at.y}`);
             else places.add(`${at.x},${at.y}`);
             if (reads) {
               for (const tool of await page.locator("[data-companion-call]").evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.tool ?? ""))) toolsShown.add(tool);
@@ -20406,7 +20557,8 @@ describe("floating voice companion", () => {
             const ask = after.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
             expect(ask, `${label}: the explicit request was heard`).toBeGreaterThan(0);
             expect(after.events.slice(0, ask).filter((event) => event.type.startsWith("delegation.")), `${label}: no delegation before the request`).toEqual([]);
-            expect({ buttonsOffered, shown: sent !== null }, `${label}: sent with no button and no tap, and the card showed it`).toEqual({ buttonsOffered: 0, shown: true });
+            const offered = Math.max(buttonsOffered, (await page.evaluate(() => (window as unknown as { __voiceSendShown: { buttons: number } }).__voiceSendShown)).buttons);
+            expect({ buttonsOffered: offered, shown: sent !== null }, `${label}: sent with no button and no tap, and the card showed it`).toEqual({ buttonsOffered: 0, shown: true });
             await page.waitForSelector("[data-voice-relay]", { timeout: 20_000 });
             await page.getByText(demoAnswer(lang), { exact: true }).first().waitFor({ timeout: 20_000 });
             await shot("conversation");
@@ -20425,8 +20577,8 @@ describe("floating voice companion", () => {
           expect(pageErrors, label).toEqual([]);
           const placement = await readCompanion(page);
           expectFree(placement, `${label}: after the scenario`, { textMayLie: true });
-          /* From Talk to the end of the script the character stands where it stood, until the delegated row arrives
-             under it: then it makes way once, to the place the rule gives or to its tile. */
+          /* From Talk to the end of the script the character stands where it stood, until a request it stands in the
+             conversation's way of is sent: then it makes way once, to the place the rule gives or to its tile. */
           expect([...places], `${label}: the character kept its place through the conversation`).toEqual([`${characterAtTalk.x},${characterAtTalk.y}`]);
           /* A place counts where it stood for two reads in a row; a read in the middle of its move to the tile is no place. */
           const madeWay = [...new Set(placesAfterRow.filter((place, index) => place === placesAfterRow[index + 1] && !places.has(place)))];
@@ -20471,14 +20623,19 @@ describe("floating voice companion", () => {
             if (motion.overlapFrames) laneFaults.push(`${label}: ${motion.overlapFrames} frames with two legible elements over each other (up to ${motion.overlapMaxPx} px, ${motion.overlapWorstPair})`);
             if (motion.rises === 0) laneFaults.push(`${label}: no rise was read`);
             if (motion.riseMaxFrameShare > RISE_SHARE_LIMIT) laneFaults.push(`${label}: one frame carried ${motion.riseMaxFrameShare} of a rise (${motion.riseMaxFrameShareStepPx} px of ${motion.riseMaxFrameSharePathPx} px)`);
-            const relay = name === "delegation" ? await page.evaluate(() => (window as unknown as { __voiceRelay: Record<string, unknown> }).__voiceRelay) : null;
+            const relay = name === "delegation" ? await page.evaluate(() => (window as unknown as { __voiceRelay: { seen: boolean; coveredShare: number; underCharacterPx2: number; underLaneElementsPx2: number; by: string[] } }).__voiceRelay) : null;
             if (relay) expect(relay.seen, `${label}: the delegated row was read as it appeared`).toBe(true);
+            /* The companion made way as the request was sent, so the row it brings arrives where nothing of it stands. */
+            if (relay) expect({ coveredShare: relay.coveredShare, underCharacterPx2: relay.underCharacterPx2, underLaneElementsPx2: relay.underLaneElementsPx2 }, `${label}: the delegated row as it appeared (${relay.by.join(", ")})`)
+              .toEqual({ coveredShare: 0, underCharacterPx2: 0, underLaneElementsPx2: 0 });
+            const travel = await stopTravelProbe(page);
+            expect(travel.overTextFrames, `${label}: frames in which the character, moving, stood over page text (${travel.overText})`).toBe(0);
             if (motion.orphanLastLines.length) laneFaults.push(`${label}: a last line of one word in ${motion.orphanLastLines.join("; ")}`);
             const video = page.video()!;
             await context.close();
             await video.saveAs(path.join(HANDOFF, `scenario-${label}.webm`));
             await video.delete();
-            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, glowAtLaneEndWhenScriptEnded: glow, stoodWhileRecorded: stood, afterLaneEmptied, ...(relay ? { delegatedRowAsItAppeared: relay } : {}) });
+            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, travel, glowAtLaneEndWhenScriptEnded: glow, stoodWhileRecorded: stood, afterLaneEmptied, ...(relay ? { delegatedRowAsItAppeared: relay } : {}) });
             continue;
           }
           const meter = await page.evaluate(() => {
@@ -20589,11 +20746,12 @@ describe("floating voice companion", () => {
         order: "one chronology: the element that arrived last, speech or call, stands beside the character; the orchestrator's answer is an element of its own and arrives there too",
         leaving: "from the far end only: when an element's time is up and nothing older is left, or when a fifth bubble, a fifth call or the lane's height sends the oldest away with everything older than it",
         reading: "every animation frame of the recorded run, against the lane's end at the character and by each element's far edge: towardCharacterFrames counts frames in which an element moved more than 1 px toward the character; overlapFrames counts frames in which the visible parts of two elements of opacity >= 0.5 (leaving ones included) overlap by more than 2 px; entriesAwayFromCharacter counts arrivals (the elements first seen in one frame) whose nearest element stood more than 2 px from the character's end; orphanLastLines lists bubbles of more than two words whose last line holds one word; a rise is a run of frames in which an element keeps moving, ended by two frames at rest, and riseMaxFrameShare is the largest step of one frame as a share of its rise, over the rises of 8 px or more; a rise cut short by its element leaving the lane is counted in risesCutByLeaving and not read; a frame that came more than 1.5 intervals late is counted in lateFramesInRises and its step is read per interval it stood for, since this run is recorded and the frame times come from the other one; awayMaxStepPx is the largest step of any frame in px, late frames included",
-        required: { towardCharacterFrames: 0, carriedFrames: 0, "glowAtLaneEndWhenScriptEnded.maxStep": "<= 2", "afterLaneEmptied.rowPicturesUnderPx2": 0, "afterLaneEmptied.laneOverFeedPx2 (delegation)": 0, overlapFrames: 0, entriesAwayFromCharacter: 0, orphanLastLines: [], riseMaxFrameShare: `<= ${RISE_SHARE_LIMIT}`, placesDuringConversation: 1, madeWayForTheRow: "at most one place, once the delegated row is in the conversation", "delegatedRowAndAnswerAtScriptEnd coveredShare": 0, maxBubbleSlackPx: "<= 2", samplesOverControls: 0, preTalkTextUnderElementsMaxPx2: 0, "afterLaneEmptied.pageTextUnderCharacterPx2": 0, "afterLaneEmptied.textFreeAfterMs": "<= 1000", "afterLaneEmptied.delegatedRowAndAnswer coveredShare": 0 },
+        required: { towardCharacterFrames: 0, carriedFrames: 0, "glowAtLaneEndWhenScriptEnded.maxStep": "<= 2", "afterLaneEmptied.rowPicturesUnderPx2": 0, "afterLaneEmptied.laneOverFeedPx2 (delegation)": 0, overlapFrames: 0, entriesAwayFromCharacter: 0, orphanLastLines: [], riseMaxFrameShare: `<= ${RISE_SHARE_LIMIT}`, placesDuringConversation: 1, madeWayForTheRow: "at most one place, taken once the request is sent and before its row arrives", "delegatedRowAsItAppeared coveredShare, underCharacterPx2, underLaneElementsPx2": 0, "travel.overTextFrames": 0, "delegatedRowAndAnswerAtScriptEnd coveredShare": 0, maxBubbleSlackPx: "<= 2", samplesOverControls: 0, preTalkTextUnderElementsMaxPx2: 0, "afterLaneEmptied.pageTextUnderCharacterPx2": 0, "afterLaneEmptied.textFreeAfterMs": "<= 1000", "afterLaneEmptied.delegatedRowAndAnswer coveredShare": 0 },
         place: "stood, on every run: where the character stood at Talk, how many places it stood in until the script ended or, on the delegation runs, until the delegated row arrived (required: 1), the one place it made way to once that row was under what it reserves (madeWayForTheRow: the place the rule gives with that row on the page, or its tile where none is free of text), its layout when the script ended, how much of the delegated row and of the answer lay under the companion then (delegatedRowAndAnswerAtScriptEnd, required: 0), and the px² of the page's text under the character when the script ended, while the lane still held the end of the conversation. afterLaneEmptied, on the recorded runs: how long the lane took to empty after the script ended, how long after that the character stood off the page's text (required: within 1 s), the text under the character and under its lane then (required: 0), and on the delegation runs how much of the delegated row and of the orchestrator's answer lay under the companion then (required: 0) and when the script ended (atScriptEnd, required: 0)",
         preTalkText: "geometry.preTalkTextUnderElementsMaxPx2, sampled every 120 ms from before Talk to the end of the script: the most px² of the page's text lines as they stood before Talk that lay under the visible part of the lane's elements, leaving ones included (required: 0); samplesOverPreTalkText counts the samples with any",
         bubbleHeight: "geometry.maxBubbleSlackPx, sampled every 120 ms: the largest difference between a bubble's height and its text lines at the line height plus the note of a cut, padding and border (required: <= 2 px)",
-        delegatedRow: "delegatedRowAsItAppeared, on the delegation runs: the visible area of the delegated row in the orchestrator's conversation in the frame it appeared, and how much of it lay under the lane's elements and under the character. Reported: where a place outside the conversation exists (1440) the companion stands there and covers none of it; where none does (1000) it stands in the conversation's empty part, which the row arrives into, and makes way for it within 250 ms of its arrival (madeWayForTheRow)",
+        delegatedRow: "delegatedRowAsItAppeared, on the delegation runs: the visible area of the delegated row in the orchestrator's conversation in the frame it appeared, and how much of it lay under the lane's elements and under the character. Required 0 at both widths: where a place outside the conversation exists (1440) the companion stands there; where none does (1000) it stands in the conversation's empty part until the request is sent, and makes way the moment it is (delegation.sending), before the row arrives (madeWayForTheRow)",
+        travel: "every frame in which the character (block or tile) stood elsewhere than in the frame before, read against the page's text in that frame: overTextFrames counts those in which what can be seen of it lay over a line of text. A move the companion makes by itself along a path that would cross text fades it out where it stands and shows it at the new place",
       },
       limitations: [
         "Headless Chromium on the build machine with a software compositor: no physical display, no CPU throttling.",

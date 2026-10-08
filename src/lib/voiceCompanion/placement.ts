@@ -196,16 +196,18 @@ export class Occupancy {
  * beside the character is tried at every height before one above it, and the
  * tallest that fits wins. With no such place the answer is null and the
  * companion collapses: it never takes a place over text by itself. A place
- * the operator asked for is found with no `text` and no `rows`. The answer
+ * the operator asked for is found with no `text` and no `rows`. With
+ * `outsideRows` (a request was sent, and its row is on its way into the
+ * feed) the rows' surfaces are kept off whole, with no second pass. The answer
  * depends on nothing but the arguments, so one page gives one place.
  * A walk over a 4 px grid, each place read from the summed-area tables of
  * what it must keep off; it runs on a drop or a settled page change, never
  * per frame.
  */
 export function placeExpanded(input: {
-  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; rows?: readonly Rect[]; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
+  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; rows?: readonly Rect[]; outsideRows?: boolean; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
 }): Extract<Placement, { mode: "expanded" }> | null {
-  const { viewport, block, obstacles, text = [], rows = [], desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 4 } = input;
+  const { viewport, block, obstacles, text = [], rows = [], outsideRows = false, desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 4 } = input;
   const start = clampToViewport(desired, viewport, block);
   const maxX = viewport.width - block.width - VIEWPORT_MARGIN;
   const maxY = viewport.height - block.height - VIEWPORT_MARGIN;
@@ -216,9 +218,8 @@ export function placeExpanded(input: {
   /* Candidates nearest first, so the first free one is the answer; the place asked for leads them. */
   const candidates = nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, { x: maxX, y: maxY }, step);
   type Free = (x: number, y: number, width: number, height: number) => boolean;
-  const passes: Free[] = away
-    ? [(x, y, width, height) => kept.free(x, y, width, height) && away.free(x, y, width, height), (x, y, width, height) => kept.free(x, y, width, height)]
-    : [(x, y, width, height) => kept.free(x, y, width, height)];
+  const outside: Free = (x, y, width, height) => kept.free(x, y, width, height) && (!away || away.free(x, y, width, height));
+  const passes: Free[] = away && !outsideRows ? [outside, (x, y, width, height) => kept.free(x, y, width, height)] : [outside];
   const { width, height: tall } = block;
   /* The walk allocates nothing per candidate: the lane is read as numbers, and made an object once it is the answer. */
   const lane = { x: 0, y: 0, height: 0 };
@@ -247,6 +248,39 @@ export function placeExpanded(input: {
   return null;
 }
 
+/**
+ * Whether a box of `size` that travels in a straight line from `from` to `to` meets any of `rects` on the way, its
+ * two ends included: the segment against each rectangle grown by the box (a box at `p` meets a rectangle exactly
+ * when `p` lies inside that grown rectangle), clipped slab by slab. A box that only touches an edge meets nothing.
+ */
+export function pathCrosses(from: Point, to: Point, size: Size, rects: readonly Rect[]): boolean {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  return rects.some((rect) => {
+    let enter = 0;
+    let leave = 1;
+    for (const [start, delta, low, high] of [[from.x, dx, rect.x - size.width, rect.x + rect.width], [from.y, dy, rect.y - size.height, rect.y + rect.height]] as const) {
+      if (delta === 0) {
+        if (start <= low || start >= high) return false;
+        continue;
+      }
+      const a = (low - start) / delta;
+      const b = (high - start) / delta;
+      enter = Math.max(enter, Math.min(a, b));
+      leave = Math.min(leave, Math.max(a, b));
+    }
+    return enter < leave;
+  });
+}
+
+/** The height a body that scrolls is cut at: the lowest of its lines' bottoms (`bottoms`, from its top) within
+    `room`, so no line shows halved; with room for none, the first line; with no lines, the room itself. */
+export function lineCut(bottoms: readonly number[], room: number): number {
+  if (!bottoms.length) return room;
+  const within = bottoms.filter((bottom) => bottom <= room + 0.5);
+  return within.length ? Math.max(...within) : Math.min(...bottoms);
+}
+
 /** The free place nearest `desired` for the collapsed shape alone. */
 export function placeCollapsed(input: { viewport: Size; size: Size; obstacles: readonly Rect[]; desired: Point; clearance?: number; step?: number }): Point | null {
   const { viewport, size, obstacles, desired, clearance = CONTROL_CLEARANCE, step = 4 } = input;
@@ -254,7 +288,41 @@ export function placeCollapsed(input: { viewport: Size; size: Size; obstacles: r
   const max = { x: viewport.width - size.width - VIEWPORT_MARGIN, y: viewport.height - size.height - VIEWPORT_MARGIN };
   if (max.x < VIEWPORT_MARGIN || max.y < VIEWPORT_MARGIN) return null;
   const kept = new Occupancy(viewport, obstacles.map((obstacle) => inflate(obstacle, clearance)));
-  return nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, max, step).find((point) => kept.free(point.x, point.y, size.width, size.height)) ?? null;
+  return nearestFree(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, max, step, (x, y) => kept.free(x, y, size.width, size.height));
+}
+
+/**
+ * The first point `nearestFirst` would give that `free` admits, found without ordering the whole grid: the place
+ * asked for first, then the grid in square rings around it, each ring read whole, until no point of a further
+ * ring can stand nearer than the best one found. The tile is placed as a request goes out, while the hand-off
+ * plays, and ordering every point of the viewport for a place asked for once took frames of its own.
+ */
+export function nearestFree(start: Point, min: Point, max: Point, step: number, free: (x: number, y: number) => boolean): Point | null {
+  if (free(start.x, start.y)) return start;
+  const columns = Math.floor((max.x - min.x) / step) + 1;
+  const rows = Math.floor((max.y - min.y) / step) + 1;
+  if (columns <= 0 || rows <= 0) return null;
+  const column0 = Math.min(columns - 1, Math.max(0, Math.round((start.x - min.x) / step)));
+  const row0 = Math.min(rows - 1, Math.max(0, Math.round((start.y - min.y) / step)));
+  const reach = Math.max(column0, columns - 1 - column0, row0, rows - 1 - row0);
+  const best = { found: false, x: 0, y: 0, distance: Number.POSITIVE_INFINITY };
+  const consider = (column: number, row: number) => {
+    if (column < 0 || row < 0 || column >= columns || row >= rows) return;
+    const x = min.x + column * step;
+    const y = min.y + row * step;
+    const distance = (x - start.x) ** 2 + (y - start.y) ** 2;
+    /* Ties go the way `nearestFirst` orders them: the smaller row, then the smaller column. */
+    if (distance > best.distance || (distance === best.distance && (y > best.y || (y === best.y && x > best.x)))) return;
+    if (free(x, y)) Object.assign(best, { found: true, x, y, distance });
+  };
+  for (let ring = 0; ring <= reach; ring += 1) {
+    /* Every point of this ring lies at least (ring - 1) steps from the place asked for, which lies within a step of
+       the ring's centre: once that is farther than the best found, nothing further can be nearer. */
+    if (best.found && ((ring - 1) * step) ** 2 > best.distance) break;
+    for (let column = column0 - ring; column <= column0 + ring; column += 1) { consider(column, row0 - ring); if (ring) consider(column, row0 + ring); }
+    for (let row = row0 - ring + 1; row <= row0 + ring - 1; row += 1) { consider(column0 - ring, row); consider(column0 + ring, row); }
+  }
+  return best.found ? { x: best.x, y: best.y } : null;
 }
 
 /* The orders last computed, for the open block and for the collapsed shape: the grid and the place asked for
@@ -267,11 +335,27 @@ function nearestFirst(start: Point, min: Point, max: Point, step: number): Point
   const key = [start.x, start.y, min.x, min.y, max.x, max.y, step].join(",");
   const known = ordered.get(key);
   if (known) return known;
+  /* Each point as one number, its squared distance from `start` and then its row and its column, sorted as numbers:
+     ties go to the lower and then the left one, so the order never depends on the sort. A comparator over the tens
+     of thousands of points a viewport holds took frames of its own. Rows and columns are counted from `min`, in
+     steps; the distance is below 2^26 on any screen, which leaves the number exact. */
+  const columns = Math.floor((max.x - min.x) / step) + 1;
+  const rows = Math.floor((max.y - min.y) / step) + 1;
+  const keys = new Float64Array(Math.max(0, columns) * Math.max(0, rows));
+  let at = 0;
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x = min.x + column * step;
+      const y = min.y + row * step;
+      keys[at++] = ((x - start.x) ** 2 + (y - start.y) ** 2) * 2 ** 24 + row * 2 ** 12 + column;
+    }
+  }
+  keys.sort();
   const points: Point[] = [start];
-  for (let y = min.y; y <= max.y; y += step) for (let x = min.x; x <= max.x; x += step) points.push({ x, y });
-  const distance = (point: Point) => (point.x - start.x) ** 2 + (point.y - start.y) ** 2;
-  /* Ties go to the lower and then the left one, so the order never depends on the sort. */
-  points.sort((left, right) => distance(left) - distance(right) || left.y - right.y || left.x - right.x);
+  for (const key of keys) {
+    const cell = key % 2 ** 24;
+    points.push({ x: min.x + (cell % 2 ** 12) * step, y: min.y + Math.floor(cell / 2 ** 12) * step });
+  }
   if (ordered.size >= ORDERS_KEPT) ordered.delete(ordered.keys().next().value!);
   ordered.set(key, points);
   return points;

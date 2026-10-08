@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, SendHorizontal, Settings, X } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, SendHorizontal, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -9,7 +9,7 @@ import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import {
-  BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, isFree, isPassiveCursor, laneLayout, placeCollapsed, placeExpanded, splitSpeech,
+  BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, laneLayout, lineCut, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
@@ -219,6 +219,57 @@ function rowSurfaces(self: Element | null, rows: string | undefined): Rect[] {
     .flatMap((surface) => reachable(surface.parentElement, surface.getBoundingClientRect(), clips) ?? []);
 }
 
+/** The bottoms of a scrolling body's lines and of its elements, from the top of what it scrolls. */
+function lineBottoms(body: HTMLElement): number[] {
+  const top = body.getBoundingClientRect().top - body.scrollTop;
+  const bottoms: number[] = [];
+  const range = document.createRange();
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    range.selectNodeContents(node);
+    for (const line of range.getClientRects()) if (line.width >= 1) bottoms.push(line.bottom - top);
+  }
+  for (const child of body.children) bottoms.push(child.getBoundingClientRect().bottom - top);
+  return bottoms;
+}
+
+/** Whether a card's body has more below what it shows, said on the card, where its sign is drawn. */
+function markMore(card: HTMLElement, body: HTMLElement) {
+  card.toggleAttribute("data-more", body.scrollTop + body.clientHeight < body.scrollHeight - 1);
+}
+
+/** A waiting card in a lane shorter than it: its head on one line, and its body cut where a line ends, with the
+    sign that more is below, so what it shows reads whole and the rest is a scroll away. */
+function fitWaiting(card: HTMLElement) {
+  const body = card.querySelector<HTMLElement>("[data-companion-confirm-body]");
+  card.removeAttribute("data-tight");
+  if (!body) { card.removeAttribute("data-more"); return; }
+  body.style.height = "";
+  body.style.flex = "";
+  const overflows = () => body.scrollHeight > body.clientHeight + 1;
+  if (overflows()) card.setAttribute("data-tight", "");
+  if (overflows()) {
+    /* The room the card leaves its body, as the body shrank into it, cut where a line ends. */
+    body.style.height = `${lineCut(lineBottoms(body), body.clientHeight)}px`;
+    body.style.flex = "none";
+  }
+  markMore(card, body);
+}
+
+/** Scrolls a waiting card's body on to the first line it does not show whole. */
+function showMore(body: HTMLElement) {
+  const top = body.getBoundingClientRect().top - body.scrollTop;
+  const range = document.createRange();
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  const seen = body.scrollTop + body.clientHeight + 0.5;
+  let next = body.scrollHeight;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    range.selectNodeContents(node);
+    for (const line of range.getClientRects()) if (line.width >= 1 && line.bottom - top > seen) next = Math.min(next, line.top - top);
+  }
+  body.scrollTo({ top: Math.max(0, Math.floor(next)), behavior: reducedMotion() ? "auto" : "smooth" });
+}
+
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const mark = (name: string, durationMs: number) => { try { performance.mark(name, { detail: { durationMs } }); } catch { /* measurement only */ } };
 const viewportSize = (): Size => ({ width: innerWidth, height: innerHeight });
@@ -345,6 +396,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
      so nothing in it is carried across the page or swings to another side on the way. */
   const [view, setView] = useState<Layout | null>(null);
   const [relocating, setRelocating] = useState<"out" | "travel" | null>(null);
+  /* A move the companion makes by itself whose straight path would carry it over the page's text: it fades where it
+     stands (`fade`) and shows at the new place with no travel (`jump`). */
+  const [moveKind, setMoveKind] = useState<"fade" | "jump" | null>(null);
   /* Set by the operator's own moves (a drop, a key, a resize): those are shown as they happen. */
   const moveAtOnce = useRef(false);
   /* While held: where the character is and the lane it would have there. */
@@ -371,6 +425,11 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const chosen = useRef(false);
   /* What the last placement was computed from: the same page gives the same place without a second search. */
   const settledFor = useRef<string | null>(null);
+  /* A request is on its way to the orchestrator: its row is coming into the conversation's feed, which is then kept
+     clear whole, its empty part included, until the request settles. */
+  const outsideRows = useRef(false);
+  /* The controls and the text the last placement was read from. */
+  const lastRead = useRef<{ obstacles: Rect[]; text: Rect[] } | null>(null);
   const swallowClick = useRef(false);
   /* What the companion keeps off unless the operator put it there: the page's text, and the pictures of the rows
      in a feed. */
@@ -390,21 +449,23 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
 
   /** Open at the free place nearest the anchor; with none, collapse there instead.
       The answer depends on the page, the viewport and the anchor alone. `read`: the controls and the text,
-      when the caller has just read them from the page. */
-  const settle = useCallback((isCollapsed: boolean, read?: { obstacles: Rect[]; text: Rect[] }) => {
+      when the caller has just read them from the page. `known`: the caller knows no open place is left for this
+      read, and the search for one is not run. */
+  const settle = useCallback((isCollapsed: boolean, read?: { obstacles: Rect[]; text: Rect[] }, known?: "no-open-place") => {
     const began = performance.now();
     const viewport = viewportSize();
     const obstacles = read?.obstacles ?? [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
     const text = read?.text ?? pageContent();
+    lastRead.current = { obstacles, text };
     const surfaces = rowSurfaces(root.current, rows);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
-    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, obstacles, text, surfaces]);
+    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, outsideRows.current, obstacles, text, surfaces]);
     if (inputs === settledFor.current) return;
     settledFor.current = inputs;
     let next: Layout | null = null;
     const desired = { x: corner.x - shape.width, y: corner.y - shape.height };
-    if (!isCollapsed) {
-      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, rows: chosen.current ? [] : surfaces, desired: { x: corner.x - block.width, y: corner.y - block.height } });
+    if (!isCollapsed && known !== "no-open-place") {
+      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, rows: chosen.current ? [] : surfaces, outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height } });
       if (open) next = { mode: "expanded", at: open.at, lane: open.lane };
     }
     if (!next) {
@@ -439,6 +500,30 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (layout.mode === "collapsed") return [{ ...layout.at, ...shape }];
     return [{ ...layout.at, ...block }, ...(lane ? [lane.rect] : [])];
   }, [layout, lane, block, shape]);
+
+  /* A request that is sent brings its row into the orchestrator's conversation. Standing in that conversation's
+     empty part, the companion makes way the moment the request is sent, before the row arrives: it takes a place
+     outside the feed, or its tile where none holds it open. The feed stays kept clear until the request settles.
+     One that settles with no answer coming (its delivery unknown, refused, failed) is news the card says, so the
+     place is read again as it is then. An answered one brings its own row, and the companion stays where it went.
+     A place the operator chose is theirs, and stays. */
+  const requestInFlight = ["sending", "queued", "delivered"].includes(state.delegation?.stage ?? "");
+  const answered = state.delegation?.stage === "answered";
+  useLayoutEffect(() => {
+    const was = outsideRows.current;
+    outsideRows.current = requestInFlight;
+    if (chosen.current || !layout) return;
+    if (!requestInFlight) { if (was && !answered) settle(collapsed); return; }
+    const surfaces = rowSurfaces(root.current, rows);
+    if (!footprint().some((rect) => surfaces.some((surface) => intersectionArea(rect, surface) > 0))) return;
+    /* Placed from the page as it was last read: reading it again costs frames of the hand-off the operator is
+       watching, and the place taken is checked against the page as it is within 250 ms, like every other. It
+       stands in the feed because that read left no open place outside it, so none is searched for: it takes its
+       tile. */
+    if (lastRead.current) settle(collapsed, lastRead.current, "no-open-place");
+    else settle(collapsed);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a request goes out and when it settles
+  }, [requestInFlight]);
 
   /* The mouth, and the pace of the playing line's bubbles: one transform per
      level sample, and a render only when another bubble is due. */
@@ -560,22 +645,31 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const atOnce = moveAtOnce.current;
     moveAtOnce.current = false;
     const moves = !!view && !!layout && (layout.at.x !== view.at.x || layout.at.y !== view.at.y || layout.mode !== view.mode);
+    /* The new shape travels from the old place to the new one: a path over a line of the page's text, as the
+       placement that chose the new place read it, is not taken. */
+    const crosses = !atOnce && moves && !reducedMotion() && pathCrosses(view!.at, layout!.at, layout!.mode === "expanded" ? block : shape, lastRead.current?.text ?? pageContent());
     const staged = !atOnce && moves && view?.mode === "expanded" && (layout?.mode === "expanded" || layout?.yielded === true) && carrying && !reducedMotion();
-    if (!staged) {
+    if (!staged && !crosses) {
       setView(layout);
       setRelocating(null);
+      setMoveKind(null);
       return;
     }
-    setRelocating("out");
-    const timer = setTimeout(() => { setView(layout); setRelocating(layout!.mode === "expanded" ? "travel" : null); }, LANE_OUT_MS);
+    setRelocating(view?.mode === "expanded" ? "out" : null);
+    if (crosses) setMoveKind("fade");
+    const timer = setTimeout(() => {
+      setView(layout);
+      setRelocating(layout!.mode === "expanded" && staged ? "travel" : null);
+      setMoveKind(crosses ? "jump" : null);
+    }, LANE_OUT_MS);
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per placement; what the lane holds is read as it is then
   }, [layout]);
   useEffect(() => {
-    if (relocating !== "travel") return;
-    const timer = setTimeout(() => setRelocating(null), TRAVEL_MS);
+    if (relocating !== "travel" && moveKind !== "jump") return;
+    const timer = setTimeout(() => { setRelocating(null); setMoveKind(null); }, TRAVEL_MS);
     return () => clearTimeout(timer);
-  }, [relocating, view]);
+  }, [relocating, moveKind, view]);
 
   /* A clock for the lingering, ticking only while something can still leave. */
   const lingering = floaters.some((floater) => floater.settled);
@@ -647,6 +741,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const stackFacing = useRef<string | null>(null);
   /* The rise the lane is on: how fast it moves now decides the curve of the one that takes over. */
   const sheetFlight = useRef<{ animation: Animation; travel: number; curve: Bezier } | null>(null);
+  /* A card that waits for the operator, fitted to the lane before the stack reads its height. */
+  const fitKeys = floaters.filter((floater) => floater.kind === "delegation").map((floater) => `${floater.key}:${floater.kind === "delegation" ? floater.delegation.stage : ""}`).join("|");
+  useLayoutEffect(() => {
+    const stack = stackEl.current;
+    if (!stack) return;
+    for (const card of stack.querySelectorAll<HTMLElement>(":scope > [data-floater] > [data-companion-delegation]")) fitWaiting(card);
+  }, [fitKeys, shownLane?.rect.height, locale, expanded, unconfirmedFor]);
   const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? `${floater.text.length}${floater.cut === null ? "" : "c"}` : floater.kind === "call" ? `${floater.call.status}${(floater.call.result ?? floater.call.summary).length}` : floater.kind === "more" ? floater.count : floater.kind === "notice" ? floater.code : `${floater.delegation.stage}${floater.delegation.notice ?? ""}`}:${arrival.get(floater.key) ?? ""}`).join("|");
   useLayoutEffect(() => {
     const stack = stackEl.current;
@@ -995,7 +1096,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         <div className="vc-deleg-head">
           <span className="vc-call-icon" aria-hidden>{running ? <LoaderCircle size={14} className="vc-spin" /> : failed ? <CircleAlert size={14} /> : delegation.stage === "cancelled" ? <X size={14} /> : delegation.stage === "awaiting-confirmation" ? <SendHorizontal size={14} /> : <Check size={14} />}</span>
           <span className="vc-deleg-title">{head}</span>
-          {recipient ? <span className="vc-deleg-engine"><EngineMark engine={recipient.engine} size={14} />{ENGINE_NAME[recipient.engine]}</span> : null}
+          {recipient ? <span className="vc-deleg-engine" title={ENGINE_NAME[recipient.engine]}><EngineMark engine={recipient.engine} size={14} /><span className="vc-deleg-engine-name">{ENGINE_NAME[recipient.engine]}</span></span> : null}
         </div>
         <span className="vc-call-name">{DELEGATION_TOOL}</span>
         {delegation.stage === "refused" ? <p className="vc-deleg-note" data-companion-refused={delegation.refusal ?? ""}>{delegation.refusal === "no_orchestrator" ? companionErrorMessage("no_orchestrator", speechLocaleOf(locale)) : t("voiceCompanion.refused")}</p> : null}
@@ -1003,7 +1104,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         {/* The model's own reason for asking first, the whole request and the spoken way to answer, read as one
             body that scrolls in a short lane, so the card keeps to the lane with its head and both buttons in view. */}
         {delegation.stage === "awaiting-confirmation" ? (
-          <div className="vc-deleg-body" tabIndex={0} data-companion-confirm-body>
+          <div className="vc-deleg-body" tabIndex={0} data-companion-confirm-body onScroll={(event) => { const card = event.currentTarget.closest<HTMLElement>("[data-companion-delegation]"); if (card) markMore(card, event.currentTarget); }}>
             {/* A Send that was lost on its way: said first, where the body opens, above what it would send. */}
             {delegation.proposal && unconfirmedFor.has(delegation.proposal.proposalId) ? <p className="vc-deleg-note vc-deleg-wait" role="alert" data-companion-delegation-notice="DELIVERY_UNCONFIRMED">{companionErrorMessage("SEND_UNCONFIRMED", speechLocaleOf(locale))}</p> : null}
             {delegation.proposal?.confirmation ? <p className="vc-deleg-note" data-companion-confirm-reason>{delegation.proposal.confirmation.reason}</p> : null}
@@ -1015,6 +1116,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         ) : null}
         {delegation.stage === "awaiting-confirmation" ? (
           <div className="vc-acts">
+            {/* Shown while the body has more below what it shows: the sign of it, and the way on to the rest. */}
+            <button type="button" className="vc-btn vc-more-below" data-companion-more-below aria-label={t("voiceCompanion.moreBelow")} title={t("voiceCompanion.moreBelow")}
+              onClick={(event) => { const body = event.currentTarget.closest<HTMLElement>("[data-companion-delegation]")?.querySelector<HTMLElement>("[data-companion-confirm-body]"); if (body) showMore(body); }}><ChevronDown size={15} aria-hidden /></button>
             <button type="button" className="vc-act" data-companion-cancel disabled={!!delegation.proposal && decidedFor.has(delegation.proposal.proposalId)} onClick={() => delegation.proposal && decide(delegation.proposal.proposalId, "cancel")}><X size={14} aria-hidden />{t("voiceCompanion.cancel")}</button>
             <button type="button" className="vc-act" data-primary data-companion-send disabled={!!delegation.proposal && decidedFor.has(delegation.proposal.proposalId)} onClick={() => delegation.proposal && decide(delegation.proposal.proposalId, "send")}><SendHorizontal size={14} aria-hidden />{t("voiceCompanion.send")}</button>
           </div>
@@ -1057,6 +1161,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       data-collapsed={!expanded ? "" : undefined}
       data-delegation-stage={stage ?? undefined}
       data-dragging={dragging ? "" : undefined}
+      data-move={moveKind ?? undefined}
       style={style}
     >
       <style>{VOICE_COMPANION_CSS}</style>

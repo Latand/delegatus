@@ -43,6 +43,12 @@ export const VOICE_COMPANION_CSS = `
 }
 .vc *, .vc *::before, .vc *::after { box-sizing: border-box; }
 .vc[data-dragging] { transition: none; }
+/* A move by itself whose path would cross the page's text: what is on screen fades where it stands, and shows at
+   the new place with no travel between. */
+.vc[data-move="fade"] .vc-block, .vc[data-move="fade"] .vc-shape, .vc[data-move="fade"] .vc-shape-end { opacity: 0; transition: opacity 140ms linear; }
+.vc[data-move="jump"] { transition: none; }
+.vc[data-move="jump"] .vc-block, .vc[data-move="jump"] .vc-shape, .vc[data-move="jump"] .vc-shape-end { animation: vc-in 200ms var(--vc-ease); }
+@keyframes vc-in { from { opacity: 0; } to { opacity: 1; } }
 .vc[data-phase="listening"] { --vc-ring: var(--color-accent); }
 .vc[data-phase="speaking"] { --vc-ring: var(--color-primary); }
 .vc[data-phase="thinking"] { --vc-ring: var(--color-muted); }
@@ -242,6 +248,15 @@ export const VOICE_COMPANION_CSS = `
   border-radius: 8px; outline: none;
 }
 .vc-deleg-body:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-info) 45%, transparent); }
+/* In a lane shorter than the card (\`data-tight\`): the head keeps to one line, the engine by its mark alone, and the
+   component cuts the body where a line ends. While the body has more below (\`data-more\`), the sign of it stands
+   left of the buttons and scrolls on to the first line not shown. */
+.vc-deleg[data-tight] .vc-deleg-engine-name { display: none; }
+.vc-deleg[data-tight] > .vc-deleg-body { min-height: 0; }
+.vc-deleg[data-tight] > .vc-acts { margin-top: 0; }
+.vc-more-below { display: none; width: 26px; height: 26px; margin: 2px auto 0 0; color: var(--vc-teal-ink); border-color: color-mix(in srgb, var(--color-info) 45%, transparent); pointer-events: auto; }
+.vc-deleg[data-more] .vc-more-below { display: inline-grid; animation: vc-nudge 1600ms ease-in-out 2; }
+@keyframes vc-nudge { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(2px); } }
 .vc-deleg-body > * { flex: none; }
 .vc-deleg-body > .vc-instruction, .vc-deleg-body > .vc-deleg-note { max-height: none; overflow: visible; }
 .vc-deleg-head { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--vc-teal-ink); }

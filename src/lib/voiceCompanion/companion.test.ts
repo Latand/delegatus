@@ -7,7 +7,7 @@ import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./c
 import { COMPANION_MESSAGES } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
-import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
 import { DEMO_IDS, SCENARIOS, scenarioScript, scenarioText, type ScenarioName } from "./scenarios";
 import { createSimulatedCompanion, syntheticLevel, virtualClock, type ScriptStep } from "./simulator";
@@ -932,6 +932,59 @@ describe("geometry", () => {
     expect(isFree({ ...inside.at, ...block }, [...walls, ...text])).toBe(true);
     expect(isFree(inside.lane.rect, [...walls, ...text])).toBe(true);
     expect(intersectionArea(inside.lane.rect, feed)).toBeGreaterThan(0);
+    /* Once a request is sent, the feed is where its row arrives: kept clear whole, with no second pass into its empty
+       part, so with no room outside it the open companion has no place and makes way as its tile. */
+    expect(placeExpanded({ viewport, block, obstacles: walls, text, rows: [feed], outsideRows: true, desired })).toBeNull();
+    /* Where room outside the feed exists, the answer is the one the first pass gives anyway. */
+    expect(placeExpanded({ viewport, block, obstacles: [], text, rows: [feed], outsideRows: true, desired })).toEqual(placed);
+  });
+
+  test("a move along a straight path is read against what lies between its two places", () => {
+    const size = { width: 56, height: 56 };
+    const line = rect(300, 340, 240, 18);
+    /* Up and to the left across the line. */
+    expect(pathCrosses({ x: 500, y: 420 }, { x: 260, y: 200 }, size, [line])).toBe(true);
+    /* Straight up beside it, with a pixel to spare. */
+    expect(pathCrosses({ x: 541, y: 420 }, { x: 541, y: 100 }, size, [line])).toBe(false);
+    /* Over it and back down to where it started: no path at all. */
+    expect(pathCrosses({ x: 100, y: 100 }, { x: 100, y: 100 }, size, [line])).toBe(false);
+    /* A box that only touches the line's edge meets nothing. */
+    expect(pathCrosses({ x: 244, y: 300 }, { x: 244, y: 500 }, size, [line])).toBe(false);
+    expect(pathCrosses({ x: 245, y: 300 }, { x: 245, y: 500 }, size, [line])).toBe(true);
+  });
+
+  test("the tile's place is the first free one of the whole grid ordered nearest first", () => {
+    /* A seeded walk, so the cases are the same on every run. */
+    let seed = 7;
+    const next = () => { seed = (seed * 48271) % 2147483647; return seed / 2147483647; };
+    const size = { width: 56, height: 56 };
+    for (let turn = 0; turn < 80; turn += 1) {
+      const view = turn % 2 ? { width: 1000, height: 800 } : { width: 1440, height: 900 };
+      const min = { x: 8, y: 8 };
+      const max = { x: view.width - size.width - 8, y: view.height - size.height - 8 };
+      const obstacles = Array.from({ length: 4 + Math.floor(next() * 60) }, () => rect(Math.floor(next() * view.width), Math.floor(next() * view.height), 20 + Math.floor(next() * 400), 10 + Math.floor(next() * 300)));
+      const start = { x: min.x + Math.floor(next() * (max.x - min.x)), y: min.y + Math.floor(next() * (max.y - min.y)) };
+      const free = (x: number, y: number) => isFree({ x, y, ...size }, obstacles);
+      const grid: Array<{ x: number; y: number }> = [];
+      for (let y = min.y; y <= max.y; y += 4) for (let x = min.x; x <= max.x; x += 4) grid.push({ x, y });
+      const distance = (point: { x: number; y: number }) => (point.x - start.x) ** 2 + (point.y - start.y) ** 2;
+      grid.sort((left, right) => distance(left) - distance(right) || left.y - right.y || left.x - right.x);
+      const scanned = free(start.x, start.y) ? start : grid.find((point) => free(point.x, point.y)) ?? null;
+      expect(nearestFree(start, min, max, 4, free), `turn ${turn}`).toEqual(scanned);
+    }
+    expect(nearestFree({ x: 101, y: 99 }, { x: 8, y: 8 }, { x: 400, y: 300 }, 4, (x, y) => x >= 200 && y >= 150)).toEqual({ x: 200, y: 152 });
+    expect(nearestFree({ x: 101, y: 99 }, { x: 8, y: 8 }, { x: 400, y: 300 }, 4, () => false)).toBeNull();
+  });
+
+  test("a body that scrolls is cut where a line ends, never through one", () => {
+    /* Line bottoms in a body: a one-line reason, then a request in a padded box. */
+    const bottoms = [18, 47, 65, 83];
+    expect(lineCut(bottoms, 56)).toBe(47);
+    expect(lineCut(bottoms, 47.4)).toBe(47);
+    expect(lineCut(bottoms, 200)).toBe(83);
+    /* Room for no whole line keeps the first one. */
+    expect(lineCut(bottoms, 10)).toBe(18);
+    expect(lineCut([], 40)).toBe(40);
   });
 
   test("a column too narrow for the lane beside the character takes the lane above it, rising away from it", () => {

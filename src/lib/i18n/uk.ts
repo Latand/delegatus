@@ -2060,6 +2060,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.refused": "Нічого не надіслано: я не почув явного прохання до оркестратора.",
   "voiceCompanion.withdrawn": "Ви забрали це прохання, тож нічого не надіслано. Попросіть ще раз, і я надішлю.",
   "voiceCompanion.confirmHint": "Скажіть «так» чи «ні» або натисніть.",
+  "voiceCompanion.moreBelow": "Показати решту",
   "voiceCompanion.declined": "Ви відмовилися, тож нічого не надіслано.",
   "voiceCompanion.unanswered": "Відповіді не було, тож нічого не надіслано.",
   "voiceCompanion.call.running": "триває",
