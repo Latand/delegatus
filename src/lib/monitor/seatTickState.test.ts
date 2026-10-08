@@ -61,6 +61,23 @@ test("a row survives the write and reads back whole", () => {
   expect(readSeatTickState("other", file)).toMatchObject(emptySeatTickState());
 });
 
+test("recovered authentication notice debt survives persistence and a new seat epoch", () => {
+  const file = path.join(SANDBOX, "auth-notice-debt.json");
+  const lastFailedTs = Date.parse("2026-10-08T00:05:00Z");
+  const notice = { id: "seat-auth:viewer:7:first", seatEpoch: 7, conversationId: CONVERSATION,
+    engine: "claude" as const, accountId: "fixture-account-a", firstFailedAt: new Date(lastFailedTs).toISOString(),
+    lastFailedTs, recoveredThrough: lastFailedTs, credentialStamp: null, text: "Authentication failed",
+    rotation: { state: "held" as const }, notice: null };
+  writeSeatTickState("viewer", { ...row, authNoticesOwed: [notice] }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.authNoticesOwed).toEqual([notice]);
+  const successor = seatTickStateForEpoch(reopened, 8);
+  expect(successor.authIncident).toBeUndefined();
+  expect(successor.authNoticesOwed).toEqual([notice]);
+  writeSeatTickState("viewer", successor, file);
+  expect(readSeatTickState("viewer", file).authNoticesOwed).toEqual([notice]);
+});
+
 test("one project's write leaves the others' rows alone", () => {
   const file = path.join(SANDBOX, "multi.json");
   writeSeatTickState("viewer", row, file);
