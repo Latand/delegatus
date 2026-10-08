@@ -80,8 +80,21 @@ A behaviour conflict stops the pass. A clearing omission names the responsible
 PR; multiple clearing omissions report `integration: needs both`. If no single
 omission clears it, combined removals find a minimal clearing set. If all
 implementation removals leave a failure, attribution cannot be proven: the gate
-names the failing tests, retains their detectors and refuses publication. Test
-authorship and literal assertion syntax supply no attribution or exemption.
+names the failing tests, retains their detectors and refuses publication, and
+its message names that rule. Test authorship and literal assertion syntax supply
+no attribution or exemption.
+
+A PR's reviewed tree supplies every selected test file, including files its
+patch never touched; such a copy is the version at the PR's review base. When
+main changed that file after the base, the copy is a stale reviewed detector: it
+judges main's newer code with the branch's older assertions, so no removal can
+clear it. A failure of a stale copy that the all-removed control keeps red
+defers only that PR, with `stale reviewed detector: branch predates <main
+commit> that changed <file>; merge main into the branch`, and the rest of the
+batch is validated again; `resolve N` merges main into it after landing. The
+report lists these under "Stale reviewed detectors". A file the PR itself
+changed keeps the rules above, and a failure that is neither narrowed nor stale
+still stops the batch.
 A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and
 the rest is validated again.
