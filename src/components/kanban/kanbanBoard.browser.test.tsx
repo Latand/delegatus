@@ -19973,6 +19973,496 @@ describe("the board holds still under a scroll", () => {
   }, 120_000);
 });
 
+describe("creating a new agent: the composer alone, and the conversation after Send", () => {
+  /*
+   * docs/design/new-agent-redesign.md, variant 1 as built. The real Viewer over `?scenario=new-agent`, walked
+   * from the board's own button through the same moments at 1440x900, 1000x700 and a 390 phone, light and
+   * dark, en and uk: the empty form, the runtime pill open, the model and the account chosen, dictation in
+   * progress, the frame after Send, the frame after the launch answered, and the loaded conversation. On the
+   * desktop the same launch is walked from a task card's own «+ Agent». At every size, scheme and language a
+   * launch that carries a picture is walked too, to the frame after the launch answered. Six more states are
+   * drawn once, at 1440 in the light theme in English: a refused launch, a handoff draft, a handoff whose
+   * source's folder is on no record, a signed-out account, a Copilot account chosen in the pill and a launch
+   * of a picture with no words. The launch is the fixture's own: no agent starts.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> NEW_AGENT_TODAY=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
+   *
+   * The frames and the comparison sheets go to `NEW_AGENT_OUT`, outside the repository. `NEW_AGENT_TODAY`
+   * names the frames of the form this one replaced (`look0-<view>-<scheme>-<lang>-<state>.png`, shot by the
+   * design lane at the last commit that had it); given, each sheet puts them beside the built ones.
+   * `NEW_AGENT_ONLY` narrows a run while the form is being drawn: `views=desktop-1440;langs=en;schemes=light;passes=header`.
+   */
+  const OUT = process.env.NEW_AGENT_OUT ? path.resolve(process.env.NEW_AGENT_OUT) : null;
+  const TODAY = process.env.NEW_AGENT_TODAY ? path.resolve(process.env.NEW_AGENT_TODAY) : null;
+  const only = new Map((process.env.NEW_AGENT_ONLY ?? "").split(";").filter(Boolean).map((entry) => {
+    const [key, value] = entry.split("=");
+    return [key!, new Set((value ?? "").split(","))] as const;
+  }));
+  const wanted = (key: string, value: string) => !only.has(key) || only.get(key)!.has(value);
+  /* The strip the design lane's page printed above the application; cut off a frame of today's form. */
+  const TODAY_STRIP = 40;
+  const views = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-1000", width: 1000, height: 700, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const STATES = ["empty", "picker", "chosen", "dictation", "sent", "receipt", "loaded", "task-card-empty", "task-card-sent", "task-card-receipt", "task-card-loaded", "image-sent", "image-receipt"] as const;
+  /* Drawn once. */
+  const EXTRAS = ["refused", "handoff", "handoff-lost", "signed-out", "copilot", "image-only-sent", "image-only-receipt"] as const;
+  const EXTRA_PASSES = ["refused", "handoff", "handoff-lost", "signed-out", "copilot", "image-only"] as const;
+  const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#1f2430"/><text x="14" y="${height / 2 + size / 3}" font-family="sans-serif" font-weight="700" font-size="${size}" fill="#fff">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
+  );
+  /* One sheet: a block per caption, a row per state, today's frame then the built one, scaled to one height. */
+  const sheet = async (file: string, title: string, cell: number, blocks: { name: string; rows: { state: string; today: string | null; built: string }[] }[]) => {
+    const layers: { input: Buffer; left: number; top: number }[] = [];
+    let top = 64;
+    let widest = 0;
+    for (const block of blocks) {
+      const blockTop = top;
+      top += 40;
+      for (const row of block.rows) {
+        if (!fs.existsSync(row.built)) continue;
+        const built = await sharp(row.built).metadata();
+        const column = Math.round(cell * (built.width! / built.height!));
+        let left = 190;
+        layers.push({ input: await sharp(caption(row.state, 182, cell, 17)).png().toBuffer(), left: 0, top });
+        /* A moment today's form did not have (it had no pill to open) leaves its column empty. */
+        if (row.today && fs.existsSync(row.today)) {
+          const today = await sharp(row.today).metadata();
+          layers.push({ input: await sharp(row.today).extract({ left: 0, top: TODAY_STRIP, width: today.width!, height: today.height! - TODAY_STRIP }).resize({ height: cell }).png().toBuffer(), left, top });
+        }
+        left += column + 8;
+        layers.push({ input: await sharp(row.built).resize({ height: cell }).png().toBuffer(), left, top });
+        left += column + 8;
+        widest = Math.max(widest, left);
+        top += cell + 8;
+      }
+      layers.push({ input: await sharp(caption(block.name, 1600, 34, 18)).png().toBuffer(), left: 0, top: blockTop });
+      top += 16;
+    }
+    layers.push({ input: await sharp(caption(title, Math.max(widest, 1600), 56, 26)).png().toBuffer(), left: 0, top: 0 });
+    await sharp({ create: { width: Math.max(widest, 1600), height: top, channels: 3, background: "#8a8f99" } }).composite(layers).png().toFile(file);
+  };
+  const TYPED = { en: "Compare the two export screens and list what differs", uk: "Порівняй два екрани експорту й перелічи відмінності" } as const;
+  const SPOKEN = { en: "Read the README and tell me what this project is made of", uk: "Прочитай README і скажи, з чого складається цей проєкт" } as const;
+
+  browserTest("the form is the composer alone and the pane is the conversation after Send, at three sizes, in both themes and languages", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "new-agent-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: Record<string, unknown>[] = [];
+    const server = await serveEvidenceFixture(work);
+    /* The picture a launch carries: a small PNG, put in through the composer's own file input. */
+    const picture = path.join(work, "screen.png");
+    await sharp({ create: { width: 64, height: 48, channels: 3, background: "#3b82f6" } }).png().toFile(picture);
+    /* Dictation is recorded from the browser's own synthetic microphone. */
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+    try {
+      for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        if (!wanted("views", view.name) || !wanted("schemes", scheme) || !wanted("langs", lang)) continue;
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+        for (const pass of ["header", "task-card", "image", ...EXTRA_PASSES] as const) {
+          if (!wanted("passes", pass)) continue;
+          const extra = (EXTRA_PASSES as readonly string[]).includes(pass);
+          if (extra && (view.name !== "desktop-1440" || scheme !== "light" || lang !== "en")) continue;
+          /* A card's own «+ Agent» is on the desktop board; the phone opens a draft from its menu alone. */
+          if (pass === "task-card" && view.touch) continue;
+          const { width, height } = view;
+          const seeded = extra && pass !== "image-only";
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent${seeded ? `&naseed=${pass}` : ""}`, { width, height }, scheme, lang, "reduce", view.touch);
+          await context.grantPermissions(["microphone"]);
+          const label = (state: string) => `built-${view.name}-${scheme}-${lang}-${state}`;
+          const settle = async () => {
+            /* A tooltip follows the pointer and the focus a press left, and would lie over the frame. */
+            if (!view.touch) await page.mouse.move(0, 0);
+            await page.waitForTimeout(250);
+          };
+          /* The launches the page asked for; the fixture answers them itself and keeps what each one carried. */
+          const launches = () => page.evaluate(() => (window as unknown as { launchRun: { requests: Record<string, unknown>[] } }).launchRun.requests);
+          const shoot = (state: string) => page.screenshot({ path: path.join(out, `${label(state)}.png`) });
+          try {
+            await page.locator("[data-kanban-board] .card[data-id], [data-phone-card]").first().waitFor({ state: "attached", timeout: 30_000 });
+            /* An attention toast is another surface's and would lie over the draft; a tooltip is the pointer's. */
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            if (pass === "task-card") {
+              await page.locator("[data-add-agent]:visible").first().click();
+            } else if (pass === "handoff" || pass === "handoff-lost") {
+              /* The fixture restored this draft the way the product restores a tab's drafts. */
+            } else if (view.touch) {
+              await page.locator('[data-mobile2-open="menu"]').click();
+              await page.locator('[data-mobile2-menu-row="new-agent"]').click();
+            } else if (await page.locator("[data-new-agent]").isVisible()) {
+              await page.locator("[data-new-agent]").click();
+            } else {
+              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
+            }
+            const draft = page.locator("[data-draft-pane]:visible").first();
+            const prompt = draft.locator(`textarea[aria-label="${tr("draft.promptTextAria")}"]`);
+            await prompt.waitFor({ timeout: 15_000 });
+            const box = async (target: ReturnType<typeof page.locator>) => {
+              const rect = await target.first().boundingBox();
+              if (!rect) throw new Error(`${label(pass)}: nothing to measure`);
+              return { left: Math.round(rect.x), top: Math.round(rect.y), right: Math.round(rect.x + rect.width), bottom: Math.round(rect.y + rect.height) };
+            };
+            const within = (rect: { left: number; top: number; right: number; bottom: number }) => rect.left >= 0 && rect.top >= 0 && rect.right <= width && rect.bottom <= height;
+            /* What the form holds: the composer's own parts, and every kind of field it must not hold. */
+            const controls = () => page.evaluate((names) => {
+              const pane = [...document.querySelectorAll<HTMLElement>("[data-draft-pane]")].find((element) => element.getClientRects().length)!;
+              const seen = (selector: string) => [...pane.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length).length;
+              const clipped = [...pane.querySelectorAll<HTMLElement>("[data-runtime-pill], textarea, button")].filter((element) => element.getClientRects().length)
+                .filter((element) => { const rect = element.getBoundingClientRect(); return rect.left < 0 || rect.right > innerWidth + 0.5; }).length;
+              return {
+                voice: seen("button:has(svg.lucide-mic)"), prompt: seen("textarea"), images: pane.querySelectorAll('input[type="file"]').length,
+                /* The picker is the image one: a launch carries images and no other file, and says so. */
+                imageOnly: pane.querySelectorAll('input[type="file"][accept="image/*"]').length, paperclip: seen("svg.lucide-paperclip"),
+                launch: seen(`button[aria-label="${names.launch}"]`), pill: seen("[data-runtime-pill]"),
+                selects: seen("select"), radios: seen('[role="radio"]'), textInputs: seen('input:not([type="file"]):not([type="hidden"])'), details: seen("details"),
+                headings: seen("h1, h2, h3, h4, header"), buttons: seen("button"), clipped, focused: document.activeElement === pane.querySelector("textarea"),
+                height: Math.round(pane.getBoundingClientRect().height),
+              };
+            }, { launch: tr("composer.launchAgent") });
+            const composerOnly = async (state: string) => {
+              const read = await controls();
+              expect({ prompt: read.prompt, voice: read.voice, images: read.images, imageOnly: read.imageOnly, paperclip: read.paperclip, launch: read.launch, pill: read.pill }, `${label(state)} the composer's parts`)
+                .toEqual({ prompt: 1, voice: 1, images: 1, imageOnly: 1, paperclip: 0, launch: 1, pill: 1 });
+              expect({ selects: read.selects, radios: read.radios, textInputs: read.textInputs, details: read.details, headings: read.headings }, `${label(state)} fields the form dropped`)
+                .toEqual({ selects: 0, radios: 0, textInputs: 0, details: 0, headings: 0 });
+              /* The runtime pill, the image picker, the microphone and Send: nothing else is pressed here. */
+              expect(read.buttons, `${label(state)} buttons`).toBeLessThanOrEqual(5);
+              expect(read.clipped, `${label(state)} nothing cut by the window`).toBe(0);
+              expect(within(await box(draft.locator("[data-draft-form]"))), `${label(state)} the composer in the window`).toBe(true);
+              return read;
+            };
+            /* The form grows before Send (the recording panel, the picture's tile, a refused file's line), and
+               a draft opened low in its column keeps the whole of it in the window as it does. */
+            const formInSight = async (state: string) => {
+              /* The form is brought into sight in the frame its height changed in; measure once that frame is drawn. */
+              await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+              const form = await box(draft.locator("[data-draft-form]"));
+              expect(within(form), `${label(state)} the whole form in the window: ${JSON.stringify(form)} of ${width}x${height}`).toBe(true);
+              return form;
+            };
+            /* The runtime control of a new agent says what the launch starts on: no name inside the draft, its
+               popover or its sheet speaks of a conversation's next message. */
+            const nextMessageNames = () => page.evaluate((marks) => {
+              const names: string[] = [];
+              for (const root of document.querySelectorAll<HTMLElement>("[data-draft-pane], [data-runtime-popover], [data-runtime-sheet]")) {
+                for (const element of [root, ...root.querySelectorAll<HTMLElement>("*")]) {
+                  const name = element.getAttribute("aria-label");
+                  if (name) names.push(name);
+                }
+                names.push(root.innerText);
+              }
+              return names.filter((name) => marks.some((mark) => name.toLowerCase().includes(mark)));
+            }, ["next message", "наступне повідомлення"]);
+            /* After Send the pane is the conversation: the first message is a row of the feed from the first
+               frame, the loading shape stands where the answer will be, and no status sentence stands in. */
+            const opening = async (state: string, text: string) => {
+              const shape = draft.locator("[data-draft-opening]");
+              await shape.waitFor({ timeout: 5_000 });
+              await shoot(state);
+              const found = {
+                firstMessage: await shape.locator("[data-message-row]").filter({ hasText: text }).count(),
+                loadingShape: await shape.locator('[data-skeleton="feed"]').count(),
+                statusSentence: await draft.getByText(tr("draft.launchedStructured")).count(),
+                pane: await box(draft),
+                message: await box(shape.locator("[data-message-row]")),
+                composer: await box(draft.locator("[data-draft-form]")),
+              };
+              expect({ firstMessage: found.firstMessage, loadingShape: found.loadingShape, statusSentence: found.statusSentence }, `${label(state)} the conversation's opening shape`).toEqual({ firstMessage: 1, loadingShape: 1, statusSentence: 0 });
+              /* The first message is in sight. The composer stands where the launched window's composer will,
+                 which on a short window is under its lower edge, as the product's launched card is. */
+              expect(within(found.message), `${label(state)} the first message in the window`).toBe(true);
+              return found;
+            };
+            /* The account the conversation's window names: the phone's top bar, or the chip nearest the row
+               on the board. */
+            const accountShown = async (text: string) => {
+              if (view.touch) return (await page.locator("[data-mobile2-chat-account-runs]").filter({ visible: true }).first().innerText()).replace(/^@\s*/, "").trim();
+              return page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first().evaluate((row) => {
+                for (let at: Element | null = row; at; at = at.parentElement) {
+                  const chip = at.querySelector(".ch-account");
+                  if (chip) return (chip.querySelector(".cur") ?? chip).textContent?.trim() ?? "";
+                }
+                return "";
+              });
+            };
+            /* The launch answered: the product's own conversation window took the pane over. The first
+               message is the same row in the same place and of the same height, the picture's count under
+               it included; nothing the operator was reading moved. */
+            const receipt = async (state: string, text: string, before: { message: { left: number; top: number; right: number; bottom: number } }) => {
+              await page.locator("[data-draft-pane]").first().waitFor({ state: "detached", timeout: 10_000 });
+              const row = page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first();
+              await row.waitFor({ timeout: 5_000 });
+              const message = await box(row);
+              const account = await accountShown(text);
+              await shoot(state);
+              /* Each edge within a pixel: the window lays the row out a fraction of a pixel off the pane's, which
+                 rounds either way; the jump this guards against was 18 px. */
+              const moved = Math.max(...(["left", "top", "right", "bottom"] as const).map((edge) => Math.abs(message[edge] - before.message[edge])));
+              expect(moved, `${label(state)} the first message where it was: ${JSON.stringify({ before: before.message, after: message })}`).toBeLessThanOrEqual(1);
+              return { message, account };
+            };
+            /* The loaded conversation is the product's own window: the first message once, and the agent's answer. */
+            const loaded = async (state: string, text: string) => {
+              const answer = page.getByText("Summary: the README describes the layout above", { exact: false }).filter({ visible: true }).first();
+              await answer.waitFor({ timeout: 30_000 });
+              await page.waitForTimeout(400);
+              await settle();
+              await shoot(state);
+              const rows = await page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).count();
+              expect(rows, `${label(state)} the first message, once`).toBe(1);
+              expect(await page.locator("[data-draft-pane]").count(), `${label(state)} the draft is gone`).toBe(0);
+              return { firstMessage: rows, account: await accountShown(text) };
+            };
+            /* A launch that carries a picture: its count is under the first message from the press, as the
+               conversation draws it, so the row keeps its height when the launch answers. */
+            const withPicture = async (words: string) => {
+              /* A file the launch cannot carry is refused by name, in a line the form grows by. */
+              await draft.locator('input[type="file"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
+              await draft.locator('[data-testid="composer-status"]').filter({ hasText: "notes.txt" }).first().waitFor({ timeout: 10_000 });
+              const refusedForm = await formInSight(`${pass}-refused-file`);
+              await draft.locator('input[type="file"]').setInputFiles(picture);
+              await page.locator('[data-testid="attachment-tile"][data-status="ready"]').first().waitFor({ timeout: 10_000 });
+              const attachedForm = await formInSight(`${pass}-attached`);
+              if (words) await prompt.fill(words);
+              await prompt.press("Enter");
+              const count = tr("composer.imagesCount", { count: 1 });
+              const sent = await opening(`${pass}-sent`, words || count);
+              const caption = await draft.locator("[data-draft-opening] [data-message-row]").getByText(count, { exact: true }).count();
+              const answered = await receipt(`${pass}-receipt`, words || count, sent);
+              const posted = await launches();
+              const launchedWith = { count: posted.length, images: (posted[0]?.images as unknown[] | undefined)?.length ?? 0, prompt: posted[0]?.prompt };
+              readings.push({ view: view.name, scheme, lang, state: pass, refusedForm, attachedForm, caption, launchedWith, sent, receipt: answered, pageErrors });
+              expect(caption, `${label(`${pass}-sent`)} the picture's count under the first message`).toBe(1);
+              expect(launchedWith, `${label(`${pass}-sent`)} what was launched`).toEqual({ count: 1, images: 1, prompt: words });
+            };
+            if (pass === "image") {
+              await withPicture(TYPED[lang]);
+            } else if (pass === "image-only") {
+              await withPicture("");
+            } else if (pass === "refused") {
+              /* The engine is chosen with the model: a model of another engine moves the draft to it. */
+              await draft.locator("[data-runtime-pill]").click();
+              await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+              await page.locator('[data-runtime-popover] [data-runtime-value="codex/gpt-6-astra"]').click();
+              expect((await draft.locator("[data-runtime-pill]").innerText()).replace(/\s+/g, " ").trim(), `${label(pass)} the pill names the engine`).toContain("Codex · 6-Astra");
+              await prompt.fill(TYPED[lang]);
+              await prompt.press("Enter");
+              const refusal = draft.locator('[data-testid="composer-status"]').filter({ hasText: "export-csv" });
+              await refusal.first().waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              const found = { refusal: await refusal.count(), promptKept: await prompt.inputValue() === TYPED[lang] ? 1 : 0 };
+              const posted = await launches();
+              expect({ engine: posted[0]?.engine, model: posted[0]?.model }, `${label(pass)} the engine the model chose`).toEqual({ engine: "codex", model: "gpt-6-astra" });
+              readings.push({ view: view.name, scheme, lang, state: pass, found, launchedWith: { engine: posted[0]?.engine, model: posted[0]?.model }, controls: await composerOnly(pass), pageErrors });
+              expect(found, label(pass)).toEqual({ refusal: 1, promptKept: 1 });
+            } else if (pass === "handoff") {
+              /* A restored draft is not brought into sight, as no restored card is; the press that opens a
+                 handoff in the product reveals its card. */
+              await draft.scrollIntoViewIfNeeded();
+              await settle();
+              await shoot(pass);
+              /* The source rides in the field, and in the launch: the new agent is its continuation. */
+              const found = { sourceInPrompt: (await prompt.inputValue()).includes("/repo/pending-worker.jsonl") ? 1 : 0 };
+              const controlsRead = await composerOnly(pass);
+              await prompt.press("Enter");
+              await draft.locator("[data-draft-opening]").waitFor({ timeout: 5_000 });
+              const posted = await launches();
+              const carried = { src: posted[0]?.src, cwd: posted[0]?.cwd, parentConversationId: posted[0]?.parentConversationId ?? null, role: posted[0]?.role ?? null };
+              readings.push({ view: view.name, scheme, lang, state: pass, found, carried, controls: controlsRead, pageErrors });
+              expect(found, label(pass)).toEqual({ sourceInPrompt: 1 });
+              expect(carried.src, `${label(pass)} the launch names its source`).toBe("/repo/pending-worker.jsonl");
+              /* The source's own checkout, which the fixture answers for it; the project's root is `/repo`. */
+              expect(carried.cwd, `${label(pass)} the launch runs in its source's folder`).toBe("/repo/worktrees/export-csv");
+            } else if (pass === "handoff-lost") {
+              /* No record names the source's folder: the launch is refused in words, and the board's guess is not taken. */
+              await draft.scrollIntoViewIfNeeded();
+              const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+              await blocked.getByText(tr("draft.sourceFolderUnknown")).waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              await prompt.press("Enter");
+              await page.waitForTimeout(400);
+              const found = { refusal: await blocked.getByText(tr("draft.sourceFolderUnknown")).count(), launches: (await launches()).length, opening: await draft.locator("[data-draft-opening]").count() };
+              const read = await controls();
+              readings.push({ view: view.name, scheme, lang, state: pass, found, controls: read, pageErrors });
+              expect(found, label(pass)).toEqual({ refusal: 1, launches: 0, opening: 0 });
+              expect({ selects: read.selects, textInputs: read.textInputs, clipped: read.clipped }, `${label(pass)} no path is asked for`).toEqual({ selects: 0, textInputs: 0, clipped: 0 });
+              expect(within(await box(blocked)), `${label(pass)} the refusal in the window`).toBe(true);
+            } else if (pass === "copilot") {
+              /* Copilot's account is chosen in the same pill, among the draft's own. */
+              const pill = draft.locator("[data-runtime-pill]");
+              const popover = page.locator("[data-runtime-popover]");
+              await pill.click();
+              await popover.locator('[data-runtime-value="model"]').click();
+              await popover.locator('[data-runtime-value="copilot/auto"]').click();
+              await pill.click();
+              const head = (await popover.locator("[data-runtime-popover-account]").innerText()).trim();
+              await popover.locator('[data-runtime-value="account"]').click();
+              await popover.locator('[data-runtime-value="account-account-k"]').waitFor({ timeout: 5_000 });
+              await settle();
+              await shoot(pass);
+              const offered = await popover.locator('[data-runtime-row="account"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-runtime-value")));
+              expect(within(await box(popover)), `${label(pass)} the popover in the window`).toBe(true);
+              await popover.locator('[data-runtime-value="account-account-k"]').click();
+              const face = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              const controlsRead = await composerOnly(pass);
+              await prompt.fill(TYPED[lang]);
+              await prompt.press("Enter");
+              await draft.locator("[data-draft-opening]").waitFor({ timeout: 5_000 });
+              const posted = await launches();
+              const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, accountId: posted[0]?.accountId, fast: posted[0]?.fast ?? null };
+              readings.push({ view: view.name, scheme, lang, state: pass, head, offered, face, launchedWith, controls: controlsRead, pageErrors });
+              expect(head, `${label(pass)} the account the agent starts on`).toBe(tr("draft.accountStartsOn", { account: "Account H" }));
+              expect(offered, `${label(pass)} the accounts offered`).toEqual(["account-default", "account-account-k"]);
+              expect(face, `${label(pass)} the pill names the engine and the account`).toContain("Copilot · Auto");
+              expect(face, `${label(pass)} the pill names the account`).toContain("Account K");
+              expect(launchedWith, `${label(pass)} what was launched`).toEqual({ count: 1, engine: "copilot", model: "auto", accountId: "account-k", fast: null });
+            } else if (pass === "signed-out") {
+              const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+              await blocked.waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              const found = {
+                signedOut: await blocked.getByText(tr("launch.accountSignedOut", { label: "Account A", engine: "Claude" })).count(),
+                signIn: await blocked.getByRole("button", { name: tr("launch.signInFirst", { engine: "Claude" }) }).count(),
+              };
+              readings.push({ view: view.name, scheme, lang, state: pass, found, pageErrors });
+              expect(found, label(pass)).toEqual({ signedOut: 1, signIn: 1 });
+            } else if (pass === "task-card") {
+              await settle();
+              await shoot("task-card-empty");
+              const empty = await composerOnly("task-card-empty");
+              expect(empty.focused, `${label("task-card-empty")} cursor in the field`).toBe(true);
+              const card = await draft.evaluate((pane) => pane.closest(".card")?.getAttribute("data-id") ?? "");
+              /* On a task's card the draft is one more row of that card: the card keeps its own title. */
+              expect(card.startsWith("task:"), `${label("task-card-empty")} the draft on the task's card`).toBe(true);
+              await prompt.fill(TYPED[lang]);
+              /* Enter sends: no second step. */
+              await prompt.press("Enter");
+              const sent = await opening("task-card-sent", TYPED[lang]);
+              const answered = await receipt("task-card-receipt", TYPED[lang], sent);
+              const done = await loaded("task-card-loaded", TYPED[lang]);
+              /* The conversation is on the card whose button was pressed. */
+              const holder = await page.locator("[data-message-row]").filter({ hasText: TYPED[lang] }).filter({ visible: true }).first().evaluate((row) => row.closest(".card")?.getAttribute("data-id") ?? "");
+              expect(holder, `${label("task-card-loaded")} the conversation on its card`).toBe(card);
+              const posted = await launches();
+              expect({ count: posted.length, taskId: posted[0]?.taskId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null }, `${label("task-card-sent")} what was launched`).toEqual({ count: 1, taskId: card.slice("task:".length), cwd: "/repo", role: null });
+              expect(answered.account, `${label("task-card-receipt")} the account the window names`).toBe(done.account);
+              readings.push({ view: view.name, scheme, lang, state: pass, card, empty, sent, receipt: answered, loaded: done, pageErrors });
+            } else {
+              await settle();
+              await shoot("empty");
+              const empty = await composerOnly("empty");
+              /* «+ Agent» puts the cursor in the field at once. */
+              expect(empty.focused, `${label("empty")} cursor in the field`).toBe(true);
+              /* The model and the account are chosen in the runtime pill, as in a conversation's composer: a
+                 popover on the desktop, the sheet on the phone, which says it is a new agent's. */
+              const pill = draft.locator("[data-runtime-pill]");
+              const defaultFace = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              expect(defaultFace, `${label("empty")} the pill names the engine, the model and the tier`).toContain(`Claude · Opus 5.5 · ${tr("draft.tierDefault")}`);
+              let sheetTitle: string | null = null;
+              if (view.touch) {
+                await pill.click();
+                const runtimeSheet = page.locator("[data-runtime-sheet]");
+                await runtimeSheet.waitFor({ timeout: 5_000 });
+                await settle();
+                await shoot("picker");
+                sheetTitle = (await runtimeSheet.locator("h2").innerText()).trim();
+                expect(sheetTitle, `${label("picker")} the sheet says it is a new agent`).toBe(tr("draft.sheetTitle"));
+                expect(await nextMessageNames(), `${label("picker")} the sheet speaks of no next message`).toEqual([]);
+                await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: "Claude · Fable" }).click();
+                await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: /^high$/ }).click();
+                await runtimeSheet.locator('[data-runtime-sheet-account="account-c"]').click();
+                await runtimeSheet.locator("[data-runtime-sheet-close]").click();
+              } else {
+                const popover = page.locator("[data-runtime-popover]");
+                await pill.click();
+                await popover.locator('[data-runtime-value="model"]').click();
+                await popover.locator('[data-runtime-row="model"]').first().waitFor({ timeout: 5_000 });
+                await settle();
+                await shoot("picker");
+                expect(within(await box(popover)), `${label("picker")} the popover in the window`).toBe(true);
+                await popover.locator('[data-runtime-value="fable"]').click();
+                await pill.click();
+                await popover.locator('[data-runtime-value="tier-high"]').click();
+                await pill.click();
+                await popover.locator('[data-runtime-value="account"]').click();
+                await popover.locator('[data-runtime-value="account-account-c"]').waitFor({ timeout: 5_000 });
+                expect(await nextMessageNames(), `${label("picker")} the popover speaks of no next message`).toEqual([]);
+                await popover.locator('[data-runtime-value="account-account-c"]').click();
+              }
+              await settle();
+              await shoot("chosen");
+              const face = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              expect(face, `${label("chosen")} the pill names the model`).toContain("Fable");
+              expect(face, `${label("chosen")} the pill names the tier`).toContain(view.touch ? "high" : tr("reasoningTier.high"));
+              /* The desktop face names the picked account; the phone's chip names none, as a conversation's
+                 does not, and its sheet marks the account the launch goes to. */
+              if (view.touch) {
+                await pill.click();
+                expect(await page.locator('[data-runtime-sheet] [data-runtime-sheet-account="account-c"]').getAttribute("data-runtime-account-next"), `${label("chosen")} the sheet marks the account`).toBe("true");
+                await page.locator("[data-runtime-sheet] [data-runtime-sheet-close]").click();
+              } else expect(face, `${label("chosen")} the pill names the account`).toContain("Account C");
+              const pillName = await pill.getAttribute("aria-label");
+              expect(pillName, `${label("chosen")} the pill's name says what the agent starts with`).toContain(tr("draft.runtimePill"));
+              expect(await nextMessageNames(), `${label("chosen")} the draft speaks of no next message`).toEqual([]);
+              await composerOnly("chosen");
+              /* Dictation: the composer's own microphone, then «stop and launch» sends what was said. */
+              await draft.locator("button:has(svg.lucide-mic)").first().click();
+              const stop = draft.getByRole("button", { name: tr("draft.stopAndLaunch") }).first();
+              await stop.waitFor({ timeout: 10_000 });
+              await page.waitForTimeout(900);
+              await settle();
+              await shoot("dictation");
+              const dictatingForm = await formInSight("dictation");
+              await stop.click();
+              const sent = await opening("sent", SPOKEN[lang]);
+              const answered = await receipt("receipt", SPOKEN[lang], sent);
+              const done = await loaded("loaded", SPOKEN[lang]);
+              /* One press launched it, with what the pill said and the directory the board derived. */
+              const posted = await launches();
+              const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, effort: posted[0]?.effort, accountId: posted[0]?.accountId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null };
+              expect(launchedWith, `${label("sent")} what was launched`).toEqual({ count: 1, engine: "claude", model: "fable", effort: "high", accountId: "account-c", cwd: "/repo", role: null });
+              /* The window names the account the pill chose, from the launch's answer on. */
+              expect({ receipt: answered.account, loaded: done.account }, `${label("receipt")} the account the window names`).toEqual({ receipt: "Account C", loaded: "Account C" });
+              readings.push({ view: view.name, scheme, lang, state: pass, empty, defaultFace, sheetTitle, face, pillName, dictatingForm, launchedWith, sent, receipt: answered, loaded: done, pageErrors });
+            }
+            expect(pageErrors, `${label(pass)} page errors`).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${label(`${pass}-FAILED`)}.png`) }).catch(() => {});
+            throw error;
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const built = (view: string, scheme: string, lang: string, state: string) => path.join(out, `built-${view}-${scheme}-${lang}-${state}.png`);
+    const today = (view: string, scheme: string, lang: string, state: string) => (TODAY ? path.join(TODAY, `look0-${view}-${scheme}-${lang}-${state}.png`) : null);
+    /* One sheet per size, each row one moment: the form this one replaced, then the built one. */
+    for (const view of views) {
+      if (!wanted("views", view.name)) continue;
+      await sheet(path.join(out, `sheet-built-${view.width}.png`), `Creating a new agent at ${view.width} px — each row: ${TODAY ? "before, then built" : "built"}`, view.touch ? 640 : 520, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
+        name: `${scheme} · ${lang}`,
+        rows: [...STATES, ...(view.name === "desktop-1440" && scheme === "light" ? EXTRAS : [])].map((state) => ({ state, today: today(view.name, scheme!, lang!, state), built: built(view.name, scheme!, lang!, state) })),
+      })));
+    }
+    if (!only.size) {
+      fs.mkdirSync("evidence/new-agent-redesign", { recursive: true });
+      fs.writeFileSync("evidence/new-agent-redesign/built.json", `${JSON.stringify({ viewports: views.map((view) => `${view.width}x${view.height}`), readings }, null, 2)}\n`);
+    }
+  }, 3_600_000);
+});
+
 describe("the left sidebar: one tidy panel with a compact system block", () => {
   /*
    * Rendered evidence for the built sidebar (docs/design/sidebar-redesign.md, variant 1):
