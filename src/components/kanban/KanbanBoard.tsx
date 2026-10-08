@@ -183,6 +183,10 @@ export interface KanbanBoardProps {
   closedPaths?: readonly string[];
   /** Restore a closed conversation to the board. */
   onRestoreConversation?: (file: FileEntry) => void;
+  /** The paths of the conversations open as readers on this board. An open
+      reader is the operator's own act: the page keeps its conversation in its
+      card when its work finishes, until the reader is closed. */
+  onReadersChange?: (paths: readonly string[]) => void;
   /** The project's checkout, carried into the seat the board draws. */
   projectCwd?: string;
   /** The project's seat as its owner read it: every conversation the seat
@@ -627,6 +631,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useEffect(() => {
     memory.update((readers) => followPaths(readers, (key) => filesByIdentity.get(key)?.path ?? null));
   }, [memory, filesByIdentity]);
+  /* Told before paint, so a conversation whose turn ends under an open reader is never drawn folded. */
+  const readerPaths = useMemo(() => openReaders.map((reader) => filesByIdentity.get(reader.key)?.path ?? reader.path).join("\n"), [openReaders, filesByIdentity]);
+  const readersChanged = useStableCallback((paths: readonly string[]) => props.onReadersChange?.(paths));
+  useLayoutEffect(() => {
+    readersChanged(readerPaths ? readerPaths.split("\n") : []);
+  }, [readerPaths, readersChanged]);
   const readerKeysByCard = useMemo(() => {
     const byCard = new Map<string, string[]>();
     for (const reader of openReaders) {
@@ -1353,7 +1363,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const open = menu.open;
     if (!open) return null;
     if (open.value.kind === "create") {
-      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), icon: <ListPlus className="ico" aria-hidden />, onSelect: () => openNewTask() }];
+      /* The task composer takes focus itself: handing it back to + raced it. */
+      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), icon: <ListPlus className="ico" aria-hidden />, keepFocus: true, onSelect: () => openNewTask() }];
       if (props.onNewAgent) {
         const onNewAgent = props.onNewAgent;
         items.push({ type: "item", label: t("dash.newConvo"), icon: <MessageSquarePlus className="ico" aria-hidden />, disabled: !loaded, onSelect: () => onNewAgent() });
@@ -2612,6 +2623,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   });
   const cardCancelHold = useStableCallback(() => { const id = holdEditing; setHoldEditing(null); if (id) focusCard(id); });
 
+  /* A held launch's conversation joined the board before its task did: its
+     draft stands for it until the task's card swaps in, so it draws no card
+     of its own meanwhile (docs/design/launch-render-polish.md §3). */
+  // eslint-disable-next-line react-hooks/refs -- Read on the render the launch tick schedules; the set only narrows what is drawn.
+  const heldLaunches = new Set([...launching.current.values()].map((entry) => conversationIdentity(entry.file)));
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
       key={status}
@@ -2641,6 +2657,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       actingByCard={actingByCard}
       placement={placement}
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
+      heldLaunches={heldLaunches}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -3040,13 +3057,15 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, heldLaunches, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
   widths: { state: KanbanWideState; wide: TaskStatus | null } | null;
   /** `+ Task`'s inline card, drawn first in Inbox. */
   newTask: ReactNode;
+  /** Conversations of launches whose draft still stands for them. */
+  heldLaunches: ReadonlySet<string>;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
   failedEdits: ReadonlyMap<string, { field: EditField; draft: string; message: string }>;
   incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
@@ -3108,7 +3127,9 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
-  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned")) : [];
+  const held = (card: KanbanCardModel) => !card.task && !card.drafts.length && card.members.length > 0
+    && card.members.every((member) => heldLaunches.has(conversationIdentity(member.file)));
+  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned") && !held(card)) : [];
   const drafting = status === "assigned" ? model.unlinkedShown.filter((card) => holdsOnlyDrafts(card) && card.status === "assigned") : [];
   const unboundRemote = status === "inbox" ? remoteAgents.filter((row) => !row.task) : [];
   const empty = shown.length === 0 && unlinked.length === 0 && drafting.length === 0 && unboundRemote.length === 0 && !newTask;
