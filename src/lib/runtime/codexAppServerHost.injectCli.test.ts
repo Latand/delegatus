@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
-import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 
 import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { decodeCodexStructuredUserText as decodeWire } from "./codexStructuredUserText";
@@ -59,7 +59,7 @@ interface Probe {
 }
 
 function startAppServer(home: string): Probe {
-  const child: ChildProcessWithoutNullStreams = spawn(codexBinary, ["app-server"], {
+  const child: ChildProcessWithoutNullStreams = ownFixtureTree(spawn(codexBinary, ["app-server"], {
     /* An ALLOWLISTED environment with an empty CODEX_HOME: no credential is
        inherited, so nothing here can authenticate even by accident. */
     env: {
@@ -73,7 +73,7 @@ function startAppServer(home: string): Probe {
     },
     cwd: home,
     stdio: ["pipe", "pipe", "pipe"],
-  });
+  }));
   let buffer = "";
   let nextId = 0;
   const pending = new Map<number, (value: { result?: unknown; error?: { message?: string } }) => void>();
@@ -106,7 +106,7 @@ function startAppServer(home: string): Probe {
         resolve({ error: { message: `${method} timed out` } });
       }, 20_000);
     }),
-    stop: () => stopFixtureProcess(child),
+    stop: () => stopFixtureTree(child),
   };
 }
 

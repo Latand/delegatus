@@ -584,7 +584,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/testing/testChildren.ts` | Wraps the real Node primitive and both Bun overloads before spawn returns; supplies the parent identity even without options. |
 | `scripts/local-gate-tests.ts` | Per-file comparison launches the kernel-owned runner and removes the old post-exit group-number kill. |
 | `scripts/verify-native-codex-runtime.ts` | Preserves the existing manager connection for nested containment, with one named file per process and a five-minute bound. |
-| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | The direct CLI helper now awaits bounded handle termination in every finally block. |
+| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | The direct CLI helper records its root identity at spawn and awaits bounded identity-checked tree termination in every finally block, including native app-server helpers. |
 | `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/codexAppServerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/copilotAcpHost.integration.test.ts` | Calls a product launch port; the preload owns real process creation. |
