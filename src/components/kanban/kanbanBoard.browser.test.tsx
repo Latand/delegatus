@@ -21920,7 +21920,9 @@ describe("prototype review on a task: the card's button, the review and the orch
           }, size.phone);
           /* Chips and thumbnails are rows that scroll on purpose: what leaves the frame there is off screen, not on top of anything. */
           const scrolled = (entry: string) => /^(chips|variant|tools)/.test(entry) && size.phone;
-          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry))];
+          /* On the phone a frame is drawn at its own height and the sheet's body scrolls: a part below the fold is scrolled to, and only a part out to a side is outside. */
+          const beside = (entry: string) => { const box = parts.boxes[entry]; return Boolean(box && (box[0]! < -0.5 || box[0]! + box[2]! > size.viewport.width + 0.5)); };
+          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry) && (!size.phone || beside(entry)))];
           /* The phone's chips stand in the sheet's sticky head: a part of the body scrolled up under that head is covered by it, not on top of it. */
           const headBottom = size.phone ? await page.evaluate(() => document.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect().bottom ?? 0) : 0;
           const underHead = (pair: string) => {
@@ -21933,6 +21935,12 @@ describe("prototype review on a task: the card's button, the review and the orch
           if (regions.overlaps.length || partOverlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...partOverlaps].join(", ")}`);
           if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
           if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
+          /* The phone's sheet is the screen: its footer stands at the screen's foot, under the sheet's 6 px inset, whatever the stage holds. */
+          if (size.phone) {
+            const footGap = await page.evaluate(() => Math.round((innerHeight - document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect().bottom) * 10) / 10);
+            record(`${name}-foot-gap`, footGap);
+            if (footGap > 6.5) failures.push(`${label} ${name}: an empty band of ${footGap}px under the sheet's footer`);
+          }
         };
         const stageState = () => page.evaluate(() => {
           const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
@@ -22371,7 +22379,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           const slider = await stageState();
           const clip = await page.evaluate(() => getComputedStyle(document.querySelectorAll<HTMLElement>("[data-prototype-pair] img")[1]!).clipPath);
           /* The two names against what each picture really paints inside its box. */
-          const sliderLabels = await page.evaluate(() => {
+          const sliderLabels = await page.evaluate((phone) => {
             const round = (value: number) => Math.round(value * 10) / 10;
             const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
             const drawn = [...document.querySelectorAll<HTMLImageElement>("[data-prototype-pair] img")].map((image) => {
@@ -22388,13 +22396,15 @@ describe("prototype review on a task: the card's button, the review and the orch
                 overPicture: drawn.some((picture) => box.left < picture.right - 0.5 && picture.left < box.right - 0.5 && box.top < picture.bottom - 0.5 && picture.top < box.bottom - 0.5),
               };
             });
-            /* The track and the two names end where the changed picture's drawn edges are. */
+            /* The track and the two names end where the changed picture's drawn
+               edges are; on the phone the picture runs edge to edge and they keep the sheet's 16 px inset. */
             const track = document.querySelector<HTMLElement>("[data-prototype-split]")!.getBoundingClientRect();
             const changed = drawn[0]!;
+            const inset = phone ? 16 : 0;
             const names = labels.map((entry) => [entry.box[0]!, entry.box[0]! + entry.box[2]!]);
-            const fitted = Math.abs(track.left - changed.left) <= 2 && Math.abs(track.right - changed.right) <= 2 && Math.abs(names[0]![0]! - changed.left) <= 2 && Math.abs(names[1]![1]! - changed.right) <= 2;
+            const fitted = Math.abs(track.left - changed.left - inset) <= 2 && Math.abs(changed.right - track.right - inset) <= 2 && Math.abs(names[0]![0]! - changed.left - inset) <= 2 && Math.abs(changed.right - names[1]![1]! - inset) <= 2;
             return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels, track: [round(track.left), round(track.right)], fitted };
-          });
+          }, size.phone);
           record("pair-slider", { ...slider, clip, labels: sliderLabels });
           captionParted("pair-slider", slider);
           if (sliderLabels.labels.length !== 2 || sliderLabels.labels.some((entry) => !entry.inside || entry.overPicture) || sliderLabels.labels[0]!.box[0]! + sliderLabels.labels[0]!.box[2]! > sliderLabels.labels[1]!.box[0]!) failures.push(`${label}: the slider's labels lie over a picture, leave the stage or meet: ${JSON.stringify(sliderLabels)}`);
@@ -22447,6 +22457,37 @@ describe("prototype review on a task: the card's button, the review and the orch
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
           if (!await page.locator(REVIEW).count()) failures.push(`${label}: Escape in the viewer closed the review too`);
+
+          /* 7b. A tall phone frame on the stage: fitted on the desktop, the stage's whole width on the phone. */
+          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
+          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await settle();
+          const tallFrame = await stageState();
+          record("tall-frame", tallFrame);
+          await shot("tall-frame");
+          await frameCheck("tall-frame");
+          const [tallWidth, tallHeight] = tallFrame.media[0] ?? [0, 0];
+          if (tallFrame.position?.trim() !== "3 / 3" || (size.phone ? Math.abs(tallWidth! - size.viewport.width) > 1 : !tallFrame.mediaInside || tallHeight! < tallFrame.canvas[1]! - 30)) failures.push(`${label}: the tall phone frame reads ${JSON.stringify(tallFrame)}`);
+
+          /* 7c. A pair full screen is one picture with a switch that puts the original in its place, at the same zoom. */
+          await showVariant(2);
+          await settle();
+          await page.locator("[data-prototype-fullsize]").click();
+          await page.waitForSelector("[data-lightbox-compare]", { timeout: 5_000 });
+          await page.locator(`[role=dialog] button[aria-label="${tr("lightbox.zoomIn")}"]`).click();
+          await page.locator('[data-lightbox-compare-side="before"]').click();
+          await settle();
+          const pairViewer = await page.evaluate(() => {
+            const shown = [...document.querySelectorAll<HTMLImageElement>("img[data-lightbox-side]")].filter((image) => !image.hidden);
+            const sides = [...document.querySelectorAll<HTMLElement>("[data-lightbox-compare-side]")].map((element) => [element.dataset.lightboxCompareSide, element.getAttribute("aria-pressed"), element.textContent]);
+            return { shown: shown.map((image) => image.dataset.lightboxSide), position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null, zoom: document.querySelector("[role=dialog] [data-lightbox-position]")?.parentElement?.textContent ?? null, sides };
+          });
+          record("viewer-pair", pairViewer);
+          await shot("viewer-pair-original");
+          if (JSON.stringify(pairViewer.shown) !== JSON.stringify(["before"]) || pairViewer.position?.trim() !== "1 / 3" || !pairViewer.caption?.includes(tr("proto.pair.original")) || !pairViewer.zoom?.includes("140%") || JSON.stringify(pairViewer.sides) !== JSON.stringify([["before", "true", tr("lightbox.original")], ["after", "false", tr("lightbox.changed")]])) failures.push(`${label}: the pair full screen reads ${JSON.stringify(pairViewer)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
 
           /* 8. A combination and a dictated comment. */
           if (size.phone) { await choose(2); await choose(3); } else { await page.keyboard.press("2"); await page.keyboard.press("3"); }

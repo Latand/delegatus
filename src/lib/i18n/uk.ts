@@ -1718,6 +1718,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "lightbox.zoomIn": "Збільшити",
   "lightbox.previous": "Попереднє зображення",
   "lightbox.next": "Наступне зображення",
+  "lightbox.compare": "Порівняти з оригіналом",
+  "lightbox.original": "Оригінал",
+  "lightbox.changed": "Змінено",
 
   "proto.title": "Огляд прототипів",
   "proto.dialogAria": "Огляд прототипів «{title}»",
