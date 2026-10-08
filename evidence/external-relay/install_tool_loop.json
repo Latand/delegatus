@@ -1,8 +1,8 @@
 {
   "x1": {
-    "revision": "a8bfda0b836a17f2d3ba7a4d065fabf03e967a13",
+    "revision": "a0d9245bcac2c2246f29f180f8bd21aa825d478c",
     "claim": "claimed_tools_member.json",
-    "claim_sha256": "6b98c7c183e2f1b1752bab92bcae724891ac5c75a9f484bbaaa4fb65b73f2387"
+    "claim_sha256": "2fdc03a4de10fbdc2df73322fc8e11fa4b240acb680962a70b2fce30b44c2a7d"
   },
   "claim_body": {
     "wait_s": 25,
