@@ -36,6 +36,7 @@ import {
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { didStructuredHostStartupFail, structuredStartupStatus } from "./startupStatus";
 import { adoptStructuredHostsAtStartup, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
+import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
@@ -1397,6 +1398,9 @@ async function startupAdoptionAttempts(
     await adoptStructuredHostsAtStartup({
       registry,
       client: client ?? runtimeJournalClient(journal!),
+      /* A row held for its restart cut evidence schedules a re-probe; this
+         helper tears its registry down, so none may reach a real timer. */
+      schedule: () => ({ unref() {} }),
       adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
         select("codex", received, shouldAdopt);
         return [];
@@ -1413,6 +1417,130 @@ async function startupAdoptionAttempts(
   }
   return attempts;
 }
+
+/** One Viewer whose passes and scheduled re-probes a restart cut case drives
+    itself: the rows each pass would adopt, and the probes it scheduled. */
+function restartCutStartup(registry: AgentRegistry, directory: string, extra: Partial<StructuredStartupDependencies> = {}) {
+  const attempts: string[] = [];
+  const scheduled: Array<() => void> = [];
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const select = (engine: "codex" | "claude", received: AgentRegistry, shouldAdopt: StructuredHostAdoptionFilter) => {
+    for (const entry of Object.values(received.snapshot().entries)) {
+      if (entry.key.engine === engine && entry.structuredHost && shouldAdopt(entry)) attempts.push(`${engine}:${entry.key.sessionId}`);
+    }
+    return [];
+  };
+  const dependencies: StructuredStartupDependencies = {
+    registry,
+    client: runtimeJournalClient(journal),
+    schedule: (callback) => {
+      scheduled.push(callback);
+      return { unref() {} };
+    },
+    adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => select("codex", received, shouldAdopt),
+    adoptClaude: async (received, _optionsFor, _env, shouldAdopt = () => true) => select("claude", received, shouldAdopt),
+    ...extra,
+  };
+  return {
+    attempts,
+    scheduled,
+    boot: () => adoptStructuredHostsAtStartup(dependencies),
+    cuts: () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list(),
+    close: async () => {
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+async function restartCutSettled(predicate: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(5);
+  }
+}
+
+function recentClaudeRecords(end: "tool-call" | "end-turn"): Record<string, unknown>[] {
+  const at = (offset: number) => new Date(Date.now() - 60_000 + offset * 1_000).toISOString();
+  return [
+    { type: "user", timestamp: at(0), message: { role: "user", content: "run the suite" } },
+    end === "tool-call"
+      ? { type: "assistant", timestamp: at(1), message: { role: "assistant", content: [{ type: "tool_use", id: "tool-cut", name: "Bash" }] } }
+      : { type: "assistant", timestamp: at(1), message: { role: "assistant", content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" } },
+  ];
+}
+
+test("an undecided predecessor row is held out of adoption, listed by the deferral, and decided and adopted by the re-probe once its evidence reads whole", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-undecided-cut-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  /* Assembled so no id-shaped literal is published. */
+  const sessionId = ["f1000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "active-claude",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const viewer = restartCutStartup(registry, directory);
+  try {
+    await viewer.boot();
+    expect(viewer.attempts).toEqual([]);
+    expect(viewer.cuts()).toEqual([]);
+    expect(structuredStartupDeferral()).toMatchObject({
+      hostKeys: [hostKey], message: `restart cut evidence is unresolved; holding 1 host(s): ${hostKey}`,
+    });
+    expect(registry.snapshot().entries[hostKey]).toMatchObject({ status: "live", structuredHost: { activeTurnRef: "active-claude" } });
+
+    /* The record is finished. The re-probe decides the row before the pass it
+       starts adopts it: the cut is recorded, and its record is what adopts. */
+    fs.writeFileSync(artifactPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    viewer.scheduled.shift()!();
+    await restartCutSettled(() => viewer.attempts.length > 0, "the re-probe pass");
+    expect(viewer.attempts).toContain(hostKey);
+    expect(viewer.cuts()).toMatchObject([{ reason: "viewer-restart", hostKey, turnRef: "active-claude", state: "owed" }]);
+    await restartCutSettled(() => structuredStartupDeferral() === null, "the deferral to clear");
+  } finally {
+    await viewer.close();
+  }
+});
+
+test("a row whose evidence moved after the pass decided it is neither adopted nor demoted, and the re-probe decides it again", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-moved-stamp-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  /* Assembled so no id-shaped literal is published. */
+  const sessionId = ["f2000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "stale-claude",
+    transcriptRecords: recentClaudeRecords("end-turn"),
+  });
+  fs.appendFileSync(artifactPath, "\n");
+  let moved = false;
+  const viewer = restartCutStartup(registry, directory, {
+    /* Runs after the pass decided the ended turn "no cut": the engine, which
+       outlived its Viewer, takes a new prompt. */
+    refreshTranscriptState: async () => {
+      if (moved) return;
+      moved = true;
+      fs.appendFileSync(artifactPath, `${JSON.stringify({ type: "user", timestamp: new Date().toISOString(), message: { role: "user", content: "next" } })}\n`);
+    },
+  });
+  try {
+    await viewer.boot();
+    expect(viewer.attempts).toEqual([]);
+    expect(viewer.cuts()).toEqual([]);
+    expect(registry.snapshot().entries[hostKey]).toMatchObject({ status: "live", structuredHost: { activeTurnRef: "stale-claude" } });
+    expect(structuredStartupDeferral()?.hostKeys).toEqual([hostKey]);
+
+    viewer.scheduled.shift()!();
+    await restartCutSettled(() => viewer.attempts.length > 0, "the re-probe pass");
+    expect(viewer.cuts()).toMatchObject([{ reason: "viewer-restart", hostKey, turnRef: "stale-claude" }]);
+  } finally {
+    await viewer.close();
+  }
+});
 
 test("startup defers hosts belonging to a preserved future pipeline and still admits healthy members", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-future-pipeline-"));
@@ -3376,8 +3504,10 @@ test("a busy Codex turn advances after container replacement without operator me
     onStateChange: () => () => {},
     send: async (entry: Parameters<FakeEngineHost["send"]>[0]) => {
       const receipt = await FakeEngineHost.prototype.send.call(baseHost, entry);
+      /* The continuation arrives after the cut was recorded, and starts the
+         turn the next replacement cuts. */
       fs.appendFileSync(artifactPath, `${JSON.stringify({
-        timestamp: new Date(Date.now() - 60_000).toISOString(),
+        timestamp: new Date().toISOString(),
         payload: { type: "user_message", text: entry.text },
       })}\n`);
       return receipt;
@@ -3398,16 +3528,24 @@ test("a busy Codex turn advances after container replacement without operator me
   });
   await startup();
 
+  /* The boot records the cut it found and continues it under that record. */
   await waitFor(() => ledger.writes.length === 1);
   expect(ledger.writes).toEqual([expect.objectContaining({
-    text: "Continue the interrupted turn from the transcript.",
+    text: expect.stringMatching(/^Viewer restarted and severed your structured host mid-turn\./),
   })]);
+  const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
+  expect(cuts()).toHaveLength(1);
+  const firstCut = cuts()[0]!;
+  expect(firstCut).toMatchObject({
+    reason: "viewer-restart", conversationId: conversation.id, operationId: ledger.writes[0]!.id,
+  });
   expect(fs.statSync(artifactPath).size).toBeGreaterThan(before);
   expect(registry.conversation(conversation.id)?.id).toBe(conversation.id);
   const advanced = fs.statSync(artifactPath).size;
 
   await startup();
   expect(ledger.writes).toHaveLength(1);
+  expect(cuts().map((cut) => cut.id)).toEqual([firstCut.id]);
   expect(fs.statSync(artifactPath).size).toBe(advanced);
 
   const nextLedger = createFakeDeliveryLedger();
@@ -3437,9 +3575,18 @@ test("a busy Codex turn advances after container replacement without operator me
   await startup();
   await waitFor(() => nextLedger.writes.length === 1);
   expect(nextLedger.writes).toEqual([expect.objectContaining({
-    id: `recovery-continuation-${sessionId}-4`,
+    text: expect.stringMatching(/^Viewer restarted and severed your structured host mid-turn\./),
   })]);
+  expect(nextLedger.writes[0]!.text).not.toBe(ledger.writes[0]!.text);
+  expect(cuts()).toHaveLength(2);
+  const nextCut = cuts().find((cut) => cut.id !== firstCut.id)!;
+  expect(nextCut).toMatchObject({
+    reason: "viewer-restart", conversationId: conversation.id, operationId: nextLedger.writes[0]!.id,
+  });
   expect(fs.statSync(artifactPath).size).toBeGreaterThan(advanced);
+  await startup();
+  expect(nextLedger.writes).toHaveLength(1);
+  expect(cuts()).toHaveLength(2);
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();

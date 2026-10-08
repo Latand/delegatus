@@ -34,6 +34,7 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
 import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -305,6 +306,10 @@ const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") 
 /* The seat holds the Telegram tool and Telegram waits on the operator: the
    status read names the action: `sign_in`, `check` or `restart`. */
 const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("telegram") : null;
+/* The seat tick switch in that header and in the phone's seat sheet
+   (`&tick=driver`): the driver holds the tick's record and answers the
+   settings route, so a drag reads back the way the real route answers. */
+const SEAT_TICK_DRIVER = SEAT_HEAD && new URLSearchParams(location.search).get("tick") === "driver";
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -337,6 +342,21 @@ const TICK_CARDS = SCENARIO === "seat-tick-cards";
    arriving while the turn runs, the turn's end. The driver reads every layout shift from the first click to
    the end of the turn. */
 const LAUNCH_CLS = SCENARIO === "launch-cls";
+/* Creating a new agent (docs/design/new-agent-redesign.md): the board of `atlas`, with what a draft reads
+   answered in full — the accounts of each engine, a structured launch that takes images — and a launch
+   that runs on the clock of `launch-cls`, held a little longer before its receipt so the frame between the
+   press and the receipt can be read. */
+const NEW_AGENT = SCENARIO === "new-agent";
+/* Five states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
+   a tab's drafts, continuing the conversation «Worker waiting for a seat»; the same draft when the source's
+   folder is on no record; the engine's active account signed out; a launch the server refuses by name; and
+   two Copilot accounts to choose between. */
+const NEW_AGENT_SEEDS = ["handoff", "handoff-lost", "signed-out", "refused", "copilot"] as const;
+const NEW_AGENT_SEED = NEW_AGENT ? NEW_AGENT_SEEDS.find((seed) => seed === new URLSearchParams(location.search).get("naseed")) ?? null : null;
+if (NEW_AGENT_SEED === "handoff" || NEW_AGENT_SEED === "handoff-lost") {
+  sessionStorage.setItem("llvDrafts:atlas", JSON.stringify(["na-handoff"]));
+  sessionStorage.setItem("llvDraftPane:na-handoff:src", "/repo/pending-worker.jsonl");
+}
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -2018,7 +2038,7 @@ function transcriptOf(pathname: string): string {
   if (!file || file === pendingWorker) return "";
   if (ROLE_MEMORY && (file as { conversationId?: string }).conversationId === "conversation_md-impl") return roleMemoryStageTranscript();
   /* A launch the transcript has not appeared for reads nothing. */
-  if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
+  if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (FEED_RELOAD && file === searchVer2) return `${[
@@ -2618,13 +2638,9 @@ const PROTO = params.get("proto");
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
+/* The Viewer's own selectors: which round waits and which a later decision retired. */
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
-  const latest = rounds.at(-1)!;
-  const waiting = rounds.findLast((round) => !round.decision);
-  return {
-    latestReviewId: latest.id, waitingReviewId: waiting?.id ?? null, title: latest.title, rounds: rounds.length, createdAt: (waiting ?? latest).createdAt,
-    ...(latest.decision ? { decision: { chosen: latest.variants.filter((variant) => latest.decision!.chosen.includes(variant.number)).map(({ number, name }) => ({ number, name })), comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}),
-  };
+  return prototypeReviewSummary(rounds)!;
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2673,6 +2689,13 @@ if (PROTO) {
     { number: 2, name: L("Segmented control", "Сегментований перемикач"), description: L("The presets as one segmented control.", "Пресети одним сегментованим перемикачем."), videos: [], frames: [{ image: image(960, 600, 80, "segments", false, false), caption: L("presets", "пресети"), width: 1440 }] },
     { number: 3, name: L("Advanced drawer", "Шухляда розширених"), description: L("Eleven toggles behind one disclosure.", "Одинадцять перемикачів за одним розкриттям."), videos: [], frames: [{ image: image(960, 600, 120, "drawer", false, false), caption: L("advanced", "розширені"), width: 1440 }] },
   ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN), decision: decided([2, 3], L("Take the segmented control and keep the drawer closed by default.", "Беремо сегментований перемикач, шухляда типово закрита."), 38 * 24 * 60 * MIN, "sent") })];
+  /* `&retired=1`: export's design round was never answered and its decided
+     round came after it, as on the task a revise stage answered. The decision
+     retires that earlier round, so export waits for nothing. */
+  if (params.get("retired") === "1") protoRounds["t-export"]!.unshift(round("r-export-0", "t-export", L("Export presets, first take", "Пресети експорту, перша спроба"), 41 * 24 * 60 * MIN, [
+    { number: 1, name: L("One long list", "Один довгий список"), description: L("Every preset in one list.", "Усі пресети одним списком."), videos: [], frames: [{ image: image(960, 600, 60, "list", false, false), caption: L("presets", "пресети"), width: 1440, lang: "en" }] },
+    { number: 2, name: L("Two tabs", "Дві вкладки"), description: L("Simple and advanced presets on two tabs.", "Прості й розширені пресети на двох вкладках."), videos: [], frames: [{ image: image(960, 600, 90, "tabs", false, false), caption: L("presets", "пресети"), width: 1440, lang: "en" }] },
+  ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN) }));
   protoRounds["t-links"] = [
     round("r-links-1", "t-links", L("Release notes links", "Посилання в нотатках релізу"), 3 * 24 * 60 * MIN, [
       { number: 1, name: L("Inline arrows", "Стрілки в рядку"), description: L("An arrow after every repaired link.", "Стрілка після кожного виправленого посилання."), videos: [], frames: [{ image: image(960, 600, 20, "arrows"), caption: L("notes", "нотатки"), width: 1440 }] },
@@ -2839,10 +2862,19 @@ const SEAT_TITLE = "Orchestrator for atlas";
 const launchRun = {
   launchId: "launch-cls", conversationId: "conversation_launch-cls", path: "/repo/launch-cls.jsonl",
   startedAt: 0, prompt: "", title: "Claude", engine: "claude", model: "haiku", effort: "low", clientAttemptId: null as string | null,
+  /* The card whose own «+ Agent» opened the draft, when one did. */
+  taskId: null as string | null,
+  /* The account the launch asked for, which the spawn record carries as the product's does. */
+  accountId: null as string | null,
+  /* How many pictures the first message carried, which the server projects beside its words. */
+  images: 0,
+  requests: [] as Record<string, unknown>[],
 };
-const LAUNCH_RECEIPT_MS = 700;
-const LAUNCH_ADOPT_MS = 2_400;
-const LAUNCH_END_MS = 10_800;
+/* The new-agent frames read the pane between the press and the receipt, so that scenario holds the receipt longer. */
+const LAUNCH_HOLD_MS = NEW_AGENT ? 1_500 : 0;
+const LAUNCH_RECEIPT_MS = 700 + LAUNCH_HOLD_MS;
+const LAUNCH_ADOPT_MS = 2_400 + LAUNCH_HOLD_MS;
+const LAUNCH_END_MS = 10_800 + LAUNCH_HOLD_MS;
 const launchTimeline: Array<{ at: number; lines: (stamp: (ms: number) => number) => string[] }> = [
   { at: 3_000, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(0, 1) },
   { at: 3_400, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(1) },
@@ -2859,12 +2891,14 @@ function launchTranscript(): string {
   /* A row's stamp is its own time on the clock, so the feed's times read as a turn that ran. */
   const stamp = (ms: number) => (Date.now() - (launchRun.startedAt + ms)) / 1_000;
   const rows = [asked(stamp(LAUNCH_RECEIPT_MS), launchRun.prompt)];
-  for (const entry of launchTimeline) if (elapsed >= entry.at) rows.push(...entry.lines(stamp));
+  for (const entry of launchTimeline) if (elapsed >= entry.at + LAUNCH_HOLD_MS) rows.push(...entry.lines(stamp));
   return `${rows.join("\n")}\n`;
 }
+/* The launch's name: its first line, or for a picture with no words the title it was launched with. */
+const launchName = () => launchRun.prompt.split("\n")[0] || launchRun.title.replace(/^[^·]*·\s*/, "");
 /* The files and tasks the board holds at this moment of the launch. */
 function launchAdvance() {
-  if (!(LAUNCH_CLS || SEAT_CLS) || !launchRun.startedAt) return;
+  if (!(LAUNCH_CLS || SEAT_CLS || NEW_AGENT) || !launchRun.startedAt) return;
   const elapsed = Date.now() - launchRun.startedAt;
   const nowSeconds = Date.now() / 1_000;
   for (let index = files.length - 1; index >= 0; index -= 1) if (files[index]!.conversationId === launchRun.conversationId) files.splice(index, 1);
@@ -2872,7 +2906,7 @@ function launchAdvance() {
   const ended = elapsed >= LAUNCH_END_MS;
   const common = { model: launchRun.model, launchModel: launchRun.model, effort: launchRun.effort, fast: null, mtime: nowSeconds };
   files.push(adopted
-    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.prompt.split("\n")[0] ?? "", {
+    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchName(), {
       ...common, path: launchRun.path, size: new TextEncoder().encode(launchTranscript()).length,
       ...(ended
         ? { activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, lastTurn: { startedAt: launchRun.startedAt, endedAt: Date.now() } }
@@ -2881,16 +2915,29 @@ function launchAdvance() {
     : conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.title, {
       ...common, path: `spawn:${launchRun.launchId}`, size: 0, activity: "live", activityReason: "structured_spawn_starting", generation: 1,
       spawn: {
-        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: null, conversationId: launchRun.conversationId, generation: 1,
-        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt,
+        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: launchRun.accountId, conversationId: launchRun.conversationId, generation: 1,
+        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt, promptImages: launchRun.images,
         ...(SEAT_CLS ? { mandate: { kind: "version", version: ORCHESTRATOR_PROMPT_VERSION } } : {}),
       },
     }));
   /* The seat's conversation belongs to no task. */
   if (SEAT_CLS) return;
+  const assignment = {
+    launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
+    panePid: null, state: "delivered", error: null, at: new Date(launchRun.startedAt).toISOString(),
+  };
+  /* A draft opened from a card launches onto that card's task. */
+  const owner = launchRun.taskId ? tasks.find((entry) => entry.id === launchRun.taskId) : null;
+  if (owner) {
+    Object.assign(owner, {
+      assignments: [...(owner.assignments ?? []).filter((entry) => entry.launchId !== launchRun.launchId), assignment],
+      updatedAt: new Date().toISOString(), revision: REV(900 + Math.floor(elapsed / 1_000)),
+    });
+    return;
+  }
   const index = tasks.findIndex((entry) => entry.id === "t-launch");
   const placeholder = {
-    id: "t-launch", project: PROJECT, text: launchRun.prompt.split("\n")[0] ?? "", status: "assigned", placement: "unplaced",
+    id: "t-launch", project: PROJECT, text: launchName(), status: "assigned", placement: "unplaced",
     origin: { kind: "launch", key: launchRun.clientAttemptId ?? launchRun.launchId, refinement: "pending" },
     assignments: [{
       launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
@@ -2928,7 +2975,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
-  if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
+  if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
@@ -2957,7 +3004,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       protoPublish();
     }
     return json({
-      taskId, rounds, waitingReviewId: rounds.findLast((entry) => !entry.decision)?.id ?? null,
+      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return by ? { ...entry, supersededBy: by } : entry; }),
+      waitingReviewId: rounds.length ? protoSummary(rounds).waitingReviewId : null,
       ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
@@ -2977,9 +3025,41 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(albumPage(taskId));
   }
-  if (LAUNCH_CLS && url.pathname === "/api/spawn" && method === "POST") {
+  if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
+    return json(NEW_AGENT_SEED === "signed-out" ? {
+      ...accountsBody,
+      claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
+        ? { ...row, authPresent: false, loginState: "signed_out", auth: { ...row.auth, state: "signed_out" } } : row) },
+    } : NEW_AGENT_SEED === "copilot" ? {
+      ...accountsBody,
+      copilot: { active: "default", accounts: [accountRow("default", "Account H", "Pro", 22, 160), accountRow("account-k", "Account K", "Pro", 9, 190)], mutationLocked: false, migration: null, autoBalance: null },
+    } : accountsBody);
+  }
+  if (NEW_AGENT && url.pathname === "/api/spawn" && method === "GET") {
+    const images = { supported: true, reason: null, formats: ["image/png", "image/jpeg"], maxImages: 8, maxRawBytesPerImage: 5_000_000, maxEncodedBytesPerRequest: 20_000_000 };
+    /* A handoff's source names its own checkout, as the route reads it from the source transcript. */
+    const sourceCwd = url.searchParams.get("src") && NEW_AGENT_SEED !== "handoff-lost" ? "/repo/worktrees/export-csv" : null;
+    return json({ dirs: ["/repo", "/repo/worktrees/export-csv", "/srv/atlas-docs"], cwd: sourceCwd, spawnTransport: "structured", imageInput: { claude: images, codex: images, copilot: images } });
+  }
+  /* Dictation in the draft's composer: no live token, so the recording is transcribed on stop, and the
+     answer is the first prompt the operator spoke. */
+  if (NEW_AGENT && url.pathname === "/api/transcribe/token") return json({}, 404);
+  if (NEW_AGENT && url.pathname === "/api/transcribe" && method === "POST") {
+    return json({ text: L("Read the README and tell me what this project is made of", "Прочитай README і скажи, з чого складається цей проєкт") });
+  }
+  /* What each launch asked for, kept for the driver: this page answers its own requests, so none reaches the network. */
+  if (NEW_AGENT && url.pathname === "/api/spawn" && method === "POST") launchRun.requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+  if (NEW_AGENT_SEED === "refused" && url.pathname === "/api/spawn" && method === "POST") {
+    return json({ error: L("Launch refused: /repo/worktrees/export-csv is not a checkout this account may write to.", "Запуск відхилено: /repo/worktrees/export-csv не є копією, у яку цей акаунт може писати.") }, 422);
+  }
+  if ((LAUNCH_CLS || NEW_AGENT) && url.pathname === "/api/spawn" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     Object.assign(launchRun, {
+      taskId: typeof body.taskId === "string" ? body.taskId : null,
+      accountId: NEW_AGENT && typeof body.accountId === "string" ? body.accountId : null,
+      images: Array.isArray(body.images) ? body.images.length : 0,
+      /* A managed account's transcripts live under its own home, which is how the conversation names its account. */
+      ...(NEW_AGENT && typeof body.accountId === "string" && body.accountId !== "default" ? { path: `/repo/accounts/claude/${body.accountId}/launch-cls.jsonl` } : {}),
       startedAt: Date.now(), prompt: String(body.prompt ?? ""), title: String(body.title ?? "Claude"), engine: String(body.engine ?? "claude"),
       model: String(body.model ?? "") || "haiku", effort: String(body.effort ?? "") || "low", clientAttemptId: typeof body.clientAttemptId === "string" ? body.clientAttemptId : null,
     });
@@ -3445,7 +3525,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
       if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
-      if ((LAUNCH_CLS || SEAT_CLS) && req.path === launchRun.path) {
+      if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && req.path === launchRun.path) {
         /* The transcript grows by whole lines: a read answers what lies past the offset it was given. */
         const bytes = new TextEncoder().encode(launchTranscript());
         return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: bytes.length, size: bytes.length }];

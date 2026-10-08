@@ -6,7 +6,9 @@ import { runtimeIdleKillMatches } from "./contracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
+import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 
@@ -30,10 +32,13 @@ import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostE
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
-import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
+import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptCutEvidence, transcriptCutEvidenceFromRecords, type TurnLivenessDependencies } from "./liveness";
+import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 import {
   interruptionObligationDirectory,
   interruptionObligationStore,
+  interruptionStageOf,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
@@ -1094,6 +1099,15 @@ export async function bindStructuredDeliveryQueue(
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
+      /* Startup holds this row until its restart cut evidence is decided:
+         the message stays queued and recovery is asked again. Recovery
+         refuses the row itself for every other caller; this answers the
+         queue before a transport or a candidate is even looked up. */
+      if (restartCutEvidenceHolds(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }))) {
+        throw new (await import("./structuredRecovery")).StructuredRecoveryHeldForUpdateError(
+          "recovery is held until the conversation's restart cut evidence is decided",
+        );
+      }
       const recover = dependencies.recover
         ?? (await import("./structuredRecovery")).recoverDeadStructuredConversation;
       const recovered = await recover({
@@ -1975,30 +1989,38 @@ async function orchestratorSeatFor(
  * Writes the continuation this release owes a host whose turn is in flight
  * (#1835), before anything releases it. The host's own active turn is the
  * evidence; the registry's turn word only backs it up, so a host that finished
- * its turn before the release is owed nothing. Every demotion path that
- * releases a host calls this first: the published hosts below, and the ones
- * startup adopted but had not yet published.
+ * its turn before the release is owed nothing unless `backgroundTasks` names
+ * work that turn left running or `selfStartedWork` says its engine began
+ * again by itself. Every demotion path that releases a host
+ * reaches this through `handOverHostForDemotion`. False when
+ * `evidenceStands` says the evidence moved after the last awaited read:
+ * nothing is written, and the caller decides again.
  */
 export async function recordDemotionInterruption(
   registry: AgentRegistry,
   key: SessionKey,
   current: HostState,
   options: DemotionInterruptionOptions,
-): Promise<void> {
+  backgroundTasks: readonly string[] = [],
+  selfStartedWork = false,
+  /** Whether the evidence the cut was decided from still stands, asked after
+      the last awaited read and before the record is written. */
+  evidenceStands: () => boolean = () => true,
+): Promise<boolean> {
   const snapshot = registry.readOnlySnapshot();
   const hostKey = sessionKeyId(key);
   const entry = snapshot.entries[hostKey];
   const conversation = Object.values(snapshot.conversations).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
-  if (!entry || !conversation || conversation.supersededBy) return;
+  if (!entry || !conversation || conversation.supersededBy) return true;
   /* Interruption obligations re-drive Claude and Codex turns a release cut;
      a Copilot turn cut the same way is resumed by the operator (slice 1). */
-  if (conversation.engine === "copilot") return;
+  if (conversation.engine === "copilot") return true;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
-  if (turnRef === null && conversation.turn.state !== "busy") return;
+  if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return true;
   const conversationId = registry.canonicalConversationId(conversation.id);
   const generation = conversation.generations.at(-1)!;
-  const transcript = await readTranscriptEvidence(conversation.engine, generation.path).catch(() => null);
+  const transcript = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
   let seat: { project: string; seatEpoch: number } | null = null;
   try {
     seat = await orchestratorSeatFor(registry, conversationId, options.seats);
@@ -2006,6 +2028,7 @@ export async function recordDemotionInterruption(
     console.error("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
   }
   const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  if (!evidenceStands()) return false;
   const { obligation, created } = store.record({
     conversationId,
     engine: conversation.engine,
@@ -2016,14 +2039,164 @@ export async function recordDemotionInterruption(
     turnRef,
     boundary: options.boundary ?? "viewer-release",
     reason: "viewer-release",
-    checkpoint: { lastEventKind: transcript?.kind ?? null, lastEventAt: transcript?.lastEventAt ?? null },
+    checkpoint: {
+      lastEventKind: transcript?.lastWork?.kind ?? null,
+      lastEventAt: transcript?.lastWork?.at ?? null,
+      ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
+    },
     seat,
+    /* Still owed: the stage stays held until the successor boots and hands
+       the cut to the stage's controller instead of continuing it. */
+    stage: interruptionStageOf(snapshot.memberships, conversationId),
   });
   if (created) {
     console.error("[viewer release] recorded an interrupted turn owed one continuation", {
       conversationId, hostKey, turnRef, obligation: obligation.id,
     });
   }
+  return true;
+}
+
+/** How many times a release reads a live CLI's transcript before it gives
+    up on a tail that keeps moving. */
+const RELEASE_TAIL_READS = 3;
+
+/** What releasing an idle host cuts, and whether the evidence it was decided
+    from still stands. */
+interface IdleHostCut {
+  backgroundTasks: string[];
+  selfStartedWork: boolean;
+  evidenceStands: () => boolean;
+}
+
+const NO_IDLE_HOST_CUT: IdleHostCut = { backgroundTasks: [], selfStartedWork: false, evidenceStands: () => true };
+
+/**
+ * What releasing an idle Claude host cuts, decided as a restart decides it
+ * (docs/design/restart-cut-recognition.md, rows 5 and 6) from the host's own
+ * ledger and transcript: harness background work its ended turn still waits
+ * on, and work the engine began by itself after the host recorded the turn's
+ * end, which nothing has ended. Releasing the host ends both with its process.
+ *
+ * This process is the ledger's only writer, so no append can land inside the
+ * synchronous read. The CLI is alive and may be writing the transcript, so
+ * the tail and the background records are each read up to three times; one
+ * still uncertain records nothing, and so does a ledger that cannot be read
+ * or a tail that holds no boundary for the ledger's newest turn (rows 1 and 2).
+ */
+async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<IdleHostCut> {
+  if (key.engine !== "claude") return NO_IDLE_HOST_CUT;
+  const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
+    candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+  const transcriptPath = conversation && !conversation.supersededBy ? conversation.generations.at(-1)!.path : null;
+  if (!transcriptPath) return NO_IDLE_HOST_CUT;
+  /* The host keeps writing its ledger, and the CLI its transcript, while the
+     reads below await: a decision stands only when neither file moved under
+     it, and the evidence it rests on is asked again before the record. */
+  for (let read = 0; read < RELEASE_TAIL_READS; read += 1) {
+    const before = idleHostEvidenceIdentity(key.sessionId, transcriptPath);
+    const decided = await decideIdleHostCut(key, transcriptPath);
+    const evidenceStands = () => idleHostEvidenceIdentity(key.sessionId, transcriptPath) === before;
+    if (evidenceStands()) return { ...decided, evidenceStands };
+  }
+  console.error("[viewer release] an idle host's evidence kept moving under its reads; recording nothing for it", {
+    hostKey: sessionKeyId(key),
+  });
+  return NO_IDLE_HOST_CUT;
+}
+
+/** The host ledger and the transcript as they stand, without reading either. */
+function idleHostEvidenceIdentity(sessionId: string, transcriptPath: string): string {
+  let transcript: string;
+  try {
+    const stats = fs.statSync(transcriptPath);
+    transcript = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch (error) {
+    transcript = (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+  return `${hostTurnRecordIdentity(sessionId)}|${transcript}`;
+}
+
+/** One decision of `idleHostCut` from one read of each source. */
+async function decideIdleHostCut(key: SessionKey, transcriptPath: string): Promise<Omit<IdleHostCut, "evidenceStands">> {
+  const nothing = { backgroundTasks: [], selfStartedWork: false };
+  const ledger = readHostTurnRecord(key.sessionId);
+  let tail: StableTailRead = { integrity: "complete", prefixTruncated: false, records: [] };
+  if (fs.existsSync(transcriptPath)) {
+    for (let read = 0; read < RELEASE_TAIL_READS; read += 1) {
+      tail = await readStableTailRecords(transcriptPath);
+      if (tail.integrity === "complete") break;
+    }
+  }
+  if (tail.integrity !== "complete") {
+    console.error("[viewer release] an idle host's transcript could not be read whole; recording nothing for it", {
+      hostKey: sessionKeyId(key),
+    });
+    return nothing;
+  }
+  /* Rows 1 and 2: a ledger that cannot be read, or a transcript slice that
+     cannot be found for its newest turn, decides nothing, and neither does
+     the background work that slice would be read for. */
+  const host = hostTurnReading(ledger);
+  const record = engineRecordSince("claude", ledger, tail);
+  if (host.state === "unreadable" || record === "unreadable" || record === "undelimited") {
+    console.error("[viewer release] an idle host's turn evidence could not be decided; recording nothing for it", {
+      hostKey: sessionKeyId(key), ledger: host.state, record,
+    });
+    return nothing;
+  }
+  const evidence = transcriptCutEvidenceFromRecords(tail.records, "claude");
+  const hostClosedTurn = host.state === "closed";
+  /* The CLI may be writing while its background records are read, so this
+     read is repeated like the tail's. */
+  let background = await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn);
+  for (let read = 1; read < RELEASE_TAIL_READS && background.state !== "read"; read += 1) {
+    background = await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn);
+  }
+  if (background.state !== "read") {
+    console.error("[viewer release] an idle host's background work could not be read whole; recording nothing for it", {
+      hostKey: sessionKeyId(key), reason: background.reason,
+    });
+    return nothing;
+  }
+  return { backgroundTasks: background.names, selfStartedWork: hostClosedTurn && record === "open" };
+}
+
+/**
+ * Hands one host over to the successor before its release, recording what the
+ * release cuts: a turn in flight, or what an idle Claude host was in the
+ * middle of (background work it waits on, work its engine began by itself).
+ * False when the release cuts nothing, so the host is simply released. Throws
+ * when the host could not be marked or its record written; the caller then
+ * leaves it running.
+ */
+export async function handOverHostForDemotion(
+  registry: AgentRegistry,
+  key: SessionKey,
+  current: HostState,
+  options: DemotionInterruptionOptions,
+): Promise<boolean> {
+  if (current.pid === null || current.processStartIdentity === null) return false;
+  const inFlight = current.status === "active" || current.status === "attention";
+  let marked = false;
+  /* An idle host's cut is decided again when its evidence moved between the
+     decision and the record: work that ended in that window is owed nothing. */
+  for (let attempt = 0; attempt < RELEASE_TAIL_READS; attempt += 1) {
+    const idle = !inFlight && current.status === "idle" ? await idleHostCut(registry, key) : NO_IDLE_HOST_CUT;
+    if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
+    if (!marked && !registry.markStructuredHostHandoff(
+      key,
+      captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
+    )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+    marked = true;
+    if (await recordDemotionInterruption(
+      registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork, idle.evidenceStands,
+    )) return true;
+  }
+  console.error("[viewer release] an idle host's evidence kept moving before its cut was recorded; recording nothing for it", {
+    hostKey: sessionKeyId(key),
+  });
+  return marked;
 }
 
 /** Releases every engine host owned by this Viewer before release demotion.
@@ -2034,8 +2207,9 @@ export async function recordDemotionInterruption(
  * claim each durable row on its bounded startup retry. All releases begin in
  * one turn so several slow engine shutdowns consume one grace window.
  *
- * A host whose turn is in flight is cut by this release, so the continuation
- * it is owed is recorded first (#1835); the store retries the record and falls
+ * A host whose turn is in flight is cut by this release, and so is an idle
+ * Claude host still waiting on background work, so the continuation it is
+ * owed is recorded first (#1835); the store retries the record and falls
  * back to its pending journal. A host whose obligation still could not be
  * written anywhere is not released: cutting its turn would leave no trace that
  * a continuation is owed, so its engine keeps the turn and the failure is
@@ -2056,14 +2230,11 @@ export async function releaseStructuredDeliveryHostsForDemotion(
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
       const current = await host.health();
-      if ((current.status !== "active" && current.status !== "attention")
-        || current.pid === null
-        || current.processStartIdentity === null) return;
-      if (!registry?.markStructuredHostHandoff(
-        key,
-        captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
-      )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
-      await recordDemotionInterruption(registry, key, current, options);
+      if (registry) await handOverHostForDemotion(registry, key, current, options);
+      else if ((current.status === "active" || current.status === "attention")
+        && current.pid !== null && current.processStartIdentity !== null) {
+        throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+      }
     } catch (error) {
       unrecorded.add(sessionKeyId(key));
       console.error("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
