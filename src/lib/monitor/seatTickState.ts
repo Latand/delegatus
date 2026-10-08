@@ -236,6 +236,10 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   }
   return {
     authIncident: normalizeSeatAuthIncident(raw.authIncident),
+    ...(Array.isArray(raw.authNoticesOwed) ? { authNoticesOwed: raw.authNoticesOwed.flatMap((value) => {
+      const incident = normalizeSeatAuthIncident(value);
+      return incident?.recoveredThrough !== undefined ? [incident] : [];
+    }) } : {}),
     ...(Array.isArray(raw.authCardsOwed) ? { authCardsOwed: raw.authCardsOwed.flatMap((value) => {
       const notice = normalizeSeatAuthCardNotice(value); return notice ? [notice] : [];
     }) } : {}),
@@ -357,6 +361,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...emptySeatTickState(),
     seatEpoch,
     authIncident: row.authIncident,
+    authNoticesOwed: row.authNoticesOwed,
     authTelegramOwed: row.authTelegramOwed,
     authCardsOwed: row.authCardsOwed,
     authCredentialObserved: row.authCredentialObserved,

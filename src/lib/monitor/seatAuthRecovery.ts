@@ -7,6 +7,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { seatTurnProgressing } from "./seatTick";
 import { openSeatAuthIncident, seatAuthAccounts, seatAuthCredentialStamp, seatAuthCredentialChangedAt, seatAuthCredentialsChanged, seatAuthIncidentRecovered, seatAuthNotice } from "./seatAuthIncident";
+import type { SeatAuthIncident } from "./seatAuthIncident";
 import type { SeatTickCheckInput, SeatTickCard } from "./types";
 import type { SeatTickSources } from "./seatTickSources";
 import type { readSeatTickState, writeSeatTickState } from "./seatTickState";
@@ -51,6 +52,84 @@ export async function recoverSeatAuthentication(
       console.error("[seat authentication] board notice write failed", error instanceof Error ? error.name : "unknown");
       return false;
     }
+  };
+  const deliverNotice = async (pending: SeatAuthIncident, resolved: boolean): Promise<boolean> => {
+    if (activeDrain()) return false;
+    const accounts = seatAuthAccounts(pending.engine);
+    let allowed: string[] | null = null;
+    try { allowed = allowedAccountIdsForProject(input.project, pending.engine); }
+    catch (error) {
+      if (!(error instanceof AccountProjectBindingsUnreadableError)) throw error;
+      // Authentication and the selection refusal remain reportable even when
+      // the pool cannot be read. Outside-account enumeration is unverified.
+    }
+    const locale = operatorLocale() === "en" ? "en" : "uk";
+    const notice = seatAuthNotice(pending, new Map(accounts.map((row) => [row.id, row.label])),
+      allowed ? accounts.filter((row) => !allowed.includes(row.id)).map((row) => row.id) : [], locale, reportHeaderName(input.project, locale));
+    const { renderReport, renderPlain, REPORT_ITEM_MAX_CHARS } = await import("@/lib/bridge/reportRender");
+    const { renderTelegram } = await import("@/lib/bridge/telegramReport");
+    const { recordManagerReport } = await import("@/lib/bridge/service");
+    const { findBridgeReport, scopedReportId, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
+    const reportClass = pending.rotation.state === "rotated" || pending.recoveredThrough !== undefined ? "status" : "blocked";
+    const items = (paragraph: string): string[] => {
+      const chunks: string[] = [];
+      let chunk = "";
+      for (const word of paragraph.split(/\s+/)) {
+        if (chunk && chunk.length + word.length + 1 > REPORT_ITEM_MAX_CHARS) { chunks.push(chunk); chunk = ""; }
+        chunk += `${chunk ? " " : ""}${word.slice(0, REPORT_ITEM_MAX_CHARS)}`;
+      }
+      if (chunk) chunks.push(chunk);
+      return chunks;
+    };
+    const rendered = renderReport({ class: reportClass, name: "Delegatus", at: new Date(pending.firstFailedAt), locale,
+      timeZone: operatorTimeZone(), summary: notice.summary,
+      // The renderer preserves the decision section when it cuts for size.
+      // Keep the login action there so a long diagnostic cannot crowd it out.
+      sections: { decision: items(notice.action), inProgress: [notice.failure, ...(notice.pool ? [notice.pool] : [])].flatMap(items) } });
+    const destination = effectiveReportTelegram(input.project);
+    const html = renderTelegram(rendered.cut);
+    if (activeDrain()) return false;
+    const report = bridgeReportsEnabled(input.project)
+      ? recordManagerReport({ key: pending.id, origin: { kind: "agent", role: "seat-tick", conversationId: null },
+        project: input.project, targetSeatConversationId: pending.conversationId, class: reportClass, at,
+        body: renderPlain(rendered.cut), ...(destination ? { telegram: { chat: destination.chat, html, ...(destination.topicId ? { topicId: destination.topicId } : {}) } } : {}) })
+        ?? findBridgeReport(scopedReportId(input.project, pending.id)) : null;
+    let telegram: "sent" | "failed" | "skipped" = "skipped";
+    if (destination) {
+      try {
+        let send = ports.telegram;
+        if (!send) {
+          const service = (await import("@/lib/telegram/bot/service")).telegramBotService();
+          send = service.send.bind(service);
+        }
+        if (activeDrain()) return false;
+        const sent = await send({ conversationId: null, clientRequestId: pending.id, chat: destination.chat,
+          ...(destination.topicId ? { topicId: destination.topicId } : {}), text: html, format: "html", silent: false });
+        telegram = "sent";
+        if (report) recordBridgeReportTelegram(report.id, { state: "sent", at, messageIds: sent.messageIds });
+      } catch (error) {
+        telegram = "failed";
+        if (telegramRefusedBeforeSend(error) && !input.state.authTelegramOwed?.some((notice) => notice.id === pending.id)) {
+          input.state = { ...input.state, authTelegramOwed: [...(input.state.authTelegramOwed ?? []), {
+            id: pending.id, chat: destination.chat, html, ...(destination.topicId ? { topicId: destination.topicId } : {}),
+          }] };
+          persist();
+        }
+        if (report) recordBridgeReportTelegram(report.id, { state: "failed", at, code: error instanceof Error && "code" in error ? String(error.code) : "telegram_failed" });
+      }
+    }
+    // Create then resolve a recovered notice: a resolved write alone creates no
+    // card, and would erase the board's only evidence that this happened.
+    if (activeDrain()) return false;
+    input.state = { ...input.state, authCardsOwed: [...(input.state.authCardsOwed ?? []).filter(card => card.id !== pending.id), {
+      id: pending.id, detail: notice.body, state: resolved ? "resolved" : "open",
+    }] };
+    persist();
+    let card = writeCard(input.project, { ref: "seat-auth-failed", kind: "auth-failed", instance: pending.id, state: "open", detail: notice.body }, at);
+    if (card && resolved) card = writeCard(input.project, { ref: "seat-auth-failed", kind: "auth-failed", instance: pending.id, state: "resolved", detail: notice.body }, at);
+    if (card) input.state = { ...input.state, authCardsOwed: input.state.authCardsOwed?.filter(notice => notice.id !== pending.id) };
+    pending.notice = { ...(report ? { bridgeSeq: report.seq } : {}), telegram, card };
+    return true;
   };
   const owedCard = input.state.authCardsOwed?.[0];
   if (owedCard && !activeDrain()) {
@@ -128,7 +207,17 @@ export async function recoverSeatAuthentication(
     && incident.accountId !== null && outcome?.accountId && (incident.engine !== outcome.engine || incident.accountId !== outcome.accountId)) {
     // A native account migration keeps the conversation and designation epoch.
     // Finish the old credential scope before judging the current account's turn.
+    if (!incident.notice) input.state = { ...input.state, authNoticesOwed: [...(input.state.authNoticesOwed ?? []), {
+      ...incident, recoveredThrough: incident.lastFailedTs,
+    }] };
     close();
+  }
+  const owedNotice = input.state.authNoticesOwed?.[0];
+  if (owedNotice && !activeDrain() && await deliverNotice(owedNotice, true)) {
+    // Board and proven pre-send Telegram refusals have their own durable debt.
+    // The migrated account is judged separately from this recovered scope.
+    input.state = { ...input.state, authNoticesOwed: input.state.authNoticesOwed?.filter(notice => notice.id !== owedNotice.id) };
+    persist();
   }
   const provisionalSuccessor = () => {
     const current = sources.seatFor(input.project).active;
@@ -256,83 +345,8 @@ export async function recoverSeatAuthentication(
     } else if (!choiceFailed) incident.rotation.state = "none-allowed";
     persist();
   }
-  if (!incident.notice?.card) {
-    if (activeDrain()) return `${incident.id}: held`;
-    const accounts = seatAuthAccounts(incident.engine);
-    let allowed: string[] | null = null;
-    try { allowed = allowedAccountIdsForProject(input.project, incident.engine); }
-    catch (error) {
-      if (!(error instanceof AccountProjectBindingsUnreadableError)) throw error;
-      // Authentication and the selection refusal remain reportable even when
-      // the pool cannot be read. Outside-account enumeration is unverified.
-    }
-    const locale = operatorLocale() === "en" ? "en" : "uk";
-    const notice = seatAuthNotice(incident, new Map(accounts.map((row) => [row.id, row.label])),
-      allowed ? accounts.filter((row) => !allowed.includes(row.id)).map((row) => row.id) : [], locale, reportHeaderName(input.project, locale));
-    const { renderReport, renderPlain, REPORT_ITEM_MAX_CHARS } = await import("@/lib/bridge/reportRender");
-    const { renderTelegram } = await import("@/lib/bridge/telegramReport");
-    const { recordManagerReport } = await import("@/lib/bridge/service");
-    const { findBridgeReport, scopedReportId, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
-    const reportClass = incident.rotation.state === "rotated" || incident.recoveredThrough !== undefined ? "status" : "blocked";
-    const items = (paragraph: string): string[] => {
-      const chunks: string[] = [];
-      let chunk = "";
-      for (const word of paragraph.split(/\s+/)) {
-        if (chunk && chunk.length + word.length + 1 > REPORT_ITEM_MAX_CHARS) { chunks.push(chunk); chunk = ""; }
-        chunk += `${chunk ? " " : ""}${word.slice(0, REPORT_ITEM_MAX_CHARS)}`;
-      }
-      if (chunk) chunks.push(chunk);
-      return chunks;
-    };
-    const rendered = renderReport({ class: reportClass, name: "Delegatus", at: new Date(incident.firstFailedAt), locale,
-      timeZone: operatorTimeZone(), summary: notice.summary,
-      // The renderer preserves the decision section when it cuts for size.
-      // Keep the login action there so a long diagnostic cannot crowd it out.
-      sections: { decision: items(notice.action), inProgress: [notice.failure, ...(notice.pool ? [notice.pool] : [])].flatMap(items) } });
-    const destination = effectiveReportTelegram(input.project);
-    const html = renderTelegram(rendered.cut);
-    if (activeDrain()) return `${incident.id}: held`;
-    const report = bridgeReportsEnabled(input.project)
-      ? recordManagerReport({ key: incident.id, origin: { kind: "agent", role: "seat-tick", conversationId: null },
-        project: input.project, targetSeatConversationId: incident.conversationId, class: reportClass, at,
-        body: renderPlain(rendered.cut), ...(destination ? { telegram: { chat: destination.chat, html, ...(destination.topicId ? { topicId: destination.topicId } : {}) } } : {}) })
-        ?? findBridgeReport(scopedReportId(input.project, incident.id)) : null;
-    let telegram: "sent" | "failed" | "skipped" = "skipped";
-    if (destination) {
-      try {
-        let send = ports.telegram;
-        if (!send) {
-          const service = (await import("@/lib/telegram/bot/service")).telegramBotService();
-          send = service.send.bind(service);
-        }
-        if (activeDrain()) return `${incident.id}: held`;
-        const sent = await send({ conversationId: null, clientRequestId: incident.id, chat: destination.chat,
-          ...(destination.topicId ? { topicId: destination.topicId } : {}), text: html, format: "html", silent: false });
-        telegram = "sent";
-        if (report) recordBridgeReportTelegram(report.id, { state: "sent", at, messageIds: sent.messageIds });
-      } catch (error) {
-        telegram = "failed";
-        if (telegramRefusedBeforeSend(error) && !input.state.authTelegramOwed?.some((notice) => notice.id === incident!.id)) {
-          input.state = { ...input.state, authTelegramOwed: [...(input.state.authTelegramOwed ?? []), {
-            id: incident.id, chat: destination.chat, html, ...(destination.topicId ? { topicId: destination.topicId } : {}),
-          }] };
-          persist();
-        }
-        if (report) recordBridgeReportTelegram(report.id, { state: "failed", at, code: error instanceof Error && "code" in error ? String(error.code) : "telegram_failed" });
-      }
-    }
-    // Create then resolve a rotated notice: a resolved write alone creates no
-    // card, and would erase the board's only evidence that this happened.
-    if (activeDrain()) return `${incident.id}: held`;
-    input.state = { ...input.state, authCardsOwed: [...(input.state.authCardsOwed ?? []).filter(card => card.id !== incident!.id), {
-      id: incident.id, detail: notice.body, state: incident.rotation.state === "rotated" && !provisionalSuccessor() ? "resolved" : "open",
-    }] };
-    persist();
-    let card = writeCard(input.project, { ref: "seat-auth-failed", kind: "auth-failed", instance: incident.id, state: "open", detail: notice.body }, at);
-    if (card && incident.rotation.state === "rotated" && !provisionalSuccessor()) card = writeCard(input.project, { ref: "seat-auth-failed", kind: "auth-failed", instance: incident.id, state: "resolved", detail: notice.body }, at);
-    if (card) input.state = { ...input.state, authCardsOwed: input.state.authCardsOwed?.filter(notice => notice.id !== incident!.id) };
-    incident.notice = { ...(report ? { bridgeSeq: report.seq } : {}), telegram, card };
-  }
+  if (!incident.notice?.card && !await deliverNotice(incident, incident.recoveredThrough !== undefined
+    || (incident.rotation.state === "rotated" && !provisionalSuccessor()))) return `${incident.id}: held`;
   if (incident.recoveredThrough !== undefined || (closingThrough !== undefined && incident.notice?.card)) {
     close(incident.recoveredThrough ?? closingThrough, true);
     if (!incident) return recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, ports);

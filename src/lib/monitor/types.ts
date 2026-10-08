@@ -1067,6 +1067,8 @@ export interface SeatTickReportsInput {
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
   authIncident?: SeatAuthIncident;
+  /** Recovered credential scopes still owe their original operator notice. */
+  authNoticesOwed?: SeatAuthIncident[];
   /** Proven pre-send refusals retry independently of credential recovery. */
   authTelegramOwed?: SeatAuthTelegramNotice[];
   /** Refused board writes survive recovery without keeping the seat parked. */

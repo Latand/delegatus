@@ -8031,6 +8031,75 @@ describe("seat authentication recovery through production seams", () => {
     });
   });
 
+  test("a healthy native migration preserves its drain-held predecessor notice across restart", async () => {
+    await authFixture(true, async (f) => {
+      const lease = { id: "auth-migration-notice-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      writeDrain(drainFile(), lease);
+      try {
+        await f.check();
+        const id = f.row().authIncident!.id;
+        const targetPath = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        f.migrateAccount(f.b.id, targetPath, "2026-10-08T00:08:00Z");
+        await f.check();
+        await f.restartAuthentication();
+        expect(f.reports()).toHaveLength(0); expect(f.cards()).toHaveLength(0);
+        releaseDrain(drainFile(), lease.id);
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(1);
+        expect(f.sendRequests).toEqual([id]);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
+        expect(f.reports()[0]?.body).toContain("Account A");
+        expect(f.row().authIncident).toBeUndefined(); expect(f.spawns).toHaveLength(0);
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+        await f.restartAuthentication(); await f.check();
+        expect(f.reports()).toHaveLength(1); expect(f.sendRequests).toEqual([id]);
+      } finally { releaseDrain(drainFile(), lease.id); }
+    });
+  });
+
+  test("a failing native migration retains both drain-held account notices and decides recovery independently", async () => {
+    await authFixture(true, async (f) => {
+      const lease = { id: "auth-failed-migration-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      writeDrain(drainFile(), lease);
+      try {
+        await f.check();
+        const predecessorId = f.row().authIncident!.id;
+        const targetPath = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        const at = "2026-10-08T00:08:00Z";
+        fs.writeFileSync(targetPath, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "try again" } }) + "\n"
+          + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+            message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+        f.migrateAccount(f.b.id, targetPath, at);
+        await f.check();
+        const successorId = f.row().authIncident!.id;
+        expect(successorId).not.toBe(predecessorId);
+        expect(f.row().authIncident?.accountId).toBe(f.b.id);
+        expect((await f.restartAuthentication()).authIncident?.id).toBe(successorId);
+        let decisions = 0;
+        f.rig.deps.seatAuth!.rotate = async (body) => {
+          decisions++;
+          expect(body.accountId).toBe(f.a.id);
+          return { status: 503, body: { error: "fixture migration recovery refused" } };
+        };
+        releaseDrain(drainFile(), lease.id);
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(2);
+        expect(f.sendRequests).toEqual([predecessorId, successorId]);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.cards()).toHaveLength(2);
+        expect(f.cards().map(card => card.status).sort()).toEqual(["done", "inbox"]);
+        expect(f.reports()[0]?.body).toContain("Account A"); expect(f.reports()[1]?.body).toContain("Account B");
+        expect(f.row().authIncident?.id).toBe(successorId);
+        expect(f.row().authIncident?.rotation.state).toBe("refused");
+        expect(f.rig.sent).toHaveLength(0); expect(decisions).toBe(1);
+        await f.restartAuthentication(); await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(2); expect(f.sendRequests).toEqual([predecessorId, successorId]);
+        expect(decisions).toBe(1);
+      } finally { releaseDrain(drainFile(), lease.id); }
+    });
+  });
+
   test("a board storage exception preserves notice debt without fencing a repaired seat", async () => {
     await authFixture(false, async (f) => {
       f.rig.deps.ensureCard = () => { throw Object.assign(new Error("fixture board write refused"), { code: "EACCES" }); };

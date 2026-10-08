@@ -175,6 +175,13 @@ so unsafe credentials still produce the authentication notice.
 An unfinished predecessor notice retains only that predecessor's failures.
 After it is delivered, the same check evaluates the successor's own failure;
 the predecessor's recovery boundary cannot consume it.
+Native account migration can keep both the conversation and the seat epoch.
+It clears the old account's wake fence while preserving an unsent notice in
+`authNoticesOwed`, under its original incident id. This debt survives restart
+and epoch changes independently of the new account's authentication incident.
+After the drain releases, its bridge and Telegram report is delivered once;
+the board card is created and resolved, with refused channel writes retained
+in their existing separate debt fields.
 
 ## 4. The automatic rotation rule
 
