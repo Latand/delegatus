@@ -1,9 +1,11 @@
 # Provider-cut recovery: the cut a stage still owes
 
 Status: design for PR #2537 (lane d2d49fe8, branch of lane 499d73d9), revision
-2 of 2026-10-08. The controller approved the chain rule, and this revision adds
-the parked retry and the zero-time successor to the build plan after the
-critique of revision 1.
+3 of 2026-10-08. The controller approved the chain rule. Revision 2 added the
+parked retry and the zero-time successor after the critique of revision 1;
+this revision answers the critique of revision 2: a parked retry moves to a new
+chain with that chain's own kind, reset and budget, whatever kind the parked
+cut had, and the closed chain's confirmation wait is cleared.
 Head reviewed: `52d7f9bd3`. Base the PR started from: `ff4af9a38`.
 
 ## Originating requirement
@@ -72,10 +74,12 @@ no continuation record, so the anchor falls back to the attempt start again.
 Any fix that persists one more anchor has to be written on every path that
 clears a wait, and each missed path reopens the class.
 
-The critique of revision 1 found two more such paths in revision 1's own plan:
-a parked retry, whose `providerCutActivity` reads any newer record as
-cancelling activity, and a zero-time successor, whose inherited wait keeps its
-predecessor's cancellation and budget. Both are covered below.
+The critiques of revisions 1 and 2 found four more such paths in this
+document's own plans. In each, a new chain inherited state an old chain left
+behind: a parked retry read any newer record as cancelling activity; a zero-time successor's inherited wait kept its predecessor's
+cancellation and budget; a parked retry moved only between two quota cuts; and
+the parked chain's confirmation wait kept its clock across hours of work. All
+four are covered below.
 
 ### Round 10 (P1, head `63d4ce5ca`)
 
@@ -112,6 +116,29 @@ anchor covered only that one path.
   `recoverProviderCut` (`:2129-2132`) parked cut 2 on the inherited
   cancellation; without a pause, cut 2 inherited its predecessor's budget.
 
+### Critique of revision 2 (two P2, 2026-10-08)
+
+- A new chain of another cut kind lost its retry. Revision 2 moved a parked
+  retry inside `refreshHarnessProviderCut`, which keeps its two `usage_limit`
+  guards (`engine.ts:6672`, `:6677`): the saved wait and the new cut both had
+  to be quota cuts. A successor parked on a capacity cut until its source's
+  reset (the shape of "successor capacity cut retains the source reset retry",
+  `engine.test.ts:19176`), then a harness wake, real output and a quota cut on
+  the successor, all before the next tick: the refresh refused,
+  `providerCutActivity` answered "newer" (`:6703-6706`) and the retry was
+  withdrawn (`:6786-6788`). The reverse (quota, output, capacity or overloaded)
+  failed the second guard, and so did a third cut of another kind.
+- The parked chain's confirmation wait kept aging. Cut 1 parked with reset
+  19:00; at 19:01 a harness prompt is written and its answer is not, so the
+  confirmation at the retry time opens `attempt.controllerWait` with
+  `startedAt` 19:01; at 19:01:30 the agent works until 21:30, when cut 2 names
+  23:00. Revision 2 moved the retry and left that `controllerWait`. At 23:01 a
+  held delivery is outstanding for thirty seconds; the first confirmation books
+  a round on the 19:01 wait, `nextBoundedWait` (`engine.ts:7173-7194`) finds
+  four hours spent of its ten minutes, and the retry is withdrawn ("could not
+  confirm unchanged cut evidence") before the delivery clears. Revision 2 had
+  only skipped booking while the stage worked.
+
 ## The rule
 
 **A stage attempt owes recovery for its open cut chain while the engine owns
@@ -121,8 +148,11 @@ the stage.**
   attempt: the Claude assistant record flagged `isApiErrorMessage` with a
   terminal API error, or the Codex turn-end record carrying a provider failure.
   A turn the operator or a deploy aborted (`turn_aborted`) is not a provider
-  cut. Records older than `attempt.startedAt` belong to an earlier attempt; the
-  attempt start decides membership only and never anchors a window.
+  cut. Its *kind* is the condition `classifyProviderCondition` gives it: a
+  quota cut (`usage_limit`), a capacity or other transient cut, an
+  authentication cut, or an unclassified provider error. Records older than
+  `attempt.startedAt` belong to an earlier attempt; the attempt start decides
+  membership only and never anchors a window.
 - *Agent output* is a record the agent authored after the provider accepted a
   turn. Claude: an `assistant` record that is not flagged `isApiErrorMessage`
   and whose model is not `<synthetic>`, carrying text, thinking or a tool call.
@@ -132,12 +162,13 @@ the stage.**
 - The *open cut chain* is the run of provider cuts after the attempt's last
   agent output. Its *first cut* is the cut record the rule measures from.
   Further cut records with no agent output between them belong to the same
-  chain; each one refreshes the saved witness (`turnTs`, reset) and opens
-  nothing new, and the chain keeps one try budget.
+  chain, whatever their kind; each one refreshes the saved witness (`turnTs`,
+  and the reset when a quota chain meets a quota record) and opens nothing new,
+  and the chain keeps one try budget.
 - The chain is **closed by agent output**: the stage is working again, because
   the engine's continuation took effect or because someone's prompt was worked
   on. The next cut after that output opens a new chain, owed by itself with a
-  budget of its own.
+  budget of its own and the recovery its own kind calls for.
 - The chain is **cancelled by activity after its first cut**: an operator or
   orchestrator prompt (any prompt the reader classifies `external`), a pause or
   a resume, a close, a report. Harness wakes and engine continuations
@@ -154,12 +185,27 @@ the stage.**
   successor's first agent output; after it, the successor's next cut opens a
   chain of its own, and the inherited cancellation and budget go with the old
   one.
+- **Nothing a closed chain left behind binds the next one**: its saved wait,
+  its budget, its cancellation flag and its bounded confirmation wait
+  (`controllerWait`) all go when agent output closes it.
 - The engine **owns** the stage while the lane runs, and while a parked lane
-  holds a live stage retry. A parked retry **follows the chain**: once agent
-  output closes the parked cut's chain, the retry holds while the stage's turn
-  runs; a turn that ends in a new cut moves the retry to that chain, its reset
-  and a fresh budget, and a turn that ends with no cut withdraws it, because
-  nothing is owed.
+  holds a live stage retry. A parked retry **follows the chain**:
+  - a further cut in the parked chain keeps the retry and refreshes the
+    witness; a quota record in a quota chain also refreshes the reset and the
+    retry time, as at the head;
+  - once agent output closes the parked chain, the retry holds while the
+    stage's turn runs, and spends nothing from the bounded confirmation wait;
+  - a turn that ends in a new cut moves the retry to the new chain: the wait
+    the running tick would open for that cut (its kind, its reset, its account,
+    a fresh budget), parked at that kind's own retry time. A quota cut retries
+    at the earliest allowed reset, or after the bounded 30-minute fallback when
+    none is named; a capacity or other transient cut retries after the running
+    path's first backoff, one minute. Either retry is a fresh attempt, as at a
+    quota reset;
+  - a new chain cut by authentication or by an unclassified provider error
+    withdraws the retry (Deferred): the running path answers the first with an
+    account choice and parks the second;
+  - a turn that ends with no cut withdraws the retry, because nothing is owed.
 - Close, report, retry-stage and skip-stage end ownership through pipeline and
   attempt state, as they do today. On a parked lane, pause and resume act
   through state as well: they withdraw the retry at once (`engine.ts:10425`).
@@ -229,13 +275,20 @@ the witness and continuation key, and acts on that one answer on each path:
 the running tick drops a wait outside the open chain, and a parked retry moves
 to the open chain.
 
-For the parked retry two narrower answers were weighed. Withdrawing the retry
-on any operator prompt after the parked cut would make the outcome depend on
-whether a tick lands between the reply and the agent's output, and it measures
-from the parked cut where the rule measures from the open chain. Reopening a
-parked lane to `running` when its stage works again would change what the
-board shows without the operator, which the requirement does not ask for. Both
-were rejected.
+For the parked retry three narrower answers were weighed. Withdrawing the
+retry on any operator prompt after the parked cut would make the outcome
+depend on whether a tick lands between the reply and the agent's output, and
+it measures from the parked cut where the rule measures from the open chain.
+Reopening a parked lane to `running` when its stage works again would change
+what the board shows without the operator, which the requirement does not ask
+for. Dropping the quota guards from the refresh, so that it moves the retry
+for every kind, would let one function both refresh a chain's witness and
+replace its condition, reset and budget; those guards are what keep a
+same-chain record from rewriting a chain's reset. All three were rejected, as
+the revision-2 critique asked: the move is a step of its own that opens the new
+chain's wait with the constructor the running tick already uses, so the new
+chain gets the same condition, reset, account and budget it would get on a
+running lane.
 
 ## What stays, what goes
 
@@ -257,6 +310,9 @@ Goes:
 - The requirement that a requested cut be found before history counts as
   complete (`durableEvidence.ts:522-523`). A closed chain is dropped from the
   window, so its cut is legitimately absent.
+- The refresh's `usage_limit` guards as a gate on a parked lane
+  (`engine.ts:6672`, `:6677`). They stay as the gate on the reset refresh, and
+  on a running lane, where `relaunchCutStage` is the only caller.
 
 Stays:
 
@@ -281,12 +337,18 @@ Stays:
 - The withdrawal of a parked retry by pause, resume, a control change, a
   report, close, retry-stage and skip-stage (`cancelProviderStageRetry` and its
   callers), unchanged.
+- The parked retry's validity guard (`engine.ts:6756-6763`), unchanged: a moved
+  quota retry is a quota retry, and a moved capacity retry carries
+  `fallback: false`, the form the guard already admits for transient waits.
+- The ten-minute confirmation budget (`SPAWN_HOST_WAIT_BUDGET_MS`) and
+  `nextBoundedWait`, unchanged. Each chain gets its own.
 
 ## Build plan (smallest)
 
 A prototype of exactly this plan ran in a scratch export of `52d7f9bd3`
-(results below). Source change: 112 added and 52 removed lines in two files,
-comments included.
+(results below). Source change against the head: 192 added and 97 removed lines
+in two files, comments included; about thirty of each are the wait constructor
+moving out of `recoverProviderCut` unchanged.
 
 ### `src/lib/pipelines/durableEvidence.ts`
 
@@ -332,24 +394,51 @@ comments included.
    `recoverProviderCut` with a fresh budget, and its `retryCancelled` check
    (`:2129`) no longer sees the old chain's cancellation. A successor with no
    output keeps its inherited wait, cancellation and budget.
-3. `refreshHarnessProviderCut` (`:6669-6692`): replace the message and
-   `automaticPromptBeforeProviderCut` checks with one test on
-   `requestedCutOpen`. Absent: no refresh. `true`: refresh the witness as today.
-   `false`, with a live `stageRetry` and an open chain: move the wait to the
-   newer chain, setting its witness and its reset (or none), `tries` 0, deleting
-   `providerRecoveryBudget`, and parking again through
-   `parkProviderUsageLimit`, which reschedules the retry at that chain's reset
-   with the current control generation. The external-prompt test before it is
-   already measured from the open chain's first cut.
-4. `providerCutActivity` (`:6694-6710`): before the external-prompt test, a
-   saved wait outside the open chain with no newer cut open answers by the
-   turn: busy → a new `"working"`, terminal → `"newer"`, otherwise
-   `"unknown"`. A report or a verdict still answers `"newer"`.
-5. `reconcileParkedProviderRetry`'s confirmation (`:6771-6784`): `"working"`
-   holds the retry and spends nothing from the bounded confirmation wait; the
-   other answers keep their branches. `relaunchCutStage` already treats any
-   answer other than `"unchanged"` and `"newer"` as unavailable evidence (a
-   bounded transport wait) and needs no edit.
+3. Two extractions, moved unchanged so both paths share them:
+   `providerCutNotice(engine, message)`, the notice the running tick builds
+   from a terminal provider message (`:5432-5436`), and
+   `openProviderWait(stage, attempt, notice, ports)`, the wait a new cut opens
+   in `recoverProviderCut` (`:2134-2164`: account, budget, reset, delay,
+   `failedAccounts`, the usage-limited entry, the `"wait"` journal record and
+   `delete attempt.controllerWait`). `recoverProviderCut` calls it and
+   persists.
+4. `refreshHarnessProviderCut` (`:6669-6692`) refreshes the same open chain
+   only: `requestedCutOpen === true` replaces the message and
+   `automaticPromptBeforeProviderCut` checks. On a parked lane any newer record
+   of the chain moves the witness (`turnTs`, text) and keeps the retry; the
+   reset, the usage-limited entry and the retry time are refreshed only when a
+   quota chain meets a quota record, as at the head. On a running lane it stays
+   quota-only.
+5. New `moveParkedProviderRetry`: with a live `stageRetry`,
+   `requestedCutOpen === false`, an open chain (`firstProviderCutAt`), and a
+   terminal cut newer than the witness, classify that cut. For a quota or a
+   transient cut, delete the wait and `providerRecoveryBudget`, open the new
+   chain's wait through `openProviderWait` (fresh budget, `tries` 0), record a
+   `"park"` with "stage cut by <kind>; last: <text>", and park through
+   `parkProviderUsageLimit`: a quota cut as today (earliest allowed reset, or
+   the bounded fallback), a transient cut with `retryAt` set to the new wait's
+   own `resumeAt` (one minute) and `fallback: false`. Any other kind returns
+   false, and the retry is withdrawn as newer activity.
+6. `parkProviderUsageLimit` (`:1964`, `:1973`) takes an optional `fallback`;
+   the backoff retry passes `false`, because it names its own time. That keeps
+   the moved capacity retry inside the guard at `:6760-6762` and gives its
+   fresh attempt a replenished budget at `:6826-6836`, as a named reset does.
+7. `providerCutActivity` (`:6694-6710`), in order: incomplete history answers
+   `"unknown"`; when the saved wait is outside the open chain and the lane is
+   parked, delete `attempt.controllerWait` and persist; with no newer chain
+   open, answer by the turn (busy → a new `"working"`, terminal → `"newer"`,
+   otherwise `"unknown"`); the external-prompt test, measured from the open
+   chain's first cut; then the move, or else the same-chain refresh; the final
+   comparisons read the wait the attempt holds after them. A report or a
+   verdict still answers `"newer"`.
+8. `reconcileParkedProviderRetry`: `"working"` holds the retry and spends
+   nothing from the bounded confirmation wait (`:6771-6784`). After each
+   `providerCutActivity` call, a retry that moved returns at once
+   (`attempt.providerWait !== wait`, `:6772` and `:6790`): the rest of the pass
+   holds the old wait's `resumeAt` and `turnTs`, and the next pass judges the
+   moved retry on its own. `relaunchCutStage` already treats any answer other
+   than `"unchanged"` and `"newer"` as unavailable evidence (a bounded transport
+   wait) and needs no edit.
 
 Everything else in the provider path reads the same fields with the new
 meaning and needs no edit: `newerExternalProviderPrompt`,
@@ -361,10 +450,13 @@ and `providerRecoveryTurnProven`.
 
 Engine seam, fake clock, real reader through `readFixtures`, both engines,
 pinned and pool, in `src/lib/pipelines/engine.test.ts` beside "stage progress
-makes the next provider cut own cancellation". Clock shape shared by all three
+makes the next provider cut own cancellation". Clock shape shared by all
 families: cut 1 at 17:22:09Z ("resets 10pm (Europe/Kyiv)", 19:00Z; Codex adds
 a `token_count` with that reset); later cuts name "2am" (23:00Z), "3am"
-(00:00Z) or "4am" (01:00Z). Pool mode allows two or three accounts.
+(00:00Z) or "4am" (01:00Z). Pool mode allows two or three accounts. A capacity
+cut is the Claude `overloaded` API-error record or the Codex `task_complete`
+with "Selected model is at capacity" (`server_overloaded`); an authentication
+cut is "OAuth session expired and could not be refreshed".
 
 **"a provider cut after agent output owes its own recovery"** (running lane,
 32 cases): activity at 19:00:20Z, cut 2 at 21:30Z, ticks every 30 s to 23:05Z.
@@ -396,13 +488,45 @@ After the reset the host wakes at 19:00:20Z and the agent works at 19:00:25Z.
 | harness-no-output | harness wake at 17:24:05Z refused half a second later, same reset | a fresh attempt after 19:01 |
 | operator-refused | operator prompt at 17:24:05Z refused half a second later | retry withdrawn, no spawn |
 
+**"a parked retry moves to a newer chain of another kind"** (28 cases).
+Source-kind cases run in pool mode only: a pinned lane never holds a parked
+retry for a non-quota cut, because `providerRetryReset` excludes the cut's own
+account for such a cut and a pinned lane has no other. In them, cut 1 on the
+first account relaunches the stage on the spare at once; the spare's budget is
+spent and its capacity or authentication cut at 17:23Z parks it with a retry at
+the first account's reset (19:01, `fallback: false`).
+
+| Case | After the park | Expected |
+| --- | --- | --- |
+| capacity-then-quota (pool) | the spare's harness wake at 17:30Z, output, its quota cut at 17:40Z ("2am"), tick | the retry moves: quota, the spare's account, still due at 19:01 (the earliest allowed reset); a fresh attempt on the first account after 19:01, the spare excluded |
+| auth-then-quota (pool) | as above after an authentication cut | same |
+| quota-then-capacity | quota park; harness wake at 19:00:20Z, output, capacity cut at 19:00:40Z, tick | the retry moves: transient, due one minute after the tick, `fallback: false`; a fresh attempt then |
+| quota-quota-capacity | as above, with a quota cut ("2am"), harness wake and output before the capacity cut | same |
+| capacity-reply-after | quota-then-capacity, tick; operator prompt after the capacity cut, refused by capacity | retry withdrawn, `needs_decision`, no spawn |
+| capacity-control-after | quota-then-capacity, tick; pause and resume | retry withdrawn, no spawn |
+| same-chain-capacity | quota park; harness wake at 19:00:20Z refused by capacity at once, no output, tick | the retry stays due at 19:01 with the newer witness; a fresh attempt then |
+| same-chain-capacity-reply | quota park; operator prompt at 19:00:20Z refused by capacity, no output, tick | retry withdrawn, no spawn |
+
+**"a moved retry starts its own confirmation wait"** (16 cases): cut 1 parks
+as in the parked family. At 19:00:58Z a harness prompt is written with no
+answer; the tick at 19:01:00Z opens the confirmation wait (`controllerWait`
+starting 19:01:00Z, asserted). At 19:01:30Z the agent opens a tool call and
+works, ticks every ten minutes to 21:29Z; at 21:30Z the turn ends in cut 2
+("2am"), tick: the retry is due at 23:01.
+
+| Case | At the retry time | Expected |
+| --- | --- | --- |
+| held-fails | a held delivery is outstanding at 23:01:00Z and gone thirty seconds later | the retry holds, then a fresh attempt |
+| held-lasting | the delivery stays outstanding | still live with no spawn at 23:06; withdrawn ("could not confirm unchanged cut evidence") only after the new chain's own ten minutes; no spawn |
+| held-reply | the held delivery lands as an operator prompt at 23:01:15Z, refused | retry withdrawn, no spawn |
+| three-held-fails | as held-fails, with a harness wake, output and cut 3 ("3am") after cut 2, before the tick | the retry holds at 00:01, then a fresh attempt |
+
 **"a zero-time successor owes the chain its own output opened"** (26 cases):
 cut 1 on the first account relaunches the stage (pool: at once on the spare;
 pinned: on its own account at 19:01, the relaunch branch a pane-hosted stage
-takes). The successor's
-inherited wait has `turnTs` 0. Its own transcript, all written before its first
-recovery tick: cut 1 ("2am"), the activity, agent output, cut 2 (pool at once;
-pinned at 21:30Z, "3am").
+takes). The successor's inherited wait has `turnTs` 0. Its own transcript, all
+written before its first recovery tick: cut 1 ("2am"), the activity, agent
+output, cut 2 (pool at once; pinned at 21:30Z, "3am").
 
 | Case | Activity in the successor | Expected |
 | --- | --- | --- |
@@ -457,28 +581,28 @@ against live state; no hosted-check waiting.
 
 All runs used `git archive` exports of `52d7f9bd3` under the stage's scratch
 directory, a symlinked `node_modules` with the same lockfile, and the isolated
-wrapper above, each run through `scripts/gate-slot.sh`. The worktree was not
-edited. "Revision 1" is the plan of revision 1 of this document rebuilt in a
-third export: discharge only for `turnTs > 0`, refresh only for
-`requestedCutOpen === true`, no `"working"` answer.
+wrapper above, each run through `scripts/gate-slot.sh`. Product source in the
+worktree was not edited. Revision 2's prototype was rebuilt by replaying its recorded edits
+into a fresh export; it reproduced its recorded diff (112 added, 52 removed)
+and its 90 of 90 probe passes before revision 3 was applied on top of it.
 
 | Run | Result |
 | --- | --- |
-| head, the 90 engine probe cases above | 54 fail, 36 pass |
-| revision 1, the 90 probe cases | 38 fail (16 parked, 22 zero-time), 52 pass |
-| revision 2, the 90 probe cases | 90 pass |
-| revision 2, full `engine.test.ts` (1 012 existing + 90 probes) | 1 102 pass, 0 fail |
-| revision 2, `durableEvidence.test.ts` + `hostRetirement.test.ts` with the expectation update and the six reader units | 138 pass |
-| head reader, the same two files | 7 fail (the six units and the changed expectation), 131 pass |
-| revision 2 `tsc --noEmit` | 0 errors |
-| revision 2 eslint on the two source files and the reader test | 0 errors (4 warnings at `engine.ts:2589`, untouched code) |
+| head, all 134 probes | 94 fail (54 of the 90 earlier probes, as in revision 2's run, and 40 of the 44 new), 40 pass |
+| revision 2, the 90 earlier probes, rebuilt | 90 pass |
+| revision 2, the 44 probes added in revision 3 | 36 fail, 8 pass |
+| revision 3, all 134 probes | 134 pass |
+| revision 3, full `engine.test.ts` (1 012 existing + 134 probes) | 1 146 pass, 0 fail |
+| revision 3, `durableEvidence.test.ts` + `hostRetirement.test.ts` with the expectation update and the six reader units | 138 pass |
+| revision 3 `tsc --noEmit` | 0 errors |
+| revision 3 eslint on the two source files and the reader test | 0 errors (4 warnings at head `engine.ts:2589`, untouched code) |
 
 What failed, by family:
 
 - Running lane, head: the twenty owed cases, sixteen with "provider recovery
   cancelled after newer stage activity" and four with "…by operator control
-  during the stage"; the twelve cancellation cases pass. Revision 1 passes all
-  32.
+  during the stage"; the twelve cancellation cases pass. Revisions 1 to 3 pass
+  all 32.
 - Parked retry, head: Codex harness and harness-three withdraw the retry
   ("automatic provider retry cancelled after newer stage activity");
   harness-busy withdraws it ten minutes after cut 1's retry time ("could not
@@ -490,23 +614,39 @@ What failed, by family:
   parks "by operator control during the stage". Revision 1: harness and
   operator recover with the inherited budget, every pause case parks "by
   operator control" from `recoverProviderCut`, the critique's exact path.
+- Newer chain of another kind, head and revision 2: every owed case withdraws
+  the retry at the tick after the newer cut, and the saved wait keeps the old
+  chain's kind (a capacity wait after a quota cut, a quota wait after a
+  capacity cut). The four same-chain-capacity cases withdraw it as well. The
+  reply-after and control-after cases end withdrawn on every revision and fail
+  on head and revision 2 only at the assertion that the retry moved first. The
+  four same-chain-capacity-reply cases pass everywhere.
+- Confirmation wait, revision 2: every held-fails, held-lasting and
+  three-held-fails case is withdrawn at the retry time itself (23:01:00Z,
+  00:01:00Z for three) with "automatic provider retry could not confirm
+  unchanged cut evidence", the critique's exact path; held-reply ends
+  withdrawn on every revision. On head all sixteen fail earlier: the retry is
+  withdrawn while the stage works, before cut 2 ("could not confirm unchanged
+  cut evidence"), as in the parked family's harness-busy case.
 
 ## Rounds and existing tests mapped to the rule
 
 Clauses: **R1** later cuts with no agent output between them are one chain,
 measured from its first cut, with one budget; **R2** agent output closes a
-chain and the next cut owes itself with its own budget; **R3** an external
-prompt after the first cut cancels; **R4** pause or resume after the first cut
-cancels, and on a parked lane they withdraw the retry at once; **R5** harness
-wakes and engine continuations cancel nothing, and a re-observed cut refreshes
-the witness; **R6** the window and the 8 MiB bound start at the first cut;
-**R7** close, report, retry and skip end ownership through state; **R8** a
-zero-time successor's inherited chain is open from its start until its first
-agent output; **R9** a parked retry follows the chain: it holds while the stage
-works after its cut, moves to a newer chain with that chain's reset and budget,
-and is withdrawn when the turn ends with no cut.
+chain and the next cut owes itself with its own budget and its own kind's
+recovery; **R3** an external prompt after the first cut cancels; **R4** pause
+or resume after the first cut cancels, and on a parked lane they withdraw the
+retry at once; **R5** harness wakes and engine continuations cancel nothing,
+and a re-observed cut refreshes the witness; **R6** the window and the 8 MiB
+bound start at the first cut; **R7** close, report, retry and skip end
+ownership through state; **R8** a zero-time successor's inherited chain is open
+from its start until its first agent output; **R9** a parked retry follows the
+chain: it holds while the stage works after its cut, moves to a newer chain
+with that chain's kind, reset and budget, and is withdrawn when the turn ends
+with no cut or in a kind with no timed retry; **R10** nothing a closed chain
+left behind (wait, budget, cancellation, confirmation wait) binds the next.
 
-Rounds and critique:
+Rounds and critiques:
 
 | Finding | Rule | Outcome under the rule |
 | --- | --- | --- |
@@ -514,8 +654,10 @@ Rounds and critique:
 | Round 12 operator or orchestrator reply answered, then cut 2 | R2 | the answer closed chain 1; cut 2 owed; continued at 23:01 |
 | Round 12 harness wake answered, pause/resume at 20:00, cut 2 | R2, R4 | the control precedes chain 2's first cut; continued at 23:01 |
 | Same shapes, reply or control after cut 2 | R3, R4 | cancelled |
-| Critique: parked cut 1, harness wake, output, cut 2 (or cut 3) | R2, R9 | the retry moves to the newer chain and runs after its reset |
-| Critique: zero-time successor, cut 1, pause/resume, harness or reply, output, cut 2 (or cut 3) | R2, R8 | the inherited wait, its cancellation and its budget are discharged; cut 2 (cut 3) recovered with a fresh budget |
+| Critique 1: parked cut 1, harness wake, output, cut 2 (or cut 3) | R2, R9 | the retry moves to the newer chain and runs after its reset |
+| Critique 1: zero-time successor, cut 1, pause/resume, harness or reply, output, cut 2 (or cut 3) | R2, R8, R10 | the inherited wait, its cancellation and its budget are discharged; cut 2 (cut 3) recovered with a fresh budget |
+| Critique 2: parked capacity or authentication cut, output, quota cut (and the reverse, and a third cut of another kind) | R2, R9 | the move opens the new chain's own wait; quota retries at the earliest allowed reset, capacity after one minute |
+| Critique 2: unknown confirmation at 19:01, hours of work, cut 2, a held delivery at 23:01 | R9, R10 | the 19:01 wait went with chain 1; 23:01 starts its own ten minutes; a short hold resumes, a lasting one still withdraws, a delivered reply cancels |
 
 `engine.test.ts` (line numbers at `52d7f9bd3`). Every case stays with its
 assertions unchanged.
@@ -537,21 +679,22 @@ assertions unchanged.
 | 21805 | parked harness quota notice persists its named 10pm / 11pm reset (pool) | cut, task notification, cut | R1, R5 refresh: no output, so the same chain |
 | 21902 | parked retry retains a delivered pipeline / startup-recovery continuation | cut, continuation, cut | R1, R5 |
 | 21967 | running / parked quota wait retains a human prompt removed by shutdown normalization | cut, typed prompt, interrupt, `<synthetic>` no-op | R3; the `<synthetic>` record is not agent output |
+| 19176 | successor auth / auth-window / capacity cut retains the source reset retry | test doubles: a non-quota park until the source's reset, no later cut | unchanged; the revision-3 family starts from this park and adds the output and the newer cut |
 | 19307 | a newer native operator turn cancels running reset continuation (tool) | cut saved, reply, tool call | R3; with the tool call the chain is closed and no newer chain is open, so the running lane keeps the stale wait marked cancelled until the turn ends |
 | 19710 | an operator reply ending on a newer native provider-notice / empty-completion cancels the old quota retry | cut, reply, cut or clean completion without output | R1, R3 |
 | 19645 | operator close / pause / pause-resume / reply / report / retry-stage / skip-stage cancels a parked quota retry | parked | R3 (test-double evidence without chain fields), R4 through state, R7 |
 | 19496 | cancelled quota retry withdraws its card promise after pause-resume / report | parked | R4, R7 |
-| 19584 | an exhausted provider limit retries the stage after its native reset across a Viewer restart (none / failed / delivered / pending) | parked, held delivery | unchanged cut; the bounded confirmation wait still applies to everything except `"working"` |
+| 19584 | an exhausted provider limit retries the stage after its native reset across a Viewer restart (none / failed / delivered / pending) | parked, held delivery | unchanged cut; the bounded confirmation wait still applies to everything except `"working"`, and starts with that chain |
 | 19695, 21474, 21516 | reply while termination is confirmed; reply before a far-future reset; reply during fresh target termination | test-double evidence | R3 through the `prompts` fallback |
 | 21947, 22044 | reply racing continuation admission; capacity relaunch rechecks operator input | test-double evidence | R3 through the `prompts` fallback |
 | 21992 | pause and resume withdraws a running provider reset obligation | saved wait, pause, resume | R4 |
 | 19910 | a report wins over a terminal limit | report | R7 |
 | 21879, 22106 | prompt history over the read bound; first recovery tick bounds incomplete prompt history | 9 MiB inside one chain | R6 |
 | 22307 | large historical prefix permits named reset recovery (parked) | 9.35 MiB before the chain | R6 |
-| 20081, 20418 | unknown resets keep the three-continuation bound; mixed provider cuts keep expenditure until progress | repeated cuts, no output (test doubles) | R1: one chain keeps one budget |
+| 20081, 20418 | unknown resets keep the three-continuation bound; mixed provider cuts keep expenditure until progress | repeated cuts, no output (test doubles, running lane) | R1: one chain keeps one budget |
 | 20098 | a busy resumed turn retires the old unknown-reset wait (assistant progress) | test double | R2 |
 | 19035, 19064 | Codex unavailable prompt metadata lets both lanes settle; cancels a parked quota retry | reply answered; cut, reply, cut | R2 settles; R3 for the parked retry (the chain is open) |
-| 19109, 19176, 19437, 19731, 20167, 20208, 20245, 20272, 20802, 21426, 21662 and the remaining provider cases | single cut per transcript: selection, resets and time zones, budgets, restart, delivery fences, host stops, card text | one chain, so every anchor agrees | unaffected |
+| 19109, 19437, 19731, 20167, 20208, 20245, 20272, 20802, 21426, 21662 and the remaining provider cases | single cut per transcript: selection, resets and time zones, budgets, restart, delivery fences, host stops, card text | one chain, so every anchor agrees | unaffected |
 
 `durableEvidence.test.ts`: "prompt order survives clock skew" (705, R1 physical
 order), "backdated context cannot hide a human reply" (722, R1, R6), "first
@@ -569,17 +712,23 @@ into the fence it hands over.
 - *Resumes by itself after the reset*: a cut after agent output is owed whatever
   happened before it (rounds 10 and 12), on both engines, pinned and pooled,
   on a running lane, on a parked lane whose stage worked again, and in a
-  zero-time successor.
+  zero-time successor. On a parked lane the new chain's own kind decides when:
+  its reset, or a one-minute backoff for capacity.
+- *Moves to another allowed account*: a moved quota retry runs at the earliest
+  reset among the allowed accounts, and its fresh attempt's admission excludes
+  the account the new chain cut (the capacity-then-quota and auth-then-quota
+  cases).
 - *Never resumes a lane the operator closed, paused or answered meanwhile*:
   "meanwhile" is the time since the chain's first cut. A reply, a pause or a
   resume in that time cancels, including a reply the provider refused at once.
   On a parked lane, a pause or a resume withdraws the retry at once.
 - *Survives a Viewer restart*: the chain comes from the transcript, so a
   restarted Viewer derives the same owed cut with no persisted anchor. A parked
-  retry that moved is persisted like any park.
+  retry that moved is persisted like any park, and the cleared confirmation
+  wait is persisted with it.
 - *Same attempt semantics as `retry-stage`*: unchanged (parked retries still go
   through `reconcileParkedProviderRetry`, and a moved retry creates the same
-  fresh attempt at its new reset).
+  fresh attempt at its new time).
 
 ## Deferred — not currently justified
 
@@ -588,9 +737,16 @@ into the fence it hands over.
   change, an operator prompt while the parked chain was still open, a turn that
   ended with no cut, or an expired confirmation; the card says so and the
   operator holds the lane. A later cut in that conversation is not upgraded
-  into a new retry. Revision 2 covers the shape the critique found, where the
-  retry was still live when the stage worked again (R9). No incident shows the
-  withdrawn shape.
+  into a new retry. Revisions 2 and 3 cover the shape the critiques found,
+  where the retry was still live when the stage worked again (R9). No incident
+  shows the withdrawn shape.
+- **A parked lane's new chain cut by authentication or by an unclassified
+  provider error.** It withdraws the retry. On a running lane an unclassified
+  error parks, and an authentication cut moves to an untried allowed account,
+  retries at another allowed account's known reset, or parks. Carrying that
+  account choice into the parked path adds account selection there for a cut
+  the requirement does not name (it names limits), and no incident shows the
+  shape.
 - **Moving the wait inside a pool relaunch.** `relaunchCutStage` confirms the
   cut twice around an idle-only host stop, inside the tick that has already
   discharged a closed wait; a newer chain cannot form between those reads
@@ -613,13 +769,18 @@ into the fence it hands over.
 ## Notes
 
 - No earlier solution existed: transcript and memory searches for the anchor
-  question, the parked retry and the zero-time successor returned only lane
-  499d73d9's rounds and this lane's own critique.
+  question, the parked retry, the zero-time successor, the cut-kind move and
+  the stale confirmation wait returned only lane 499d73d9's rounds and this
+  lane's own critiques.
 - Revision 1 claimed that `retryCancelled` on a wait from a closed chain is
   harmless because the discharge step removes that wait before the next chain
   is judged. That held only for waits with `turnTs > 0`. In revision 2 the
   discharge covers zero-time waits too, and a parked retry moves to the newer
-  chain through the refresh.
+  chain.
+- Revision 2 put the move inside the quota refresh, so it inherited that
+  function's quota guards, and it skipped booking the confirmation wait while
+  the stage worked without clearing the wait it already had. Revision 3 makes
+  the move its own step and clears that wait with the chain.
 - Claude parked harness and harness-three pass on head by accident: the head's
   refresh compares the last assistant message, which for Claude is the
   synthetic limit notice, so it never sees the agent's output and treats cut 2
