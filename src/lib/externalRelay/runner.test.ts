@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { callBody, type ToolLoopRuntime } from "./toolLoop";
+import { requestSchema, handoffAnswerSchema, type ToolCallResult } from "./protocol";
+import { x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -1011,7 +1015,7 @@ test("service-built roles answer and the real runner and poller emit cross-check
     ensureExternalRelayPollers();
     const deadline = Date.now() + 5000;
     while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
-    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context"], slots: [{ target_id: "t_target", free: 1 }] });
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls"], slots: [{ target_id: "t_target", free: 1 }] });
     const expected = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_completions.json"), "utf8"));
     expect(handoff).toEqual(expected.handoff);
     expect(claimBody).toEqual(expected.claim_body);
@@ -1032,3 +1036,329 @@ test("service-built roles answer and the real runner and poller emit cross-check
     await server.close();
   }
 }, 60_000);
+
+// Slice 2a uses the real launchDetached command and relayCall HTTP seams.
+function loopStub(plan: string, seen: string) {
+  return stub(`import fs from 'node:fs';const a=process.argv.slice(2);const p=await Bun.stdin.text();
+const schema=JSON.parse(fs.readFileSync(a[a.indexOf('--output-schema')+1],'utf8'));
+const round=Number(p.match(/This is round (\\d+) of 8/)?.[1]??1);
+const results=JSON.parse(p.match(/<tool_results>\\n([^]*?)\\n<\\/tool_results>/)?.[1]??'[]');
+const final=!schema.properties.calls;
+fs.appendFileSync(${JSON.stringify(seen)},JSON.stringify({round,prompt:p,schema,cwd:process.cwd()})+'\\n');
+const call=(tool='search_docs',args={query:'meetup'},cursor=null)=>({tool,arguments:JSON.stringify(args),cursor});
+const reply={action:'reply',text:'The meetup is Friday.',reply_to:'m_b40b71a0a9d43622ee0e2e6a',...(final?{}:{calls:[]})};
+const answer=(()=>{${plan}})();
+if(answer!==undefined)await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));`);
+}
+const oneCallPlan = `return round===1?{action:'call',text:'',reply_to:null,calls:[call()]}:reply;`;
+type WireCall = ReturnType<typeof callBody>;
+async function runLoopCase(options: {
+  role?: string; request?: ReturnType<typeof x1Request>; plan?: string;
+  response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown } | Promise<{ status?: number; body?: unknown }>;
+  runtime?: ToolLoopRuntime;
+  relayId?: string;
+  heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
+}) {
+  const request = options.request ?? { ...x1Request(options.role ?? "member"), request_id: `loop_${crypto.randomUUID()}` };
+  const calls: WireCall[] = [];
+  const events: string[] = [];
+  const completions: unknown[] = [];
+  const seen = path.join(root, `loop-seen-${crypto.randomUUID()}`);
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      const seq = (body as { seq: number }).seq;
+      events.push(`beat:${seq}`);
+      if (options.heartbeatResponse) return options.heartbeatResponse(seq);
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    if (req.url?.endsWith("/tool-calls")) {
+      events.push("call");
+      calls.push(body as WireCall);
+      return options.response ? await options.response(body as WireCall, calls.length) : {
+        body: { ...x1Results.ok, call_id: (body as WireCall).call_id, calls_remaining: 16 - new Set(calls.map((call) => call.call_id)).size },
+      };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
+  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null };
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, { command: loopStub(options.plan ?? oneCallPlan, seen),
+      sleep: async () => {}, ...options.runtime });
+    const rounds = fs.existsSync(seen) ? fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+    expect(events.indexOf("beat:1")).toBeLessThan(events.indexOf("call") === -1 ? Infinity : events.indexOf("call"));
+    expect(readRunLedger().runs).toEqual([]);
+    return { completion, calls, events, rounds, completions, paired, request,
+      record: readAnswerRecord(paired.id, request.target_id, request.request_id) };
+  } finally { await server.close(); }
+}
+
+for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin"])
+  test(`X1 ${role} claim completes through the read loop`, async () => {
+    const run = await runLoopCase({ role });
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    expect(run.calls).toHaveLength(1);
+    expect(run.rounds).toHaveLength(2);
+    expect(run.record).toMatchObject({ rounds: 2, toolCalls: [{ round: 1, tool: "search_docs", status: "ok", local: false }] });
+    const stored = JSON.stringify(run.record);
+    for (const secret of [run.calls[0]!.call_id, run.request.lease_id, run.paired.credential, x1Results.ok!.output]) expect(stored).not.toContain(secret);
+    expect(run.record!.toolCalls![0]).not.toHaveProperty("arguments");
+  });
+
+for (const [name, sample] of Object.entries(x1Results))
+  test(`X1 result ${name} crosses the runner projection`, async () => {
+    // Even an unexpected action result must end calling safely; no action is sent.
+    const run = await runLoopCase({
+      response: (body, attempt) => ({ body: { ...(sample.status === "pending" && attempt > 1 ? x1Results.ok : sample), tool: "search_docs", call_id: body.call_id } }),
+    });
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+    const prompt = run.rounds[1].prompt as string;
+    const projected = JSON.parse(prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)![1]!)[0];
+    if (sample.audience) {
+      expect(projected).toMatchObject({ status: "denied", code: "not_permitted", output: "" });
+      expect(run.record!.toolCalls![0]!.withheld).toBe(true);
+      expect(run.calls).toHaveLength(1);
+    } else if (sample.status === "pending") {
+      expect(run.calls).toHaveLength(2);
+      expect(run.calls[1]).toEqual(run.calls[0]);
+      expect(projected.output).toBe(x1Results.ok!.output);
+    } else {
+      expect(projected.status).toBe(sample.status);
+      expect(projected.output).toBe(sample.output);
+      if (sample.code) expect(projected.code).toBe(sample.code);
+      expect(run.calls).toHaveLength(name === "unavailable" ? 3 : 1);
+    }
+    if (sample.delivered || sample.status === "outcome_unknown" || sample.code === "too_many_calls")
+      expect(run.rounds[1].schema).toEqual(handoffAnswerSchema);
+  });
+
+for (const [name, envelope] of Object.entries(x1Errors).filter(([name]) => name !== "handoff_after_action"))
+  test(`X1 transport ${name} uses the production HTTP path`, async () => {
+    const waits: number[] = [];
+    const run = await runLoopCase({ response: () => envelope, runtime: { sleep: async (ms) => { waits.push(ms); } } });
+    if (["lease_lost", "not_found"].includes(name)) {
+      expect(run.completion).toBeNull();
+      expect(run.completions).toEqual([]);
+      expect(run.record?.outcome).toBe("lease_lost");
+    } else {
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+      expect(run.rounds[1].prompt).toContain(`"code":"${name}"`);
+      if (["unauthorized", "unsupported_version"].includes(name)) expect(run.rounds[1].schema).toEqual(handoffAnswerSchema);
+      if (name === "rate_limited") expect(waits).toEqual([60000, 60000, 60000]);
+    }
+  });
+
+test("six requested calls send four, invalid arguments and forbidden tools stay local", async () => {
+  const run = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:Array.from({length:6},(_,i)=>call('search_docs',{query:String(i)}))}:reply;` });
+  expect(run.calls).toHaveLength(4);
+  expect(run.record!.toolCalls!.slice(4).map((item) => item.code)).toEqual(["too_many_calls", "too_many_calls"]);
+  const local = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call('missing'),{tool:'search_docs',arguments:'[]',cursor:null},call('search_docs',{},'invented'),call('search_docs',{query:'x'.repeat(65536)})]}:reply;` });
+  expect(local.calls).toHaveLength(0);
+  expect(local.record!.toolCalls!.map((item) => item.code)).toEqual(["not_permitted", "invalid_arguments", "invalid_arguments", "invalid_arguments"]);
+});
+test("sixteen calls force a final schema, and sparse calls force round eight", async () => {
+  for (const n of [1, 4]) {
+    const run = await runLoopCase({ plan: `return final?reply:{action:'call',text:'',reply_to:null,calls:Array.from({length:${n}},(_,i)=>call('search_docs',{query:round+'-'+i}))};` });
+    expect(run.calls).toHaveLength(n === 4 ? 16 : 7);
+    expect(run.rounds).toHaveLength(n === 4 ? 5 : 8);
+    expect(run.rounds.at(-1).schema).toEqual(handoffAnswerSchema);
+  }
+});
+test("repeat calls use the local result, empty calls force the next round final", async () => {
+  const run = await runLoopCase({ plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call()]}:reply;` });
+  expect(run.calls).toHaveLength(1);
+  const empty = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[]}:reply;` });
+  expect(empty.calls).toHaveLength(0);
+  expect(empty.rounds[1].schema).toEqual(handoffAnswerSchema);
+});
+test("a pending read stops at 330 seconds through the wait seam", async () => {
+  let clock = 0;
+  const run = await runLoopCase({ response: (body) => ({ body: { ...x1Results.pending, tool: "search_docs", call_id: body.call_id } }),
+    runtime: { now: () => clock, sleep: async (ms) => { clock += ms; } } });
+  expect(clock).toBe(330000);
+  expect(run.rounds[1].prompt).toContain("The read did not finish.");
+});
+test("only 64 KiB of distinct outputs reaches subsequent prompts", async () => {
+  const run = await runLoopCase({
+    plan: `return final?reply:{action:'call',text:'',reply_to:null,calls:Array.from({length:4},(_,i)=>call('search_docs',{query:round+'-'+i}))};`,
+    response: (body) => ({ body: { ...x1Results.ok, call_id: body.call_id, output: "😀".repeat(16000), calls_remaining: 16 } }),
+  });
+  const prompt = run.rounds.at(-1).prompt as string;
+  const results = JSON.parse(prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)![1]!);
+  expect(results.reduce((bytes: number, result: { output: string }) => bytes + Buffer.byteLength(result.output), 0)).toBeLessThanOrEqual(65536);
+  expect(results.some((result: { code?: string }) => result.code === "quota_exhausted")).toBe(true);
+});
+test("a later Codex round cannot reuse a previous answer file", async () => {
+  const run = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:[call()]}:undefined;` });
+  expect(run.completion).toMatchObject({ outcome: "failed", reason: "agent_error" });
+  expect(run.rounds[0].cwd).not.toBe(run.rounds[1].cwd);
+});
+
+test("X2 is generated by the real poller and runner with X1 pending and pages", async () => {
+  const { ensureExternalRelayPollers, stopExternalRelayPollers } = await import("./poller");
+  const request = x1Request("member");
+  const calls: { round: number; attempts: { request: WireCall; x1_sample: string; response: ToolCallResult }[] }[] = [];
+  const seenIds = new Set<string>();
+  let claimBody: unknown;
+  let heartbeat = false;
+  let round = 1;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: request.target_id, name: "Target", answered_by: "install", fallback: "service" }] } };
+    if (req.url?.endsWith("/claim")) { claimBody = body; stopExternalRelayPollers(); return { status: 204 }; }
+    if (req.url?.endsWith("/heartbeat")) heartbeat = true;
+    if (req.url?.endsWith("/tool-calls")) {
+      expect(heartbeat).toBe(true);
+      const call = body as WireCall;
+      const first = !seenIds.has(call.call_id);
+      seenIds.add(call.call_id);
+      const sample = "cursor" in call ? "last_page" : call.tool === "search_docs" ? "ok" : first ? "pending" : "cursor_page";
+      if ("cursor" in call) round = 2;
+      const response = { ...x1Results[sample]!, call_id: call.call_id, calls_remaining: 16 - seenIds.size };
+      let entry = calls.find((item) => item.attempts[0]!.request.call_id === call.call_id);
+      if (!entry) { entry = { round, attempts: [] }; calls.push(entry); }
+      entry.attempts.push({ request: call, x1_sample: sample, response });
+      return { body: response };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_x2";
+  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null };
+  try {
+    updateRelayStore((store) => ({ ...store, relays: [paired] }));
+    ensureExternalRelayPollers();
+    const deadline = Date.now() + 5000;
+    while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls"], slots: [{ target_id: request.target_id, free: 1 }] });
+    const completion = await runClaimedRequest(paired, request, undefined, { sleep: async () => {}, command: loopStub(
+      `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('get_media',{message_id:'m_b40b71a0a9d43622ee0e2e6a'}),call()]};
+       if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('get_media',{},results.find(r=>r.next_cursor).next_cursor)]};return reply;`,
+      path.join(root, "x2-seen")) });
+    expect(completion?.outcome).toBe("answered");
+    if (completion?.outcome !== "answered") throw new Error("X2 did not answer");
+    expect(completion.duration_ms).toBeGreaterThanOrEqual(0);
+    const output = JSON.stringify({ x1: { revision: "a8bfda0b836a17f2d3ba7a4d065fabf03e967a13", claim: "claimed_tools_member.json",
+      claim_sha256: createHash("sha256").update(fs.readFileSync(path.join(x1Dir, "claimed_tools_member.json"))).digest("hex") },
+      claim_body: claimBody, calls, completion: { ...completion, duration_ms: 0 } }, null, 2) + "\n";
+    if (process.env.LLV_RELAY_WIRE_OUTPUT_TOOL_LOOP) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_TOOL_LOOP, output);
+    expect(output).toBe(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8"));
+    expect(calls[0]!.attempts[0]!.request).toEqual(calls[0]!.attempts[1]!.request);
+    expect(calls[2]!.attempts[0]!.request).toEqual({ lease_id: request.lease_id, call_id: calls[2]!.attempts[0]!.request.call_id, cursor: x1Results.cursor_page!.cursor! });
+  } finally { stopExternalRelayPollers(); await server.close(); }
+}, 30_000);
+
+test("C6 re-claim sends the stored call identity under a new lease and counts the member once", async () => {
+  const request = { ...x1Request("member"), request_id: "rq_reclaim_read" };
+  const relayId = "relay_reclaim_read";
+  let first: WireCall | undefined;
+  let executions = 0;
+  const lost = await runLoopCase({ request, relayId, response: (body) => {
+    first = body; executions++; return x1Errors.lease_lost!;
+  } });
+  expect(lost.completion).toBeNull();
+  const reclaimed = await runLoopCase({ request: { ...request, lease_id: "b".repeat(64) }, relayId,
+    response: (body) => {
+      expect(body.call_id).toBe(first!.call_id);
+      if (body.call_id !== first!.call_id) executions++;
+      return { body: { ...x1Results.ok, call_id: body.call_id, replayed: true } };
+    } });
+  expect(reclaimed.completion).toMatchObject({ outcome: "answered" });
+  expect(executions).toBe(1);
+  expect(countMemberAnswers({ relayId, targetId: request.target_id, chatKey: request.chat!.key,
+    requesterKey: request.input.requester!.key, sinceMs: Date.now() - 3600000 }).count).toBe(1);
+});
+
+test("heartbeats span the pending phase between child rounds", async () => {
+  const request = { ...x1Request("member"), request_id: "rq_pending_beats",
+    liveness: { ...x1Request("member").liveness, heartbeat_interval_s: 2 } };
+  const run = await runLoopCase({ request, response: (body, attempt) => ({ body: {
+    ...(attempt === 1 ? x1Results.pending : x1Results.ok), tool: "search_docs", call_id: body.call_id,
+  } }), runtime: { sleep: async (ms) => { await Bun.sleep(ms); } } });
+  expect(run.events.indexOf("beat:2")).toBeGreaterThan(run.events.indexOf("call"));
+  expect(run.events).toContain("beat:3");
+  expect(run.calls[0]).toEqual(run.calls[1]);
+}, 20_000);
+
+test("a stalled lease aborts a call phase and sends no completion", async () => {
+  const request = { ...x1Request("member"), request_id: "rq_stalled_call",
+    liveness: { ...x1Request("member").liveness, heartbeat_interval_s: 2, stall_window_s: 10 } };
+  const run = await runLoopCase({ request, response: async (body) => {
+    await Bun.sleep(12000); return { body: { ...x1Results.ok, call_id: body.call_id } };
+  }, heartbeatResponse: (seq) => seq === 1 ? { body: { status: "ok" } } : { status: 503 } });
+  expect(run.completion).toBeNull();
+  expect(run.completions).toEqual([]);
+  expect(run.record!.outcome).toBe("lease_lost");
+}, 25_000);
+
+for (const role of ["admin", "owner", "anonymous_admin"])
+  test(`audience projection for ${role} permits only its own flags`, async () => {
+    for (const audience of ["admin", "owner"] as const) {
+      const sample = x1Results[audience]!;
+      const run = await runLoopCase({ role, response: (body) => ({ body: { ...sample, tool: "search_docs", call_id: body.call_id } }) });
+      const allowed = audience === "admin" || role === "owner";
+      expect(run.record!.toolCalls![0]!.withheld).toBe(!allowed);
+      const result = JSON.parse(run.rounds[1].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1])[0];
+      expect(result.output).toBe(allowed ? sample.output : "");
+    }
+  });
+
+test("slice 1 requests launch with unchanged prompt/schema, no calls and no loop record fields", async () => {
+  const { answerPrompt } = await import("./prompt");
+  const { answerSchema } = await import("./protocol");
+  for (const fixture of serviceClaims) {
+    const request = requestSchema.parse(fixture.body.request);
+    const run = await runLoopCase({ request, plan: "return reply;" });
+    expect(run.rounds[0].prompt).toBe(answerPrompt(request));
+    expect(run.rounds[0].schema).toEqual(request.input.tools?.length ? handoffAnswerSchema : answerSchema);
+    expect(run.calls).toEqual([]);
+    expect(run.record).not.toHaveProperty("rounds");
+    expect(run.record).not.toHaveProperty("toolCalls");
+  }
+  const readRequest = x1Request("member");
+  const request = { ...readRequest, request_id: "rq_handoff_only", input: { ...readRequest.input, tool_guidance: null,
+    tools: readRequest.input.tools!.map((tool) => ({ name: tool.name, summary: tool.summary, mode: "handoff" as const })) } };
+  const run = await runLoopCase({ request, plan: "return reply;" });
+  expect(run.calls).toEqual([]);
+  expect(run.rounds[0].prompt).toBe(answerPrompt(request));
+  expect(run.record).not.toHaveProperty("rounds");
+});
+
+test("concurrent reads settle in model order with at most four in flight", async () => {
+  let active = 0;
+  let maximum = 0;
+  const run = await runLoopCase({ plan: `return round===1?{action:'call',text:'',reply_to:null,calls:Array.from({length:4},(_,i)=>call('search_docs',{query:String(i)}))}:reply;`,
+    response: async (body) => {
+      active++; maximum = Math.max(maximum, active);
+      const query = "arguments" in body ? body.arguments!.query as string : "";
+      await Bun.sleep((4 - Number(query)) * 20); active--;
+      return { body: { ...x1Results.ok, call_id: body.call_id, output: query, calls_remaining: 12 } };
+    } });
+  expect(maximum).toBe(4);
+  const results = JSON.parse(run.rounds[1].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1]);
+  expect(results.map((item: { output: string }) => item.output)).toEqual(["0", "1", "2", "3"]);
+});
+
+test("transport and invalid-result retries keep identical bodies", async () => {
+  for (const kind of ["5xx", "bad_result", "oversize_response"]) {
+    const waits: number[] = [];
+    const run = await runLoopCase({ response: (body, attempt) => {
+      if (attempt < 4) {
+        if (kind === "5xx") return { status: 503 };
+        if (kind === "oversize_response") return { body: { ...x1Results.ok, output: "x".repeat(65537), call_id: body.call_id } };
+        return { body: { ...x1Results.ok, status: "unexpected", call_id: body.call_id } };
+      }
+      return { body: { ...x1Results.ok, call_id: body.call_id } };
+    }, runtime: { sleep: async (ms) => { waits.push(ms); } } });
+    expect(run.calls).toHaveLength(4);
+    expect(run.calls.every((body) => JSON.stringify(body) === JSON.stringify(run.calls[0]))).toBe(true);
+    expect(waits).toEqual([1000, 2000, 4000]);
+    expect(run.completion).toMatchObject({ outcome: "answered" });
+  }
+});
+
+test("a historical replay cannot restore the fresh remaining-call budget", async () => {
+  const run = await runLoopCase({ plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call('search_docs',{query:String(round)})]}:reply;`,
+    response: (body, attempt) => ({ body: { ...x1Results.ok, call_id: body.call_id, calls_remaining: attempt === 1 ? 2 : 15, replayed: attempt === 2 } }) });
+  expect(run.rounds[2].prompt).toContain("2 calls are left.");
+});
