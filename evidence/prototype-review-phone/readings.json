@@ -1,0 +1,2966 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "readings": {
+    "390-en-light-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        243.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 243.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-light-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-light-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-light-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Compact list — results, phone· Search results layout",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        379,
+        738
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-en-light-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "390-en-light-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Compact list — results, narrow pane· Search results layout",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        293
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-en-light-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        292.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 292.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-light-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        331
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-light-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        847
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        358,
+        44
+      ]
+    },
+    "390-en-light-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Changed· Search results layout",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          379,
+          738
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Original· Search results layout",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1042,
+          2031
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "390-en-light-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        219.4
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 219.4,
+          "natural": 640,
+          "drawnAt": 0.6
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "390-en-light-chosen": {
+      "chip": "4Cards with a preview",
+      "onScreen": true
+    },
+    "390-en-light-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
+    },
+    "390-en-dark-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        243.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 243.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-dark-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-dark-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-dark-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Compact list — results, phone· Search results layout",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        379,
+        738
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-en-dark-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "390-en-dark-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Compact list — results, narrow pane· Search results layout",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        293
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-en-dark-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        292.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 292.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-dark-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        331
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-en-dark-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        847
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        358,
+        44
+      ]
+    },
+    "390-en-dark-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Changed· Search results layout",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          379,
+          738
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Original· Search results layout",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1042,
+          2031
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "390-en-dark-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        219.4
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 219.4,
+          "natural": 640,
+          "drawnAt": 0.6
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "390-en-dark-chosen": {
+      "chip": "4Cards with a preview",
+      "onScreen": true
+    },
+    "390-en-dark-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
+    },
+    "390-uk-light-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        243.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 243.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-light-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-light-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-light-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Компактний список — результати, телефон· Макет результатів пошуку",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        379,
+        738
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-uk-light-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "390-uk-light-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Компактний список — результати, вузька панель· Макет результатів пошуку",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        293
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-uk-light-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        292.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 292.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-light-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        331
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-light-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        847
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        358,
+        44
+      ]
+    },
+    "390-uk-light-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Змінено· Макет результатів пошуку",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          379,
+          738
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Оригінал· Макет результатів пошуку",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1042,
+          2031
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "390-uk-light-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        219.4
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 219.4,
+          "natural": 640,
+          "drawnAt": 0.6
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "390-uk-light-chosen": {
+      "chip": "4Картки з переглядом",
+      "onScreen": true
+    },
+    "390-uk-light-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
+    },
+    "390-uk-dark-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        243.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 243.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-dark-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-dark-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        760
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-dark-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Компактний список — результати, телефон· Макет результатів пошуку",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        379,
+        738
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-uk-dark-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "390-uk-dark-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Компактний список — результати, вузька панель· Макет результатів пошуку",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        293
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "390-uk-dark-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        292.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 292.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-dark-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        331
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 244,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "390-uk-dark-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        847
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        },
+        {
+          "left": 0,
+          "width": 390,
+          "height": 760,
+          "natural": 390,
+          "drawnAt": 1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        358,
+        44
+      ]
+    },
+    "390-uk-dark-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Змінено· Макет результатів пошуку",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          379,
+          738
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Оригінал· Макет результатів пошуку",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1042,
+          2031
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "390-uk-dark-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        390,
+        844
+      ],
+      "sheet": [
+        0,
+        844
+      ],
+      "canvas": [
+        0,
+        390,
+        219.4
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 390,
+          "height": 219.4,
+          "natural": 640,
+          "drawnAt": 0.6
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "390-uk-dark-chosen": {
+      "chip": "4Картки з переглядом",
+      "onScreen": true
+    },
+    "390-uk-dark-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
+    },
+    "430-en-light-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        268.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 268.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-light-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-light-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-light-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Compact list — results, phone· Search results layout",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        760
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-en-light-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "430-en-light-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Compact list — results, narrow pane· Search results layout",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        430,
+        323
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-en-light-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        322.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 322.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-light-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        356
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-light-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        925
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        398,
+        44
+      ]
+    },
+    "430-en-light-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Changed· Search results layout",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          390,
+          760
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Original· Search results layout",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1073,
+          2090
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "430-en-light-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        241.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 241.9,
+          "natural": 640,
+          "drawnAt": 0.7
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "430-en-light-chosen": {
+      "chip": "4Cards with a preview",
+      "onScreen": true
+    },
+    "430-en-light-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
+    },
+    "430-en-dark-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        268.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 268.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-dark-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-dark-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-dark-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Compact list — results, phone· Search results layout",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        760
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-en-dark-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "430-en-dark-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Compact list — results, narrow pane· Search results layout",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        430,
+        323
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-en-dark-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        322.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 322.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-dark-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        356
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-en-dark-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        925
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        398,
+        44
+      ]
+    },
+    "430-en-dark-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Changed· Search results layout",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          390,
+          760
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Two columns — phone, before and after · Original· Search results layout",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1073,
+          2090
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "430-en-dark-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        241.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 241.9,
+          "natural": 640,
+          "drawnAt": 0.7
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "430-en-dark-chosen": {
+      "chip": "4Cards with a preview",
+      "onScreen": true
+    },
+    "430-en-dark-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
+    },
+    "430-uk-light-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        268.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 268.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-light-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-light-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-light-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Компактний список — результати, телефон· Макет результатів пошуку",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        760
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-uk-light-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "430-uk-light-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Компактний список — результати, вузька панель· Макет результатів пошуку",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        430,
+        323
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-uk-light-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        322.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 322.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-light-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        356
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-light-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        925
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        398,
+        44
+      ]
+    },
+    "430-uk-light-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Змінено· Макет результатів пошуку",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          390,
+          760
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Оригінал· Макет результатів пошуку",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1073,
+          2090
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "430-uk-light-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        241.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 241.9,
+          "natural": 640,
+          "drawnAt": 0.7
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "430-uk-light-chosen": {
+      "chip": "4Картки з переглядом",
+      "onScreen": true
+    },
+    "430-uk-light-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
+    },
+    "430-uk-dark-wide-frame": {
+      "slide": "1:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        268.8
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 268.8,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-dark-tall-frame": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-dark-tall-frame-scrolled": {
+      "slide": "1:f2",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        837.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 837.9,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-dark-viewer-opened": {
+      "position": "3 / 3",
+      "caption": "1 · Компактний список — результати, телефон· Макет результатів пошуку",
+      "src": "20270:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        390,
+        760
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-uk-dark-viewer-pinch-pan": {
+      "pinched": {
+        "tx": 0,
+        "ty": 118.687,
+        "scale": 3.25
+      },
+      "panned": {
+        "tx": 60,
+        "ty": 198.687,
+        "scale": 3.25
+      }
+    },
+    "430-uk-dark-viewer-swiped": {
+      "position": "2 / 3",
+      "caption": "1 · Компактний список — результати, вузька панель· Макет результатів пошуку",
+      "src": "23306:AAAASUVORK5CYII=",
+      "side": null,
+      "drawn": [
+        430,
+        323
+      ],
+      "view": {
+        "tx": 0,
+        "ty": 0,
+        "scale": 1
+      },
+      "compare": [],
+      "closeSize": [
+        44,
+        44
+      ]
+    },
+    "430-uk-dark-viewer-closed": {
+      "slide": "1:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        322.5
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 322.5,
+          "natural": 800,
+          "drawnAt": 0.5
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-dark-pair-wide": {
+      "slide": "2:f0",
+      "position": "1 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        356
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 269,
+          "natural": 960,
+          "drawnAt": 0.4
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0
+    },
+    "430-uk-dark-pair-tall": {
+      "slide": "2:f1",
+      "position": "2 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        925
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        },
+        {
+          "left": 0,
+          "width": 430,
+          "height": 838,
+          "natural": 390,
+          "drawnAt": 1.1
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "track": [
+        16,
+        398,
+        44
+      ]
+    },
+    "430-uk-dark-viewer-pair": {
+      "changed": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Змінено· Макет результатів пошуку",
+        "src": "21542:AAAASUVORK5CYII=",
+        "side": "after",
+        "drawn": [
+          390,
+          760
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 0,
+          "scale": 1
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "false",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "true",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      },
+      "zoomed": {
+        "tx": 0,
+        "ty": 92.3125,
+        "scale": 2.75
+      },
+      "original": {
+        "position": "2 / 3",
+        "caption": "2 · Дві колонки — телефон, до і після · Оригінал· Макет результатів пошуку",
+        "src": "19126:AAAASUVORK5CYII=",
+        "side": "before",
+        "drawn": [
+          1073,
+          2090
+        ],
+        "view": {
+          "tx": 0,
+          "ty": 92.3125,
+          "scale": 2.75
+        },
+        "compare": [
+          {
+            "side": "before",
+            "pressed": "true",
+            "height": 44
+          },
+          {
+            "side": "after",
+            "pressed": "false",
+            "height": 44
+          }
+        ],
+        "closeSize": [
+          44,
+          44
+        ]
+      }
+    },
+    "430-uk-dark-video": {
+      "slide": "4:v0",
+      "position": "3 / 3",
+      "screen": [
+        430,
+        932
+      ],
+      "sheet": [
+        0,
+        932
+      ],
+      "canvas": [
+        0,
+        430,
+        241.9
+      ],
+      "media": [
+        {
+          "left": 0,
+          "width": 430,
+          "height": 241.9,
+          "natural": 640,
+          "drawnAt": 0.7
+        }
+      ],
+      "pairModes": 0,
+      "footerOnScreen": true,
+      "sideways": 0,
+      "controls": true
+    },
+    "430-uk-dark-chosen": {
+      "chip": "4Картки з переглядом",
+      "onScreen": true
+    },
+    "430-uk-dark-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
+    }
+  },
+  "failures": []
+}

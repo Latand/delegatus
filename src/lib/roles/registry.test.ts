@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER } from "./defaults";
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER, VISUAL_CRITIC_CLASSES, VISUAL_CRITIC_UNFRAMED } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
@@ -17,6 +17,14 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.definition.capabilities).toEqual([]);
   expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
   expect(role.value.prompt).toContain("Never judge your own resolution");
+  // The rule a seat once had to rule on is the default: main's own red never
+  // stops a batch, foreign detectors are skipped, gates run one at a time.
+  expect(role.value.prompt).toContain("produces on native main are pre-existing and never stop the batch");
+  expect(role.value.prompt).toContain("A detector of a PR outside the candidate is skipped with a note");
+  expect(role.value.prompt).toContain("drops only the PR whose removal clears it");
+  expect(role.value.prompt).toContain("one at a time through scripts/gate-slot.sh");
+  expect(role.value.prompt).toContain("Full browser campaigns are opt-in (gate --browser)");
+  expect(role.value.prompt).not.toContain("/var/tmp/llv-gate");
 });
 
 test("maintainer preserves review and release ownership and treats retired seats as history", () => {
@@ -30,7 +38,7 @@ test("maintainer preserves review and release ownership and treats retired seats
   expect(resolved.value.prompt).toContain("Hide only a confirmed retired orchestrator seat card");
 });
 
-test("role registry exposes the eleven role ids and campaign-ready orchestrator config", () => {
+test("role registry exposes the twelve role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
 
   expect(roles.map((role) => role.id)).toEqual([
@@ -45,6 +53,7 @@ test("role registry exposes the eleven role ids and campaign-ready orchestrator 
     "merger",
     "maintainer",
     "issue-reporter",
+    "visual-critic",
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
     orchestrator: { engine: "claude", model: "opus", effort: "high" },
@@ -58,6 +67,7 @@ test("role registry exposes the eleven role ids and campaign-ready orchestrator 
     merger: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     deployer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
     "issue-reporter": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
+    "visual-critic": { engine: "claude", model: "opus", effort: "high" },
   });
 
   const orchestrator = resolveRole("orchestrator", {
@@ -126,7 +136,7 @@ test("role registry rejects unknown and missing required parameters with bounded
   });
   expect(resolveRole("no-such-role", {})).toEqual({
     ok: false,
-    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter)",
+    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter, visual-critic)",
   });
 });
 
@@ -162,7 +172,7 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
    only if every registry role renders it, so assert the whole registry. */
 test("every registry role scaffold carries the process-cleanup rule", () => {
   const roles = listRoles();
-  expect(roles.length).toBe(11);
+  expect(roles.length).toBe(12);
   for (const definition of roles) {
     /* The renderer both the spawn path and the pipeline stage lookup call, so
        a role whose required params are unset (a stage resolves them to registry
@@ -419,4 +429,59 @@ test("the issue-reporter preset is read-only, previews and never publishes, and 
   expect(text).toContain("You never publish.");
   expect(text).toContain("no edits, staging, commits, pushes, service restarts, forge comments or issues");
   expect(text).toContain("the only write is issue_report with action preview");
+});
+
+/* The operator, 2026-10-06: the last check of a UI lane looks only at the
+   rendered screens. The critic is read-only, runs on Claude Opus, makes its
+   own frames at every width, language and theme, and reports the two classes. */
+test("the visual-critic preset is read-only on Opus and judges only rendered frames", () => {
+  const resolved = resolveRole("visual-critic", {});
+  if (!resolved.ok) throw new Error(resolved.error);
+  expect(resolved.value.definition.capabilities).toEqual(["read-only"]);
+  expect(resolved.value.definition.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  expect(resolved.value.definition.name).toBe("Visual critic");
+  const text = resolved.value.prompt;
+  expect(text).toStartWith("You are a Visual-critic.");
+  expect(text).toContain("Do not review code, tests or architecture.");
+  expect(text).toContain(VISUAL_CRITIC_CLASSES);
+  for (const surface of [
+    "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "src/components/conversation/conversationWindow.browser.test.tsx",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx",
+    "scripts/capture-board-geometry.ts",
+  ]) expect(text).toContain(surface);
+  for (const frame of ["1440x900", "1000x700", "390 px", "en and uk", "light and dark", "an export of the head", "isolated state"]) expect(text).toContain(frame);
+  for (const kind of ["misalignment", "clipping", "overlap", "cramped or uneven spacing", "wrong emphasis", "inconsistent colours or sizes", "visual noise", "ids", "paths", "counters", "debug detail"]) expect(VISUAL_CRITIC_CLASSES).toContain(kind);
+  expect(text).toContain("each naming the frames it shows in");
+  expect(text).toContain("Verdict: pass when you find nothing");
+  expect(text).toContain("Close every browser you start, by the PID you recorded");
+  expect(text).toContain("Every finding names the frames it shows in");
+});
+
+/* A surface the critic cannot frame is the operator's call: a finding without a
+   frame would send the lane to driver work, outside both classes. */
+test("the visual critic ends needs_decision with no findings when a touched surface cannot be framed", () => {
+  const resolved = resolveRole("visual-critic", {});
+  if (!resolved.ok) throw new Error(resolved.error);
+  const text = resolved.value.prompt;
+  expect(text).toContain(`When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}`);
+  expect(VISUAL_CRITIC_UNFRAMED).toStartWith("needs_decision with no findings");
+  expect(text).toContain("Report only what a frame you produced shows");
+  expect(text).toContain("needs_decision when a touched surface cannot be framed");
+  expect(text).not.toContain("is a finding that names it");
+});
+
+/* Visual judgement runs on Claude, never Codex: spawn_agent takes an edited
+   Claude runtime and refuses a Codex one. */
+test("spawning a visual critic takes a Claude runtime and refuses Codex", () => {
+  const plain = resolveSpawnRole({ role: "visual-critic" });
+  if (!plain.ok) throw new Error(plain.error);
+  expect(plain.value?.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  const edited = resolveSpawnRole({ role: "visual-critic", model: "fable", effort: "max" });
+  if (!edited.ok) throw new Error(edited.error);
+  expect(edited.value?.config).toEqual({ engine: "claude", model: "fable", effort: "max" });
+  expect(resolveSpawnRole({ role: "visual-critic", engine: "codex", model: "gpt-6.1-sol", effort: "high" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
+  expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.1-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
+  const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.1-sol" });
+  expect(architect.ok && architect.value?.config.engine).toBe("codex");
 });

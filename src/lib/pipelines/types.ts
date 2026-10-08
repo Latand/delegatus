@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -38,7 +38,8 @@ export type PipelineRoleId =
   | "cleaner"
   | "prod-auditor"
   | "deployer"
-  | "merger";
+  | "merger"
+  | "visual-critic";
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
@@ -161,6 +162,12 @@ export type PipelineAttemptState =
   | "needs_decision"
   | "skipped";
 
+/** Who launched an activation by hand: the actor of the `start`, retry,
+    decision answer, review grant, accepted head or skip that put the cursor
+    where it is. The cursor carries it until the next attempt is made, which
+    takes it, so an attempt the engine makes on its own carries none. */
+export type PipelineHandLaunch = { actor: PauseResumeActor; at: string };
+
 /** Durable provenance for a cursor activation / attempt: which stage's attempt
     advanced here, along which verdict edge. Loop budgets are derived from these
     records (never a separate counter), so counts cannot drift from evidence. */
@@ -260,6 +267,7 @@ export type PipelineGraphEdit = {
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
   summary: string;
+  runtimeSwitch?: { attempt: number; id: string };
 };
 
 /** What the server itself observed about a stage attempt's work at the moment
@@ -337,8 +345,32 @@ export type PipelineDecisionAnswer = {
   at: string;
 };
 
+export type PipelineRuntimeSeat = {
+  engine: FlowEngine; model: string | null; effort: string | null;
+  serviceTier: string | null; accountId: string | null;
+};
+export type PipelineRuntimeSwitch = {
+  id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
+  mode: "fork" | "handoff";
+  from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
+  to: PipelineRuntimeSeat & { accountPinned: boolean };
+  phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
+  cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  rollback?: boolean;
+  reconfigureNoop?: boolean;
+  continuationKey?: string;
+  continuationDispatch?: { key: string; at: string };
+  launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
+  handoff?: { prompt: string; digest: string; bytes: number };
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  runtimeSwitches?: PipelineRuntimeSwitch[];
+  /** Monotonic verdict fence survives bounded switch-history retention. */
+  runtimeEvidenceSince?: string;
+  /** Explicit account policy for the live attempt after an apply-now edit. */
+  runtimeAccountPin?: string | null;
   /** Answer that created this continuation; forces lease-free activation. */
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -532,6 +564,9 @@ export type PipelineStageAttempt = {
       legacy positional scan. */
   input: string | null;
   activatedBy: PipelineEdgeActivation | null;
+  /** The hand that launched this attempt, taken from the cursor; absent when
+      the engine made it on its own. */
+  launchedBy?: PipelineHandLaunch;
   output: string | null;
   verdict: StageVerdict | null;
   /** A committed fixer self-fail accepted for independent review. Keeps the
@@ -909,7 +944,7 @@ export type Pipeline = {
       the activating edge are persisted in the same atomic write as the verdict
       that advanced here, so a crash between advance and spawn replays the
       identical prompt. */
-  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null } | null;
+  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
   state: PipelineState;
   pausedState: Exclude<PipelineState, "paused" | "draft"> | null;
   /** When the pipeline was last paused, and when it was last resumed. Durable
@@ -1137,6 +1172,7 @@ export type PatchPipelineRequest = {
   acceptedSha?: string;
   reason?: string;
   action: PipelineAction;
+  applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.
@@ -1177,8 +1213,13 @@ export type PatchPipelineRequest = {
   /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
       attempt the caller saw, or `0` when it saw none yet (a provisioning park).
       A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
-      non-integers are malformed. */
+      non-integers are malformed. On override-stage with `applyNow` it stands
+      alone and names the running attempt the caller saw. */
   expectedAttempt?: number;
+  /** for override-stage with `applyNow`: the conversation the caller saw
+      running the attempt. An attempt another conversation runs by then answers
+      409 `STAGE_CHANGED` before any runtime or definition is changed. */
+  expectedConversationId?: string;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

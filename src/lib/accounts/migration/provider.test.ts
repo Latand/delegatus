@@ -17,14 +17,118 @@ import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/c
 import { AgentRegistry, type ConversationObservation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
+import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
+import { setCpuPortsForTests, type CpuContainment } from "@/lib/runtime/cpuPlacement";
+import type { AgentMemoryCell } from "@/lib/runtime/agentMemory";
+
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "@/lib/runtime/telegramConnectorEnv";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import * as structuredSpawn from "@/lib/runtime/structuredSpawn";
+import * as tmux from "@/lib/tmux";
+import { advanceConversationMigration } from "./coordinator";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { StructuredDeliveryControllerUnavailableError } from "@/lib/runtime/structuredDeliveryController";
 
 const roots: string[] = [];
+
+for (const retireAt of ["cancel", "forget", "allowed"] as const) {
+  test(`a reused legacy Claude receipt checks target authorization after retirement: ${retireAt}`, async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-retirement-fence-"));
+    roots.push(base);
+    const source = accountRoot("claude", base, "source");
+    const target = accountRoot("claude", base, "target");
+    const registry = new AgentRegistry(path.join(base, "registry.json"));
+    const sourcePath = path.join(source.transcriptRoot, "source.jsonl");
+    const nativeId = crypto.randomUUID();
+    const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+    const profile = emptyLaunchProfile({ cwd: base, title: "Retirement fence", model: "opus", effort: "high" });
+    registry.reconcileConversations([{
+      engine: "claude", path: sourcePath, accountId: "source", launchProfile: profile,
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-05T10:00:00.000Z",
+    }]);
+    const conversation = registry.conversationForPath(sourcePath)!;
+    let migration = registry.requestConversationReseat(conversation.id, "target").migration!;
+    migration = registry.transitionConversationMigration(conversation.id, migration.revision, [migration.phase], { phase: "successor-starting" }).migration!;
+    const legacyHost = claudeHost("%47", 4747);
+    const receipt: ProviderReceipt = {
+      operationId: migration.operationId, nativeId, path: transcript, continuityPaths: [transcript], historyHash: "history",
+      host: { kind: "claude-stream", identity: "%47:4747", epoch: 1, verifiedAt: "2026-10-05T10:00:00.000Z", tmuxHost: legacyHost },
+    };
+    registry.persistMigrationProviderReceipt(conversation.id, migration.revision, migration.operationId, receipt);
+    // The running-stage reconfigure joins a migration that already holds its legacy receipt.
+    registry.claimConversationReconfigure(conversation.id, {
+      operationId: "stage-switch", revision: 1, accountId: "target", profile: { model: "opus", effort: "high", fast: null },
+    });
+    registry.requestConversationReseat(conversation.id, "target", { operationId: "stage-switch", revision: 1 });
+    const before = registry.conversation(conversation.id)!.generations;
+    let allowed = true;
+    let cancellations = 0;
+    let launches = 0;
+    let registrations = 0;
+    let releases = 0;
+    const forget = spyOn(tmux, "forgetResumePaneIfMatches").mockImplementation(async () => {
+      await Promise.resolve();
+      if (retireAt === "forget") allowed = false;
+    });
+    const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async () => {
+      launches += 1;
+      return {
+        identity: { sessionId: nativeId }, setWriterFence() {},
+        health: async () => ({ status: "idle", sessionKey: nativeId, endpoint: "stdio:retirement-fence", pid: process.pid, processStartIdentity: null,
+          eventCursor: 0, protocolVersion: "test", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+        onStateChange: () => () => {}, release: async () => { releases += 1; },
+      } as unknown as ClaudeStreamBrokerHost;
+    });
+    const provider = new RegisteredSuccessorProvider({
+      accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source }, registry,
+      startCodex: async () => { throw new Error("unexpected Codex client"); }, claudeStatus: async () => ({ loggedIn: true }),
+      verifyClaudeHost: async () => true,
+      cancelClaude: async () => {
+        cancellations += 1;
+        await Promise.resolve();
+        if (retireAt === "cancel") allowed = false;
+        return "absent";
+      },
+      now: () => "2026-10-05T10:00:00.000Z",
+    });
+    const structuredFlag = process.env.LLV_STRUCTURED_HOSTS;
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    const controller = (process as typeof process & {
+      __llvStructuredDeliveryController?: { registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null };
+    }).__llvStructuredDeliveryController!;
+    const originalRegister = controller.registerActiveHost;
+    controller.registerActiveHost = async () => { registrations += 1; return async () => {}; };
+    try {
+      const result = await advanceConversationMigration(conversation.id, registry, provider, {
+        reconfigureOperationId: "stage-switch", authorizeTarget: () => {
+          if (!allowed) throw new Error("target account is no longer allowed on this project");
+        },
+      });
+      if (retireAt === "allowed") {
+        expect({ launches, registrations }).toEqual({ launches: 1, registrations: 1 });
+        expect(result.migration?.phase).toBe("committed");
+        expect(result.generations.at(-1)).toMatchObject({ id: nativeId, accountId: "target" });
+      } else {
+        expect({ launches, registrations }).toEqual({ launches: 0, registrations: 0 });
+        expect(result.generations).toEqual(before);
+        expect(result.migration).toMatchObject({ phase: "failed-recoverable", errorCode: "target-account-unavailable", error: expect.stringContaining("no longer allowed") });
+        expect(registry.snapshot().pendingSuccessorCleanups).toEqual({});
+        expect(registry.snapshot().entries[`claude:${nativeId}`]?.claimOwner ?? null).toBeNull();
+        expect(cancellations).toBe(2); // Retirement and the coordinator's confirmed discarded-receipt cleanup.
+      }
+    } finally {
+      await provider.cleanup(receipt);
+      expect(releases).toBe(launches);
+      controller.registerActiveHost = originalRegister;
+      adopt.mockRestore();
+      forget.mockRestore();
+      if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+      else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+    }
+  });
+}
 
 function accountRoot(engine: "claude" | "codex", base: string, id: string) {
   const home = path.join(base, id);
@@ -585,6 +689,85 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     adopt.mockRestore();
     if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+  }
+});
+
+test.each(["codex", "claude"] as const)("a %s migration successor runs in the CPU cell of its conversation's class, and work it cannot contain is refused before it starts", async (engine) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), `llv-provider-${engine}-successor-cpu-`));
+  roots.push(base);
+  const source = accountRoot(engine, base, "source");
+  const target = accountRoot(engine, base, "target");
+  const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const fakeHost = {
+    setWriterFence() {},
+    health: async () => ({ status: "idle", sessionKey: "successor", endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
+      eventCursor: 0, protocolVersion: "test-v1", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+    onStateChange: () => () => {},
+    release: async () => {},
+  };
+  const cells: Array<AgentMemoryCell | null> = [];
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null }) => {
+    cells.push(options.memoryCell ?? null);
+    return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
+  };
+  const adopt = engine === "codex"
+    ? spyOn(CodexAppServerHost, "adopt").mockImplementation(capture as unknown as typeof CodexAppServerHost.adopt)
+    : spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(capture as unknown as typeof ClaudeStreamBrokerHost.adopt);
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    verifyClaudeHost: async () => true,
+    cancelClaude: async () => "absent",
+    registry,
+    now: () => "2026-10-07T09:00:00.000Z",
+  });
+  const launch = (member: "pipeline" | null) => {
+    const begun = registry.beginSpawn(engine, base, { cwd: base, title: "Migrated conversation" });
+    if (member) registry.rememberMembership(begun.conversationId, { kind: member, containerId: "pipeline_successor", role: "builder", slot: "build:1",
+      stageId: null, stageOrder: null, round: null, parentConversationId: null });
+    return begun.conversationId;
+  };
+  let attempt = 0;
+  const publish = (conversationId: string) => {
+    attempt += 1;
+    const nativeId = ["50505050", "5050", "4050", "8050", `50505050505${attempt}`].join("-");
+    const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+    const receipt = { operationId: `${engine}-successor-cpu-${attempt}`, nativeId, path: transcript, continuityPaths: [transcript], historyHash: `history-${attempt}`,
+      host: engine === "codex"
+        ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
+        : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base }) });
+  };
+  const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
+  Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });
+  const controller = (process as typeof process & {
+    __llvStructuredDeliveryController?: { registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null };
+  }).__llvStructuredDeliveryController!;
+  const originalRegister = controller.registerActiveHost;
+  controller.registerActiveHost = async () => async () => {};
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), cpus: 24, agentSlice: "test-agents.slice", workSlice: "test-agents-work.slice", runner: () => "" });
+    await publish(launch("pipeline"));
+    await publish(launch(null));
+    expect(cells.map((cell) => cell?.plan.cpu)).toMatchObject([
+      { workload: "work", slice: "test-agents-work.slice", weight: 100, quotaPercent: 300 },
+      { workload: "operator", slice: "test-agents.slice", weight: 1000, quotaPercent: null },
+    ]);
+    const reason = "the kernel applied no CPU controls to a scope in test-agents.slice; the cpu controller is off on one of its ancestors";
+    setCpuPortsForTests({ probe: (): CpuContainment => ({ kind: "missing", reason }), runner: () => "" });
+    await expect(publish(launch("pipeline"))).rejects.toThrow(`CPU containment for agent work is unavailable: ${reason}`);
+    expect(cells).toHaveLength(2);
+  } finally {
+    warn.mockRestore();
+    setCpuPortsForTests(null);
+    controller.registerActiveHost = originalRegister;
+    adopt.mockRestore();
+    for (const [key, value] of [["LLV_STRUCTURED_HOSTS", saved.structured], ["LLV_AGENT_CPU", saved.cpu], ["LLV_AGENT_MEMORY", saved.memory]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
 });
 

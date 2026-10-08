@@ -1,4 +1,4 @@
-import { memoryKillText } from "./agentMemoryState";
+import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
@@ -746,7 +746,7 @@ export class CopilotAcpHost implements EngineHost {
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.running?.turnId ?? null,
       pendingAttention: [...this.attentions.keys()],
-      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
+      ...memoryField(this.memoryCell),
       activeFlags: [...this.launchFlags],
       account: null,
     };

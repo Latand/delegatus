@@ -1,0 +1,4585 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "block": "the header's menu, built",
+  "bound": {
+    "desktop": 360,
+    "phone": 743
+  },
+  "tallest": {
+    "desktop": 355.2,
+    "phone": 661
+  },
+  "reached": {
+    "desktop": [
+      "activity",
+      "dictation",
+      "guide",
+      "key",
+      "language",
+      "linked",
+      "mapping",
+      "memory",
+      "ping",
+      "push",
+      "qr",
+      "relay",
+      "signOut",
+      "team",
+      "update",
+      "walk"
+    ],
+    "phone": [
+      "activity",
+      "dictation",
+      "guide",
+      "key",
+      "linked",
+      "mapping",
+      "memory",
+      "ping",
+      "relay",
+      "team",
+      "update",
+      "walk"
+    ]
+  },
+  "states": [
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-rest.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-help-member.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-settings.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-working.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-working-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-key.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-key-replace.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-rest-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-settings-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-off-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-key-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-rest-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-settings-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        257.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-noKey-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-noKey-field.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        342.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-key-missing.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-rest-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-settings-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        223.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        273.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-memory-capped-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-en-key-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-rest.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-help-member.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-settings.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-working.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-working-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-key.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-key-replace.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-rest-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-settings-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-off-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-key-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-rest-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-settings-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        257.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-noKey-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-noKey-field.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        342.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-key-missing.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-rest-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-settings-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        223.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        273.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-memory-capped-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-en-key-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        0,
+        183,
+        390,
+        661
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-rest.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "help",
+      "memory": "working",
+      "box": [
+        0,
+        640,
+        390,
+        204
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-help.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rules",
+      "memory": "working",
+      "box": [
+        0,
+        397.3,
+        390,
+        446.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-rules.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-settings.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-memory-working.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        0,
+        642.9,
+        390,
+        201.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-key.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-settings-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-memory-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-settings-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        419,
+        390,
+        425
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-memory-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        0,
+        419,
+        390,
+        425
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-memory-noKey-field.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        0,
+        330.4,
+        390,
+        513.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        0,
+        588.9,
+        390,
+        255.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-key-missing.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-settings-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        469,
+        390,
+        375
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-en-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-rest.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-help-member.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-settings.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-working.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-working-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-key.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-key-replace.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-rest-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-settings-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-off-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-key-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-rest-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-settings-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        270.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-noKey-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-noKey-field.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        355.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-key-missing.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-rest-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-settings-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        236.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        286.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-memory-capped-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-light-uk-key-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-rest.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-help-member.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-settings.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-working.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-working-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-key.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-key-replace.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-rest-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-settings-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-off-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-key-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-rest-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-settings-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        270.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-noKey-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-noKey-field.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        355.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-key-missing.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-rest-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-settings-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        236.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        286.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-memory-capped-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-light-uk-key-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        0,
+        183,
+        390,
+        661
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-rest.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "help",
+      "memory": "working",
+      "box": [
+        0,
+        640,
+        390,
+        204
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-help.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rules",
+      "memory": "working",
+      "box": [
+        0,
+        382.1,
+        390,
+        461.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-rules.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-settings.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-memory-working.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        0,
+        642.9,
+        390,
+        201.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-key.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-settings-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-memory-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-settings-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        401.1,
+        390,
+        442.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-memory-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        0,
+        401.1,
+        390,
+        442.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-memory-noKey-field.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        0,
+        312.5,
+        390,
+        531.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        0,
+        588.9,
+        390,
+        255.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-key-missing.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-settings-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        451.1,
+        390,
+        392.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-light-uk-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-rest.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-help-member.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-settings.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-working.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-working-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-key.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-key-replace.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-rest-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-settings-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-off-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-key-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-rest-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-settings-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        257.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-noKey-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-noKey-field.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        342.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-key-missing.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-rest-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-settings-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        223.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        273.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-memory-capped-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-en-key-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-rest.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-help-member.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-settings.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-working.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-working-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-key.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-key-replace.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-rest-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-settings-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        203.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        253.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-off-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-key-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-rest-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-settings-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        257.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-noKey-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        307.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-noKey-field.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        342.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-key-missing.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-rest-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-settings-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        223.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        273.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-memory-capped-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-en-key-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        0,
+        183,
+        390,
+        661
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-rest.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "help",
+      "memory": "working",
+      "box": [
+        0,
+        640,
+        390,
+        204
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-help.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rules",
+      "memory": "working",
+      "box": [
+        0,
+        397.3,
+        390,
+        446.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-rules.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-settings.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-memory-working.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        0,
+        642.9,
+        390,
+        201.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-key.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-settings-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-memory-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-settings-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        419,
+        390,
+        425
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-memory-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        0,
+        419,
+        390,
+        425
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-memory-noKey-field.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        0,
+        330.4,
+        390,
+        513.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        0,
+        588.9,
+        390,
+        255.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-key-missing.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-settings-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        469,
+        390,
+        375
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-en-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-rest.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-help-member.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-settings.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-working.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-working-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-key.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-key-replace.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-rest-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-settings-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-off-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-key-off.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-rest-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-settings-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        270.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-noKey.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-noKey-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-noKey-field.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        355.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-key-missing.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-rest-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-settings-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        236.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-capped.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        286.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-memory-capped-details.png"
+    },
+    {
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1440-dark-uk-key-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        215
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-rest.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "help-member",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        275
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-help-member.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-settings.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-working.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-working-details",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-working-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-key.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-replace",
+      "memory": "working",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-key-replace.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-rest-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-settings-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        231.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-off-details",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        281.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-off-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-off",
+      "memory": "off",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-key-off.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-rest-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-settings-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        270.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-noKey.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-details",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-noKey-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        320.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-noKey-field.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        355.2
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        7,
+        36.5,
+        232,
+        134.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-key-missing.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "rest-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        185
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-rest-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        349
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-settings-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        236.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-capped.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "memory-capped-details",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        286.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-memory-capped-details.png"
+    },
+    {
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "desktop",
+      "state": "key-capped",
+      "memory": "capped",
+      "box": [
+        7,
+        36.5,
+        232,
+        100.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "desktop-1000-dark-uk-key-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "memory": "working",
+      "box": [
+        0,
+        183,
+        390,
+        661
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-rest.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "help",
+      "memory": "working",
+      "box": [
+        0,
+        640,
+        390,
+        204
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-help.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rules",
+      "memory": "working",
+      "box": [
+        0,
+        382.1,
+        390,
+        461.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-rules.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings",
+      "memory": "working",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-settings.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-working",
+      "memory": "working",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-memory-working.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "key",
+      "memory": "working",
+      "box": [
+        0,
+        642.9,
+        390,
+        201.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-key.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings-off",
+      "memory": "off",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-settings-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-off",
+      "memory": "off",
+      "box": [
+        0,
+        486.6,
+        390,
+        357.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-memory-off.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-settings-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-noKey",
+      "memory": "noKey",
+      "box": [
+        0,
+        401.1,
+        390,
+        442.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-memory-noKey.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-noKey-field",
+      "memory": "noKey",
+      "box": [
+        0,
+        401.1,
+        390,
+        442.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-memory-noKey-field.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-noKey-invalid",
+      "memory": "noKey",
+      "box": [
+        0,
+        312.5,
+        390,
+        531.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-memory-noKey-invalid.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "key-missing",
+      "memory": "noKey",
+      "box": [
+        0,
+        588.9,
+        390,
+        255.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-key-missing.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "settings-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        310.9,
+        390,
+        533.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-settings-capped.png"
+    },
+    {
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "memory-capped",
+      "memory": "capped",
+      "box": [
+        0,
+        451.1,
+        390,
+        392.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "cut": [],
+      "file": "phone-390-dark-uk-memory-capped.png"
+    }
+  ],
+  "failures": []
+}

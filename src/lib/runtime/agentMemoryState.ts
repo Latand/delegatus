@@ -19,3 +19,9 @@ export function memoryKillText(kill: Pick<AgentMemoryKill, "limitBytes" | "limit
   const n = gb < 10 ? String(Number(gb.toFixed(1))) : String(Math.round(gb));
   return kill.limit === "system" ? `killed: out of memory (system memory exhausted, ${n} GB RAM)` : `killed: out of memory (limit ${n} GB)`;
 }
+
+/** A host's `memory` field; absent when the scope carries only CPU placement. */
+export function memoryField(cell: { memoryState(): HostMemoryState | null } | null | undefined): { memory?: HostMemoryState } {
+  const memory = cell?.memoryState();
+  return memory ? { memory } : {};
+}

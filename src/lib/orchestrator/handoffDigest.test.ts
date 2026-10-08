@@ -478,8 +478,12 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    report section (docs/design/board-maintenance-report.md §8), which measured
    13 399; 18 500 bytes still hold two. Raised to 14 600 for the bug report
    and other-project section and the issue-reporter row (#2518), which
-   measured 14 558; 17 400 bytes still hold two. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 14_600;
+   measured 14 558; 17 400 bytes still hold two. The visual-critic row and
+   the UI-lane step measured 14 760 on main. With the prototype-review
+   pointer and the merged role rows, the directive measures 14 807, and with
+   the applyNow pointer on the override-stage line 14 823, inside a 14 900
+   byte share that still leaves more than two history budgets. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 14_900;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));

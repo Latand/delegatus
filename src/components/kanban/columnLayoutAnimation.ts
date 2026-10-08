@@ -15,7 +15,9 @@ interface Shot {
   glyphs?: { node: HTMLElement; rect: DOMRect }[];
   paint?: { backgroundColor: string; backgroundImage: string; borderColor: string };
 }
-interface Snapshot { key: string; shots: Shot[]; navigation?: boolean }
+/** The first card in a scrolled column's window, and where it stood in it. */
+interface Reading { body: HTMLElement; node: HTMLElement; offset: number; top: number }
+interface Snapshot { key: string; shots: Shot[]; navigation?: boolean; reading?: Reading[] }
 interface Pose { rect: DOMRect; next: DOMRect }
 const keyOf = (root: HTMLElement) => [...root.querySelectorAll<HTMLElement>(COLUMN)].map((node) => `${node.dataset.status}:${node.dataset.wide}`).join("|");
 /** The same ease as the compositor, for its inverse font-size keyframes. */
@@ -261,6 +263,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     root.dataset.columnLayout = "inverted";
     thawGrid();
     [...frozen.keys()].forEach(thaw);
+    holdReading(snapshot);
     recordScroll();
     const destinations = snapshot.shots.filter(({ node }) => node.isConnected).map((shot) => ({ shot, next: shot.node.getBoundingClientRect() }));
     const widths = new Map(destinations.filter(({ shot }) => shot.node === shot.column).map(({ shot, next }) => [shot.node, next.width]));
@@ -346,6 +349,31 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
     }
     return node.getBoundingClientRect();
   };
+  /* Cards above a scrolled column's window rewrap to other heights when its
+     width changes, and scroll anchoring is off for the change, so the cards in
+     the window moved by the sum of those differences. The first card in the
+     window is read with the source boxes and put back where it stood once the
+     final layout exists. A scroll position that changed in between is someone
+     else's: a reader revealed by navigation, or the end of a shorter list. */
+  const readingOf = (shots: Shot[]): Reading[] => {
+    const reading: Reading[] = [];
+    for (const { node: column } of shots.filter((shot) => shot.node === shot.column)) {
+      const body = column.querySelector<HTMLElement>(":scope > .col-body");
+      if (!body || !(body.scrollTop > 0)) continue;
+      const viewport = body.getBoundingClientRect();
+      const first = shots.find((shot) => shot.column === column && shot.node.parentElement === body && shot.rect.bottom > viewport.top + 1);
+      if (first) reading.push({ body, node: first.node, offset: first.rect.top - viewport.top, top: body.scrollTop });
+    }
+    return reading;
+  };
+  const holdReading = (snapshot: Snapshot) => {
+    for (const { body, node, offset, top } of snapshot.reading ?? []) {
+      if (!node.isConnected || !body.isConnected || body.scrollTop !== top) continue;
+      const moved = node.getBoundingClientRect().top - body.getBoundingClientRect().top - offset;
+      if (Math.abs(moved) > 0.5) body.scrollTop = top + moved;
+    }
+    snapshot.reading = undefined;
+  };
   const capture = () => {
     const shots: Shot[] = [];
     for (const column of root.querySelectorAll<HTMLElement>(COLUMN)) {
@@ -416,7 +444,7 @@ export function installColumnLayoutAnimation(root: HTMLElement): { prepare(): vo
         Object.assign(shot.node.style, shot.paint);
       }
     }
-    pending = { key: keyOf(root), shots, navigation };
+    pending = { key: keyOf(root), shots, navigation, reading: readingOf(shots) };
     sourceDirty = false;
     // Keep the styling marker stable while diagnostic phases change. A CSS
     // selector on that attribute invalidated descendant styles at every phase.

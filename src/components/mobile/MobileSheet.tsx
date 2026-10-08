@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import { useModalLayer } from "@/components/modalLayer";
@@ -60,7 +60,7 @@ export function MobileSheet({
   /** A header control beside the title (the queue's «Dismiss all», the switcher's «Board ›»). */
   extra?: ReactNode;
   footer?: ReactNode;
-  /** Fullscreen (the rotate / create draft): no handle, no rounded top. */
+  /** Fullscreen (the prototype review): no handle, no rounded top, the footer at the screen's foot. */
   full?: boolean;
   onClose: () => void;
   children: ReactNode;
@@ -131,7 +131,7 @@ export function MobileSheet({
         tabIndex={-1}
         data-mobile2-sheet={name}
         className={`flex flex-col bg-raised shadow-2 outline-none transition-[transform,opacity] duration-[320ms] ease-[cubic-bezier(0.2,0,0,1)] starting:translate-y-6 starting:opacity-0 motion-reduce:transition-none ${
-          full ? "h-full max-h-full rounded-none" : "max-h-[88%] rounded-t-[16px]"
+          full ? "h-full max-h-full rounded-none pt-[env(safe-area-inset-top)]" : "max-h-[88%] rounded-t-[16px]"
         } pb-[calc(6px+env(safe-area-inset-bottom))]`}
       >
         {full ? null : (
@@ -146,7 +146,9 @@ export function MobileSheet({
             <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
-        <div className="min-h-0 overflow-y-auto pb-1" data-mobile2-sheet-body>
+        {/* A full sheet's body takes the height the header and the footer leave,
+            so the footer stands at the foot of the screen whatever the body holds. */}
+        <div className={`min-h-0 overflow-y-auto pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
           {children}
         </div>
         <MobileReceipt store={receiptStore} placement="sheet" />
@@ -168,6 +170,65 @@ export function MobileSheetSection({ children, count, className = "" }: { childr
 
 export function MobileSheetDivider() {
   return <div className="my-1.5 h-px shrink-0 bg-border" aria-hidden />;
+}
+
+/** A row of icon cells for a sheet's most frequent actions: an icon over a
+    short name, with the same inset at both edges of the sheet. */
+export function MobileSheetCells({ label, children, attrs }: { label?: string; children: ReactNode; attrs?: Record<`data-${string}`, string | undefined> }) {
+  return <div role="group" aria-label={label} {...attrs} className="grid auto-cols-fr grid-flow-col gap-1 px-3 py-1">{children}</div>;
+}
+
+/** One cell of `MobileSheetCells`. `label` is the action's full name, read where the short caption is not enough. */
+export function MobileSheetCell({ icon, caption, label, onSelect, attrs }: {
+  icon: ReactNode;
+  caption: string;
+  label: string;
+  onSelect: () => void;
+  attrs?: Record<`data-${string}`, string | undefined>;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      {...attrs}
+      onClick={onSelect}
+      className="flex min-h-[60px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-control px-1 py-2 text-center text-label font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+    >
+      <span aria-hidden className="flex shrink-0 items-center justify-center text-secondary">{icon}</span>
+      <span className="max-w-full truncate">{caption}</span>
+    </button>
+  );
+}
+
+/** A named row that opens its rows in place, under itself
+    (docs/design/compact-card-menu.md): the arrow points down while it is
+    closed and up once the rows are there, and the rows hang from one rule. */
+export function MobileSheetFold({ id, title, value, open, onToggle, children }: {
+  id: string;
+  title: string;
+  /** What the closed row holds, at its end (a count). */
+  value?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const Arrow = open ? ChevronUp : ChevronDown;
+  return (
+    <div role="none">
+      <button
+        type="button"
+        aria-expanded={open}
+        data-mobile2-menu-section={id}
+        onClick={onToggle}
+        className="flex min-h-11 w-full items-center gap-3 px-4 text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      >
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {value === undefined ? null : <span className="shrink-0 text-label font-medium tabular-nums text-muted">{value}</span>}
+        <Arrow className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+      </button>
+      {open ? <div role="group" aria-label={title} data-mobile2-menu-body={id} className="ml-4 flex flex-col border-l border-border">{children}</div> : null}
+    </div>
+  );
 }
 
 /** One 44 px row inside a sheet (the prototype's `.mrow`): an icon, a label,

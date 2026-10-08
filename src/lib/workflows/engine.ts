@@ -23,6 +23,7 @@ import { paneInfo, spawnAgentWithPrompt } from "@/lib/tmux";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
+import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
 import { fixerKickoff, prBody, stageKickoff } from "./prompts";
 import { buildWorkflow, loadTemplates, loadWorkflows, normalizeStages, saveWorkflows, setupExitPath, validateWorkflowLaunchModels } from "./store";
@@ -57,6 +58,8 @@ export interface StageSpawn {
 export interface WorkflowPorts {
   exec: ExecPort;
   startSetup(wf: Workflow): { pid: number | null; error?: string };
+  /** A held setup or stage-agent start waits for CPU pressure to fall; null admits. */
+  cpuPressureHold?(): CpuPressureHold | null;
   setupStatus(wf: Workflow): SetupStatus;
   spawnAgent(role: RoleConfig, cwd: string, prompt: string, accountId: string | null | undefined, title: string): Promise<StageSpawn>;
   /** The pane still hosts a non-shell foreground process. */
@@ -79,12 +82,14 @@ export function defaultPorts(): WorkflowPorts {
   return {
     exec: realExec,
     startSetup,
+    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
     setupStatus,
     spawnAgent: async (role, cwd, prompt, accountId, title) => {
       const account = accountManager.resolveSpawn(role.engine, accountId);
       const spec = freshSpecFor(role.engine, cwd, { title, model: role.model, effort: role.effort, codexHome: account.engine === "codex" ? account.home : null, claudeConfigDir: account.engine === "claude" ? account.home : null, claudeProjectsDir: account.engine === "claude" ? account.transcriptRoot : null });
       const startedAtMs = Date.now();
-      const pane = await spawnAgentWithPrompt(spec, prompt);
+      // Workflow stages are pipeline work: their pane runs in a CPU work scope.
+      const pane = await spawnAgentWithPrompt(spec, prompt, undefined, { workload: "work" });
       const transcript = await resolveSpawnedTranscriptPath({
         engine: role.engine,
         knownTranscript: spec.transcript ?? null,
@@ -239,6 +244,10 @@ function advanceStage(wf: Workflow): void {
   wf.stateDetail = null;
 }
 
+/* The subjects of the visible CPU-pressure hold reasons. */
+const SETUP_HOLD_SUBJECT = "setup";
+const STAGE_HOLD_SUBJECT = "stage start";
+
 async function ensureStageAgent(
   wf: Workflow,
   run: WorkflowStageRun,
@@ -250,6 +259,11 @@ async function ensureStageAgent(
 ): Promise<"spawning" | "waiting" | "ready"> {
   if (!run.startedAt) {
     if (wf.mode === "auto" && activeDrain()) return "waiting";
+    // Only a fresh start asks; a stage whose start is stamped is observed and
+    // recovered below whatever the pressure reads.
+    const pressure = ports.cpuPressureHold?.();
+    if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, STAGE_HOLD_SUBJECT); return "waiting"; }
+    if (isCpuPressureDetail(wf.stateDetail, STAGE_HOLD_SUBJECT)) wf.stateDetail = null;
     /* #1279: a workflow stage is a launch of the workflow's project's work, so
        it draws its account from that project's allowed set like every other
        one. An unbound project takes the branch this always took — the engine's
@@ -328,6 +342,7 @@ function workflowGitFence(wf: Workflow, ports: WorkflowPorts) {
   return { exec, current: revalidate, release: () => clearInterval(watch) };
 }
 
+
 async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
   if (!wf.baseRef) {
     const fence = workflowGitFence(wf, ports);
@@ -344,12 +359,17 @@ async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheck
   }
   if (wf.template.setup) {
     if (wf.setupPid == null && ports.setupStatus(wf).status !== "done") {
+      // Only the first launch asks; a setup that already started is observed
+      // below whatever the pressure reads.
+      const pressure = ports.cpuPressureHold?.();
+      if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, SETUP_HOLD_SUBJECT); return; }
       const started = ports.startSetup(wf);
       if (started.pid == null) {
         park(wf, started.error ?? "setup failed to start");
         return;
       }
       wf.setupPid = started.pid;
+      if (isCpuPressureDetail(wf.stateDetail, SETUP_HOLD_SUBJECT)) wf.stateDetail = null;
       return;
     }
     const status = ports.setupStatus(wf);

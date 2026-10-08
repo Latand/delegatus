@@ -86,6 +86,8 @@ describe("rolePromptDisplayTitle", () => {
     );
     expect(rolePromptDisplayTitle("You are a Cleaner. Classify the dirty checkout and preserve evidence.")).toBe("Cleaner");
     expect(rolePromptDisplayTitle("You are a Deployer. Plan the blue/green deployment for merged SHA abc.")).toBe("Deployer");
+    expect(rolePromptDisplayTitle("You are a Visual-critic. You judge only the rendered screens of the change.")).toBe("Visual-critic");
+    expect(rolePromptDisplayTitle("You are a visual-critic. Judge the frames.")).toBe("Visual-critic");
   });
 
   test("a legacy lowercase scaffold still resolves a known role", () => {

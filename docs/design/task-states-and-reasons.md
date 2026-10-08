@@ -129,13 +129,15 @@ hold?: {
 | `task` | Waiting for «*other task's title*» | another task; the title is a link |
 | `pr` / `issue` | Waiting for PR #N / issue #N | a merge or a fix elsewhere; a link |
 | `worker` | Queued: waiting for a free worker | nobody; the seat picks it up |
-| `resource` | Queued: not enough memory | nobody, or the operator if it lasts |
+| `resource` | Queued: waiting for resources · *note* | nobody, or the operator if it lasts |
 | `limit` | Queued: usage limit, until 16:40 | nobody; time |
 | `postponed` | Postponed until 26.09: *note* | nobody until the date |
 | `external` | Waiting outside: *note* | someone outside the project |
 | `unstated` | Stopped, no reason given | whoever triages it |
 
 The three "Queued" kinds are the operator's *queued*: work that will start by itself when capacity appears. The others are *blocked* in the plain sense: somebody has to do something first. The card's first word tells them apart.
+
+**Which queued kind to write.** A wait for a free worker slot is `worker`: the seat's worker cap is full, a launch is not admitted yet, or another lane has to finish before this one starts. `resource` is a shortage on the machine itself, such as memory or disk, and its note names the shortage ("4 GB of memory available, 8 GB needed"); the card shows that note after the label, so the operator reads what is short. A usage limit on an account is `limit`. On 2026-10-06 a seat wrote `resource` for a worker slot wait, the card read "Queued: waiting for resources", and the operator went looking for memory that had never run out. The `create_task` and `update_task` descriptions and the `hold.kind` parameter carry the same rule.
 
 **Rules, all clamping and none rejecting:**
 

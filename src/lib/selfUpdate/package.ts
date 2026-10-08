@@ -92,7 +92,7 @@ export class PackageRunner implements RunnerPort {
           if (!revision.sha || revision.sha !== target) throw new Error("The package revision changed");
         } else if (index === 1) {
           writeAtomic(join(container, "package.json"), { private: true });
-          const code = await this.ports.run([this.bun, "add", "--exact", `delegatus-cli@${version}`], { cwd: container, env: this.env, onLine: line => { steps[index]!.tail.push(line); steps[index]!.tail = steps[index]!.tail.slice(-40); this.changed(); } });
+          const code = await this.ports.run([this.bun, "add", "--exact", `delegatus-cli@${version}`], { cwd: container, env: this.env, work: "update-package", onLine: line => { steps[index]!.tail.push(line); steps[index]!.tail = steps[index]!.tail.slice(-40); this.changed(); } });
           if (code !== 0) throw new Error(`Package install exited with ${code}`);
         } else {
           if (packageVersion(dir) !== version || !existsSync(join(dir, "dist", "standalone", "server.js")) || !existsSync(join(dir, "dist", "runtime-host.mjs"))

@@ -232,6 +232,37 @@ test("actual column and ancestor scroll interrupts motion; restored scroll does 
   }
 });
 
+test("a scrolled column keeps the first card of its window where it stood", async () => {
+  const { root, column, card, body, calls, layout } = mount();
+  const rect = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON() {} }) as DOMRect;
+  // The cards above the window are 60 px shorter in all at the wide width.
+  card.getBoundingClientRect = () => column.dataset.wide === "0" ? rect(812, 160, 196, 180) : rect(612, 100, 396, 120);
+  body.scrollTop = 300;
+  layout.prepare();
+  column.dataset.wide = "1";
+  await mutations();
+  expect(body.scrollTop).toBe(240);
+  // The helper's own write arrives as a scroll event and leaves the motion alone.
+  body.dispatchEvent(new dom.Event("scroll") as unknown as Event);
+  expect(root.dataset.columnLayout).toBe("running");
+  expect(calls.some((call) => call.node === column)).toBe(true);
+});
+
+test("a column at its top, and one scrolled since its source was read, keep their scroll position", async () => {
+  for (const scrolled of [0, 300]) {
+    const { column, card, body, layout } = mount();
+    const rect = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON() {} }) as DOMRect;
+    card.getBoundingClientRect = () => column.dataset.wide === "0" ? rect(812, 160, 196, 180) : rect(612, 100, 396, 120);
+    body.scrollTop = scrolled;
+    layout.prepare();
+    column.dataset.wide = "1";
+    if (scrolled) body.scrollTop = 420;
+    await mutations();
+    expect(body.scrollTop).toBe(scrolled ? 420 : 0);
+    layout.dispose();
+  }
+});
+
 test("preparing a control that keeps the width does not freeze an active transition", async () => {
   const { root, column, layout } = mount();
   layout.prepare();

@@ -24,6 +24,7 @@ import {
 } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { BoardTask } from "@/lib/tasks/types";
+import { PrototypeNoticeChip } from "@/components/prototypeReview/PrototypeNoticeRow";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
@@ -580,6 +581,9 @@ export function OrchestratorPanel({
           ) : null}
           {state.kind === "live" && !collapsed && file && rotating ? <ProcessStatusControls file={file} hideChip compact /> : null}
           <span className="grow" />
+          {/* Folded, the composer and its notice lines are put away: the strip
+              keeps the word that a prototype waits. */}
+          {collapsed ? <PrototypeNoticeChip project={project} /> : null}
           {unreadReply ? (
             <span className="seat-unread" data-seat-unread="" title={t("orchPanel.seatUnreadReply")}>
               <i aria-hidden />

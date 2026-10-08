@@ -12,10 +12,11 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { LogTailState } from "@/hooks/useLogTail";
@@ -33,6 +34,7 @@ import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/
 import { ImagePane } from "@/components/preview/ImagePane";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
+import { PrototypeReviewHost } from "@/components/prototypeReview/PrototypeReviewHost";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
@@ -103,7 +105,8 @@ export type ConversationWindowCase =
   | "telegram-refused-composer"
   | "agent-images"
   | "image-viewers"
-  | "own-message-steps";
+  | "own-message-steps"
+  | "prototype-notice";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -980,7 +983,86 @@ function LifecycleFixture() {
   );
 }
 
-function mountLifecycle(root: HTMLElement): void {
+/* The orchestrator's open composer while prototypes wait (`prototype-notice`):
+   the production composer over the same fake host, told it holds the
+   project's seat the way the orchestrator's pane tells it, with the page's
+   review host fed three waiting tasks and one decided. The notice stands above
+   the message field; «Go to prototype» opens the review the host owns, read
+   from an answer shaped like `GET /api/tasks/:id/prototypes`. */
+const PROTO_PROJECT = "viewer";
+const PROTO_UK = params.get("lang") === "uk";
+const protoWord = (en: string, uk: string) => (PROTO_UK ? uk : en);
+const PROTO_WAITING = [
+  { task: "t-search", review: "r-search", text: protoWord("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), title: protoWord("Search results layout", "Макет результатів пошуку"), ago: 3 },
+  { task: "t-links", review: "r-links", text: protoWord("Repair old links in the release notes", "Полагодити старі посилання в нотатках до випуску"), title: protoWord("Release notes links, smaller arrows and a title long enough to be cut", "Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися"), ago: 6 },
+  { task: "t-upload", review: "r-upload", text: protoWord("Redesign attachment upload for large files", "Переробити завантаження великих вкладень"), title: protoWord("Upload progress sheet", "Панель перебігу завантаження"), ago: 9 },
+];
+const protoAt = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const PROTO_TASKS = [
+  ...PROTO_WAITING.map((entry) => ({
+    id: entry.task, project: PROTO_PROJECT, status: "assigned", placement: "unplaced", text: entry.text, assignments: [], createdAt: protoAt(60), updatedAt: protoAt(entry.ago),
+    prototypeReview: { latestReviewId: entry.review, waitingReviewId: entry.review, title: entry.title, rounds: 1, createdAt: protoAt(entry.ago) },
+  })),
+  {
+    id: "t-export", project: PROTO_PROJECT, status: "assigned", placement: "unplaced", text: protoWord("Export presets", "Пресети експорту"), assignments: [], createdAt: protoAt(900), updatedAt: protoAt(300),
+    prototypeReview: { latestReviewId: "r-export", waitingReviewId: null, title: protoWord("Export presets", "Пресети експорту"), rounds: 1, createdAt: protoAt(400),
+      decision: { chosen: [{ number: 2, name: protoWord("Segmented control", "Сегментований перемикач") }], comment: "", at: protoAt(300), delivery: "sent" } },
+  },
+] as unknown as BoardTask[];
+
+function protoPicture(hue: number, label: string): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = 390; canvas.height = 600;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = `hsl(${hue} 45% 42%)`; g.fillRect(0, 0, 390, 600);
+  g.fillStyle = "#fff"; g.font = "600 20px sans-serif"; g.fillText(label, 20, 40);
+  return canvas.toDataURL("image/png");
+}
+
+function protoRead(taskId: string) {
+  const waiting = PROTO_WAITING.find((entry) => entry.task === taskId);
+  if (!waiting) return { taskId, rounds: [], waitingReviewId: null };
+  const media = (id: string, hue: number, label: string) => ({ id, mime: "image/png", bytes: 48_000, available: true, url: protoPicture(hue, label) });
+  return {
+    taskId, waitingReviewId: waiting.review,
+    rounds: [{
+      id: waiting.review, taskId, project: PROTO_PROJECT, title: waiting.title, createdAt: protoAt(waiting.ago), source: { conversationId: null },
+      variants: [
+        { number: 1, name: protoWord("Compact list", "Компактний список"), description: protoWord("One line per result.", "Один рядок на результат."), videos: [], frames: [{ image: media("m1", 205, "compact"), caption: protoWord("results, phone", "результати, телефон"), width: 390 }] },
+        { number: 2, name: protoWord("Two columns", "Дві колонки"), description: protoWord("Results beside the opened one.", "Результати поруч із відкритим."), videos: [], frames: [{ image: media("m2", 150, "two columns"), caption: protoWord("results, phone", "результати, телефон"), width: 390 }] },
+      ],
+    }],
+  };
+}
+
+function PrototypeNoticeFixture() {
+  useFakeHost();
+  return (
+    <div data-evidence-case="prototype-notice" className="flex h-dvh flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
+          paused={false} follow setFollow={() => undefined} />
+      </div>
+      <div data-evidence-composer="">
+        <TmuxComposer file={lifeFile()} taskChipsFor={PROTO_PROJECT} />
+      </div>
+      <PrototypeReviewHost tasks={PROTO_TASKS} />
+    </div>
+  );
+}
+
+function mountPrototypeNotice(root: HTMLElement): void {
+  mountLifecycle(root, <PrototypeNoticeFixture />);
+  const transport = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const match = /^\/api\/tasks\/([^/]+)\/prototypes$/.exec(url.split("?")[0]!);
+    if (match) return Response.json(protoRead(decodeURIComponent(match[1]!)));
+    return transport(input, init);
+  }) as typeof fetch;
+}
+
+function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture />): void {
   setRuntimeUiEnabledForTests(false);
   setLogFeedDependenciesForTests({
     useLogTail: () => ({
@@ -992,7 +1074,7 @@ function mountLifecycle(root: HTMLElement): void {
   installFakeComposerHost();
   fakeHost.lines = [LIFE_OPENING];
   (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(<LifecycleFixture />);
+  createRoot(root).render(scene);
 }
 
 /** The composer's side of the fake host: a hosted structured session, its
@@ -1391,6 +1473,8 @@ interface OwnStepsControls {
   /** Median and mean ms of one reading across `runs` places in the feed, and
       how many selector passes over the feed those readings made. */
   readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
+  /** Show another conversation in the components already on the page. */
+  open: (conversation: string) => void;
 }
 
 const noop = () => undefined;
@@ -1565,13 +1649,20 @@ function mountOwnMessageSteps(root: HTMLElement): void {
     activity: "idle",
     mtime: Math.floor(Date.now() / 1000) - 120,
   } as unknown as FileEntry;
-  createRoot(root).render(
+  const pane = (shown: FileEntry) => (
     <OwnMessageStepsPane
-      file={file}
+      file={shown}
       surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
       paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
-    />,
+    />
   );
+  const reactRoot = createRoot(root);
+  /* Another conversation in the same window, the way the orchestrator panel
+     and a reader hand a new file to the components they already mounted. */
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.open = (conversation) => {
+    reactRoot.render(pane({ ...file, path: `/${conversation}.jsonl`, name: `${conversation}.jsonl`, conversationId: conversation, title: conversation }));
+  };
+  reactRoot.render(pane(file));
 }
 
 setLocale((params.get("lang") as Locale | null) ?? "en");
@@ -1581,6 +1672,7 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
+else if (root && requested === "prototype-notice") mountPrototypeNotice(root);
 else if (root && requested === "long-history") mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root) {

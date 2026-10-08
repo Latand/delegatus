@@ -45,6 +45,8 @@ test("with Codex out, every mapping row lands on its Sonnet 5.5 or Opus runtime"
     [{ roleId: "cleaner" }, { engine: "codex", model: "gpt-6-luna", effort: "medium" }, sonnet("high")],
     [{ roleId: "prod-auditor" }, { engine: "codex", model: "gpt-6.1-sol", effort: "high" }, opus],
     [{ roleId: "deployer" }, { engine: "codex", model: "gpt-6-sol", effort: "medium" }, opus],
+    /* Model to model this would be Sonnet at medium: the visual critic judges, so it lands on Opus. */
+    [{ roleId: "visual-critic" }, { engine: "codex", model: "gpt-6-luna", effort: "medium" }, opus],
   ] as const;
   for (const [row, from, to] of rows) expect({ row, config: equivalentConfig(from, "claude", row) }).toEqual({ row, config: to });
 });
@@ -85,4 +87,14 @@ test("the frontend and docs fix rows have approved targets on both engines", () 
     expect(equivalentConfig({ engine: "codex", model: "gpt-6.1-sol", effort: "high" }, "claude", row)).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
     expect(equivalentConfig({ engine: "codex", model: "gpt-6-sol", effort: "high" }, "claude", row)).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
   }
+});
+
+/* Visual judgement runs on Claude, never Codex (ROLE_ENGINE_LOCKS): a move to
+   Codex leaves the visual critic's row where it is, edited runtime included. */
+test("with Claude out, the visual critic stays on its Claude runtime", () => {
+  const opusHigh: RoleConfig = { engine: "claude", model: "opus", effort: "high" };
+  expect(equivalentConfig(opusHigh, "codex", { roleId: "visual-critic" })).toEqual(opusHigh);
+  const edited: RoleConfig = { engine: "claude", model: "fable", effort: "max" };
+  expect(equivalentConfig(edited, "codex", { roleId: "visual-critic" })).toEqual(edited);
+  expect(equivalentConfig(opusHigh, "codex", { roleId: "architect" }).engine).toBe("codex");
 });
