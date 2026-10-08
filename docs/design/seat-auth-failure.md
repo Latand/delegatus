@@ -83,7 +83,8 @@ MCP health read at `:1474`:
 1. Skip when `input.seat` is null or `seatTurnProgressing(input.seat)`.
 2. Read the seat's current generation from the registry: engine,
    `generations.at(-1).path`, and its account through
-   `accountManager.resolveTranscriptOwner(engine, path)`.
+   registry account attribution, with transcript-path ownership as fallback.
+   Credential launch eligibility does not participate in this attribution.
 3. `durableStageTurnEvidence(engine, path)`, reused as it is. When
    `turn === "terminal"` and `terminalProviderMessage` is present, classify it
    with `classifyProviderCondition(engine, errorClass, text)`.
@@ -113,7 +114,7 @@ authIncident?: {
   seatEpoch: number; conversationId: string;
   engine: "claude" | "codex"; accountId: string | null;
   firstFailedAt: string; lastFailedTs: number;
-  credentialStamp: string | null; // mtime+size of the account's credential file at detection
+  credentialStamp: string | null; // repair time and incident-scoped credential fingerprint
   rotation: { state: "pending" | "held" | "rotated" | "none-allowed" | "refused";
               toAccountId?: string; successorConversationId?: string; error?: string };
   notice: { bridgeSeq?: number; telegram?: "sent" | "failed" | "skipped"; card: boolean } | null;
@@ -129,6 +130,13 @@ find its own record after the new epoch is current.
 - An auth turn with no open incident for this `seatEpoch` opens one. A later
   auth turn on the same incident only moves `lastFailedTs`, and nothing is
   sent.
+- Credential contents are fingerprinted at launch admission (or readable
+  activation for an existing conversation) and at
+  each later check. A changed credential newer than the failed turn, before
+  its first check, consumes that turn through the persisted
+  `authRecoveredThrough` boundary. File timestamps alone cannot consume it.
+  It leaves the repaired seat available across restart. A subsequent failure
+  after the repair opens its own incident.
 - The notice goes out once, after the rotation decision (§4), so it can say
   what happened. Each channel is idempotent under the incident id: the bridge
   key, the Telegram `clientRequestId`, and the card's create receipt
@@ -141,13 +149,32 @@ find its own record after the new epoch is current.
 **The incident closes** (the card is resolved and the field cleared) when any
 of these holds:
 
-- the project's `seatEpoch` moved, through this rotation or anyone else's;
-- the seat's transcript shows a terminal turn newer than `lastFailedTs` that
-  is not an auth turn (`normalTurnTs`);
-- the account's credential stamp differs from `credentialStamp`, meaning
+- another seat becomes readable at a new epoch; a provisional automatic
+  successor retains the incident, and restoring the same failed predecessor
+  preserves its fence;
+- the seat's transcript shows a successful assistant turn newer than
+  `lastFailedTs` (`normalTurnTs`), without a terminal provider refusal;
+- a readable account credential content fingerprint differs from the one
+  retained in `credentialStamp`, meaning
   someone logged in again. Wakes resume. If the next turn fails again, that
   opens a new incident with one new notice, and that is new information: the
   login did not fix it.
+
+Claude credentials follow the existing reader's file or Keychain authority.
+File, Keychain and provider stamps retain an incident-scoped HMAC of credential contents;
+credential values never enter the incident, notice or logs. Unreadable or
+absent credentials do not establish a successful repair.
+The metadata-only Keychain query reads the item's modification time to order
+unobserved failures around a login, using the format emitted by
+[Apple's security tool](https://github.com/apple-oss-distributions/Security/blob/main/SecurityTool/macOS/keychain_utilities.c).
+When that date cannot be verified, only the already-observed failure is consumed.
+Compatible-provider accounts use the exported revision and modification-time
+helpers for their token/runtime/header files. Transcript ownership follows the
+registry and path attribution independently of credential launch eligibility,
+so unsafe credentials still produce the authentication notice.
+An unfinished predecessor notice retains only that predecessor's failures.
+After it is delivered, the same check evaluates the successor's own failure;
+the predecessor's recovery boundary cannot consume it.
 
 ## 4. The automatic rotation rule
 
@@ -167,7 +194,9 @@ Run once per incident, in the check that opened it:
 3. **`available`, a different account**: call `executeOrchestratorRotation`
    in-process with
    `{ project, clientRequestId: <incident id hashed to the 8–128 URL-safe form>, accountId: <picked>, handoffNotes: <one line: automatic rotation after authentication failure on <engine> account <label>> }`
-   and `actor: null`. The engine and model are omitted, so they continue the
+   and `actor: null`, with trusted autonomous launch admission. The guard
+   rechecks the current binding, target capacity and drain before helper and
+   successor admission. The engine and model are omitted, so they continue the
    incumbent's (`seatCommand.ts:1548-1552`). This is the path
    `rotate_orchestrator` takes. The handoff names the predecessor's read
    call, `predecessorConversationId` records the lineage,
@@ -176,11 +205,13 @@ Run once per incident, in the check that opened it:
    matters, because the spawn's own automatic pick would not know the
    incumbent's account had failed. The spawn's health pass
    (`resolveHealthySpawnAccount`) still checks the target's credentials.
-   - 2xx: `rotated`. The successor's first wake comes from the next check, as
-     after any rotation.
+   - A successful receipt with the matching activated successor: `rotated`.
+     A 202 successor remains provisional until readable. A terminal failure
+     receipt does not prove a successful move.
    - 409 on epoch conflict: someone else rotated, so the incident closes and
      no notice is sent. The operator acted, so there is nothing left to tell
      them.
+   - A late update drain: `held`, with no notice until release.
    - Any other refusal: `refused` with the error, and the seat is parked.
 4. **`exhausted` / `unavailable`**: `none-allowed`. The seat is parked.
    Nothing is bound, and the binding record is never written.
@@ -208,8 +239,8 @@ Language: `operatorLocale()`, Ukrainian by default. The words live in a small
 Labels are account labels (`listClaudeAccounts`/`listCodexAccounts`), never
 emails or ids.
 
-**Rotated** (bridge class `status`; Telegram; board card resolved at once,
-since nothing is owed):
+**Rotated** (bridge class `status`; Telegram; board card resolved when the
+successor is readable):
 
 > Оркестратор проєкту «Delegatus» не зміг автентифікуватися: Claude, акаунт
 > «A» — «OAuth session expired and could not be refreshed» (з 21:48).
@@ -226,6 +257,23 @@ board card left open):
 > один із них до проєкту — ваше рішення; сам Delegatus нічого не додає.
 
 **Refused**: the parked text, with "the move to «B» was refused: <error>".
+
+An accepted successor remains provisional until its transcript is readable. The
+authentication incident and open card survive this window. If the ordinary seat
+reconciler restores the unrepaired predecessor after a failed launch, recovery
+keeps the original incident and notice identity under the restored epoch, shows
+the failed move on its card, and holds wakes until login or a newer normal turn.
+An account migration can retain the conversation and designation epoch. A verified
+change of the transcript's current account ends the old credential scope before
+judging the new account's failure, so its first failure has an independent notice.
+
+All credential backends compare an incident-scoped content fingerprint;
+metadata availability alone cannot clear the authentication fence. A verified
+modification time supplies ordering once the credential itself has changed.
+
+The incident's failed conversation remains authoritative across a lost outcome
+write and bounded terminal-history trimming. The ordinary command's terminal
+history supplies the refusal detail when it is still available.
 
 Channels, none of which runs through the seat:
 
@@ -251,6 +299,24 @@ Channels, none of which runs through the seat:
 - **Journal**: the check's run record carries `delivery.outcome` and a
   `detail` naming the incident id and rotation state, so
   `seat_tick_settings verbose` explains the silence.
+
+A repaired incident whose notice is drain-held retains its original identity
+and a recovered boundary until reporting completes. It no longer fences
+authentication admission or rotates the repaired account. Authentication card
+references include a bounded hash of their incident, so an older owed card
+can be created and resolved alongside a newer open notice.
+
+Known Telegram refusals before any send are retained independently in the project
+state and retried under the original incident key. They survive credential repair,
+seat rotation and restart, including when bridge reporting is disabled. Retries
+respect the drain and leave successful successors free to work. Uncertain or
+partial sends keep their original bot receipts and are never automatically posted
+under a new key. Aborted turns and terminal provider refusals cannot substitute
+for a successful assistant turn when proving authentication recovery. The
+assistant message's own timestamp supplies that proof; a later empty completion
+cannot promote an older answer. A refused board creation remains owed independently under its original
+incident key until its card exists. Credential repair releases the seat while
+the board is full or its writer fails; the eventual notice card is then created and resolved.
 
 ## 6. Test plan
 

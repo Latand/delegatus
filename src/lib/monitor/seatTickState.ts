@@ -1,4 +1,5 @@
-import { normalizeSeatAuthIncident } from "./seatAuthIncident";
+import { normalizeSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
+import { normalizeSeatAuthIncident, normalizeSeatAuthTelegramNotice, normalizeSeatAuthCardNotice } from "./seatAuthIncident";
 import fs from "node:fs";
 import path from "node:path";
 import { SeatTickAccounting } from "./seatTickAccounting";
@@ -235,6 +236,14 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   }
   return {
     authIncident: normalizeSeatAuthIncident(raw.authIncident),
+    ...(Array.isArray(raw.authCardsOwed) ? { authCardsOwed: raw.authCardsOwed.flatMap((value) => {
+      const notice = normalizeSeatAuthCardNotice(value); return notice ? [notice] : [];
+    }) } : {}),
+    authCredentialObserved: normalizeSeatAuthCredentialBaseline(raw.authCredentialObserved),
+    ...(Array.isArray(raw.authTelegramOwed) ? { authTelegramOwed: raw.authTelegramOwed.flatMap((value) => {
+      const notice = normalizeSeatAuthTelegramNotice(value);
+      return notice ? [notice] : [];
+    }) } : {}),
     ...(typeof raw.authRecoveredThrough === "number" && Number.isFinite(raw.authRecoveredThrough) ? { authRecoveredThrough: raw.authRecoveredThrough } : {}),
     ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
@@ -348,6 +357,9 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...emptySeatTickState(),
     seatEpoch,
     authIncident: row.authIncident,
+    authTelegramOwed: row.authTelegramOwed,
+    authCardsOwed: row.authCardsOwed,
+    authCredentialObserved: row.authCredentialObserved,
     diskPressureShown: row.diskPressureShown,
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,

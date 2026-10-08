@@ -1,4 +1,5 @@
-import type { SeatAuthIncident } from "./seatAuthIncident";
+import type { SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
+import type { SeatAuthIncident, SeatAuthTelegramNotice, SeatAuthCardNotice } from "./seatAuthIncident";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import type { LifecycleEventType, LifecycleState, LifecycleTurnState } from "@/lib/lifecycle/vocabulary";
 
@@ -1066,8 +1067,14 @@ export interface SeatTickReportsInput {
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
   authIncident?: SeatAuthIncident;
+  /** Proven pre-send refusals retry independently of credential recovery. */
+  authTelegramOwed?: SeatAuthTelegramNotice[];
+  /** Refused board writes survive recovery without keeping the seat parked. */
+  authCardsOwed?: SeatAuthCardNotice[];
   /** Last failed turn cleared by a re-login; it cannot reopen on stale evidence. */
   authRecoveredThrough?: number;
+  /** Latest readable credential observation, scoped to this seat activation. */
+  authCredentialObserved?: SeatAuthCredentialBaseline;
   diskPressureShown?: string;
   /** Latest delivered versions, bounded to 2000 recent agenda items. */
   itemsShown?: string[];

@@ -67,6 +67,7 @@ import {
   orchestratorRevocations,
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
+  recordOrchestratorSeatAuthCredentialBaseline,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -106,9 +107,15 @@ import {
  * duplicated.
  */
 
+/** Trusted in-process restrictions; request JSON cannot supply admission. */
+export interface SeatLaunchAdmission {
+  autonomous?: boolean;
+  assertAccount?(accountId: string): void;
+}
+
 export interface SeatCommandDependencies {
   /** POST /api/spawn in-process, on the operator's own authority. */
-  spawn(body: Record<string, unknown>, autonomous?: boolean): Promise<{ status: number; body: Record<string, unknown> }>;
+  spawn(body: Record<string, unknown>, autonomous?: boolean, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }>;
   /** Deliver the mandate to an existing conversation, idempotent on
       `clientMessageId`. */
   deliver(input: { conversationId: string; path: string | null; clientMessageId: string; text: string }): Promise<{ ok: boolean; error?: string; outcome?: string }>;
@@ -246,7 +253,7 @@ function resolveOrchestratorCwd(project: string, requested: unknown, dependencie
   return dependencies.projectRoot?.(project) ?? null;
 }
 
-async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false): Promise<{ status: number; body: Record<string, unknown> }> {
+async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }> {
   const { executeSpawnRequest, productionSpawnCommandDependencies } = await import("@/lib/agent/spawnCommand");
   /* An in-process call the VIEWER makes, on its own authority: the designation
      surfaces have already made their authority decision — the seat route by
@@ -264,7 +271,8 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
-    autonomousAdmissionHeld: () => autonomous && !!activeDrain() });
+    autonomousAdmissionHeld: () => autonomous && !!activeDrain(),
+    assertAccountAdmission: admission?.assertAccount });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -430,8 +438,8 @@ export interface SeatCommandResult {
   body: Record<string, unknown>;
 }
 
-function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null): SeatCommandResult | null {
-  const hold = triggeredBy?.kind === "agent" ? activeDrain() : null;
+function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null, autonomous = false): SeatCommandResult | null {
+  const hold = autonomous || triggeredBy?.kind === "agent" ? activeDrain() : null;
   return hold ? { status: 409, body: { ...launchHoldRefusal(hold) } } : null;
 }
 
@@ -912,8 +920,9 @@ export function executeOrchestratorSeatRequest(
      Deliberately not a `rawBody` field: the body is caller-supplied JSON, and
      attribution that a caller can write is not attribution. */
   triggeredBy: OrchestratorSeatTrigger | null = null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy), {
+  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
@@ -924,6 +933,7 @@ async function runOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
   triggeredBy: OrchestratorSeatTrigger | null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
@@ -1110,8 +1120,9 @@ async function runOrchestratorSeatRequest(
   if (spawnSizing) return spawnSizing;
   // Reconciliation and completed replay above can settle admitted work. A
   // fresh agent spawn still needs admission after any awaited handoff work.
-  const hold = agentSeatLaunchHold(triggeredBy);
+  const hold = agentSeatLaunchHold(triggeredBy, admission?.autonomous);
   if (hold) return hold;
+  if (admission?.assertAccount) admission.assertAccount(text(rawBody.accountId));
   /* A seat holds the grant wherever Telegram is set up, whatever its
      connection reads this minute: the launch repairs a connection that is down
      or starts without the tool, and the grant brings the tool back later. */
@@ -1208,7 +1219,11 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawned = await dependencies.spawn(spawnBody, begun.seat.triggeredBy?.kind === "agent");
+  const spawnAdmission: SeatLaunchAdmission = { ...admission, assertAccount: (accountId) => {
+    admission?.assertAccount?.(accountId);
+    recordOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
+  } };
+  const spawned = await dependencies.spawn(spawnBody, admission?.autonomous || begun.seat.triggeredBy?.kind === "agent", spawnAdmission);
   if (spawned.body.code === "AUTO_UPDATE_DRAIN") {
     // No receipt was admitted: keep the pending intent and its downstream key.
     return { status: 409, body: { ...spawned.body, code: "launch_held_for_update", seat: begun.seat } };
@@ -1401,8 +1416,9 @@ export function executeOrchestratorRotation(
      someone else. Null is an in-process caller that named nobody, and records
      unknown provenance; the operator is never credited by default. */
   actor: ViewerActor | null = null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor), {
+  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor, admission), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
@@ -1413,6 +1429,7 @@ async function runOrchestratorRotation(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
   actor: ViewerActor | null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
@@ -1463,7 +1480,7 @@ async function runOrchestratorRotation(
   }
   // An accepted rotation can be replayed during a hold. Defer a fresh one
   // before composition, which may itself launch a handoff summarizer.
-  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy);
+  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy, admission?.autonomous);
   if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
@@ -1512,7 +1529,7 @@ async function runOrchestratorRotation(
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
-    autonomousAdmissionHeld: triggeredBy?.kind === "agent" ? () => !!activeDrain() : undefined,
+    autonomousAdmissionHeld: admission?.autonomous || triggeredBy?.kind === "agent" ? () => !!activeDrain() : undefined,
   }, dependencies);
   const composed = composition instanceof Promise ? await composition : composition;
   const rotatedFrom = {
@@ -1571,7 +1588,7 @@ async function runOrchestratorRotation(
           ? { cwd: readable.cwd }
           : {}),
     ...(rawBody.accountId !== undefined ? { accountId: rawBody.accountId } : {}),
-  }, dependencies, triggeredBy);
+  }, dependencies, triggeredBy, admission);
   return {
     status: outcome.status,
     body: {

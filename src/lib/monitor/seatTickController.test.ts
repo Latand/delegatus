@@ -1123,17 +1123,12 @@ test("a rotation during the send is caught by the same check that made the wake"
     state: OVERDUE,
     delivery: { ok: true, target: null, outcome: "queued", operationId: "op-inflight", receipt: {} as never, structured: true },
   });
-  let reads = 0;
-  const seatFor = rig.deps.sources!.seatFor;
-  rig.deps.sources!.seatFor = ((project: string) => {
-    reads += 1;
-    /* The opening reconcile, the gather and the pre-send re-check all see the
-       incumbent; the read after the send sees the successor that landed
-       meanwhile. */
-    return reads > 4
-      ? { active: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } as never, pending: null, history: [] }
-      : seatFor(project);
-  }) as typeof seatFor;
+  const deliver = rig.deps.deliver!;
+  rig.deps.deliver = async (...args) => {
+    const result = await deliver(...args);
+    rig.deps.sources!.seatFor = () => ({ active: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } as never, pending: null, history: [] });
+    return result;
+  };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.withdrawn.map((entry) => entry.wake.operationId)).toEqual(["op-inflight"]);
   expect(rig.written.at(-1)!.outstandingWake).toBeNull();
@@ -7275,14 +7270,14 @@ describe("seat authentication recovery through production seams", () => {
   const AUTH_TS = Date.parse(AUTH_AT);
   const ERROR_TEXT = "Failed to authenticate: OAuth session expired and could not be refreshed";
 
-  async function authFixture(allowed: boolean, run: (fixture: Awaited<ReturnType<typeof makeAuthFixture>>) => Promise<void>) {
+  async function authFixture(allowed: boolean, run: (fixture: Awaited<ReturnType<typeof makeAuthFixture>>) => Promise<void>, engine: "claude" | "codex" = "claude", history = false) {
     const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME };
     const dir = fs.mkdtempSync(path.join(SANDBOX, "auth-case-"));
     process.env.LLV_STATE_DIR = path.join(dir, "state");
     process.env.LLV_CLAUDE_HOME = path.join(dir, "legacy-claude");
     process.env.LLV_CODEX_HOME = path.join(dir, "legacy-codex");
     let fixture: Awaited<ReturnType<typeof makeAuthFixture>> | undefined;
-    try { fixture = await makeAuthFixture(dir, allowed); await run(fixture); }
+    try { fixture = await makeAuthFixture(dir, allowed, engine, history); await run(fixture); }
     finally {
       await fixture?.telegram.stopPoller();
       setAgentRegistryForTests(null);
@@ -7292,7 +7287,7 @@ describe("seat authentication recovery through production seams", () => {
     }
   }
 
-  async function makeAuthFixture(dir: string, allowed: boolean) {
+  async function makeAuthFixture(dir: string, allowed: boolean, engine: "claude" | "codex", history: boolean) {
     const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
     const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
     const { seedAccountSource, persistedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
@@ -7305,10 +7300,18 @@ describe("seat authentication recovery through production seams", () => {
     const { loadTasks } = await import("@/lib/tasks/store");
     const { TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
     const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
-    const a = createManagedClaudeAccount("Account A");
-    const b = createManagedClaudeAccount("Account B");
-    for (const account of [a, b]) fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
-    const binding = { schemaVersion: 1, bindings: (allowed ? [a, b] : [a]).map((account) => ({ engine: "claude", accountId: account.id, project: PROJECT, createdAt: AUTH_AT })) };
+    const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const create = engine === "claude" ? createManagedClaudeAccount : createManagedCodexAccount;
+    const a = create("Account A");
+    const b = create("Account B");
+    const transcriptRoot = (account: typeof a) => "projectsDir" in account ? account.projectsDir : account.sessionsDir;
+    for (const account of [a, b]) {
+      const credentials = path.join(account.home, engine === "claude" ? ".credentials.json" : "auth.json");
+      fs.writeFileSync(credentials, "{}", { mode: 0o600 });
+      const beforeFailure = new Date(AUTH_TS - MINUTE);
+      fs.utimesSync(credentials, beforeFailure, beforeFailure);
+    }
+    const binding = { schemaVersion: 1, bindings: (allowed ? [a, b] : [a]).map((account) => ({ engine, accountId: account.id, project: PROJECT, createdAt: AUTH_AT })) };
     seedAccountSource(BINDINGS_SOURCE, binding);
     // The current account migration tombstones the legacy JSON path. Both
     // that directory and the durable binding rows must remain untouched.
@@ -7317,9 +7320,15 @@ describe("seat authentication recovery through production seams", () => {
     expect(bindingStat.isDirectory()).toBe(true);
     const bindingEntries = fs.readdirSync(bindingFile);
     const storedBinding = JSON.stringify(persistedAccountSource(BINDINGS_SOURCE));
-    const transcript = path.join(a.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
+    const transcript = path.join(transcriptRoot(a), "fixture", `${crypto.randomUUID()}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
     function appendTurn(error: string | null = "authentication_failed", at = AUTH_AT, providerText = ERROR_TEXT) {
+      if (engine === "codex") {
+        fs.appendFileSync(transcript, JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "task_started" } }) + "\n"
+          + JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "error", message: providerText, error_type: error } }) + "\n"
+          + JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "task_complete", error: { message: providerText, codex_error_info: "authentication_failed" } } }) + "\n");
+        return;
+      }
       fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
         + JSON.stringify({ type: "assistant", timestamp: at, ...(error ? { error, isApiErrorMessage: true } : {}),
           message: { model: error ? "<synthetic>" : "fixture-model", role: "assistant", ...(error === "authentication_failed" ? {} : { stop_reason: "end_turn" }),
@@ -7327,25 +7336,27 @@ describe("seat authentication recovery through production seams", () => {
     }
     appendTurn();
     const registry = new AgentRegistry(path.join(dir, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-    registry.setEngineRouting("claude", a.id);
+    registry.setEngineRouting(engine, a.id);
     const capacity = (accountId: string, usedPercent: number) => {
       const now = Date.now();
-      registry.recordQuotaObservation({ engine: "claude", accountId, authenticated: true,
+      registry.recordQuotaObservation({ engine, accountId, authenticated: true,
         authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "auth-fixture",
-        limits: { session: { usedPercent, resetsAt: Math.floor(now / 1000) + 3600 }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1000) },
+        limits: engine === "claude"
+          ? { session: { usedPercent, resetsAt: Math.floor(now / 1000) + 3600 }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1000) }
+          : { session: { usedPercent, resetsAt: Math.floor(now / 1000) + 3600, windowMinutes: 300 }, weekly: null, plan: "pro", capturedAt: Math.floor(now / 1000) },
         provenance: { source: "live", reason: null, staleSince: null } });
     };
     capacity(a.id, 5); capacity(b.id, 20);
-    const conversation = registry.ensureConversation("claude", transcript, null);
-    registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: a.id,
+    const conversation = registry.ensureConversation(engine, transcript, null);
+    registry.reconcileConversations([{ engine, path: transcript, accountId: a.id,
       launchProfile: emptyLaunchProfile({ cwd: dir }), turn: { state: "idle", source: "assistant", terminalAt: AUTH_AT }, observedAt: AUTH_AT }]);
     setAgentRegistryForTests(registry);
-    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results.", engine: "claude", model: "opus", clientRequestId: "seed_auth_fixture", mode: "spawn", now: "2026-10-08T00:00:00Z" });
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results." + (history ? "\n\n## Rotation history\nPrior decisions" : ""), engine, model: engine === "claude" ? "opus" : "gpt-6-astra", clientRequestId: "seed_auth_fixture", mode: "spawn", now: "2026-10-08T00:00:00Z" });
     completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "seed_auth_fixture", conversationId: conversation.id, path: transcript, now: "2026-10-08T00:00:00Z" });
     const original = orchestratorSeatFor(PROJECT).active!;
-    const successorPath = path.join(b.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
+    const successorPath = path.join(transcriptRoot(b), "fixture", `${crypto.randomUUID()}.jsonl`);
     fs.mkdirSync(path.dirname(successorPath), { recursive: true }); fs.writeFileSync(successorPath, "");
-    const successor = registry.ensureConversation("claude", successorPath, null);
+    const successor = registry.ensureConversation(engine, successorPath, null);
     const spawns: Record<string, unknown>[] = [];
     const command: import("@/lib/orchestrator/seatCommand").SeatCommandDependencies = {
       spawn: async (body) => {
@@ -7386,8 +7397,46 @@ describe("seat authentication recovery through production seams", () => {
     rig.deps.reconcileSeat = () => null;
     delete rig.deps.ensureCard;
     const sendRequests: string[] = [];
-    rig.deps.seatAuth = { rotate: (body) => executeOrchestratorRotation(body, command, null), telegram: async (input) => { sendRequests.push(String(input.clientRequestId)); return telegram.send(input); } };
-    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests,
+    rig.deps.seatAuth = { rotate: (body, _dependencies, actor, admission) => executeOrchestratorRotation(body, command, actor, admission), telegram: async (input) => { sendRequests.push(String(input.clientRequestId)); return telegram.send(input); } };
+    function migrateAccount(accountId: string, targetPath: string, at: string) {
+      const id = original.conversationId! as Parameters<typeof registry.requestConversationReseat>[0];
+      const requested = registry.requestConversationReseat(id, accountId);
+      const revision = requested.migration!.revision;
+      registry.transitionConversationMigration(id, revision, ["requested"], { phase: "preparing" });
+      const starting = registry.transitionConversationMigration(id, revision, ["preparing"], { phase: "successor-starting" });
+      const receipt: import("@/lib/accounts/migration/contracts").ProviderReceipt = {
+        operationId: starting.migration!.operationId, nativeId: "fixture-manual-moved", path: targetPath, continuityPaths: [targetPath], historyHash: "fixture",
+        host: { kind: "claude-fork", identity: "fixture", epoch: 1, verifiedAt: at },
+      };
+      registry.persistMigrationProviderReceipt(id, revision, starting.migration!.operationId, receipt);
+      registry.commitSuccessor(id, { id: "fixture-manual-moved", path: targetPath, accountId }, revision, starting.migration!.operationId, receipt);
+    }
+    async function restartAuthentication(credentialReader?: string) {
+      const active = orchestratorSeatFor(PROJECT).active!;
+      const activeTranscript = registry.conversation(active.conversationId! as Parameters<typeof registry.conversation>[0])?.generations.at(-1)?.path ?? active.path ?? transcript;
+      const script = `
+        ${credentialReader ?? ""}
+        const { recoverSeatAuthentication } = await import("./src/lib/monitor/seatAuthRecovery");
+        const { readSeatTurnOutcome } = await import("./src/lib/monitor/seatAuthIncident");
+        const { readSeatTickState, writeSeatTickState } = await import("./src/lib/monitor/seatTickState");
+        const { defaultSeatTickSources } = await import("./src/lib/monitor/seatTickSources");
+        const project = ${JSON.stringify(PROJECT)};
+        const input = { project, now: ${clock}, state: readSeatTickState(project),
+          seat: ${JSON.stringify({ conversationId: active.conversationId, seatEpoch: active.seatEpoch, path: activeTranscript, designatedAt: active.designatedAt, turn: "idle", activity: null })} };
+        const unexpected = () => { throw new Error("restart attempted another authentication effect"); };
+        await recoverSeatAuthentication(input, { ...defaultSeatTickSources(), seatTurnOutcome: () => readSeatTurnOutcome(${JSON.stringify(engine)}, ${JSON.stringify(activeTranscript)}) },
+          readSeatTickState, writeSeatTickState, readSeatTickState(project).authCardsOwed?.length ? () => false : unexpected, { rotate: unexpected,
+            telegram: readSeatTickState(project).authTelegramOwed?.length ? async () => { throw Object.assign(new Error("fixture restart refusal"), { code: "bot_not_connected" }); } : unexpected });
+        writeSeatTickState(project, input.state);
+        console.log(JSON.stringify(readSeatTickState(project)));
+      `;
+      const child = Bun.spawn([process.execPath, "-e", script], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const output = await new Response(child.stdout).text();
+      const errors = await new Response(child.stderr).text();
+      expect({ status: await child.exited, errors }).toEqual({ status: 0, errors: "" });
+      return JSON.parse(output) as SeatTickProjectState;
+    }
+    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests, restartAuthentication, migrateAccount,
       check: async () => { const result = await runSeatTickCheck(PROJECT, rig.deps); clock += 5 * MINUTE; return result; },
       seat: () => orchestratorSeatFor(PROJECT).active!, row: () => readSeatTickState(PROJECT),
       reports: () => readBridgeReportLog().reports, cards: () => loadTasks(statePath("tasks.json")).filter((task) => task.text.includes("monitor-ref: seat-auth-failed")),
@@ -7395,6 +7444,333 @@ describe("seat authentication recovery through production seams", () => {
       unchangedNote: () => expect(JSON.stringify(readSeatTickSettingsFile())).toBe(noteBefore),
     };
   }
+
+  for (const engine of ["claude", "codex"] as const) {
+    test(`${engine}: touching unchanged credentials before first detection still reports and parks`, async () => {
+      await authFixture(false, async (f) => {
+        const file = path.join(f.a.home, engine === "claude" ? ".credentials.json" : "auth.json");
+        const touch = new Date("2026-10-08T00:06:00Z");
+        fs.utimesSync(file, touch, touch);
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        expect(f.reports()).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1);
+        expect(f.rig.sent).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.id).toBe(f.row().authIncident?.id);
+        fs.writeFileSync(file, '{"repaired":true}', { mode: 0o600 });
+        await f.check();
+        expect(f.row().authIncident).toBeUndefined();
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+      }, engine);
+    });
+  }
+
+  test("an empty Codex completion cannot promote an older assistant answer into recovery evidence", async () => {
+    await authFixture(false, async (f) => {
+      const oldAnswer = JSON.stringify({ type: "response_item", timestamp: "2026-10-08T00:01:00Z",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Earlier work completed." }] } }) + "\n";
+      fs.writeFileSync(f.transcript, oldAnswer + fs.readFileSync(f.transcript, "utf8"));
+      await f.check();
+      const id = f.row().authIncident!.id;
+      for (const type of ["task_started", "task_complete"]) fs.appendFileSync(f.transcript,
+        JSON.stringify({ type: "event_msg", timestamp: "2026-10-08T00:08:00Z", payload: { type } }) + "\n");
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.id).toBe(id);
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.id).toBe(id);
+    }, "codex");
+  });
+
+  test.each(["login", "migration"] as const)("a board capacity refusal retains the authentication notice through %s", async (recovery) => {
+    await authFixture(false, async (f) => {
+      const { BOARD_TASKS_PER_PROJECT_LIMIT, createTask } = await import("@/lib/tasks/commands");
+      const { mutateTasksFile } = await import("@/lib/tasks/store");
+      const tasksFile = statePath("tasks.json");
+      mutateTasksFile((loaded) => {
+        let tasks = loaded.tasks, receipts = loaded.recentCreates;
+        for (let index = 0; index < BOARD_TASKS_PER_PROJECT_LIMIT; index++) {
+          const created = createTask(tasks, { project: PROJECT, text: `Fixture capacity ${index}`, placement: "unplaced" }, receipts);
+          if (!created.ok) throw new Error(created.error);
+          tasks = created.tasks; receipts = created.recentCreates;
+        }
+        return { state: { tasks, recentCreates: receipts }, result: true };
+      }, tasksFile);
+      await f.check();
+      expect(f.cards()).toHaveLength(0);
+      expect(f.row().authIncident?.notice?.card).toBe(false);
+      expect(f.reports()).toHaveLength(1);
+      const id = f.row().authIncident!.id;
+      if (recovery === "login") fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+      else f.migrateAccount(f.b.id, f.registry.conversation(f.successor.id)!.generations.at(-1)!.path, "2026-10-08T02:10:00Z");
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.row().authCardsOwed?.map(notice => notice.id)).toEqual([id]);
+      expect((await f.restartAuthentication()).authCardsOwed?.map(notice => notice.id)).toEqual([id]);
+      mutateTasksFile((loaded) => ({ state: { ...loaded, tasks: loaded.tasks.map(task => ({ ...task, board: "hidden" as const })) }, result: true }), tasksFile);
+      await f.check(); await f.check();
+      expect(f.cards()).toHaveLength(1);
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.reports()).toHaveLength(1);
+      expect(f.sendRequests.every(key => key === id)).toBe(true);
+      expect(f.transport.calls.filter(call => call.method === "sendMessage")).toHaveLength(1);
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+    });
+  });
+
+  test("login before first detection consumes the failed turn across restart", async () => {
+    await authFixture(false, async (f) => {
+      const credentials = path.join(f.a.home, ".credentials.json");
+      fs.writeFileSync(credentials, '{"refreshed":true}', { mode: 0o600 });
+      const login = new Date("2026-10-08T00:06:00Z");
+      fs.utimesSync(credentials, login, login);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.row().authRecoveredThrough).toBe(AUTH_TS);
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.reports()).toHaveLength(0);
+      expect((await f.restartAuthentication()).authRecoveredThrough).toBe(AUTH_TS);
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      await f.check();
+      expect(f.row().authIncident?.firstFailedAt).toBe("2026-10-08T00:08:00.000Z");
+      expect(f.reports()).toHaveLength(1);
+    });
+  });
+
+  test("Keychain login clears the card and consumes the incident across restart", async () => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      try {
+        await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        const persisted = JSON.stringify(f.row());
+        expect(persisted).not.toContain(generation);
+        generation = "fixture-repaired-access";
+        await f.check(); await f.check();
+        expect(f.row().authIncident).toBeUndefined();
+        expect(f.cards()[0]?.status).toBe("done");
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+        expect(f.reports()).toHaveLength(1);
+        const afterRestart = await f.restartAuthentication(`
+          const { spyOn } = await import("bun:test");
+          const credentials = await import("./src/lib/accounts/claudeCredentials");
+          const generation = ${JSON.stringify(generation)};
+          spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+            state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+          }));
+        `);
+        expect(afterRestart.authIncident).toBeUndefined();
+        expect(afterRestart.authRecoveredThrough).toBe(AUTH_TS);
+        f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+        await f.check();
+        expect(f.reports()).toHaveLength(2);
+      } finally { read.mockRestore(); }
+    });
+  });
+
+  test.each([false, true])("Keychain metadata availability changes preserve unchanged credentials with initial metadata=%s", async (available) => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      let modifiedAt: number | null = available ? AUTH_TS - MINUTE : null;
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      const metadata = spyOn(credentials, "claudeKeychainCredentialChangedAt").mockImplementation(() => modifiedAt);
+      try {
+        await f.check();
+        modifiedAt = available ? null : AUTH_TS - MINUTE;
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        expect(f.rig.sent).toHaveLength(0); expect(f.cards()[0]?.status).toBe("inbox");
+        expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect((await f.restartAuthentication(`
+          const { spyOn } = await import("bun:test");
+          const credentials = await import("./src/lib/accounts/claudeCredentials");
+          const generation = ${JSON.stringify(generation)};
+          spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({ state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } } }));
+          spyOn(credentials, "claudeKeychainCredentialChangedAt").mockReturnValue(${modifiedAt});
+        `)).authIncident?.rotation.state).toBe("none-allowed");
+        generation = "fixture-repaired-access";
+        modifiedAt = AUTH_TS + MINUTE;
+        await f.check();
+        expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+        expect(f.rig.sent).toHaveLength(1);
+      } finally { read.mockRestore(); metadata.mockRestore(); }
+    });
+  });
+
+  test("a changed Keychain credential cannot hide an unobserved newer authentication failure", async () => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      try {
+        await f.check();
+        generation = "fixture-repaired-access";
+        f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+        await f.check();
+        expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse("2026-10-08T00:08:00Z"));
+        expect(f.reports()).toHaveLength(2);
+        expect(f.rig.sent).toHaveLength(0);
+        await f.check();
+        expect(f.reports()).toHaveLength(2);
+      } finally { read.mockRestore(); }
+    });
+  });
+
+  test.each([false, true])("Keychain repair consumes preceding failures with prior detection=%s", async (detected) => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      let modifiedAt = AUTH_TS - MINUTE;
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      const metadata = spyOn(credentials, "claudeKeychainCredentialChangedAt").mockImplementation(() => modifiedAt);
+      try {
+        if (detected) await f.check();
+        f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+        generation = "fixture-repaired-access";
+        modifiedAt = Date.parse("2026-10-08T00:10:00Z");
+        await f.check(); await f.check();
+        expect(f.row().authIncident).toBeUndefined();
+        expect(f.row().authRecoveredThrough).toBe(Date.parse("2026-10-08T00:08:00Z"));
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+        expect(f.reports()).toHaveLength(detected ? 1 : 0);
+        f.appendTurn("authentication_failed", "2026-10-08T00:12:00Z");
+        await f.check();
+        expect(f.reports()).toHaveLength(detected ? 2 : 1);
+      } finally { read.mockRestore(); metadata.mockRestore(); }
+    });
+  });
+
+  test("a verified healthy account migration releases the prior account's fence before its first turn", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const targetPath = path.join(path.dirname(f.registry.conversation(f.successor.id)!.generations.at(-1)!.path), `${crypto.randomUUID()}.jsonl`);
+      fs.writeFileSync(targetPath, "");
+      f.migrateAccount(f.b.id, targetPath, "2026-10-08T02:10:00.000Z");
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent).toHaveLength(1); expect(f.spawns).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+    });
+  });
+
+  test.each(["claude", "codex"] as const)("an aborted %s turn cannot clear an authentication incident", async (engine) => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const at = "2026-10-08T02:10:00.000Z";
+      const records = engine === "codex"
+        ? [{ type: "event_msg", timestamp: at, payload: { type: "task_started" } }, { type: "event_msg", timestamp: at, payload: { type: "turn_aborted", reason: "interrupted" } }]
+        : [{ type: "user", timestamp: at, message: { role: "user", content: "try again" } }, { type: "result", subtype: "interrupted", timestamp: at }];
+      fs.appendFileSync(f.transcript, records.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("none-allowed");
+    }, engine);
+  });
+
+  test("a terminal provider refusal cannot substitute for a successful authentication recovery turn", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      f.appendTurn("rate_limit", "2026-10-08T02:10:00.000Z");
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+    });
+  });
+
+  test.each(["claude", "codex"] as const)("touching unchanged %s credentials cannot clear authentication", async (engine) => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const file = path.join(f.a.home, engine === "claude" ? ".credentials.json" : "auth.json");
+      const touched = new Date("2026-10-08T02:10:00Z");
+      fs.utimesSync(file, touched, touched);
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("none-allowed");
+      fs.writeFileSync(file, "{\"repaired\":true}");
+      fs.utimesSync(file, touched, touched);
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent).toHaveLength(1);
+    }, engine);
+  });
+
+  test.each([[false, true], [true, true], [false, false]])("a known Telegram refusal retries independently with allowed=%s and bridge=%s", async (allowed, bridgeEnabled) => {
+    await authFixture(allowed, async (f) => {
+      if (!bridgeEnabled) (await import("@/lib/projects/settings")).setBridgeReports(PROJECT, false, "fixture");
+      f.telegram.setChat("-1000000000101", "auth-fixture", false);
+      await f.check();
+      expect(f.row().authIncident?.notice?.telegram).toBe("failed");
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(0); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
+      await f.check();
+      expect((await f.restartAuthentication()).authTelegramOwed).toHaveLength(1);
+      if (allowed) expect(f.rig.sent.length).toBeGreaterThan(0);
+      const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+      writeDrain(drainFile(), { id: "auth-telegram-retry-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+      try {
+        f.telegram.setChat("-1000000000101", "auth-fixture", true);
+        await f.check();
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.row().authTelegramOwed).toHaveLength(1);
+      } finally { releaseDrain(drainFile(), "auth-telegram-retry-drain"); }
+      await f.check(); await f.check();
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
+      expect(f.row().authTelegramOwed ?? []).toHaveLength(0);
+      if (!allowed) expect(f.row().authIncident?.notice?.telegram).toBe("sent");
+      expect(new Set(f.sendRequests).size).toBe(1);
+    });
+  });
+
+  test("an uncertain Telegram send keeps its original receipt and is never posted twice", async () => {
+    await authFixture(false, async (f) => {
+      const { unreachable } = await import("@/lib/telegram/bot/fakeTransport");
+      f.transport.handlers.sendMessage = () => unreachable("timed_out");
+      await f.check(); await f.check();
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.row().authTelegramOwed ?? []).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+    });
+  });
+
+  test("a migrated account's first authentication failure opens its own incident in the same seat epoch", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const first = f.row().authIncident!.id;
+      const targetPath = path.join(path.dirname(f.registry.conversation(f.successor.id)!.generations.at(-1)!.path), `${crypto.randomUUID()}.jsonl`);
+      const at = "2026-10-08T02:10:00.000Z";
+      fs.writeFileSync(targetPath, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "manual account switch" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+          message: { model: "<synthetic>", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+      f.migrateAccount(f.b.id, targetPath, at);
+      f.capacity(f.a.id, 100);
+      expect(f.seat().seatEpoch).toBe(f.original.seatEpoch);
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.accountId).toBe(f.b.id);
+      expect(f.row().authIncident?.id).not.toBe(first);
+      expect(f.reports()).toHaveLength(2); expect(f.reports()[1]?.body).toContain("Account B");
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(2); expect(f.rig.sent).toHaveLength(0);
+      expect(f.cards().filter((card) => card.status === "inbox")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.accountId).toBe(f.b.id);
+      await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
 
   test("first failure rotates once to the allowed account with handoff and one independent notice", async () => {
     await authFixture(true, async (f) => {
@@ -7424,10 +7800,178 @@ describe("seat authentication recovery through production seams", () => {
       for (let n = 0; n < 3; n++) expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
       expect(f.rig.sent).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
       fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      const login = new Date("2026-10-08T00:10:00Z");
+      fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
       await f.check(); await f.check();
       expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent.length).toBeGreaterThan(0); expect(f.cards()[0]!.status).toBe("done");
       f.appendTurn("authentication_failed", "2026-10-08T00:30:00Z");
       await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("login clears an unobserved failed turn and persists the recovery boundary across restart", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      const login = new Date("2026-10-08T00:10:00Z");
+      fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.row().authRecoveredThrough).toBe(Date.parse("2026-10-08T00:08:00Z"));
+      expect(f.cards()[0]!.status).toBe("done");
+      expect(f.rig.sent).toHaveLength(1);
+      const persisted = await f.restartAuthentication();
+      expect(persisted.authIncident).toBeUndefined();
+      expect(persisted.authRecoveredThrough).toBe(f.row().authRecoveredThrough);
+      await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      f.appendTurn("authentication_failed", "2026-10-08T00:30:00Z");
+      await f.check();
+      expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse("2026-10-08T00:30:00Z"));
+      expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("an authentication failure after login opens a new incident even before the next check", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const credentials = path.join(f.a.home, ".credentials.json");
+      fs.writeFileSync(credentials, "{\"refreshed\":true}", { mode: 0o600 });
+      const login = new Date("2026-10-08T00:07:00Z"); fs.utimesSync(credentials, login, login);
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      await f.check();
+      expect(f.row().authIncident?.firstFailedAt).toBe("2026-10-08T00:08:00.000Z");
+      expect(f.reports()).toHaveLength(2); expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+      expect(f.rig.sent).toHaveLength(0);
+      await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("an unreadable binding parks selection and still sends one independent authentication notice", async () => {
+    await authFixture(true, async (f) => {
+      const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+      const { seedAccountSource, persistedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: "damaged" });
+      const before = JSON.stringify(persistedAccountSource(BINDINGS_SOURCE));
+      await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()[0]!.body).toContain("не зміг автентифікуватися");
+      expect(f.reports()[0]!.body).toContain("account-project-bindings.json");
+      expect(f.reports()[0]!.body).not.toContain("Account B");
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect((await f.restartAuthentication()).authIncident?.notice?.card).toBe(true);
+      for (let n = 0; n < 3; n++) await f.check();
+      expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(JSON.stringify(persistedAccountSource(BINDINGS_SOURCE))).toBe(before);
+    });
+  });
+
+  test.each(["binding", "capacity"] as const)("automatic recovery refuses a target whose %s changes during handoff", async (race) => {
+    await authFixture(true, async (f) => {
+      const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+      const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+      const { resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+      f.command.summarizeHandoffs = async () => {
+        if (race === "binding") seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex", accountId: f.a.id, project: PROJECT, createdAt: AUTH_AT }] });
+        else f.capacity(f.b.id, 100);
+        return { kind: "fallback", reason: "unavailable" };
+      };
+      f.command.spawn = async (body) => {
+        const account = await resolveHealthySpawnAccount(body.engine as "codex", body.accountId as string, body.project as string, body.model as string);
+        f.spawns.push({ ...body, actualAccount: account.accountId });
+        return { status: 200, body: { ok: true, conversationId: f.successor.id, path: f.transcript } };
+      };
+      await f.check(); await f.check();
+      expect(f.spawns).toHaveLength(0);
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.seat().conversationId).toBe(f.original.conversationId);
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    }, "codex", true);
+  });
+
+  test("a drain beginning during handoff holds automatic helpers, successors and notices until release", async () => {
+    await authFixture(true, async (f) => {
+      const { summarizeHandoffsHeadless, productionDigestRuntime } = await import("@/lib/orchestrator/handoffDigest");
+      const { accountManager } = await import("@/lib/accounts/manager");
+      let startDrain = true, helpers = 0;
+      const lease = { id: "auth-handoff-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      f.command.summarizeHandoffs = (request) => summarizeHandoffsHeadless(request, {
+        ...productionDigestRuntime,
+        resolveAccount: async () => {
+          if (startDrain) { startDrain = false; writeDrain(drainFile(), lease); }
+          return { kind: "available", account: accountManager.resolveSpawn("codex", f.b.id) };
+        },
+        run: async () => { helpers++; throw new Error("fixture helper unavailable"); },
+      });
+      try {
+        await f.check(); await f.check();
+        expect(helpers).toBe(0); expect(f.spawns).toHaveLength(0);
+        expect(f.row().authIncident?.rotation.state).toBe("held");
+        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.rig.sent).toHaveLength(0);
+      } finally { releaseDrain(drainFile(), lease.id); }
+      await f.check(); await f.check();
+      expect(helpers).toBe(1); expect(f.spawns).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    }, "codex", true);
+  });
+
+  test("automatic recovery carries drain admission to a refused successor and resumes the same pending intent", async () => {
+    await authFixture(true, async (f) => {
+      const spawn = f.command.spawn;
+      const lease = { id: "auth-successor-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      let attempt: unknown;
+      f.command.spawn = async (body, autonomous, admission) => {
+        expect(autonomous).toBe(true); expect(admission?.autonomous).toBe(true);
+        attempt = body.clientAttemptId;
+        writeDrain(drainFile(), lease);
+        return { status: 503, body: { code: "AUTO_UPDATE_DRAIN", error: "held for update" } };
+      };
+      try {
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("held");
+        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+      } finally { releaseDrain(drainFile(), lease.id); }
+      f.command.spawn = spawn;
+      await f.check(); await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.spawns[0]!.clientAttemptId).toBe(attempt);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("the first terminal authentication failure fences an outstanding original-key wake retry", async () => {
+    await authFixture(false, async (f) => {
+      fs.writeFileSync(f.transcript, ""); f.appendTurn(null, "2026-10-08T02:04:00Z");
+      f.rig.deps.sources!.wakeState = async () => "absent";
+      f.rig.deps.deliver = async (message) => {
+        f.rig.sent.push(message);
+        return { ok: false, outcome: "failed", status: 503, error: "temporary connection refusal" };
+      };
+      await f.check();
+      const refused = f.row();
+      expect(refused.outstandingWake?.dispatch?.state).toBe("refused");
+      f.rig.sent.length = 0; f.appendTurn("authentication_failed", "2026-10-08T02:06:00Z");
+      f.rig.deps.deliver = async (message) => {
+        f.rig.sent.push(message);
+        return { ok: true, target: "structured", outcome: "delivered", structured: true };
+      };
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.row().lastWakeAt).toBe(refused.lastWakeAt);
+      expect(f.row().eventsThrough).toBe(refused.eventsThrough);
+      expect(f.row().outstandingWake?.clientMessageId).toBe(refused.outstandingWake?.clientMessageId);
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(1);
+      expect(f.rig.sent[0]!.clientMessageId).toBe(refused.outstandingWake?.clientMessageId);
+      expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(1);
     });
   });
 
@@ -7464,6 +8008,73 @@ describe("seat authentication recovery through production seams", () => {
     });
   });
 
+  test("login during a drain preserves the unsent notice and resumes after release", async () => {
+    await authFixture(false, async (f) => {
+      const lease = { id: "auth-login-notice-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      writeDrain(drainFile(), lease);
+      try {
+        await f.check();
+        const id = f.row().authIncident!.id;
+        fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+        await f.check();
+        expect(f.reports()).toHaveLength(0); expect(f.cards()).toHaveLength(0);
+        expect(f.rig.sent).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.id).toBe(id);
+        releaseDrain(drainFile(), lease.id);
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(1);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
+        expect(f.row().authIncident).toBeUndefined(); expect(f.spawns).toHaveLength(0);
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+      } finally { releaseDrain(drainFile(), lease.id); }
+    });
+  });
+
+  test("a board storage exception preserves notice debt without fencing a repaired seat", async () => {
+    await authFixture(false, async (f) => {
+      f.rig.deps.ensureCard = () => { throw Object.assign(new Error("fixture board write refused"), { code: "EACCES" }); };
+      await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.row().authCardsOwed).toHaveLength(1);
+      expect((await f.restartAuthentication()).authCardsOwed).toHaveLength(1);
+      delete f.rig.deps.ensureCard;
+      await f.check(); await f.check();
+      expect(f.row().authCardsOwed).toEqual([]);
+      expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("an older owed card is delivered without replacing a newer incident's open card", async () => {
+    await authFixture(false, async (f) => {
+      f.rig.deps.ensureCard = () => false;
+      await f.check();
+      const oldId = f.row().authIncident!.id;
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+      const login = new Date("2026-10-08T00:06:00Z"); fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
+      await f.check();
+      const older = f.row().authCardsOwed!;
+      writeSeatTickState(PROJECT, { ...f.row(), authCardsOwed: [] });
+      delete f.rig.deps.ensureCard;
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      await f.check();
+      const current = f.row().authIncident!.id;
+      expect(current).not.toBe(oldId); expect(f.cards()).toHaveLength(1);
+      writeSeatTickState(PROJECT, { ...f.row(), authCardsOwed: older });
+      await f.check(); await f.check();
+      expect(f.row().authCardsOwed).toEqual([]);
+      expect(f.row().authIncident?.id).toBe(current);
+      expect(f.cards()).toHaveLength(2);
+      expect(f.cards().filter(card => card.status === "inbox")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(2);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+    });
+  });
+
   test("an update drain holds rotation and notice until the first check after release", async () => {
     await authFixture(true, async (f) => {
       const lease = { id: "auth-fixture-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 };
@@ -7471,6 +8082,153 @@ describe("seat authentication recovery through production seams", () => {
       try { await f.check(); expect(f.row().authIncident?.rotation.state).toBe("held"); expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(0); expect(f.rig.sent).toHaveLength(0); }
       finally { releaseDrain(drainFile(), lease.id); }
       await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a drain starting after the rotation decision holds unsent authentication notices", async () => {
+    await authFixture(false, async (f) => {
+      let start = true;
+      f.rig.deps.writeState = (project, row) => {
+        writeSeatTickState(project, row);
+        if (start && row.authIncident?.rotation.state === "none-allowed" && !row.authIncident.notice) {
+          start = false;
+          writeDrain(drainFile(), { id: "auth-notice-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+        }
+      };
+      try {
+        await f.check(); await f.check();
+        expect(f.spawns).toHaveLength(0);
+        expect(f.rig.sent).toHaveLength(0);
+        expect(f.reports()).toHaveLength(0);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.cards()).toHaveLength(0);
+        releaseDrain(drainFile(), "auth-notice-drain");
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(1);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1);
+      } finally { releaseDrain(drainFile(), "auth-notice-drain"); }
+    });
+  });
+
+  test("a successor authentication failure stays independent of its predecessor's held notice", async () => {
+    await authFixture(true, async (f) => {
+      const rotate = f.rig.deps.seatAuth!.rotate!;
+      f.rig.deps.seatAuth!.rotate = async (...args) => {
+        const result = await rotate(...args);
+        writeDrain(drainFile(), { id: "auth-successor-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+        return result;
+      };
+      try {
+        await f.check();
+        const transcript = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        const at = "2026-10-08T00:08:00Z";
+        fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "initial mandate" } }) + "\n"
+          + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+            message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+        await f.check();
+        expect(f.row().authIncident?.lastFailedTs).toBe(AUTH_TS);
+        expect(f.reports()).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.lastFailedTs).toBe(AUTH_TS);
+        releaseDrain(drainFile(), "auth-successor-drain");
+        // Refuse the successor's move independently of the completed first move.
+        f.rig.deps.seatAuth!.rotate = async () => ({ status: 503, body: { error: "fixture successor rotation refused" } });
+        await f.check(); await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(2);
+        expect(f.row().authIncident?.conversationId).toBe(f.successor.id);
+        expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse(at));
+        expect(f.rig.sent).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.lastFailedTs).toBe(Date.parse(at));
+      } finally { releaseDrain(drainFile(), "auth-successor-drain"); }
+    });
+  });
+
+  test("unreadable Codex credentials cannot clear an incident or suppress its notice", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const credentials = path.join(f.a.home, "auth.json");
+      const openFile = fs.openSync;
+      const unreadable = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+        if (args[0] === credentials) {
+          throw Object.assign(new Error("fixture credential permission refused"), { code: "EACCES" });
+        }
+        return Reflect.apply(openFile, fs, args);
+      });
+      try {
+        fs.writeFileSync(credentials, '{"refreshed":true}', { mode: 0o600 });
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        expect(f.cards()[0]?.status).toBe("inbox");
+        expect(f.reports()).toHaveLength(1);
+        expect(f.rig.sent).toHaveLength(0);
+      } finally { unreadable.mockRestore(); }
+      const login = new Date("2026-10-08T00:10:00Z");
+      fs.utimesSync(credentials, login, login);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+    }, "codex");
+  });
+
+  test("unsafe credentials preserve first-failure attribution and the independent notice", async () => {
+    await authFixture(false, async (f) => {
+      fs.chmodSync(path.join(f.a.home, ".credentials.json"), 0o644);
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.accountId).toBe(f.a.id);
+      expect(f.reports()).toHaveLength(1);
+      expect(f.cards()).toHaveLength(1);
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.spawns).toHaveLength(0);
+    });
+  });
+
+  test("compatible-provider credential repair clears the incident across restart and retains later failures", async () => {
+    await authFixture(false, async (f) => {
+      const { createManagedClaudeAccount, updateProviderClaudeAccount } = await import("@/lib/accounts/claude");
+      const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+      const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+      const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+      const config = { baseUrl: "https://example.invalid/messages", model: "fixture-model", smallFastModel: null };
+      const provider = createManagedClaudeAccount("Account Provider", { config, token: crypto.randomUUID() });
+      const transcript = path.join(provider.projectsDir, "fixture", "provider-auth.jsonl");
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      const appendFailure = (at: string) => fs.appendFileSync(transcript,
+        JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+          message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+      // Provider metadata uses its real creation time. Put the failed turn
+      // after that creation, then repair only after the turn has ended.
+      const failureAt = new Date(Date.now() + 20).toISOString();
+      appendFailure(failureAt);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const conversation = f.registry.ensureConversation("claude", transcript, null);
+      f.registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: provider.id,
+        launchProfile: emptyLaunchProfile({ cwd: path.dirname(transcript) }),
+        turn: { state: "idle", source: "assistant", terminalAt: failureAt }, observedAt: failureAt }]);
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: provider.id, project: PROJECT, createdAt: AUTH_AT }] });
+      beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board", engine: "claude", model: "fixture-model", clientRequestId: "provider_auth_fixture", mode: "spawn", now: "2026-10-08T00:00:00Z" });
+      completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "provider_auth_fixture", conversationId: conversation.id, path: transcript, now: "2026-10-08T00:00:00Z" });
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      const tokenFile = path.join(provider.home, ".provider-token");
+      fs.utimesSync(tokenFile, new Date(), new Date());
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+      updateProviderClaudeAccount(provider.id, config, crypto.randomUUID());
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.reports()).toHaveLength(1);
+      const afterRestart = await f.restartAuthentication();
+      expect(afterRestart.authIncident).toBeUndefined();
+      expect(afterRestart.authRecoveredThrough).toBe(Date.parse(failureAt));
+      appendFailure(new Date(Date.now() + 20).toISOString());
+      await f.check();
+      expect(f.reports()).toHaveLength(2);
     });
   });
 
@@ -7512,6 +8270,127 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.rig.sent).toHaveLength(0); expect(f.reports()).toHaveLength(1);
       expect(f.reports()[0]!.body).toContain("fixture launch refused");
       expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a failed launch receipt returned with HTTP 200 cannot claim authentication recovery", async () => {
+    await authFixture(true, async (f) => {
+      f.command.spawn = async () => ({ status: 200, body: { ok: false, launched: false, state: "failed", error: "fixture terminal launch failure" } });
+      await f.check(); await f.check();
+      expect(f.seat().conversationId).toBe(f.original.conversationId);
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.reports()).toHaveLength(1);
+      expect(f.reports()[0]?.class).toBe("blocked");
+      expect(f.reports()[0]?.body).toContain("fixture terminal launch failure");
+      expect(f.cards()[0]?.status).toBe("inbox");
+      expect(f.rig.sent).toHaveLength(0);
+    });
+  });
+
+  test("login before provisional successor materialization uses its launch credential baseline", async () => {
+    await authFixture(true, async (f) => {
+      const { confirmOrchestratorSeatMaterialization } = await import("@/lib/orchestrator/seats");
+      f.command.spawn = async (_body, _autonomous, admission) => {
+        admission?.assertAccount?.(f.b.id);
+        return { status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted",
+          conversationId: f.successor.id, launchId: "launch_auth_baseline_pending" } };
+      };
+      await f.check();
+      const transcript = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+      const at = "2026-10-08T00:08:00Z";
+      fs.writeFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+          message: { model: "<synthetic>", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+      const credentials = path.join(f.b.home, ".credentials.json");
+      fs.writeFileSync(credentials, '{"repaired":true}', { mode: 0o600 });
+      const login = new Date("2026-10-08T00:09:00Z"); fs.utimesSync(credentials, login, login);
+      confirmOrchestratorSeatMaterialization({ project: PROJECT, clientRequestId: f.seat().intent.clientRequestId,
+        conversationId: f.successor.id, path: transcript });
+      f.capacity(f.a.id, 100);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.row().authRecoveredThrough).toBe(Date.parse(at));
+      expect(f.reports()).toHaveLength(1);
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+    });
+  });
+
+  test("a provisional authentication rotation keeps the incident through rollback and restart", async () => {
+    for (const repair of ["login", "normal-turn"]) await authFixture(true, async (f) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      const pending = "conversation_auth_pending";
+      f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted", conversationId: pending, launchId: "launch_auth_pending" } });
+      f.command.launchSettlement = () => ({ kind: "unknown" });
+      await f.check();
+      expect(f.seat().conversationId).toBe(pending);
+      expect(f.row().authIncident?.rotation.state).toBe("rotated");
+      expect(f.cards()[0]?.status).toBe("inbox");
+      expect((await f.restartAuthentication()).authIncident?.conversationId).toBe(f.original.conversationId!);
+      f.command.launchSettlement = () => ({ kind: "failed", error: "fixture asynchronous launch failure" });
+      expect(reconcileActiveOrchestratorSeat(PROJECT, f.command)?.restored?.conversationId).toBe(f.original.conversationId);
+      expect(f.seat().seatEpoch).not.toBe(f.original.seatEpoch);
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.row().authIncident?.seatEpoch).toBe(f.seat().seatEpoch);
+      expect(f.cards()[0]?.status).toBe("inbox");
+      expect(f.cards()[0]?.text).toContain("fixture asynchronous launch failure");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("refused");
+      if (repair === "login") {
+        fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"repaired\":true}");
+        fs.utimesSync(path.join(f.a.home, ".credentials.json"), new Date(AUTH_TS + MINUTE), new Date(AUTH_TS + MINUTE));
+      } else f.appendTurn(null, new Date(AUTH_TS + MINUTE).toISOString());
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent).toHaveLength(1);
+    });
+  });
+
+  test("a lost rotation-outcome write cannot clear authentication when the accepted successor rolls back", async () => {
+    for (const trimHistory of [false, true]) await authFixture(true, async (f) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, state: "accepted", conversationId: "conversation_auth_pending", launchId: "launch_auth_pending" } });
+      let lost = false;
+      f.rig.deps.writeState = (project, row) => {
+        if (!lost && row.authIncident?.rotation.state === "rotated") { lost = true; throw new Error("fixture lost rotation-outcome write"); }
+        writeSeatTickState(project, row);
+      };
+      await f.check();
+      expect(lost).toBe(true); expect(f.row().authIncident?.rotation.state).toBe("pending");
+      f.command.launchSettlement = () => ({ kind: "failed", error: "fixture asynchronous launch failure" });
+      expect(reconcileActiveOrchestratorSeat(PROJECT, f.command)?.restored?.conversationId).toBe(f.original.conversationId);
+      if (trimHistory) {
+        const { beginOrchestratorSeatIntent, failOrchestratorSeatIntent, ORCHESTRATOR_SEAT_HISTORY_CAP } = await import("@/lib/orchestrator/seats");
+        for (let index = 0; index < ORCHESTRATOR_SEAT_HISTORY_CAP; index++) {
+          const clientRequestId = `unrelated_auth_failure_${index}`;
+          beginOrchestratorSeatIntent({ project: "auth-unrelated-fixture", mandate: "Fixture mandate", engine: "claude", clientRequestId, mode: "spawn" });
+          failOrchestratorSeatIntent("auth-unrelated-fixture", clientRequestId, "fixture unrelated terminal failure");
+        }
+      }
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(0); expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.row().authIncident?.seatEpoch).toBe(f.seat().seatEpoch);
+      expect(f.reports()).toHaveLength(1); expect(f.reports()[0]?.class).toBe("blocked");
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("refused");
+    });
+  });
+
+  test("a provisional authentication rotation resolves only after successor materialization", async () => {
+    await authFixture(true, async (f) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      const resolved = f.command.resolvedConversation;
+      f.command.resolvedConversation = (id) => id === f.successor.id ? null : resolved(id);
+      f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, state: "accepted", conversationId: f.successor.id, launchId: "launch_auth_pending" } });
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("rotated"); expect(f.cards()[0]?.status).toBe("inbox");
+      f.command.resolvedConversation = resolved;
+      reconcileActiveOrchestratorSeat(PROJECT, f.command);
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
     });
   });
 

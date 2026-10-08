@@ -26,6 +26,7 @@ test("later auth stays one incident; epoch, newer normal turn and changed creden
   expect(seatAuthIncidentRecovered(incident, 8, outcome, null)).toBe(true);
   expect(seatAuthIncidentRecovered(incident, 7, { ...outcome, normalTurnTs: failedAt + 1 }, null)).toBe(true);
   expect(seatAuthIncidentRecovered(incident, 7, outcome, "new-login")).toBe(true);
+  expect(seatAuthIncidentRecovered({ ...incident, credentialStamp: "old-login" }, 7, outcome, null)).toBe(false);
 });
 
 test("uk/en notices name failure, account, action, allowed rotation or outside-pool choice", () => {
