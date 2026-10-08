@@ -26,7 +26,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 35,
+        "samples": 37,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -66,7 +66,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 35,
+        "samples": 40,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -106,7 +106,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 60,
+        "samples": 54,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -146,7 +146,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 52,
+        "samples": 51,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -186,7 +186,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 31,
+        "samples": 33,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -266,7 +266,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 46,
+        "samples": 51,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -304,12 +304,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 34,
-        "maxBubbles": 3,
+        "samples": 37,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 246,
         "maxBubbleSlackPx": 0,
@@ -346,7 +346,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 54,
+        "samples": 60,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -386,7 +386,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 35,
+        "samples": 38,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -426,7 +426,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 41,
+        "samples": 44,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -466,7 +466,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 42,
+        "samples": 47,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -506,7 +506,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 63,
+        "samples": 64,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -546,7 +546,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 58,
+        "samples": 66,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -586,7 +586,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 45,
+        "samples": 44,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -626,7 +626,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 58,
+        "samples": 69,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -666,7 +666,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 58,
+        "samples": 64,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -706,7 +706,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 37,
+        "samples": 42,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -746,7 +746,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 60,
+        "samples": 66,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -786,7 +786,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 44,
+        "samples": 50,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,

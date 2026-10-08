@@ -677,7 +677,7 @@
         "delegation.delivery.settled"
       ],
       "dispatches": 1,
-      "sentShownIn": "conversation"
+      "sentShownIn": "card"
     },
     {
       "viewport": "1440x900",
@@ -719,7 +719,7 @@
         "delegation.delivery.settled"
       ],
       "dispatches": 1,
-      "sentShownIn": "conversation"
+      "sentShownIn": "card"
     }
   ]
 }

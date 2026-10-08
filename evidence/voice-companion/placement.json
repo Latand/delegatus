@@ -2,7 +2,7 @@
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion",
   "browser": "Chromium (headless)",
-  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control and from every line of the page's text; the conversation's feed, where rows arrive, is kept clear as a whole wherever a place outside it exists, and its empty part is used only when none does; in the feed a control counts along its whole track (its width over the feed's height), since rows arrive and the feed scrolls, and the host reserves the 44 px under the feed where its way-back strip appears; a lane beside the character is tried at every height from 360 to 180 px, then a lane above it, before the companion collapses to its tile, which keeps off text and controls too; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place, and is read again at 6 s",
+  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control and from every line of the page's text; the conversation's feed, where rows arrive, is kept clear as a whole wherever a place outside it exists, and its empty part is used only when none does; in the feed a control counts along its whole track (its width over the feed's height), since rows arrive and the feed scrolls, and the host reserves the 44 px under the feed where its way-back strip appears; a lane beside the character is tried at every height from 360 to 180 px, then a lane above it, then the same with a narrower lane (240, then 216 px) where no place holds a full one, before the companion collapses to its tile, which keeps off text and controls too; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place, and is read again at 6 s",
   "fills": {
     "start": "the orchestrator's conversation as each scenario starts it: the reviewer's relay and the orchestrator's reply",
     "delivered": "&delivered=1: with the delegated row and the orchestrator's answer to it",
@@ -1829,43 +1829,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -1874,15 +1879,15 @@
       "controls": 53,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 10,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 292,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -1973,43 +1978,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -2018,15 +2028,15 @@
       "controls": 53,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 10,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 292,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -2117,43 +2127,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -2162,15 +2177,15 @@
       "controls": 53,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 10,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 292,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -2261,43 +2276,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 632,
-          "y": 112,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 632,
-        "y": 112,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -2306,15 +2326,15 @@
       "controls": 53,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 10,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 292,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -3001,43 +3021,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -3049,12 +3074,12 @@
       "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 8,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -3145,43 +3170,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -3193,12 +3223,12 @@
       "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 8,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -3289,43 +3319,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -3337,12 +3372,12 @@
       "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 8,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
@@ -3433,43 +3468,48 @@
       "loads": 3,
       "blockInEveryLoad": [
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         },
         {
-          "x": 916,
-          "y": 588,
-          "width": 56,
-          "height": 56
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
         }
       ],
       "blockAt6s": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
       "textUnderCharacterAt6s": 0,
-      "layout": "collapsed",
-      "yielded": true,
+      "layout": "expanded",
+      "yielded": false,
       "phase": "offline",
-      "side": null,
-      "direction": null,
+      "side": "above",
+      "direction": "up",
       "block": {
-        "x": 916,
-        "y": 588,
-        "width": 56,
-        "height": 56
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
       },
-      "lane": null,
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
@@ -3481,12 +3521,12 @@
       "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 0,
+      "passed": 624,
       "clipped": [],
       "pageOverflows": false,
       "handles": 2,
       "handleArea": 0,
-      "handleGap": 8,
+      "handleGap": 103,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
