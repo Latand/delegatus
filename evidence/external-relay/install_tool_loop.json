@@ -65,7 +65,7 @@
             "truncated": true,
             "effect": "read",
             "delivered": false,
-            "replayed": false,
+            "replayed": true,
             "calls_remaining": 14,
             "cursor": "cccccccccccccccccccccccccccccccc"
           }
