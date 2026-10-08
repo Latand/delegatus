@@ -1961,7 +1961,7 @@ function scheduleProviderWake(ports: PipelinePorts, resumeAt: string): void {
 
 /** A quota budget limits continuations of this attempt. Its next reset still
     owes a fresh stage retry, durably fenced against operator control changes. */
-function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string): void {
+function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string, fallback?: boolean): void {
   const wait = attempt.providerWait!;
   const now = unixMs(ports.now());
   if (wait.failedAccounts?.length) {
@@ -1970,7 +1970,7 @@ function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttemp
   }
   const resetsAt = providerRetryReset(pipeline, attempt, ports);
   const reset = resetsAt !== null ? resetsAt * 1_000 + 60_000 : 0;
-  const fallback = reset <= now;
+  fallback ??= reset <= now;
   if (fallback && (attempt.providerFallbackRetries ?? 0) >= 1) {
     wait.retryCancelled = true;
     park(pipeline, `${detail}; automatic ${wait.resetsAt === null ? "unknown-reset" : "elapsed-reset"} retry exhausted; waiting for operator decision`, attempt);
@@ -2117,6 +2117,53 @@ function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attem
   return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
 }
 
+function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>) {
+  return { condition: classifyProviderCondition(engine, message.errorClass
+      ?? (message.usageLimit ? (engine === "claude" ? "rate_limit" : "usage_limit") : null), message.text),
+    text: message.text, ts: message.ts, resetsAt: message.usageLimit?.resetsAt ?? null };
+}
+
+/** The wait a new provider cut opens: its condition, reset and account, in
+    the chain budget the attempt holds (a fresh one when it holds none). */
+function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null }, ports: PipelinePorts,
+): NonNullable<PipelineStageAttempt["providerWait"]> {
+  const now = ports.now();
+  const time = unixMs(now);
+  const wait = attempt.providerWait;
+  const engine = attempt.effectiveRole.engine;
+  const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
+  const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
+  const same = wait?.condition.kind === notice.condition.kind;
+  const budget = attempt.providerRecoveryBudget ??= { tries: wait?.tries ?? 0, startedAt: wait?.startedAt ?? now, engine };
+  if (budget.engine !== undefined && budget.engine !== engine) {
+    delete budget.triedAccounts;
+    delete budget.failedAccounts;
+  }
+  budget.engine = engine;
+  const tries = budget.tries;
+  // The closing turn's reset names the exhausted window; a cached reset
+  // can still describe an earlier session window while a weekly limit holds.
+  const resetsAt = knownReset(notice.resetsAt)
+    ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
+  const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
+    : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
+    : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
+  const opened = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
+    turnTs: notice.ts, tries, startedAt: budget.startedAt,
+    resumeAt: new Date(time + delay).toISOString(), resetsAt,
+    ...(same && wait?.failedAccounts ? { failedAccounts: [...wait.failedAccounts] } : {}),
+    ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
+  if (accountId && notice.condition.kind === "usage_limit") {
+    budget.triedAccounts = [...new Set([...(budget.triedAccounts ?? []), accountId])];
+    attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter((item) => item.accountId !== accountId || (item.engine ?? engine) !== engine),
+      { accountId, engine, resetsAt, limitedAt: notice.ts, turnId: String(notice.ts) }];
+  }
+  recordProviderRecovery(attempt, "wait", notice.condition, `waiting for ${notice.condition.label}`, now);
+  delete attempt.controllerWait;
+  return opened;
+}
+
 /** Persist before transport. Delivery retries retain a key for this exact cut. */
 async function recoverProviderCut(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
@@ -2132,36 +2179,7 @@ async function recoverProviderCut(
     return true;
   }
   if (notice && (!wait || notice.ts > wait.turnTs)) {
-    const engine = attempt.effectiveRole.engine;
-    const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
-    const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
-    const same = wait?.condition.kind === notice.condition.kind;
-    const budget = attempt.providerRecoveryBudget ??= { tries: wait?.tries ?? 0, startedAt: wait?.startedAt ?? now, engine };
-    if (budget.engine !== undefined && budget.engine !== engine) {
-      delete budget.triedAccounts;
-      delete budget.failedAccounts;
-    }
-    budget.engine = engine;
-    const tries = budget.tries;
-    // The closing turn's reset names the exhausted window; a cached reset
-    // can still describe an earlier session window while a weekly limit holds.
-    const resetsAt = knownReset(notice.resetsAt)
-      ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
-    const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
-      : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
-      : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
-    wait = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
-      turnTs: notice.ts, tries, startedAt: budget.startedAt,
-      resumeAt: new Date(time + delay).toISOString(), resetsAt,
-      ...(same && wait?.failedAccounts ? { failedAccounts: [...wait.failedAccounts] } : {}),
-      ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
-    if (accountId && notice.condition.kind === "usage_limit") {
-      budget.triedAccounts = [...new Set([...(budget.triedAccounts ?? []), accountId])];
-      attempt.usageLimitedAccounts = [...(attempt.usageLimitedAccounts ?? []).filter((item) => item.accountId !== accountId || (item.engine ?? engine) !== engine),
-        { accountId, engine, resetsAt, limitedAt: notice.ts, turnId: String(notice.ts) }];
-    }
-    recordProviderRecovery(attempt, "wait", notice.condition, `waiting for ${notice.condition.label}`, now);
-    delete attempt.controllerWait;
+    wait = openProviderWait(stage, attempt, notice, ports);
     persist();
   }
   if (!wait) return false;
@@ -5408,12 +5426,7 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  // Once stage progress clears a delivered wait, its continuation journal
-  // excludes the recovered cuts. A zero-time successor still owns its first cut.
-  const evidenceStartedAt = !attempt.providerWait
-    ? attempt.providerRecoveries?.findLast(recovery => recovery.action === "continue")?.at ?? attempt.startedAt
-    : attempt.startedAt;
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, evidenceStartedAt, undefined, attempt.providerWait?.turnTs);
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -5430,14 +5443,18 @@ async function tickRunStage(
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attempt.startedAt)
-    ? { condition: classifyProviderCondition(attempt.effectiveRole.engine, terminalProviderMessage.errorClass
-        ?? (terminalProviderMessage.usageLimit ? (attempt.effectiveRole.engine === "claude" ? "rate_limit" : "usage_limit") : null), terminalProviderMessage.text),
-        text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
-    : null;
+    ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage) : null;
   if (!oomDeath && !heldForDeployCut && (notice || attempt.providerWait)) {
     if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
       waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist);
       return;
+    }
+    // Agent output closed the saved wait's chain, or the chain a zero-time
+    // successor inherited. The open chain owes its own recovery, budget and
+    // cancellation test.
+    if (attempt.providerWait && durable?.requestedCutOpen === false && durable.firstProviderCutAt) {
+      delete attempt.providerWait;
+      delete attempt.providerRecoveryBudget;
     }
     if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
       && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) > durable.firstProviderCutAt) {
@@ -6664,19 +6681,19 @@ function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: St
       ?? !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin !== "external"));
 }
 
-/** A harness wake or controller continuation can hit the same limit without
-    an operator answering. Advance its cut witness and retain the stage retry. */
+/** A harness wake or controller continuation can meet the same cut chain
+    without an operator answering. Advance the open chain's witness and retain
+    the stage retry; a quota record in a quota chain also names its reset. */
 function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
   const wait = attempt.providerWait;
   const notice = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
-  if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs
-    || newerExternalProviderPrompt(attempt, durable)
-    || durable?.message && durable.message.ts > wait.turnTs && durable.message.ts !== notice.ts
-    || !(durable?.automaticPromptBeforeProviderCut
-      ?? durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin !== "external"))
-    || classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass ?? null, notice.text).kind !== "usage_limit") return false;
+  const quota = wait?.condition.kind === "usage_limit" && !!notice
+    && classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass ?? null, notice.text).kind === "usage_limit";
+  if (!wait || !notice || notice.ts <= wait.turnTs || !quota && !wait.stageRetry
+    || durable?.requestedCutOpen !== true || newerExternalProviderPrompt(attempt, durable)) return false;
   wait.turnTs = notice.ts;
   wait.text = redactBounded(notice.text, 300);
+  if (!quota) { scheduleProviderWake(ports, wait.resumeAt); return true; }
   const reset = knownReset(notice.usageLimit?.resetsAt);
   const limited = usageLimitsOn(attempt, attempt.effectiveRole.engine).find(item => item.accountId === wait.accountId);
   if (limited) { limited.limitedAt = notice.ts; limited.turnId = String(notice.ts); if (reset !== null) limited.resetsAt = reset; }
@@ -6691,22 +6708,52 @@ function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAtt
   return true;
 }
 
-async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void): Promise<"newer" | "unchanged" | "unknown"> {
+/** Agent output closed the parked chain and the turn ended in a newer one. The
+    retry moves to that chain: the wait the running tick opens for its cut, a
+    fresh budget, and that condition's own retry time. */
+function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
+  const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
+  if (!attempt.providerWait?.stageRetry || durable?.requestedCutOpen !== false || !durable.firstProviderCutAt
+    || !message || message.ts <= attempt.providerWait.turnTs) return false;
+  const notice = providerCutNotice(attempt.effectiveRole.engine, message);
+  // Authentication and unknown failures have no timed retry on a running lane either.
+  if (notice.condition.kind !== "usage_limit" && notice.condition.kind !== "transient") return false;
+  delete attempt.providerWait;
+  delete attempt.providerRecoveryBudget;
+  const wait = openProviderWait(stage, attempt, notice, ports);
+  const detail = `stage cut by ${notice.condition.label}; last: ${wait.text}`;
+  recordProviderRecovery(attempt, "park", notice.condition, detail, ports.now());
+  if (notice.condition.kind === "transient") parkProviderUsageLimit(pipeline, attempt, detail, ports, wait.resumeAt, false);
+  else parkProviderUsageLimit(pipeline, attempt, detail, ports);
+  return true;
+}
+
+async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void): Promise<"newer" | "unchanged" | "unknown" | "working"> {
     const wait = attempt.providerWait;
     if (!wait) return "unknown";
     const durable = attempt.agentPath
       ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, wait.turnTs) : null;
     if (durable?.promptHistoryComplete === false && wait.turnTs > 0) return "unknown";
+    // Agent output closed the saved chain and no newer cut is open: the stage
+    // is working. Its turn decides, ending in a newer chain or settling it.
+    if (durable?.requestedCutOpen === false && !attempt.report && !attempt.verdict) {
+      // The closed chain's confirmation wait goes with it.
+      if (wait.stageRetry && attempt.controllerWait) { delete attempt.controllerWait; persist(); }
+      if (!durable.firstProviderCutAt) return durable.turn === "busy" ? "working" : durable.turn === "terminal" ? "newer" : "unknown";
+    }
     if (newerExternalProviderPrompt(attempt, durable)) return "newer";
-    if (refreshHarnessProviderCut(pipeline, attempt, durable, ports)) persist();
+    const stage = currentStage(pipeline);
+    if (stage && moveParkedProviderRetry(pipeline, stage, attempt, durable, ports)) persist();
+    else if (refreshHarnessProviderCut(pipeline, attempt, durable, ports)) persist();
+    const saved = attempt.providerWait ?? wait;
     if (!attempt.report && !attempt.verdict && durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)) return "unknown";
-    if (attempt.report || attempt.verdict || durable?.message && durable.message.ts > wait.turnTs
-      || durable?.terminalProviderMessage && durable.terminalProviderMessage.ts > wait.turnTs
+    if (attempt.report || attempt.verdict || durable?.message && durable.message.ts > saved.turnTs
+      || durable?.terminalProviderMessage && durable.terminalProviderMessage.ts > saved.turnTs
       || durable && (durable.turn === "busy" || durable.turn === "terminal" && !durable.terminalProviderMessage)
-        && (durable.lastRecordAt ?? 0) > wait.turnTs) return "newer";
+        && (durable.lastRecordAt ?? 0) > saved.turnTs) return "newer";
     if (!attempt.agentPath && !attempt.conversationId) return "unchanged"; // No host ever received this attempt.
     return durable?.turn === "terminal" && !durable.launchOnly
-      && durable.terminalProviderMessage?.ts === wait.turnTs ? "unchanged" : "unknown";
+      && durable.terminalProviderMessage?.ts === saved.turnTs ? "unchanged" : "unknown";
 }
 
 function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string): void {
@@ -6770,11 +6817,12 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   }
   const confirmUnchangedCut = async () => {
     const state = await providerCutActivity(pipeline, attempt, ports, persist);
+    if (attempt.providerWait !== wait) return false; // The retry moved to a newer chain.
     if (state === "unchanged" && (!attempt.conversationId
       || ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true)) return true;
     if (state === "newer") {
       cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
-    } else {
+    } else if (state !== "working") {
       const now = ports.now();
       if (bookControllerWaitRound(attempt, now, now, ports,
         { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: 30_000 }) === "exhausted") {
@@ -6787,7 +6835,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
     return true;
   }
-  if (!wait.stageRetry) return true;
+  if (attempt.providerWait !== wait || !wait.stageRetry) return true;
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
   if (remaining > 0) { scheduleProviderWake(ports, wait.resumeAt); return false; }
   const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
