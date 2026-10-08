@@ -1127,6 +1127,11 @@ test.each(["hot", "cold"] as const)("manual managed completion releases an unacc
     // Web promotion alone and an unavailable host cannot release custody.
     await service.snapshot();
     expect(held()?.id).toBe(id);
+    // That observation saw the deployment finish, which starts a check and,
+    // after it, a tick of its own. Let both finish before the host moves, so
+    // the observations below are the ones this test makes.
+    const background = service as unknown as { checking: unknown; autoRunning: boolean };
+    for (let i = 0; i < 500 && (background.checking || background.autoRunning); i++) await Bun.sleep(1);
     hostRevision = TARGET;
     answers = false;
     await service.autoTick();

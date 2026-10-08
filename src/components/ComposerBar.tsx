@@ -685,6 +685,8 @@ export function ComposerBar({
                moves between the card and the floating PiP document. */
             ref={attachInput}
             value={displayText}
+            /* Native spelling can block Chromium's renderer on pasted transcripts. */
+            spellCheck={false}
             rows={1}
             readOnly={Boolean(dictation.liveText)}
             onChange={(event) => {
