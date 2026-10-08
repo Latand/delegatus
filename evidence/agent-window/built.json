@@ -755,24 +755,24 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 30,
+          "frames": 33,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 8,
+          "bareFrames": 11,
           "emptyFrames": 0
         },
         "open-export": {
-          "frames": 31,
+          "frames": 20,
           "incoming": "conversation_export-impl",
           "layouts": 1,
-          "bareFrames": 10,
+          "bareFrames": 7,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 32,
+          "frames": 28,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 10,
+          "bareFrames": 7,
           "emptyFrames": 0
         },
         "switch-row": {
@@ -783,35 +783,35 @@
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 32,
+          "frames": 29,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-alt-j": {
-          "frames": 20,
+          "frames": 22,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-one": {
-          "frames": 29,
+          "frames": 27,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-all": {
-          "frames": 29,
+          "frames": 33,
           "incoming": null,
           "layouts": 0,
-          "bareFrames": 26,
+          "bareFrames": 31,
           "emptyFrames": 0
         }
       },
-      "frames": 352,
+      "frames": 341,
       "pageErrors": []
     },
     "1000-en-light": {
@@ -1568,63 +1568,63 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 41,
+          "frames": 39,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 13,
+          "bareFrames": 11,
           "emptyFrames": 0
         },
         "open-export": {
-          "frames": 35,
+          "frames": 32,
           "incoming": "conversation_export-impl",
           "layouts": 1,
-          "bareFrames": 11,
+          "bareFrames": 8,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 45,
+          "frames": 40,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 11,
+          "bareFrames": 9,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 44,
+          "frames": 32,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 43,
+          "frames": 32,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-alt-j": {
-          "frames": 34,
+          "frames": 29,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-one": {
-          "frames": 40,
+          "frames": 32,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-all": {
-          "frames": 37,
+          "frames": 33,
           "incoming": null,
           "layouts": 0,
-          "bareFrames": 32,
+          "bareFrames": 30,
           "emptyFrames": 0
         }
       },
-      "frames": 526,
+      "frames": 396,
       "pageErrors": []
     },
     "1440-uk-light": {
@@ -2381,63 +2381,63 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 29,
+          "frames": 32,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 9,
+          "bareFrames": 8,
           "emptyFrames": 0
         },
         "open-export": {
-          "frames": 24,
+          "frames": 28,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 9,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 31,
+          "frames": 41,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 7,
+          "bareFrames": 9,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 23,
+          "frames": 25,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 23,
+          "frames": 27,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-alt-j": {
-          "frames": 21,
+          "frames": 22,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-one": {
-          "frames": 24,
+          "frames": 30,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-all": {
-          "frames": 23,
+          "frames": 33,
           "incoming": null,
           "layouts": 0,
-          "bareFrames": 20,
+          "bareFrames": 31,
           "emptyFrames": 0
         }
       },
-      "frames": 321,
+      "frames": 361,
       "pageErrors": []
     },
     "1000-uk-light": {
@@ -3194,63 +3194,63 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 45,
+          "frames": 36,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 13,
+          "bareFrames": 8,
           "emptyFrames": 0
         },
         "open-export": {
           "frames": 34,
           "incoming": "conversation_export-impl",
           "layouts": 1,
-          "bareFrames": 9,
+          "bareFrames": 10,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 47,
+          "frames": 40,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 11,
+          "bareFrames": 8,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 37,
+          "frames": 34,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 38,
+          "frames": 33,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-alt-j": {
-          "frames": 34,
+          "frames": 31,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-one": {
-          "frames": 43,
+          "frames": 35,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-all": {
-          "frames": 37,
+          "frames": 33,
           "incoming": null,
           "layouts": 0,
-          "bareFrames": 31,
+          "bareFrames": 30,
           "emptyFrames": 0
         }
       },
-      "frames": 538,
+      "frames": 406,
       "pageErrors": []
     },
     "1440-en-dark": {
@@ -4007,35 +4007,35 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 29,
+          "frames": 33,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 8,
+          "bareFrames": 10,
           "emptyFrames": 0
         },
         "open-export": {
-          "frames": 23,
+          "frames": 30,
           "incoming": "conversation_export-impl",
           "layouts": 1,
-          "bareFrames": 6,
+          "bareFrames": 9,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 35,
+          "frames": 41,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 8,
+          "bareFrames": 9,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 27,
+          "frames": 31,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 27,
+          "frames": 36,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
@@ -4049,21 +4049,21 @@
           "emptyFrames": 0
         },
         "close-one": {
-          "frames": 27,
+          "frames": 32,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-all": {
-          "frames": 29,
+          "frames": 30,
           "incoming": null,
           "layouts": 0,
-          "bareFrames": 25,
+          "bareFrames": 28,
           "emptyFrames": 0
         }
       },
-      "frames": 343,
+      "frames": 372,
       "pageErrors": []
     },
     "1000-en-dark": {
@@ -4820,49 +4820,49 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 36,
+          "frames": 34,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 9,
+          "bareFrames": 7,
           "emptyFrames": 0
         },
         "open-export": {
-          "frames": 33,
+          "frames": 31,
           "incoming": "conversation_export-impl",
           "layouts": 1,
-          "bareFrames": 9,
+          "bareFrames": 7,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 38,
+          "frames": 37,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 8,
+          "bareFrames": 7,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 30,
+          "frames": 32,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 32,
+          "frames": 29,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-alt-j": {
-          "frames": 30,
+          "frames": 27,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "close-one": {
-          "frames": 33,
+          "frames": 32,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
@@ -4876,7 +4876,7 @@
           "emptyFrames": 0
         }
       },
-      "frames": 363,
+      "frames": 338,
       "pageErrors": []
     },
     "1440-uk-dark": {
@@ -5633,42 +5633,42 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 33,
+          "frames": 34,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 7,
           "emptyFrames": 0
         },
         "open-export": {
-          "frames": 32,
+          "frames": 31,
           "incoming": "conversation_export-impl",
           "layouts": 1,
-          "bareFrames": 9,
+          "bareFrames": 7,
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 36,
+          "frames": 39,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 8,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 26,
+          "frames": 30,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-next": {
-          "frames": 28,
+          "frames": 27,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
           "bareFrames": 0,
           "emptyFrames": 0
         },
         "switch-alt-j": {
-          "frames": 25,
+          "frames": 29,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
           "bareFrames": 0,
@@ -5682,14 +5682,14 @@
           "emptyFrames": 0
         },
         "close-all": {
-          "frames": 30,
+          "frames": 31,
           "incoming": null,
           "layouts": 0,
-          "bareFrames": 27,
+          "bareFrames": 29,
           "emptyFrames": 0
         }
       },
-      "frames": 356,
+      "frames": 347,
       "pageErrors": []
     },
     "1000-uk-dark": {
@@ -6446,10 +6446,10 @@
       },
       "transitions": {
         "open-build": {
-          "frames": 35,
+          "frames": 33,
           "incoming": "conversation_rounds-build",
           "layouts": 1,
-          "bareFrames": 8,
+          "bareFrames": 6,
           "emptyFrames": 0
         },
         "open-export": {
@@ -6460,14 +6460,14 @@
           "emptyFrames": 0
         },
         "open-review": {
-          "frames": 41,
+          "frames": 38,
           "incoming": "conversation_rounds-review",
           "layouts": 1,
-          "bareFrames": 10,
+          "bareFrames": 8,
           "emptyFrames": 0
         },
         "switch-row": {
-          "frames": 32,
+          "frames": 30,
           "incoming": "conversation_export-impl",
           "layouts": 1,
           "bareFrames": 0,
@@ -6502,7 +6502,7 @@
           "emptyFrames": 0
         }
       },
-      "frames": 358,
+      "frames": 336,
       "pageErrors": []
     }
   },

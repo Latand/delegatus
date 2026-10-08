@@ -326,9 +326,15 @@ above where the critique of the prototypes (lane 23485fd0, attempt 2) asked:
   or after 1.2 s whatever it holds. A switch keeps the agent on screen until
   the next one is ready. There is no fade. The slots are keyed by agent, so
   the incoming slot becomes the shown one without moving the conversation.
-- **Closing one agent never takes the window off the screen.** The window's
-  agent and the reader's agent change in the same commit, and the neighbour
-  was already laid out in the park, so no frame shows the board.
+- **Closing one agent never takes the window off the screen.** The agent
+  closed leaves the list at once. A neighbour that has read (it waited laid
+  out in the park) takes the reader in the same commit, so no frame shows the
+  board. One that has not (never shown, or its saved tail gone) reads first,
+  the way a switch does: the agent closed stays in the reader until then, so
+  no frame shows a reader still loading either.
+- **A link followed again opens its agent again.** The Viewer holds a
+  conversation it opened as its focus for a moment afterwards; each request
+  carries a count of its own, and the board opens the agent on every one.
 - **‹ › only with two or more agents,** at the right end of the list's head at
   every width.
 - **The margins hold no board text.** The board region under the window is a

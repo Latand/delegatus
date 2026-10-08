@@ -63,7 +63,7 @@ import { stagePanelKey } from "./KanbanCard";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
 import { cycleOpenAgent, openAgents } from "./openAgents";
 import { AgentWindow, OPEN_AGENTS_SHORTCUT, OpenAgentsPill } from "./AgentWindow";
-import { useAgentWindowGeometry, useReaderReady } from "./agentWindowGeometry";
+import { readerReady, useAgentWindowGeometry, useReaderReady } from "./agentWindowGeometry";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
@@ -160,6 +160,10 @@ export interface KanbanBoardProps {
   /** A conversation or task the Viewer was asked to open while this board
       shows: its card is revealed, and a conversation opens as a reader. */
   focus?: string | null;
+  /** Which request `focus` answers. The Viewer keeps `focus` for a while
+      after the open, so a second request for the same conversation (a link
+      followed again) names the same path, and only this tells them apart. */
+  focusNonce?: number;
   /** A reader opened: the same seen-stamp opening a conversation leaves. */
   onConversationOpened?: (path: string) => void;
   /** Conversations, the project's every conversation: for what no card draws (review decks, collapsed workers)
@@ -587,13 +591,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
+  /* An agent closed while it is in the reader and its neighbour has not
+     read yet: it has left the list and stays in the reader until the
+     neighbour can take its place, then it closes (see closeReaderFor). */
+  const [closing, setClosing] = useState<{ key: string; memory: ReaderMemory } | null>(null);
   /* The agents open on the board, for the agent window's list. */
-  const windowAgents = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const openNow = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const windowAgents = useMemo(() => (closing ? openNow.filter((agent) => agent.key !== closing.key) : openNow), [openNow, closing]);
   const windowKeysRef = useRef<readonly string[]>([]);
   windowKeysRef.current = windowAgents.map((agent) => agent.key);
   /* The agent in the reader. One whose conversation is gone from the list
      (closed elsewhere, or its file left the board) is not shown. */
-  const shown = shownState && windowAgents.some((agent) => agent.key === shownState) ? shownState : null;
+  const shown = shownState && openNow.some((agent) => agent.key === shownState) ? shownState : null;
   const shownRef = useRef(shown);
   shownRef.current = shown;
   /* An agent asked for that is not open any more leaves the window on the
@@ -609,6 +618,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
      with its conversation. */
   const incoming = requestedListed && requestedAgent !== shown ? requestedAgent : null;
   useReaderReady(placement, incoming, useCallback((key: string) => setWindow(key, key), [setWindow]));
+  /* The agent closed leaves once the reader has moved on from it: to its
+     neighbour, or with the window. */
+  useLayoutEffect(() => {
+    if (!closing || shown === closing.key) return;
+    closing.memory.update((readers) => closeReader(readers, closing.key));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the close it held is done
+    setClosing(null);
+  }, [closing, shown]);
   /* Escape closes the window in one press, unless the key belongs to a field,
      a menu or another dialog. Listened for on the document: the reader is a
      portal, so its key events never pass through the window in React's tree. */
@@ -2094,27 +2111,37 @@ export function KanbanBoard(props: KanbanBoardProps) {
     menu.setOpen({ anchor, value: { kind: "links", target } });
   }, [menu]);
   /* Closing one agent closes nothing else. Closing the one in the window
-     brings its neighbour into the same reader in the same commit (the next,
-     or the previous at the end); it waited laid out in the park, so the
-     window never leaves the screen. The last one closes the window. */
+     brings its neighbour into the same reader (the next, or the previous at
+     the end), so the window never leaves the screen: in the same commit when
+     the neighbour has read, as it has when it waited laid out in the park.
+     One that has not (never shown, or its saved tail gone) reads first, the
+     way a switch does, and the agent closed stays in the reader until then,
+     out of the list. The last one closes the window. */
   const closeReaderFor = useCallback((key: string) => {
     disown(key);
     const agent = windowAgentRef.current;
-    if (agent && (agent === key || shownRef.current === key)) {
+    const onScreen = shownRef.current;
+    if (agent && (agent === key || onScreen === key)) {
       const keys = windowKeysRef.current;
       const at = keys.indexOf(key);
       const neighbour = at < 0 ? null : keys[at + 1] ?? keys[at - 1] ?? null;
       /* An agent still on its way into the reader stays asked for. */
       const next = agent === key ? neighbour : agent;
-      setWindow(next, shownRef.current === key ? next ?? neighbour : shownRef.current);
+      if (onScreen === key && next && !readerReady(placement.containerOf(next))) {
+        setWindow(next);
+        setClosing({ key, memory });
+        return;
+      }
+      setWindow(next, onScreen === key ? next : onScreen);
       if (!next) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(".board-frame")?.focus({ preventScroll: true }));
     }
     memory.update((readers) => closeReader(readers, key));
-  }, [memory, disown, setWindow]);
+  }, [memory, disown, setWindow, placement]);
   const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
   /* A conversation the Viewer was asked to open lands in its reader. */
   const focusTarget = props.focus ?? null;
+  const focusNonce = props.focusNonce;
   useEffect(() => {
     if (!focusTarget) return;
     if (focusTarget.startsWith("task::")) {
@@ -2142,7 +2169,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     /* On its card, or, for a conversation no card holds, as a reader of its own in the window. */
     openReaderFor(file);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per request
-  }, [focusTarget]);
+  }, [focusTarget, focusNonce]);
 
   const focusCard = useCallback((cardId: string) => {
     const card = cardsById.get(cardId);

@@ -576,6 +576,9 @@ function ProjectDashboardView({
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
+  /* Counts the highlights asked for: the board opens on each request, and a
+     second request for the path still highlighted changes nothing else. */
+  const [highlightNonce, setHighlightNonce] = useState(0);
   /* Jump targets the scheme would otherwise skip (a stalled root builds no
      automatic group; a stalled branch hides inside a mini stack) materialize
      as ephemeral nodes: React state only, never written to prefs, gone on
@@ -1122,6 +1125,7 @@ function ProjectDashboardView({
     /* A task card is a board object, not a conversation screen. */
     if (isMobile && !path.startsWith("task::")) showMobileConversation(path);
     setHighlight(path);
+    setHighlightNonce((nonce) => nonce + 1);
     /* A focused task card stays full-size while it is the focus target. */
     setFocusedTaskId(path.startsWith("task::") ? path.slice("task::".length) : null);
     if (highlightTimer.current) window.clearTimeout(highlightTimer.current);
@@ -2566,6 +2570,7 @@ function ProjectDashboardView({
                 catalogFailures={catalogFailures}
                 selection={board.selection}
                 focus={highlight}
+                focusNonce={highlightNonce}
                 onConversationOpened={markPathSeen}
                 projectCwd={projectCwd}
                 seatRefs={seatRefsForBoard}

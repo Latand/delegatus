@@ -10265,7 +10265,77 @@ describe("the agent window: a click on the board opens the agent in one window, 
           await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
           const keyed = await ring(fresh);
           if (!keyed?.focused || !keyed.ring) failures.push(`${label}: the link followed after a key ${JSON.stringify(keyed)}`);
-          console.log(`${label}: ${JSON.stringify({ onLoad, later, keyed })}`);
+          /* The same link once more without leaving the board: the Viewer still
+             holds that conversation as its focus, and the window opens all the
+             same. The hop above may or may not reach the Overview first; this
+             one never does. */
+          await fresh.keyboard.press("Escape");
+          await fresh.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          await fresh.evaluate(() => { location.hash = "#p=atlas"; });
+          await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
+          const again = await ring(fresh);
+          if (!again?.focused) failures.push(`${label}: the same link followed again ${JSON.stringify(again)}`);
+          console.log(`${label}: ${JSON.stringify({ onLoad, later, keyed, again })}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  /* Closing the agent on screen when its neighbour has never read: three
+     agents opened, the transcripts the page kept for them dropped and the
+     page loaded again, so only the agent the pill brings back reads. Its row's
+     × keeps the window, and the reader shows the agent closed until the
+     neighbour has read, never a reader still loading or its skeleton. */
+  browserTest("closing the agent on screen before its neighbour has ever read keeps the window and shows no loading reader", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/agent-window-unread-neighbour"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+        try {
+          await page.waitForSelector(`${chip("build")} >> visible=true`, { timeout: 30_000 });
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+          for (const [target, key] of [[chip("build"), KEY.build], [EXPORT_TILE, KEY.export], [chip("review"), KEY.review]] as const) {
+            await page.evaluate((selector) => document.querySelector(selector)?.closest(".card")?.scrollIntoView({ block: "center" }), target);
+            await page.locator(target).click();
+            await showing(page, key);
+            await page.keyboard.press("Escape");
+            await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          }
+          await page.evaluate(() => {
+            for (const key of Object.keys(localStorage)) if (key.startsWith("llvTail:")) localStorage.removeItem(key);
+          });
+          await page.reload();
+          await page.waitForSelector("[data-open-agents-pill] >> visible=true", { timeout: 30_000 });
+          await page.locator("[data-open-agents-pill]").click();
+          await showing(page, KEY.build);
+          await settle(page);
+          const parked = await page.evaluate((key) => document.querySelector(`.reader-park [data-kanban-reader="${key}"] [data-feed-state]`)?.getAttribute("data-feed-state") ?? null, KEY.export);
+          await installTrace(page);
+          await phase(page, "close-one");
+          await page.locator(`[data-open-agent-close="${KEY.build}"]`).click();
+          await showing(page, KEY.export);
+          await settle(page);
+          const trace = await samples(page);
+          const bare = trace.filter((sample) => !sample.window);
+          const loading = trace.filter((sample) => sample.window && (sample.skeleton || !sample.shown || !["items", "empty", "error"].includes(sample.feed ?? "")));
+          const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent]")].map((row) => row.dataset.openAgent));
+          const sequence = trace.map((sample) => sample.shown).filter((shown, index, all) => shown !== all[index - 1]);
+          console.log(`${label}: ${JSON.stringify({ parked, frames: trace.length, bare: bare.length, loading: loading.length, sequence, rows })}`);
+          if (bare.length) failures.push(`${label}: ${bare.length} frames of the close showed no window`);
+          if (loading.length) failures.push(`${label}: ${loading.length} frames showed the window with a loading or skeleton reader (${JSON.stringify(loading[0])})`);
+          if (rows.join(",") !== [KEY.export, KEY.review].join(",")) failures.push(`${label}: after the close the list is ${rows.join(",")}`);
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally {
           await context.close();

@@ -49,11 +49,21 @@ Object.assign(globalThis, {
   addEventListener() {},
   removeEventListener() {},
 });
+/* A transcript whose path is held here answers once it is released: its
+   reader stays on its first read until then. */
+const heldLogs = new Map<string, Array<() => void>>();
+const releaseLogs = (path: string) => {
+  const waiting = heldLogs.get(path) ?? [];
+  heldLogs.delete(path);
+  for (const resume of waiting) resume();
+};
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   let body: unknown = {};
   if (url.startsWith("/api/logs")) {
     const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string; path: string }> };
+    const held = reqs.find((req) => heldLogs.has(req.path));
+    if (held) await new Promise<void>((resume) => heldLogs.get(held.path)!.push(resume));
     body = { chunks: Object.fromEntries(reqs.map((req) => [req.id, { data: "", start: 0, offset: 0, size: 0 }])) };
   }
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -84,6 +94,7 @@ const roots: Root[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
+  for (const path of [...heldLogs.keys()]) releaseLogs(path);
   localStorage.clear();
   scrolledTo.length = 0;
   boardWidth = 1672;
@@ -155,6 +166,8 @@ function mount(options: { files?: FileEntry[]; drafts?: string[]; onDraftClose?:
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push(root);
+  /* What the Viewer asked this board to open, and which request that was. */
+  let focus: { path: string; nonce: number } | null = null;
   const render = (files: FileEntry[] = options.files ?? [implement, review, verify1, verify2, plain]) => flushSync(() => root.render(
     <KanbanBoard
       project="fixture"
@@ -174,10 +187,16 @@ function mount(options: { files?: FileEntry[]; drafts?: string[]; onDraftClose?:
       selection={new Set()}
       onOpenConversations={() => {}}
       mutationPorts={idlePorts}
+      focus={focus?.path ?? null}
+      focusNonce={focus?.nonce}
     />,
   ));
   render();
-  return { host, render };
+  const ask = (path: string) => {
+    focus = { path, nonce: (focus?.nonce ?? 0) + 1 };
+    render();
+  };
+  return { host, render, ask };
 }
 
 const click = (element: Element | null | undefined) => {
@@ -372,6 +391,92 @@ test("opening, closing and finishing update the list live; the corner × closes 
   expect(remembered()).toEqual([]);
   /* The cards stay: closing an agent never removes its card. */
   expect([...second.host.querySelectorAll(".card")].map((card) => card.getAttribute("data-id"))).toEqual(expect.arrayContaining(["task:t-search", "task:t-export"]));
+});
+
+test("a link followed again opens its agent again, though the Viewer still asks for the same conversation", async () => {
+  /* The Viewer's highlight outlives the open by HIGHLIGHT_MS, so a second
+     request for the same conversation inside it names the same path: only
+     the request itself is new. */
+  seed([plain]);
+  const { host, ask } = mount();
+  await tick();
+  ask(plain.path);
+  await showing(host, "conversation_plain-1");
+  flushSync(() => document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event));
+  await tick();
+  expect(agentWindow(host)).toBeNull();
+  ask(plain.path);
+  const reader = await showing(host, "conversation_plain-1");
+  expect(isFocused(reader)).toBe(true);
+  expect(remembered()).toEqual(["conversation_plain-1"]);
+});
+
+/* What a browser's IntersectionObserver says of a pane: off screen in the
+   park, on screen anywhere else (the window's incoming slot included, which
+   is laid out on screen and not drawn). Read again every few milliseconds,
+   so a reader moved between the park and the window is seen to move. */
+class ParkObserver {
+  private readonly seen = new Map<Element, boolean>();
+  private readonly timer = setInterval(() => this.read(), 5);
+  constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean; target: Element }>) => void) {}
+  observe(target: Element) {
+    this.seen.set(target, !target.closest(".reader-park"));
+    this.callback([{ isIntersecting: this.seen.get(target)!, target }]);
+  }
+  private read() {
+    for (const [target, was] of this.seen) {
+      const now = !target.closest(".reader-park");
+      if (now === was) continue;
+      this.seen.set(target, now);
+      this.callback([{ isIntersecting: now, target }]);
+    }
+  }
+  unobserve(target: Element) { this.seen.delete(target); }
+  disconnect() {
+    this.seen.clear();
+    clearInterval(this.timer);
+  }
+}
+
+test("closing the agent on screen keeps it there until its neighbour has read, and never shows a reader still loading", async () => {
+  /* The neighbour has never been in the window: it waited in the park, where
+     its feed does not read, no earlier read is kept for it, and its first
+     read is slow. */
+  Object.assign(globalThis, { IntersectionObserver: ParkObserver });
+  try {
+    const slow = conversation("slow-1", "Explorer: read the export presets once more");
+    seed([verify2, slow]);
+    heldLogs.set(slow.path, []);
+    const { host } = mount({ files: [implement, review, verify1, verify2, plain, slow] });
+    await tick();
+    click(pill(host));
+    await showing(host, "conversation_verify-2");
+    const feedOf = (key: string) => readerOf(host, key)?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state");
+    for (let waited = 0; waited < 3000 && feedOf("conversation_verify-2") === "loading"; waited += 10) await tick(10);
+    expect(feedOf("conversation_verify-2")).not.toBe("loading");
+    expect(feedOf("conversation_slow-1")).toBe("loading");
+    const frame = host.querySelector("[data-agent-window-frame]");
+    click(segments(host).find((segment) => segment.dataset.openAgent === "conversation_verify-2")?.querySelector("[data-open-agent-close]"));
+    /* At once the list drops the agent closed and marks the neighbour, while
+       the reader keeps the agent closed: the window never shows a loading one. */
+    expect(segmentKeys(host)).toEqual(["conversation_slow-1"]);
+    expect(jump(host, "conversation_slow-1")?.getAttribute("aria-current")).toBe("true");
+    const loadingShown = () => agentWindow(host)?.querySelector(".reader-slot:not([data-incoming]) [data-feed-state='loading']")?.closest("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
+    for (let waited = 0; waited < 300; waited += 10) {
+      expect(host.querySelector("[data-agent-window-frame]") === frame).toBe(true);
+      expect(shown(host)).toBe("conversation_verify-2");
+      expect(loadingShown()).toBeNull();
+      await tick(10);
+    }
+    releaseLogs(slow.path);
+    await showing(host, "conversation_slow-1");
+    expect(loadingShown()).toBeNull();
+    expect(host.querySelector("[data-agent-window-frame]") === frame).toBe(true);
+    expect(readerOf(host, "conversation_verify-2")).toBeNull();
+    expect(remembered()).toEqual(["conversation_slow-1"]);
+  } finally {
+    Object.assign(globalThis, { IntersectionObserver: undefined });
+  }
 });
 
 test("Alt+J and Alt+K cycle through the open agents, from inside a composer too, round the ends; with the window closed Alt+J opens it", async () => {
