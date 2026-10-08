@@ -26,7 +26,10 @@
  *    screen, and the bubbles rise upward; near an edge the lane flips to the
  *    other side, and near the top the bubbles run downward, so nothing leaves
  *    the viewport. In a column too narrow for the lane beside the character,
- *    the lane stands above it and the bubbles rise away from it.
+ *    the lane stands above it and the bubbles rise away from it. Where no
+ *    place on the page holds a lane of a bubble's full width, a narrower lane
+ *    is tried before collapsing, so a column such as a sidebar still holds the
+ *    companion open with what it says.
  */
 
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -58,6 +61,11 @@ export const BUBBLE_MAX_WIDTH = 280;
 export const BUBBLE_MAX_LINES = 4;
 /** The characters one bubble holds before the sentence continues in the next. */
 export const BUBBLE_MAX_CHARS = 116;
+/** The narrower lanes tried, widest first, where no lane of a bubble's full width fits anywhere: a column such as a
+    sidebar then still holds the companion open, its bubbles split shorter for the width (`bubbleChars`). */
+export const NARROW_LANE_WIDTHS = [240, 216] as const;
+/** The characters one bubble holds in a lane `width` wide: as many lines as a bubble of the full width holds. */
+export const bubbleChars = (width: number): number => Math.round((BUBBLE_MAX_CHARS * Math.min(width, BUBBLE_MAX_WIDTH)) / BUBBLE_MAX_WIDTH);
 /** The lane heights tried, tallest first: the tallest that fits where the character may stand. */
 export const LANE_HEIGHTS = [360, 340, 320, 300, 280, 260, 240, 220, 200, 180] as const;
 
@@ -200,14 +208,16 @@ export class Occupancy {
  * `outsideRows` (a request was sent, and its row is on its way into the
  * feed) the rows' surfaces are kept off whole, with no second pass. The answer
  * depends on nothing but the arguments, so one page gives one place.
+ * `widths`: the lane widths tried, widest first, each over every pass before the next; a narrower lane is a last
+ * resort, taken only where no place holds the wider one.
  * A walk over a 4 px grid, each place read from the summed-area tables of
  * what it must keep off; it runs on a drop or a settled page change, never
  * per frame.
  */
 export function placeExpanded(input: {
-  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; rows?: readonly Rect[]; outsideRows?: boolean; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
+  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; rows?: readonly Rect[]; outsideRows?: boolean; desired: Point; heights?: readonly number[]; widths?: readonly number[]; clearance?: number; step?: number;
 }): Extract<Placement, { mode: "expanded" }> | null {
-  const { viewport, block, obstacles, text = [], rows = [], outsideRows = false, desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 4 } = input;
+  const { viewport, block, obstacles, text = [], rows = [], outsideRows = false, desired, heights = LANE_HEIGHTS, widths = [BUBBLE_MAX_WIDTH, ...NARROW_LANE_WIDTHS], clearance = CONTROL_CLEARANCE, step = 4 } = input;
   const start = clampToViewport(desired, viewport, block);
   const maxX = viewport.width - block.width - VIEWPORT_MARGIN;
   const maxY = viewport.height - block.height - VIEWPORT_MARGIN;
@@ -223,24 +233,28 @@ export function placeExpanded(input: {
   const { width, height: tall } = block;
   /* The walk allocates nothing per candidate: the lane is read as numbers, and made an object once it is the answer. */
   const lane = { x: 0, y: 0, height: 0 };
-  for (const free of passes) {
-    /* Where the character itself may stand, read once for every lane tried. */
-    const stands = candidates.filter((point) => free(point.x, point.y, width, tall));
-    for (const height of heights) {
-      for (const point of stands) {
-        sideLane(viewport, point.x, point.y, width, tall, height, lane);
-        if (lane.height >= height && free(lane.x, lane.y, BUBBLE_MAX_WIDTH, lane.height)) return { mode: "expanded", at: point, lane: laneLayout(viewport, { ...point, ...block }, height) };
+  /* Where the character itself may stand in each pass, read once for every lane tried. */
+  const stands = new Map<Free, Point[]>();
+  for (const laneWidth of widths) {
+    for (const free of passes) {
+      if (!stands.has(free)) stands.set(free, candidates.filter((point) => free(point.x, point.y, width, tall)));
+      const points = stands.get(free)!;
+      for (const height of heights) {
+        for (const point of points) {
+          sideLane(viewport, point.x, point.y, width, tall, height, lane, laneWidth);
+          if (lane.height >= height && free(lane.x, lane.y, laneWidth, lane.height)) return { mode: "expanded", at: point, lane: laneLayout(viewport, { ...point, ...block }, height, laneWidth) };
+        }
       }
-    }
-    for (const height of heights) {
-      for (const point of stands) {
-        /* Lined up with the edge that faces the middle of the screen first. */
-        const first: "start" | "end" = point.x + width / 2 < viewport.width / 2 ? "start" : "end";
-        for (const align of [first, first === "start" ? "end" : "start"] as const) {
-          const x = align === "start" ? point.x : point.x + width - BUBBLE_MAX_WIDTH;
-          const y = point.y - LANE_GAP - height;
-          if (x < VIEWPORT_MARGIN || x + BUBBLE_MAX_WIDTH > viewport.width - VIEWPORT_MARGIN || y < VIEWPORT_MARGIN || !free(x, y, BUBBLE_MAX_WIDTH, height)) continue;
-          return { mode: "expanded", at: point, lane: laneAbove(viewport, { ...point, ...block }, height, align)! };
+      for (const height of heights) {
+        for (const point of points) {
+          /* Lined up with the edge that faces the middle of the screen first. */
+          const first: "start" | "end" = point.x + width / 2 < viewport.width / 2 ? "start" : "end";
+          for (const align of [first, first === "start" ? "end" : "start"] as const) {
+            const x = align === "start" ? point.x : point.x + width - laneWidth;
+            const y = point.y - LANE_GAP - height;
+            if (x < VIEWPORT_MARGIN || x + laneWidth > viewport.width - VIEWPORT_MARGIN || y < VIEWPORT_MARGIN || !free(x, y, laneWidth, height)) continue;
+            return { mode: "expanded", at: point, lane: laneAbove(viewport, { ...point, ...block }, height, align, laneWidth)! };
+          }
         }
       }
     }

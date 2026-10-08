@@ -127,6 +127,30 @@ test("turned on, it mounts without starting a call; Talk with no key or a reache
   }
 });
 
+test("the first placement, on mount and after a change of project, shows the character at its place with no travel from off screen", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  /* Every state of the root as it is committed: whether it is placed (and so visible), and how it moves there. */
+  const seen: Array<{ placed: boolean; move: string | null; transform: string }> = [];
+  const observer = new MutationObserver(() => {
+    const root = document.querySelector<HTMLElement>("[data-voice-companion]");
+    if (root) seen.push({ placed: root.hasAttribute("data-placed"), move: root.getAttribute("data-move"), transform: root.style.transform });
+  });
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-placed", "data-move", "style"] });
+  try {
+    const host = await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    await act(async () => settle());
+    const first = seen.find((state) => state.placed);
+    /* The root stood at −9999 px, hidden, until then: shown with its transition on, it would travel from there. */
+    expect(first).toEqual({ placed: true, move: "jump", transform: expect.not.stringContaining("-9999") });
+    seen.length = 0;
+    /* Another project in view is another companion, placed afresh. */
+    await act(async () => mounted!.root.render(<VoiceCompanionHost project="borealis" mobile={false} />));
+    await act(async () => settle());
+    expect(host.querySelectorAll("[data-voice-companion]").length).toBe(1);
+    expect(seen.find((state) => state.placed)).toEqual({ placed: true, move: "jump", transform: expect.not.stringContaining("-9999") });
+  } finally { observer.disconnect(); }
+});
+
 test("on a view with no project, Talk says to open one and starts nothing", async () => {
   routes(settingsOf({ enabled: true }));
   await mount(<VoiceCompanionHost project={null} mobile={false} />);

@@ -9,7 +9,7 @@ import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import {
-  BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, laneLayout, lineCut, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
+  BUBBLE_MAX_WIDTH, bubbleChars, clampToViewport, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, laneLayout, lineCut, NARROW_LANE_WIDTHS, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
@@ -294,11 +294,11 @@ const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SP
 /* `far`: how far the element's far edge stands from the lane's end at the character. */
 type Place = { top: number; height: number; width: number; left: number; far: number; arrival: number | null };
 
-/** A line's bubbles. While the line still streams, its last bubble holds only the words no later cut
-    can take from it, so a bubble never gives a word back and never keeps a line it emptied. */
-function bubblesOf(line: SpeechLine): string[] {
+/** A line's bubbles, `chars` long at the most. While the line still streams, its last bubble holds only the words
+    no later cut can take from it, so a bubble never gives a word back and never keeps a line it emptied. */
+function bubblesOf(line: SpeechLine, chars: number): string[] {
   const streams = !line.final && line.playback !== "cut" && line.playback !== "played";
-  return splitSpeech(line.text, BUBBLE_MAX_CHARS, streams);
+  return splitSpeech(line.text, chars, streams);
 }
 
 /** How many bubbles of a line are out: all of an operator's line and of a
@@ -449,8 +449,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
 
   /** Open at the free place nearest the anchor; with none, collapse there instead.
       The answer depends on the page, the viewport and the anchor alone. `read`: the controls and the text,
-      when the caller has just read them from the page. `known`: the caller knows no open place is left for this
-      read, and the search for one is not run. */
+      when the caller has just read them from the page. `known`: the caller knows no open place with a lane of a
+      bubble's full width is left for this read, and only the narrower lanes are searched for. */
   const settle = useCallback((isCollapsed: boolean, read?: { obstacles: Rect[]; text: Rect[] }, known?: "no-open-place") => {
     const began = performance.now();
     const viewport = viewportSize();
@@ -464,8 +464,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     settledFor.current = inputs;
     let next: Layout | null = null;
     const desired = { x: corner.x - shape.width, y: corner.y - shape.height };
-    if (!isCollapsed && known !== "no-open-place") {
-      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, rows: chosen.current ? [] : surfaces, outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height } });
+    if (!isCollapsed) {
+      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, rows: chosen.current ? [] : surfaces, outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height }, ...(known === "no-open-place" ? { widths: NARROW_LANE_WIDTHS } : {}) });
       if (open) next = { mode: "expanded", at: open.at, lane: open.lane };
     }
     if (!next) {
@@ -503,7 +503,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
 
   /* A request that is sent brings its row into the orchestrator's conversation. Standing in that conversation's
      empty part, the companion makes way the moment the request is sent, before the row arrives: it takes a place
-     outside the feed, or its tile where none holds it open. The feed stays kept clear until the request settles.
+     outside the feed, with a narrower lane where only a column (the sidebar) is left, so the request's card and
+     the answer stay in view; its tile only where no place holds it open. The feed stays kept clear until the request settles.
      One that settles with no answer coming (its delivery unknown, refused, failed) is news the card says, so the
      place is read again as it is then. An answered one brings its own row, and the companion stays where it went.
      A place the operator chose is theirs, and stays. */
@@ -518,12 +519,26 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (!footprint().some((rect) => surfaces.some((surface) => intersectionArea(rect, surface) > 0))) return;
     /* Placed from the page as it was last read: reading it again costs frames of the hand-off the operator is
        watching, and the place taken is checked against the page as it is within 250 ms, like every other. It
-       stands in the feed because that read left no open place outside it, so none is searched for: it takes its
-       tile. */
+       stands in the feed because that read left no place outside it for a lane of a bubble's full width, so only
+       the narrower lanes are searched for, and with none of them its tile is taken. */
     if (lastRead.current) settle(collapsed, lastRead.current, "no-open-place");
     else settle(collapsed);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a request goes out and when it settles
   }, [requestInFlight]);
+
+  /* Each line is split for the lane it first came out in. A lane narrower than a full bubble (a sidebar's column)
+     splits what is said while it stands there shorter, so a bubble keeps to its lines; a line already split keeps
+     its bubbles, and with them its place in the lane. */
+  const laneChars = bubbleChars(layout?.mode === "expanded" ? layout.lane.rect.width : BUBBLE_MAX_WIDTH);
+  const [lineChars, setLineChars] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const charsOf = useCallback((line: SpeechLine) => lineChars.get(line.key) ?? laneChars, [lineChars, laneChars]);
+  const charsFor = useRef(charsOf);
+  useLayoutEffect(() => {
+    charsFor.current = charsOf;
+    if (state.lines.length === lineChars.size && state.lines.every((line) => lineChars.has(line.key))) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- records the width each new line was split for
+    setLineChars(new Map(state.lines.map((line) => [line.key, lineChars.get(line.key) ?? laneChars])));
+  }, [state.lines, lineChars, laneChars, charsOf]);
 
   /* The mouth, and the pace of the playing line's bubbles: one transform per
      level sample, and a render only when another bubble is due. */
@@ -531,7 +546,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     character.current?.setLevel(reducedMotion() ? (current.mouth > 0 ? 0.5 : 0) : current.mouth);
     const playing = current.playing && current.lines.find((line) => line.key === `companion:${current.playing!.itemId}`);
     if (!playing) return;
-    const out = bubblesOut(playing, bubblesOf(playing), current.playedMs);
+    const out = bubblesOut(playing, bubblesOf(playing, charsFor.current(playing)), current.playedMs);
     setPaced((shown) => (shown?.key === playing.key && shown.out === out ? shown : { key: playing.key, out }));
   }), [store]);
   const speaking = state.phase === "speaking";
@@ -542,7 +557,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const candidates = useMemo((): Floater[] => {
     const speech: Floater[] = [];
     for (const line of state.lines.filter((entry) => entry.text.trim())) {
-      const chunks = bubblesOf(line);
+      const chunks = bubblesOf(line, charsOf(line));
       const out = Math.min(chunks.length, line.playback === "playing" && paced?.key === line.key ? Math.max(1, paced.out) : bubblesOut(line, chunks, 0));
       const done = line.speaker === "operator" ? line.final : line.playback === "played" || line.playback === "cut";
       for (let index = 0; index < out; index += 1) {
@@ -576,7 +591,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (state.closure?.incomplete && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
     return [...speech, ...calls, ...deleg, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.phase, state.error, state.closure, paced, refusedStart, seat, talks, awaiting]);
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.phase, state.error, state.closure, paced, refusedStart, seat, talks, awaiting, charsOf]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -642,6 +657,15 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const carrying = floaters.length > 0;
   useLayoutEffect(() => {
     if (layout === view) return;
+    /* The first placement (and the first after a remount, a change of project) is shown at its place as it
+       appears: the root stood off screen until now, and a transition from there would carry the character
+       across the page. */
+    if (!view) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the screen follows the placement just committed
+      setView(layout);
+      setMoveKind("jump");
+      return;
+    }
     const atOnce = moveAtOnce.current;
     moveAtOnce.current = false;
     const moves = !!view && !!layout && (layout.at.x !== view.at.x || layout.at.y !== view.at.y || layout.mode !== view.mode);
@@ -763,20 +787,31 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     /* Fit: the stack keeps to the lane, less the room a leaving element drifts into and the room kept at
        the character's end. What does not fit leaves from the far end; the newest always stays. A proposal
        that waits for the operator's answer does not leave for want of room: what is older than it may, and
-       what arrives after it and does not fit beside it is withheld instead. */
+       what arrives after it and does not fit beside it is withheld instead. The orchestrator's answer holds
+       the same way against what arrives after it (the companion's own words about it, which are heard and
+       kept in the transcript), so a short lane keeps the answer in view; it gives way only to what already
+       stands beside it, should that grow past the room. */
     const room = shownLane.rect.height - EXIT_ROOM - END_ROOM;
     let excess = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8 - room;
     let sent = 0;
     const waits = nodes.findIndex((node) => node.dataset.awaiting !== undefined);
-    for (const node of nodes.slice(0, waits === -1 ? -1 : waits)) {
+    const holds = waits !== -1 ? waits : nodes.findLastIndex((node) => node.dataset.kind === "answer");
+    for (const node of nodes.slice(0, holds === -1 ? -1 : holds)) {
       if (excess <= 0) break;
       if (node.dataset.kind === "more") continue;
       excess -= node.offsetHeight + 8;
       sent = Math.max(sent, arrived(node) ?? 0);
     }
-    if (excess > 0 && waits !== -1) {
-      const unseen = nodes.slice(waits + 1).filter((node) => !before.has(node.dataset.floater!)).map((node) => node.dataset.floater!);
+    if (excess > 0 && holds !== -1) {
+      const unseen = nodes.slice(holds + 1).filter((node) => !before.has(node.dataset.floater!)).map((node) => node.dataset.floater!);
       if (unseen.length) { setWithheld((current) => new Set([...current, ...unseen])); return; }
+      if (waits === -1) {
+        for (const node of nodes.slice(holds, -1)) {
+          if (excess <= 0) break;
+          excess -= node.offsetHeight + 8;
+          sent = Math.max(sent, arrived(node) ?? 0);
+        }
+      }
     }
     /* An element that went from the middle (the session dropped it) takes the older ones along. */
     const here = new Set(nodes.map((node) => node.dataset.floater!));
@@ -947,7 +982,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     }
     const size = expanded ? block : shape;
     held.at = clampToViewport({ x: held.originX + dx, y: held.originY + dy }, viewportSize(), size, 0);
-    setHeld({ at: held.at, lane: layout?.mode === "expanded" ? laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height) : null });
+    setHeld({ at: held.at, lane: layout?.mode === "expanded" ? laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height, layout.lane.rect.width) : null });
   };
   const onPointerUp = (event: React.PointerEvent<HTMLElement>) => {
     const held = drag.current;
@@ -961,7 +996,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     chosen.current = true;
     settledFor.current = null;
     moveAtOnce.current = true;
-    setLayout(layout?.mode === "expanded" ? { mode: "expanded", at: held.at, lane: laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height) } : { mode: "collapsed", at: held.at, yielded: false });
+    setLayout(layout?.mode === "expanded" ? { mode: "expanded", at: held.at, lane: laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height, layout.lane.rect.width) } : { mode: "collapsed", at: held.at, yielded: false });
     setDragging(false);
     setHeld(null);
     settle(collapsed);

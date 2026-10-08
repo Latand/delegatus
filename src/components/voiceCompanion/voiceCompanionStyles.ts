@@ -125,8 +125,10 @@ export const VOICE_COMPANION_CSS = `
 }
 @keyframes vc-pop { from { opacity: 0.2; transform: scale(0.9); } to { opacity: 1; transform: none; } }
 .vc[data-phase="offline"] .vc-shape { border-style: dashed; }
+/* The flag that news is waiting: inside the tile's own box, its pulse included, so like the hang-up it lies on
+   nothing the tile does not (at -3 px it reached past the tile onto the corner of the banner beside it). */
 .vc-flag {
-  position: absolute; top: -3px; right: -3px; width: 13px; height: 13px; border-radius: 50%;
+  position: absolute; top: 3px; right: 3px; width: 13px; height: 13px; border-radius: 50%;
   background: var(--color-info); border: 2px solid var(--color-raised); animation: vc-flag 1600ms ease-in-out infinite;
 }
 @keyframes vc-flag { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
@@ -155,7 +157,7 @@ export const VOICE_COMPANION_CSS = `
 .vc-lane[data-side="above"][data-align="end"] .vc-floater { justify-content: flex-end; transform-origin: 100% 100%; }
 .vc-lane[data-side="above"][data-align="start"] .vc-floater[data-speaker="operator"] { justify-content: flex-end; }
 .vc-lane[data-side="above"][data-align="end"] .vc-floater[data-speaker="operator"] { justify-content: flex-start; }
-.vc-floater > * { pointer-events: auto; max-width: 280px; }
+.vc-floater > * { pointer-events: auto; max-width: min(280px, 100%); }
 .vc-floater[data-leaving] > * { pointer-events: none; }
 
 .vc-bubble {

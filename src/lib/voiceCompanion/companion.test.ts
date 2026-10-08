@@ -7,7 +7,9 @@ import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./c
 import { COMPANION_MESSAGES } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
-import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+
+const TEXT_FOR_NARROW = "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge, and the old keys stay readable for anyone who still has them.";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
 import { DEMO_IDS, SCENARIOS, scenarioScript, scenarioText, type ScenarioName } from "./scenarios";
 import { createSimulatedCompanion, syntheticLevel, virtualClock, type ScriptStep } from "./simulator";
@@ -937,6 +939,36 @@ describe("geometry", () => {
     expect(placeExpanded({ viewport, block, obstacles: walls, text, rows: [feed], outsideRows: true, desired })).toBeNull();
     /* Where room outside the feed exists, the answer is the one the first pass gives anyway. */
     expect(placeExpanded({ viewport, block, obstacles: [], text, rows: [feed], outsideRows: true, desired })).toEqual(placed);
+  });
+
+  test("a request sent from the feed of a 1000 px page opens the companion in the sidebar with a narrower lane", () => {
+    /* The page as the shell lays it out at 1000 × 800: a 248 px sidebar whose project rows end at 180 and whose
+       footer starts at 632, the conversation's feed from 261, and around it the header with its banner, the
+       conversation's head, its composer and the board's tabs, all of them controls. */
+    const page = { width: 1000, height: 800 };
+    const feed = rect(261, 209, 726, 397);
+    const obstacles = [rect(8, 86, 231, 34), rect(8, 148, 231, 32), rect(0, 632, 166, 28), rect(166, 635, 75, 22), rect(0, 661, 247, 52), rect(0, 718, 247, 76), rect(248, 0, 752, 209), rect(248, 606, 752, 194)];
+    const text = [rect(19, 95, 60, 16), rect(19, 128, 60, 14), rect(19, 156, 40, 16), rect(19, 640, 40, 14), rect(307, 147, 80, 16)];
+    const desired = defaultAnchor(page, block);
+    /* No place outside the feed holds a lane of a bubble's full width, and the feed is kept clear whole. */
+    expect(placeExpanded({ viewport: page, block, obstacles, text, rows: [feed], outsideRows: true, desired, widths: [BUBBLE_MAX_WIDTH] })).toBeNull();
+    const placed = placeExpanded({ viewport: page, block, obstacles, text, rows: [feed], outsideRows: true, desired })!;
+    expect(placed).not.toBeNull();
+    expect(placed.lane.rect.width).toBeLessThan(BUBBLE_MAX_WIDTH);
+    expect(NARROW_LANE_WIDTHS as readonly number[]).toContain(placed.lane.rect.width);
+    /* Both in the column left of the feed, the feed kept 8 px clear. */
+    for (const area of [{ ...placed.at, ...block }, placed.lane.rect]) {
+      expect(isFree(area, [...obstacles, ...text, feed])).toBe(true);
+      expect(area.x + area.width).toBeLessThanOrEqual(feed.x - 8);
+    }
+    /* Only the narrower lanes, when the caller knows the full width has no place: the same answer. */
+    expect(placeExpanded({ viewport: page, block, obstacles, text, rows: [feed], outsideRows: true, desired, widths: NARROW_LANE_WIDTHS })).toEqual(placed);
+    /* With room for a full lane anywhere, the full lane is taken: the narrower one is a last resort. */
+    expect(placeExpanded({ viewport: page, block, obstacles, text, rows: [feed], desired })!.lane.rect.width).toBe(BUBBLE_MAX_WIDTH);
+    /* A bubble in the narrower lane holds as many lines as a full one: its text is split shorter. */
+    expect(bubbleChars(BUBBLE_MAX_WIDTH)).toBe(BUBBLE_MAX_CHARS);
+    expect(bubbleChars(placed.lane.rect.width)).toBeLessThan(BUBBLE_MAX_CHARS);
+    for (const chunk of splitSpeech(TEXT_FOR_NARROW, bubbleChars(placed.lane.rect.width))) expect(chunk.length).toBeLessThanOrEqual(bubbleChars(placed.lane.rect.width));
   });
 
   test("a move along a straight path is read against what lies between its two places", () => {
