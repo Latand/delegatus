@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -267,6 +267,7 @@ export type PipelineGraphEdit = {
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
   summary: string;
+  runtimeSwitch?: { attempt: number; id: string };
 };
 
 /** What the server itself observed about a stage attempt's work at the moment
@@ -344,8 +345,32 @@ export type PipelineDecisionAnswer = {
   at: string;
 };
 
+export type PipelineRuntimeSeat = {
+  engine: FlowEngine; model: string | null; effort: string | null;
+  serviceTier: string | null; accountId: string | null;
+};
+export type PipelineRuntimeSwitch = {
+  id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
+  mode: "fork" | "handoff";
+  from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
+  to: PipelineRuntimeSeat & { accountPinned: boolean };
+  phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
+  cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  rollback?: boolean;
+  reconfigureNoop?: boolean;
+  continuationKey?: string;
+  continuationDispatch?: { key: string; at: string };
+  launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
+  handoff?: { prompt: string; digest: string; bytes: number };
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  runtimeSwitches?: PipelineRuntimeSwitch[];
+  /** Monotonic verdict fence survives bounded switch-history retention. */
+  runtimeEvidenceSince?: string;
+  /** Explicit account policy for the live attempt after an apply-now edit. */
+  runtimeAccountPin?: string | null;
   /** Answer that created this continuation; forces lease-free activation. */
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -1170,6 +1195,7 @@ export type PatchPipelineRequest = {
   acceptedSha?: string;
   reason?: string;
   action: PipelineAction;
+  applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.
@@ -1210,8 +1236,13 @@ export type PatchPipelineRequest = {
   /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
       attempt the caller saw, or `0` when it saw none yet (a provisioning park).
       A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
-      non-integers are malformed. */
+      non-integers are malformed. On override-stage with `applyNow` it stands
+      alone and names the running attempt the caller saw. */
   expectedAttempt?: number;
+  /** for override-stage with `applyNow`: the conversation the caller saw
+      running the attempt. An attempt another conversation runs by then answers
+      409 `STAGE_CHANGED` before any runtime or definition is changed. */
+  expectedConversationId?: string;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

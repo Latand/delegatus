@@ -1035,6 +1035,11 @@ export interface StructuredSpawnInput {
   imageRefs?: StructuredImageRef[];
   registry: AgentRegistry;
   client: RuntimeHostClient;
+  /** Throws when the caller's owner no longer allows this launch's account.
+      Asked again after each async boundary that precedes a side effect: once
+      runtime admission returns, before the host starts, and once the host is
+      set up, before it is published, by this call or by its staged probe. */
+  authorize?: () => void | Promise<void>;
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
@@ -2191,6 +2196,7 @@ export async function spawnStructuredConversation(
     }), admissionRetry);
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
+    await input.authorize?.();
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
       viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
@@ -2257,6 +2263,9 @@ export async function spawnStructuredConversation(
     binding.stopPersistence = await withinDurableSetup(
       bindHost(input.registry, key, host, claimed.claimOwner, claimed.claimEpoch),
     );
+    /* Still unpublished: a refusal here enters the failure path below, which
+       retires the host this launch started and fails its receipt. */
+    await input.authorize?.();
     const ownsLaunch = async () => {
       if (durableSetupTimedOut || launchReleased) return false;
       const snapshot = input.registry.readOnlySnapshot();
@@ -2268,12 +2277,36 @@ export async function spawnStructuredConversation(
         && current.state !== "conflicted"
         && entry?.structuredHostOperationId === input.receipt.launchId);
     };
+    /* The registration awaits the host and the journal after the check above,
+       so it asks the account fence again at each of its own boundaries. A
+       refusal there leaves the host unregistered and is raised once the
+       registration returns, into the same failure path as any other. */
+    const publishAuthorized = async (): Promise<() => Promise<void>> => {
+      let refusal: { error: unknown } | null = null;
+      const unregister = await publishHost(key!, host!, async () => {
+        if (refusal || !await ownsLaunch()) return false;
+        try {
+          await input.authorize?.();
+        } catch (error) {
+          refusal = { error };
+          return false;
+        }
+        return true;
+      });
+      const refused = refusal as { error: unknown } | null;
+      if (refused) throw refused.error;
+      return unregister;
+    };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
     writeStagedRecovery(input.registry, operationId, recovery);
     const continuation: StagedContinuation = {
       host,
       owns: async () => await ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
-      publish: async () => { binding.unregister = await publishHost(key!, host!, ownsLaunch); forgetUnpublishedHost(); },
+      publish: async () => {
+        await input.authorize?.();
+        binding.unregister = await publishAuthorized();
+        forgetUnpublishedHost();
+      },
       deliver: () => deliverFirst(input, identity.path),
     };
     stagedContinuations.set(operationId, continuation);
@@ -2284,7 +2317,7 @@ export async function spawnStructuredConversation(
         await cleanupHost(host, binding);
       },
     });
-    binding.unregister = await withinDurableSetup(publishHost(key, host, ownsLaunch));
+    binding.unregister = await withinDurableSetup(publishAuthorized());
     forgetUnpublishedHost();
     if (!await ownsLaunch()) throw new Error("staged launch was released before publication completed");
     writeStagedRecovery(input.registry, operationId, { ...recovery, phase: "uncertain", reason: "first-message acknowledgement pending" });
