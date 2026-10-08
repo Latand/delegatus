@@ -87,6 +87,20 @@ export function readClaudeCredentials(home: string, ports = productionPorts): Cl
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
+/** Only metadata is requested; never ask security to print the password. */
+export function claudeKeychainCredentialChangedAt(home: string, ports = productionPorts): number | null {
+  if (ports.platform !== "darwin") return null;
+  const result = ports.security(["find-generic-password", "-a", keychainAccount(), "-s", claudeKeychainService(home)]);
+  if (result.status !== 0) return null;
+  // security prints mdat as a timedate buffer, optionally prefixed by hex.
+  // The quoted UTC value can carry an escaped NUL terminator.
+  const match = result.stdout.match(/^\s*"mdat"<timedate>=(?:0x[\da-f]+\s+)?"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z(?:\\000)?"\s*$/im);
+  if (!match) return null;
+  const iso = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}.000Z`;
+  const timestamp = Date.parse(iso);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === iso ? timestamp : null;
+}
+
 /** Store rotation in the same backend that supplied it. Never export Keychain
  * content to a file or put a token in process arguments. The caller owns the
  * account mutation and provider refresh locks across the network request. */

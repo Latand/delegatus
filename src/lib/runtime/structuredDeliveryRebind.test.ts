@@ -531,6 +531,65 @@ test("a carried-over host released mid-registration is released once and stays g
   await close();
 });
 
+test("releasing one conversation's host reads and republishes no other conversation's host", async () => {
+  /* 2026-10-07 on production: every release republished all 13 to 17
+     registered hosts one after another, which added 10.7 to 19.1 s to each
+     account switch and made a kill take 16 to 32 s. */
+  const { registry, journal, directory, client, close } = fixture("release-scope");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const released = seedConversation(registry, directory, "release-scope-released");
+  const releasedHost = structuredHost();
+  await publishStructuredDeliveryHost({ key: released.key, host: releasedHost });
+  const reads = { count: 0 };
+  for (const name of ["release-scope-other-one", "release-scope-other-two"]) {
+    const { key } = seedConversation(registry, directory, name);
+    const host = structuredHost();
+    const health = host.health.bind(host);
+    await publishStructuredDeliveryHost({ key, host: Object.assign(host, {
+      health: async () => { reads.count += 1; return health(); },
+    }) });
+  }
+  const before = reads.count;
+  const sessionRevision = () => journal.snapshot().sessions
+    .find((session) => session.conversationId === released.conversationId)?.revision ?? 0;
+  const revisionBefore = sessionRevision();
+
+  expect(await releaseStructuredDeliveryHost(released.key)).toBe(true);
+
+  expect(reads.count).toBe(before);
+  /* The released conversation's own projection is still rewritten. */
+  expect(sessionRevision()).toBeGreaterThan(revisionBefore);
+
+  await close();
+});
+
+test("a settled operator message moves the files revision, so the board drops its stale delivery state", async () => {
+  /* 2026-10-07 on production: the card kept "message not delivered" for 7 to
+     15 s after the agent had answered, until the next poll. */
+  const { registry, journal, directory, client, close } = fixture("settled-delivery-revision");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { conversationId, key } = seedConversation(registry, directory, "settled-delivery-revision-session");
+  await publishStructuredDeliveryHost({ key, host: structuredHost() });
+  const reservation = registry.holdDelivery(conversationId as `conversation_${string}`, "Reply with the single word OK",
+    "settled-delivery", "text", [], null, { operationId: "operation-settled-delivery" });
+  expect(registry.beginDeliveryAttempt(reservation.id, key.sessionId)).toMatchObject({ state: "delivery-uncertain" });
+  const revisionBefore = journal.snapshot().filesRevision;
+
+  journal.executeOperation({
+    kind: "send",
+    operationId: "operation-settled-delivery",
+    idempotencyKey: "settled-delivery",
+    conversationId,
+    text: "Reply with the single word OK",
+    policy: "queue",
+  });
+  await kickStructuredDeliveryQueue();
+  await settles(() => registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state !== "delivery-uncertain", "delivery record");
+  await settles(() => journal.snapshot().filesRevision > revisionBefore, "files revision");
+
+  await close();
+});
+
 test("an inactive carried-over host retired mid-registration is detached and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-terminate");
   let gate: ReturnType<typeof producerCursorGate> | undefined;

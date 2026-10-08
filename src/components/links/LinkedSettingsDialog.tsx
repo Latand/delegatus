@@ -71,6 +71,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const [selfError, setSelfError] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState<string | null>(null);
   const [connectedTo, setConnectedTo] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [shared, setShared] = useState<SharedState | null>(null);
@@ -156,16 +157,16 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     } catch { setSelfError("unavailable"); }
     finally { setBusy(false); }
   };
-  const linkedAction = async (url: string, method: "POST" | "PATCH" | "DELETE", body?: object): Promise<boolean> => {
-    setBusy(true); setLinkError(null); setNotice(null);
+  const linkedAction = async (url: string, method: "POST" | "PATCH" | "DELETE", body?: object, report = setLinkError): Promise<boolean> => {
+    setBusy(true); report(null); setNotice(null);
     try {
       const response = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
       const result = await response.json();
-      if (!response.ok) { setLinkError(result.error ?? "unavailable"); await refresh().catch(() => {}); return false; }
+      if (!response.ok) { report(result.error ?? "unavailable"); await refresh().catch(() => {}); return false; }
       if (result.warned === true) setNotice("remove-warning");
       await refresh();
       return true;
-    } catch { setLinkError("unavailable"); return false; }
+    } catch { report("unavailable"); return false; }
     finally { setBusy(false); }
   };
   // A failed connect is answered under the connect form, never in the line that
@@ -184,7 +185,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   // A refused mint is answered next to the button that asked, and the saved
   // address's state is re-read because the mint ran a fresh check.
   const allow = async () => {
-    setBusy(true); setLinkError(null); setNotice(null); setMintRefusal(null);
+    setBusy(true); setLinkError(null); setCodeError(null); setNotice(null); setMintRefusal(null);
     try {
       const response = await fetch("/api/links/codes", { method: "POST" });
       const result = await response.json() as { code?: string; expiresAt?: number; error?: string };
@@ -335,7 +336,9 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
                     <p className="text-muted">{t("links.codeExpires", { date: new Date(code.expiresAt).toLocaleTimeString() })}</p>
                     {newGrant ? <p role="status" data-code-state="used" data-linked-connected="" className="rounded-[8px] bg-success-soft px-3 py-2 text-success">{t("links.connectedHere", { name: newGrant.label })}</p>
                       : <p role="status" data-code-state={codeState} className="text-muted">{codeState === "burned" ? t("links.codeBurned") : codeState === "used" ? t("links.codeUsed") : codeState === "expired" ? t("links.codeExpired") : codeStatus?.wrongAttempts ? t("links.wrongAttempts", { count: codeStatus.wrongAttempts }) : t("links.noWrongAttempts")}</p>}
-                    <button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE").then((removed) => { if (removed) { setCode(null); setCodeStatus(null); } }); }} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button>
+                    {/* A failed cancellation answers beside the code it failed on, where the retry is. */}
+                    {codeError ? <p role="alert" data-pair-code-error={codeError} className="rounded-[8px] bg-danger-soft px-3 py-2 text-danger">{requestErrorMessage(t, codeError)}</p> : null}
+                    <button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE", undefined, setCodeError).then((removed) => { if (removed) { setCode(null); setCodeStatus(null); } }); }} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button>
                   </div>
                 </> : <p className="text-ui text-muted">{t("links.accept.step3Waiting")}</p>}
               </LinkStep>
