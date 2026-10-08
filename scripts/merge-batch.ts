@@ -58,13 +58,12 @@ const addUnique = (sites: TestSite[], additions: TestSite[]) => {
   for (const site of additions) if (!sites.some(other => testIdentity(other) === testIdentity(site))) sites.push(site);
 };
 
-/** Recorded results drive the decision; callbacks supply fresh file samples.
- * `without` receives the cases it must report even when the file aborts, and
- * `mainCases` runs only the named cases on native main for files main could
- * not complete, so their completed cases still name a culprit. */
-export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs: number[],
-  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[], focus: TestSite[]) => Promise<TestRun>,
-  mainCases?: (sites: TestSite[]) => Promise<TestRun>, stale?: StaleDetector): Promise<BatchTestDecision> {
+type ConfirmedFailure = { test: TestSite; confirmation: ("pass" | "fail")[] };
+/** Both batch attribution and resolution publication use this comparison and
+ * bounded confirmation against a fresh, native-main per-file sample. */
+async function confirmBatchTests(base: TestRun, candidate: TestRun,
+  rerun: (files: string[]) => Promise<TestRun>, mainCases?: (sites: TestSite[]) => Promise<TestRun>
+): Promise<{ decision: BatchTestDecision; confirmed: ConfirmedFailure[] }> {
   const probed = new Set<string>();
   const compare = async (run: TestRun) => {
     const sites = compareBatchTests(base, run).uncompared.filter(site => !probed.has(testIdentity(site)));
@@ -80,7 +79,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   addUnique(decision.uncompared!, comparison.uncompared);
   const pending = new Map(comparison.introduced.map(test => [testIdentity(test), { test, confirmation: [] as ("pass" | "fail")[] }]));
   const files = [...new Set(comparison.introduced.map(test => test.file))];
-  if (!files.length) return decision;
+  if (!files.length) return { decision, confirmed: [] };
   for (let round = 0; round < MAX_TEST_CONFIRMATION_RUNS; round++) {
     const run = await rerun(files);
     const discovered = await compare(run);
@@ -95,10 +94,22 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   if ([...pending.values()].some(entry => entry.confirmation.length < MAX_TEST_CONFIRMATIONS)) {
     throw new Error("Candidate confirmation budget exhausted with unclassified failures; batch not gated");
   }
-  const confirmed = [...pending.values()].map(entry => entry.test).filter(test => {
-    if (pending.get(testIdentity(test))!.confirmation.includes("pass")) { decision.intermittent.push(test); return false; }
+  const confirmed = [...pending.values()].filter(({ test, confirmation }) => {
+    if (confirmation.includes("pass")) { decision.intermittent.push(test); return false; }
     return true;
   });
+  return { decision, confirmed };
+}
+
+/** Recorded results drive the decision; callbacks supply fresh file samples.
+ * `without` receives the cases it must report even when the file aborts, and
+ * `mainCases` runs only the named cases on native main for files main could
+ * not complete, so their completed cases still name a culprit. */
+export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs: number[],
+  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[], focus: TestSite[]) => Promise<TestRun>,
+  mainCases?: (sites: TestSite[]) => Promise<TestRun>, stale?: StaleDetector): Promise<BatchTestDecision> {
+  const { decision, confirmed: failures } = await confirmBatchTests(base, candidate, rerun, mainCases);
+  const confirmed = failures.map(entry => entry.test);
   if (!confirmed.length) return decision;
   const affected = [...new Set(confirmed.map(test => test.file))];
   const removals: { removed: number[]; run: TestRun }[] = [];
@@ -116,9 +127,8 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   if (unattributable.length) {
     throw new Error(`Cannot establish attribution for ${unattributable.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated (${UNATTRIBUTABLE_RULE})`);
   }
-  for (const test of confirmed) {
+  for (const { test, confirmation } of failures) {
     const samples = evidence.get(testIdentity(test))!;
-    const confirmation = pending.get(testIdentity(test))!.confirmation;
     let responsible = samples.filter(entry => entry.outcome === "pass").map(entry => entry.removed[0]!);
     const reason = responsible.length === 1 ? "test regression" : "integration: needs both";
     if (!responsible.length) {
@@ -294,6 +304,7 @@ type PrView = {
 export type BatchRow = ReviewedPr & {
   head: string; reviewBase: string; view: PrView; patch: string; status: "clean" | "deferred" | "culprit" | "head-moved" | "merged" | "needs-review";
   commit: string; paths: string[]; detail: string; resolution?: string;
+  resolutionTests?: { main: string; tip: string; files: string[]; decision: BatchTestDecision; confirmed: ConfirmedFailure[] };
 };
 export type Gate = { id: string; args: string[]; report?: boolean; filter?: string[] };
 export type RunState = {
@@ -1132,7 +1143,24 @@ export class MergeBatch {
     if (git(work, ["status", "--porcelain"])) throw new Error("Resolution is not clean");
     git(work, ["merge-base", "--is-ancestor", row.head, "HEAD"]);
     git(work, ["merge-base", "--is-ancestor", main, "HEAD"]);
+    delete row.resolutionTests;
+    this.save(state);
     for (const gate of localGateCommands(work, main, state.browser)) {
+      if (gate.id === "tests") {
+        const files = gate.args.slice(2).map(file => file.replace(/^\.\//, ""));
+        // The batch's base may predate the main merged into this resolution.
+        // Reuse its native subject and isolated per-file sampler at this main.
+        const subject = { ...state, work, base: main };
+        const baseline = await this.testSubject(subject, files);
+        const candidate = await this.testSample(work, files, false);
+        const comparison = await confirmBatchTests(baseline, candidate,
+          files => this.testSample(work, files, false),
+          sites => this.testSubject(subject, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }));
+        row.resolutionTests = { main, tip: row.resolution!, files, ...comparison };
+        this.save(state);
+        if (comparison.confirmed.length) throw new Error("Resolution failed tests; no branch pushed");
+        continue;
+      }
       const result = await this.gateCommand(work, gate, false);
       if (result.code) throw new Error(`Resolution failed ${gate.id}; no branch pushed`);
     }
@@ -1180,6 +1208,14 @@ export function report(state: RunState): string {
       : row.status === "head-moved" ? "left: reviewed head moved or is ineligible" : "left: awaiting local gate or publication";
     return `| #${row.number} | ${result.replace(/[\r\n]/g, " ").replaceAll("|", "\\|")} |`;
   }), ...testDecisionReport(state.gated?.decisions ?? [], state.attributionLog ?? []),
+    ...state.rows.flatMap(row => row.resolutionTests ? [
+      "", `Resolution #${row.number}: ${row.resolutionTests.tip}; native main ${row.resolutionTests.main}; per-file comparison:`,
+      ...row.resolutionTests.files.map(file => `- ${file}`),
+      ...testDecisionReport([row.resolutionTests.decision], []),
+      "", row.resolutionTests.confirmed.length ? "New resolution failures (publication withheld):" : "New resolution failures: none",
+      ...row.resolutionTests.confirmed.map(entry =>
+        `- ${entry.test.file} > ${entry.test.suite} > ${entry.test.name}; confirmations ${entry.confirmation.join(", ")}`.replace(/[\r\n]/g, " ")),
+    ] : []),
     "", "Skipped test files:", ...(state.gated?.notApplicable ?? []).map(entry => `- ${entry.source}: ${entry.file}: ${entry.reason}`), ...(state.batch ? ["", state.batch.url] : [])].join("\n");
 }
 

@@ -8,6 +8,7 @@ import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
 import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
+import { isolatedEnvironment } from "./local-gate";
 import * as merger from "./merge-batch";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -1424,6 +1425,99 @@ test("deferred resolutions run their own touched tests and block a failed resolu
   expect(testRuns.some((paths) => paths.some((path) => path.includes("story.test.ts")))).toBe(true);
   expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(conflict);
 });
+
+for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"] as const) {
+  test(`resolution native-main per-file comparison: ${shape}`, async () => {
+    const samples: { cwd: string; head: string; home: string; temp: string; state: string }[] = [];
+    const f = landingFixture("green", async (cwd, args, env) => {
+      if (args[1] !== "bun" || args[2] !== "test") return successfulCommand(args);
+      const files = args.slice(3).filter(arg => /\.test\.ts$/.test(arg));
+      expect(files).toHaveLength(1);
+      expect(env!.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:9");
+      samples.push({ cwd, head: git(cwd, ["rev-parse", "HEAD"]), home: env!.HOME!, temp: env!.TMPDIR!, state: env!.LLV_STATE_DIR! });
+      return commandRunner(cwd, args.slice(1), env);
+    });
+    const imports = "const { test, expect, afterAll } = require('bun:test');\n";
+    const marker = imports + "globalThis.mergeBundleFixture = true;\ntest('setup', () => expect(true).toBe(true));\n";
+    const existing = shape === "pre-existing" ? ["what needs one project to write into is absent, never faked"]
+      : shape === "bundled-only" ? ["original-key payload checks"]
+      : shape === "file-error" ? Array.from({ length: 8 }, (_, i) => `switching main failure ${i}`) : [];
+    const artefacts = shape === "bundled-only" ? 8 : shape === "file-error" ? 16 : 0;
+    f.seed("story.js", "exports.value = 'first';\n");
+    f.seed("a.test.ts", marker);
+    f.seed("story.test.ts", imports
+      + (shape === "file-error" ? "afterAll(() => { if (globalThis.mergeBundleFixture) throw new Error('bundle-only file error'); });\n" : "")
+      + existing.map(name => `test(${JSON.stringify(name)}, () => expect(false).toBe(true));\n`).join("")
+      + Array.from({ length: artefacts }, (_, i) => `test('bundle-only assertion ${i}', () => expect(globalThis.mergeBundleFixture).toBeUndefined());\n`).join("")
+      + "test('resolution invariant', () => expect(require('./story.js').value).not.toBe('resolved regression'));\n");
+    f.addPr(13, "story.js", "exports.value = 'alternative';\n");
+    // Both files belong to the resolution's touched inventory.
+    git(f.repo, ["checkout", "topic-13"]);
+    writeFileSync(join(f.repo, "a.test.ts"), marker + "// Reviewed setup coverage.\n");
+    git(f.repo, ["commit", "-am", "Setup coverage"]);
+    const conflict = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${conflict}:refs/pull/13/head`, `${conflict}:refs/heads/topic-13`]);
+    f.views.get(13)!.headRefOid = conflict;
+    f.seed("story.js", "exports.value = 'accepted';\n");
+    const clean = f.addPr(12, "healthy.txt", "healthy\n");
+    await f.batch.build(`12@${clean},13@${conflict}`);
+    await f.batch.gate(); await f.batch.land();
+    const state = await f.batch.resolve(13), work = state.resolving!.work;
+    const main = state.resolving!.main;
+    expect(main).not.toBe(state.base); // Landing moved main after the batch baseline.
+    writeFileSync(join(work, "story.js"), `exports.value = '${shape === "new-failure" ? "resolved regression" : "resolved"}';\n`);
+    git(work, ["add", "story.js"]);
+    if (artefacts) {
+      const sandbox = join(f.root, "bundled-control");
+      const env = { ...isolatedEnvironment(sandbox, process.env), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9" };
+      const bundled = await commandRunner(work, ["bun", "test", "./a.test.ts", "./story.test.ts"], env);
+      expect(bundled.code).not.toBe(0);
+      expect(bundled.output).toContain(shape === "file-error" ? "bundle-only file error" : "bundle-only assertion");
+    }
+    samples.length = 0;
+    if (shape === "new-failure") {
+      await expect(f.batch.resolve(13)).rejects.toThrow("Resolution failed tests; no branch pushed");
+    } else await f.batch.resolve(13);
+    const result = f.batch.read(), row = result.rows[1]!, receipt = row.resolutionTests!;
+    expect(receipt.main).toBe(main);
+    expect(receipt.tip).toBe(row.resolution!);
+    expect(receipt.files).toEqual(["a.test.ts", "story.test.ts"]);
+    expect(samples.filter(sample => sample.cwd !== work)).toHaveLength(2);
+    expect(new Set(samples.filter(sample => sample.cwd !== work).map(sample => sample.head))).toEqual(new Set([main]));
+    expect(new Set(samples.map(sample => sample.home)).size).toBe(samples.length);
+    expect(new Set(samples.map(sample => sample.temp)).size).toBe(samples.length);
+    expect(new Set(samples.map(sample => sample.state)).size).toBe(samples.length);
+    expect(receipt.decision.preExisting.map(site => site.name)).toEqual(existing);
+    expect(receipt.decision.uncompared).toEqual([]);
+    const summary = report(result);
+    expect(summary).toContain(`Resolution #13: ${row.resolution}; native main ${main}; per-file comparison:`);
+    for (const name of existing) expect(summary).toContain(name);
+    if (shape === "new-failure") {
+      expect(row.status).toBe("deferred");
+      expect(receipt.confirmed.map(entry => [entry.test.name, entry.confirmation]))
+        .toEqual([["resolution invariant", ["fail", "fail", "fail"]]]);
+      expect(summary).toContain("New resolution failures (publication withheld):\n- story.test.ts");
+      expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(conflict);
+      // A repair samples main again and replaces the failed attempt's receipt.
+      samples.length = 0;
+      writeFileSync(join(work, "story.js"), "exports.value = 'resolved';\n");
+      git(work, ["add", "story.js"]);
+      const repaired = await f.batch.resolve(13), repairedRow = repaired.rows[1]!;
+      expect(repairedRow.status).toBe("needs-review");
+      expect(repairedRow.resolution).not.toBe(row.resolution);
+      expect(repairedRow.resolutionTests!.tip).toBe(repairedRow.resolution!);
+      expect(repairedRow.resolutionTests!.confirmed).toEqual([]);
+      expect(samples.filter(sample => sample.cwd !== work)).toHaveLength(2);
+      expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(repairedRow.resolution!);
+    } else {
+      expect(row.status).toBe("needs-review");
+      expect(receipt.confirmed).toEqual([]);
+      expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(row.resolution!);
+      expect(summary).not.toContain("bundle-only file error");
+      expect(summary).not.toContain("bundle-only assertion");
+    }
+  }, 60_000);
+}
 
 test("PR removal keeps the reviewed regression test when its author is healthy", async () => {
   const f = fixture();
