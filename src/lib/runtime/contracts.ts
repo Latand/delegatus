@@ -969,6 +969,22 @@ export function parseViewerDeploymentListCursor(cursor?: string): [number, strin
   } catch { throw new Error("deployment list cursor is invalid"); }
 }
 
+/** One keyset page of an in-memory ledger, newest first: the snapshot of an
+    older host and the ledger of a checkout install page the way the host's
+    journal does. */
+export function viewerDeploymentPage(rows: ViewerDeploymentStatus[], limit: number, cursor: [number, string, boolean] | null,
+  compact = false, legacySnapshot = false): Pick<ViewerDeploymentList, "deployments" | "nextCursor" | "hasMore"> {
+  const after = rows.slice()
+    .sort((a, b) => viewerDeploymentStartedAt(b) - viewerDeploymentStartedAt(a) || b.deploymentId.localeCompare(a.deploymentId))
+    .filter(row => !cursor || viewerDeploymentStartedAt(row) < cursor[0]
+      || (viewerDeploymentStartedAt(row) === cursor[0] && row.deploymentId < cursor[1]));
+  const page = after.slice(0, limit);
+  const last = page.at(-1);
+  return { deployments: compact ? page.map(viewerDeploymentSummary) : page,
+    hasMore: after.length > limit,
+    nextCursor: after.length > limit && last ? viewerDeploymentListCursor(viewerDeploymentStartedAt(last), last.deploymentId, legacySnapshot) : null };
+}
+
 export function viewerDeploymentStartedAt(row: ViewerDeploymentStatus): number {
   const created = Date.parse(row.createdAt);
   const updated = Date.parse(row.updatedAt);

@@ -153,6 +153,9 @@ export interface SpawnCommandDependencies {
   /** In-process autonomous callers recheck their admission hold under the
       account lock. Direct operator requests omit this callback. */
   autonomousAdmissionHeld?(): boolean;
+  /** Trusted automatic target restriction, checked under the account lock
+      immediately before a fresh launch receipt is reserved. */
+  assertAccountAdmission?(accountId: string): void;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -1005,6 +1008,7 @@ export async function executeSpawnRequest(
           || current.home !== account.home || current.transcriptRoot !== account.transcriptRoot) {
           throw new AccountAdmissionChangedError();
         }
+        dependencies.assertAccountAdmission?.(account.accountId);
       }
       return registry.beginSpawnRequest(canonicalSpawnRequest(
         receiptAccountId,
@@ -1407,6 +1411,8 @@ export async function executeSpawnRequest(
     if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
+    if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof ProjectAccountRefusedError) return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */
     if (error instanceof SpawnAdmissionError) return NextResponse.json(spawnRejectionResponse(error), { status: 403 });

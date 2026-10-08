@@ -999,21 +999,31 @@ export async function bindStructuredDeliveryQueue(
            for the write. A lock that stays held leaves the outcome owed: the
            journal already has it, the queue reads this throw as a lost
            acknowledgement and projects it on a later pass (#1612). */
-        if (!await registry.recordDeliveryOutcomeForOperationOffLoop(
-          conversationId as `conversation_${string}`,
-          result.receipt.presentationOperationId ?? operationId,
-          status === "uncertain" ? "failed" : status,
-          details?.reason ?? null,
-          /* The disposition the record has to keep: actuation began, so a
-             resend can duplicate it. Every other `failed` on a message effect
-             means the send never reached the engine and proves nothing on its
-             own, so it carries none. */
-          status === "uncertain" ? "unverified" : undefined,
-          /* The journal receipt, not these details: it carries the route the
-             delivering transition recorded, whichever executor began it. */
-          status === "delivered" ? deliveryRouteOf(result.receipt) : null,
-        )) throw new Error(REGISTRY_WRITER_BUSY);
+        const settled = await registry.deliveryWrite(
+          { label: "delivery.outcome", operationId: result.receipt.presentationOperationId ?? operationId },
+          () => registry.recordDeliveryOutcomeForOperation(
+            conversationId as `conversation_${string}`,
+            result.receipt.presentationOperationId ?? operationId,
+            status === "uncertain" ? "failed" : status,
+            details?.reason ?? null,
+            /* The disposition the record has to keep: actuation began, so a
+               resend can duplicate it. Every other `failed` on a message effect
+               means the send never reached the engine and proves nothing on its
+               own, so it carries none. */
+            status === "uncertain" ? "unverified" : undefined,
+            /* The journal receipt, not these details: it carries the route the
+               delivering transition recorded, whichever executor began it. */
+            status === "delivered" ? deliveryRouteOf(result.receipt) : null,
+          ),
+        );
+        if (!settled.acquired) throw new Error(REGISTRY_WRITER_BUSY);
         await acknowledgeTerminalProjection(client, [result.operationId]);
+        /* The board reads an operator message's delivery from the files
+           projection (the card's needs-you and its first-message chip), so a
+           settled delivery invalidates it now. Waiting for the next poll left
+           "message not delivered" on the card for 7 to 15 s after the agent
+           had answered it (2026-10-07). */
+        if (settled.value) void publishFilesRevision(client).catch(() => undefined);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {
           const launchId = operationId.slice("spawn_message_".length);
           const receipt = registry.readOnlySnapshot().receipts[launchId];
@@ -1208,6 +1218,7 @@ export async function bindStructuredDeliveryQueue(
       ...dependencies.reconfigure,
       registry,
       ownsOperation: ownership.isCurrent,
+      ...(ownership.carriedSends ? { carriedSends: ownership.carriedSends } : {}),
     }),
     async (conversationId) => {
       const liveness = await conversationTurnLiveness(registry, conversationId, dependencies.liveness ?? {});
@@ -1381,9 +1392,26 @@ export async function bindStructuredDeliveryQueue(
       await client.appendSessionFenced({ ...event, expectedSessionRevision });
     }
   };
+  /* A release changes one conversation's projection, and only the host of its
+     current generation can speak for it, so that one host is republished.
+     Republishing every registered host, one health read and one journal write
+     each, added 10.7 to 19.1 s to each account switch on production and made a
+     kill take 16 to 32 s with 13 to 17 hosts registered (2026-10-07). A
+     release whose conversation is unknown still republishes them all. */
   const refreshCurrentProjection = async (conversationId: string | null): Promise<void> => {
-    const republished = await republishCurrentHosts();
-    if (conversationId && !republished.has(conversationId)) await publishCurrentFallback(conversationId);
+    if (!conversationId) {
+      await republishCurrentHosts();
+      return;
+    }
+    const conversation = conversationId.startsWith("conversation_")
+      ? registry.conversation(conversationId as `conversation_${string}`)
+      : null;
+    const generation = conversation?.generations.at(-1);
+    const current = conversation && generation
+      ? registrations.get(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }))
+      : undefined;
+    const hosted = current ? (await republishRegistration(current)).conversationId === conversationId : false;
+    if (!hosted) await publishCurrentFallback(conversationId);
   };
   /* Closes the turns nothing else can close (#2515). A session row is written
      by the host that runs the turn, so a row whose host died with this Viewer

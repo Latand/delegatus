@@ -919,6 +919,9 @@ export const RECEIPT_REASON_KEYS: Record<string, MessageKey> = {
   "switching-accounts": "receipt.human.switchingAccounts",
   "switch-after-turn": "receipt.human.switchAfterTurn",
   "switch-failed": "receipt.human.switchFailed",
+  /* The switch's own receipt: it found the delivery record's write lock held
+     and retries without blocking the Viewer. */
+  "switch-writer-busy": "receipt.human.switchWriterBusy",
   /* #862 compact refusals. `stale-generation` is the same class of fact as a
      stale delivery key: the operator was pointing at a generation that is no
      longer the live one. */
@@ -936,7 +939,7 @@ export const RECEIPT_REASON_KEYS: Record<string, MessageKey> = {
 };
 
 /** Reason codes of a send held while its conversation switches accounts. */
-export const SWITCH_WAIT_REASONS: ReadonlySet<string> = new Set(["switching-accounts", "switch-after-turn", "switch-failed"]);
+export const SWITCH_WAIT_REASONS: ReadonlySet<string> = new Set(["switching-accounts", "switch-after-turn", "switch-failed", "switch-writer-busy"]);
 
 /** The human sentence key for a receipt's reason, or null for an unknown one. */
 export function humanReceiptReasonKey(reason: string | null | undefined): MessageKey | null {

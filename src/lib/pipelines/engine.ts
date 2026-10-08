@@ -349,6 +349,9 @@ export interface PipelinePorts {
     /** Admission time of the attempt this message continues. An update drain
         delivers a follow-up to an attempt it found running and holds the rest. */
     cohortAt?: string;
+    /** Called before a false answer that does not prove nothing was accepted:
+        the surface may have admitted the message and lost its acknowledgement. */
+    onUncertain?: () => void;
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   runtimeSwitchControl?(conversationId: string, path: string, action: "interrupt" | "reconfigure", operationId: string, target: PipelineRuntimeSwitch["to"]): Promise<"already-current" | void>;
@@ -1582,6 +1585,7 @@ export function defaultPipelinePorts(
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       });
+      if (result?.ok !== true && result?.transportUncertain === true) input.onUncertain?.();
       return result?.ok === true;
     },
     runtimeSwitchControl: async (conversationId, path, action, operationId, target) => {
@@ -3382,9 +3386,9 @@ async function retryTerminalStagePublication(
   if (ports.deferStageGit) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
-    const detail = current.ok
+    const detail = afterCommitRepair(attempt, current.ok
       ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
-      : `the accepted head cannot be verified before completion: ${current.error}`;
+      : `the accepted head cannot be verified before completion: ${current.error}`);
     // Head verification can be retried without discarding the accepted pass.
     attempt.error = detail;
     park(pipeline, detail);
@@ -3401,7 +3405,7 @@ async function retryTerminalStagePublication(
   });
   if (!published.ok) {
     if (retryRefusedPublication(pipeline, attempt, published, ports)) return;
-    attempt.error = passedPublicationParkDetail(attempt, published);
+    attempt.error = afterCommitRepair(attempt, passedPublicationParkDetail(attempt, published));
     park(pipeline, attempt.error);
     return;
   }
@@ -3516,6 +3520,216 @@ function routeFailedAttempt(
   return false;
 }
 
+/**
+ * The one repair a passed stage gets when a repository hook refuses its commit.
+ *
+ * Production lane dfcb63ab passed a read-only study whose declared output had
+ * one line ending in a space. The pre-commit hook refused the controller's
+ * commit, the lane parked, and the operator had to rewrite the stage prompt and
+ * run the stage again by hand, while the agent that wrote the file was sitting
+ * idle with the whole context. The hook's output is the instruction, so it goes
+ * back to that conversation once and the same commit runs again through the
+ * same hook.
+ *
+ * The controller does not judge what the hook printed: no pattern in it
+ * permits or vetoes the request, because every such classifier was wrong on a
+ * case the next review found. The stage reads the output and decides. It
+ * repairs its own files and the commit runs again through the same hook, or it
+ * reports a blocked verdict with the reason (infrastructure, a file it does not
+ * own, a gate misconfiguration) and the lane parks with that reason after what
+ * the hook printed. Only for a pane-less structured attempt with a delivery
+ * seam, and only once: the next refusal parks with what the hook printed, as
+ * every refusal did before. The read-only fence is the committer's and is
+ * untouched, so a repair that leaves an undeclared path changed parks there.
+ * The whole wait is bounded by `refusedAt`, which covers a delivery surface
+ * that keeps refusing or throwing and a repair turn that never ends. The record is in the store before
+ * the request leaves: a settlement that dies around the delivery finds it on
+ * the next tick, so it neither commits again nor starts a second wait. So is
+ * the moment the request leaves: the delivery surface may have admitted a
+ * request whose acknowledgement a crash lost, and the turn it started may be
+ * over before the replay, so the replay keeps that moment as the boundary the
+ * finished turn is judged against. Whatever parks the stage after the request
+ * keeps the refusal the stage was asked about.
+ */
+const COMMIT_REPAIR_WAIT_MS = 20 * 60_000;
+const COMMIT_REPAIR_DETAIL = "a commit hook refused the passed stage's commit; the stage is reading the hook's output once to repair its files or report why it cannot";
+/** Generous: the stage needs every line the hook printed. */
+const COMMIT_REPAIR_OUTPUT_CHARS = 64_000;
+const COMMIT_REPAIR_PATHS = 50;
+
+/** The hook's output whole, or its head and tail around a marked cut. */
+function hookOutputForRepair(detail: string): string {
+  if (detail.length <= COMMIT_REPAIR_OUTPUT_CHARS) return detail;
+  const half = COMMIT_REPAIR_OUTPUT_CHARS / 2;
+  return `${detail.slice(0, half)}\n[… ${detail.length - COMMIT_REPAIR_OUTPUT_CHARS} characters of the hook's output omitted …]\n${detail.slice(-half)}`;
+}
+
+function stageCommitRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, detail: string, paths: readonly string[]): string {
+  const outputs = attemptStage(stage, attempt).outputs ?? [];
+  const readOnly = attempt.effectiveRole.access !== "read-write";
+  /* A hint for the stage, never a gate: the controller acts the same either way. */
+  const named = paths.some((file) => detail.includes(file));
+  return [
+    "Your stage passed, and the repository's commit hook then refused the pipeline controller's commit of your work."
+      + " The verdict you gave stands; nothing about it is in question.",
+    `What the hook printed, verbatim:\n${hookOutputForRepair(detail)}`,
+    `Files in the refused commit:\n${paths.length ? paths.map((file) => `- ${file}`).join("\n") : "(none could be listed)"}`
+      + (paths.length && !named ? "\nHint: the hook's output names none of these files, so the refusal may be about something else." : ""),
+    "Decide from that output whether your own files can answer it.",
+    readOnly
+      ? `If they can, repair them so the hook accepts them. This stage is read-only: change only its declared outputs (${outputs.join(", ")}),`
+        + " leave every other path exactly as it is, and do not commit, stage or push. The controller commits when your turn ends."
+      : "If they can, repair them so the hook accepts them and leave the result in the worktree or in a commit of your own on this branch;"
+        + " the controller commits whatever is uncommitted when your turn ends.",
+    "The hook decides again on that commit, so fix what it names: never skip, disable or bypass it (no --no-verify, no skip variable,"
+      + " no hook path change).",
+    "If they cannot (the tool, the machine or the gate's configuration failed, or the output is about a file this stage does not own),"
+      + " change nothing and end your turn with one fenced JSON block, the reason in blockedReason; the stage then parks for the operator"
+      + " with the hook's output and your reason. stage_report is closed for this stage, so this block is how you report it:",
+    "```json\n{\"status\":\"fail\",\"blocked\":true,\"blockedReason\":\"<why your files cannot answer this refusal>\"}\n```",
+    "This is the only repair turn; a second refusal parks the stage for the operator.",
+  ].join("\n\n");
+}
+
+async function sendStageCommitRepair(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  const repair = attempt.commitRepair!;
+  const conversationId = attempt.conversationId!;
+  /* Somebody's prompt is already on its way to this conversation. */
+  if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return false;
+  /* Stable across ticks and processes, so a replay cannot mint a second ask. */
+  const clientMessageId = `stage-commit-repair-${pipeline.id}-${stage.id}-${attempt.n}`;
+  if (!repair.sendingAt) {
+    repair.sendingAt = ports.now();
+    await persist();
+  }
+  /* A false answer leaves the request owed: the next tick asks again under the
+     same id inside the same wait. Only an outright refusal proves the surface
+     accepted nothing; an answer that lost its acknowledgement, or a throw, may
+     follow an admission whose turn is already running, so its moment stays
+     the boundary that turn is judged against. */
+  let uncertain = false;
+  const delivered = await Promise.resolve().then(() => ports.resumeSeveredTurn!({
+    conversationId,
+    transcriptPath: attempt.agentPath!,
+    clientMessageId,
+    text: stageCommitRepairText(stage, attempt, repair.detail, repair.paths),
+    project: pipeline.project,
+    cwd: pipeline.repoDir,
+    ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
+    onUncertain: () => { uncertain = true; },
+  })).catch(() => { uncertain = true; return false; });
+  if (delivered !== true) {
+    if (uncertain) repair.sendUncertain = true;
+    else if (!repair.sendUncertain) delete repair.sendingAt;
+    await persist();
+    return false;
+  }
+  repair.requestedAt = repair.sendingAt;
+  repair.clientMessageId = clientMessageId;
+  delete repair.sendingAt;
+  delete repair.sendUncertain;
+  await persist();
+  return true;
+}
+
+/** True when the refusal was handed to the stage, or is still owed to it. */
+async function requestStageCommitRepair(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  result: Extract<import("./git").PipelineGitResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  if (!result.commitRefusal || attempt.commitRepair) return false;
+  if (stage.kind !== "run" || attempt.paneId || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return false;
+  const durable = await stageRepairEvidence(attempt, ports);
+  attempt.commitRepair = {
+    refusedAt: ports.now(),
+    detail: result.error,
+    paths: result.commitRefusal.paths.slice(0, COMMIT_REPAIR_PATHS),
+    messageTs: durable?.message?.ts ?? null,
+  };
+  pipeline.stateDetail = COMMIT_REPAIR_DETAIL;
+  await persist();
+  await sendStageCommitRepair(pipeline, stage, attempt, ports, persist);
+  return true;
+}
+
+/** Evidence that cannot be read is evidence of no finished turn. */
+async function stageRepairEvidence(attempt: PipelineStageAttempt, ports: PipelinePorts) {
+  return await Promise.resolve()
+    .then(() => ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt))
+    .catch(() => null);
+}
+
+/** The stage's reason when its repair turn ended on a verdict other than
+    pass (`blocked:true` is the one it is asked for), null otherwise. */
+function stageCommitRepairDeclined(text: string): string | null {
+  const parsed = parsePipelineStageVerdict(text);
+  if (!parsed || !("verdict" in parsed)) return null;
+  if (parsed.verdict.blocked !== true && parsed.verdict.status === "pass") return null;
+  return parsed.verdict.blockedReason ?? (parsed.output || `the stage answered ${parsed.verdict.status}`);
+}
+
+/** The park text for a stage that was asked to repair and is parked by `reason`. */
+function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): string {
+  const asked = attempt.commitRepair?.detail;
+  return !asked || reason.includes(asked) ? reason : `${reason}\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
+}
+
+/** True when no repair is owed or a finished repair permits another commit. */
+async function stageCommitRepairSettled(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  const repair = attempt.commitRepair;
+  if (!repair) return true;
+  // The intent checkpoint can outlive final settlement. Replay its rejection
+  // before considering settledAt permission to try the commit again.
+  if (repair.outcome?.status === "rejected") {
+    park(pipeline, `${repair.detail}\n${repair.outcome.reason}`, attempt);
+    return false;
+  }
+  if (repair.settledAt) return true;
+  const deadline = unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS;
+  const expired = unixMs(ports.now()) >= deadline;
+  const giveUp = async (why: string) => {
+    repair.outcome = { status: "rejected", reason: why };
+    repair.settledAt = ports.now();
+    park(pipeline, `${repair.detail}\n${why}`, attempt);
+    await persist();
+    return false;
+  };
+  if (!attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return true;
+  if (!repair.requestedAt) {
+    if (expired) return giveUp("The stage could not be asked to repair its files: its conversation accepted no message.");
+    await sendStageCommitRepair(pipeline, stage, attempt, ports, persist);
+    return false;
+  }
+  const durable = await stageRepairEvidence(attempt, ports);
+  const answered = durable?.turn === "terminal" && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
+    && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt)
+    && ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true
+    && await ports.conversationAgentActive(attempt.conversationId) !== true
+    && liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
+  // A delayed tick may first see a terminal turn. Its durable timestamps must
+  // still fall inside the repair window; a timely turn can survive a late tick.
+  const completedAt = Math.max(durable?.lastRecordAt ?? 0, durable?.message?.ts ?? 0);
+  if (answered && completedAt >= deadline) {
+    return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
+  }
+  if (!answered) {
+    if (expired) return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
+    return false;
+  }
+  const declined = stageCommitRepairDeclined(durable.message?.text ?? "");
+  if (declined !== null) return giveUp(`The stage was asked once to repair its files and reported it cannot: ${declined}`);
+  repair.outcome = { status: "accepted" };
+  repair.settledAt = ports.now();
+  if (pipeline.stateDetail === COMMIT_REPAIR_DETAIL) pipeline.stateDetail = null;
+  await persist();
+  return true;
+}
+
 async function commitPassedStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -3524,6 +3738,9 @@ async function commitPassedStage(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
+  /* Every park after a requested repair keeps the refusal it was about. */
+  const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   let result = allowCommit
@@ -3539,27 +3756,24 @@ async function commitPassedStage(
       await persist();
       return;
     }
-    park(pipeline, result.error, attempt);
+    if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
+    parkStage(result.error);
     return;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
-    park(
-      pipeline,
-      `approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`,
-      attempt,
-    );
+    parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
     return;
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir));
     if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
-      park(pipeline, `stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`, attempt);
+      parkStage(`stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
       return;
     }
     if (ancestor.code === 1) {
       result = (await reconcilePipelineStageHead(pipeline, result.sha, ports.exec));
       if (!result.ok) {
-        park(pipeline, result.error, attempt);
+        parkStage(result.error);
         return;
       }
     }
@@ -3597,7 +3811,7 @@ async function commitPassedStage(
     publishedSha: pipeline.publishedCommit ?? null,
   });
   if (!published.ok) {
-    park(pipeline, `publishing the passed stage: ${published.error}`, attempt);
+    parkStage(`publishing the passed stage: ${published.error}`);
     return;
   }
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
@@ -7592,7 +7806,9 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       await withPipelineMutation((pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
-        park(current, error instanceof Error ? error.message : "Pipeline locking unavailable", currentAttempt(current, stage.id));
+        const recorded = currentAttempt(current, stage.id);
+        const cause = error instanceof Error ? error.message : "Pipeline locking unavailable";
+        park(current, recorded ? afterCommitRepair(recorded, cause) : cause, recorded);
         persist([current]); changed = true;
       });
       continue;
@@ -7630,20 +7846,27 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
           setCursorState(candidate, candidateStage.id, "committing");
         }
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside, async () => {
-          // Adoption must survive a restart before Git changes the destination.
-          // Persist only its intent, under the same full lane/flow fence used
-          // for final settlement, then advance our own observation fingerprint.
+          // Adoption must survive a restart before Git changes the destination,
+          // and a hook refusal handed back to the stage must survive one before
+          // the request leaves. Persist only those two intents, under the same
+          // full lane/flow fence used for final settlement, then advance our
+          // own observation fingerprint. The repair's terminal outcome and
+          // rejection reason travel with settledAt in this same write.
           await withPipelineMutation((pipelines, persist) => {
             const current = pipelines.find((pipeline) => pipeline.id === preview.id);
             if (!current || !matches(current)) { abort.abort(); return; }
-            if (candidateAttempt.branchAdoption) {
-              currentAttempt(current, candidateStage.id)!.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
-              persist([current]);
-              fingerprint = JSON.stringify(current);
-              changed = true;
+            const recorded = currentAttempt(current, candidateStage.id)!;
+            if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair) return;
+            if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
+            if (candidateAttempt.commitRepair) {
+              recorded.commitRepair = structuredClone(candidateAttempt.commitRepair);
+              if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
             }
+            persist([current]);
+            fingerprint = JSON.stringify(current);
+            changed = true;
           });
-          if (abort.signal.aborted) throw new Error("stage settlement superseded before recording branch adoption");
+          if (abort.signal.aborted) throw new Error("stage settlement superseded before recording its intent");
         });
       }
       revalidate();
@@ -7761,7 +7984,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
-          && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
+          && (pipeline.stateDetail?.split("\n", 1)[0] === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
             || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
         if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {

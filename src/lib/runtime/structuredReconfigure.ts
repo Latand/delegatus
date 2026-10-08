@@ -10,7 +10,9 @@ import type { PipelineSwitchFence } from "@/lib/pipelines/runtimeSwitchFence";
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
-export type StructuredReconfigureOutcome = "applied" | "pending";
+/** `writer-busy`: the delivery record's write lock stayed held past its bound
+    and the step wrote nothing; the next pass repeats it. */
+export type StructuredReconfigureOutcome = "applied" | "pending" | "writer-busy";
 
 class StructuredReconfigureSupersededError extends Error {
   constructor() {
@@ -55,6 +57,10 @@ export interface StructuredReconfigureDependencies {
     reconfigureOperationId?: string,
     authorizeTarget?: () => void | Promise<void>,
   ) => Promise<RegistryConversation>;
+  /** Sends the queue holds behind this switch and never dispatched. Their
+      claims on the predecessor go back to holds the switch carries, so the
+      switch never waits for a message that waits for it. */
+  carriedSends?: readonly string[];
 }
 
 async function readPipelineSwitch(operationId: string): Promise<PipelineSwitchFence | null> {
@@ -277,6 +283,8 @@ export async function applyStructuredReconfigure(
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
       throw error;
     }
+    const handover = await registry.holdUndispatchedClaimsForSwitch(conversationId, dependencies.carriedSends ?? [], effect.operationId);
+    if (!handover.acquired) return "writer-busy";
     const committedSuccessorAfterCapturedPredecessor = (): RegistryConversation["generations"][number] | null => {
       const latest = registry.conversation(conversationId);
       if (!latest) return null;

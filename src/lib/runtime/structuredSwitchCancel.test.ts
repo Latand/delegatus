@@ -110,7 +110,7 @@ interface PendingSwitch {
   sourceGenerationId: string;
   effect: StructuredReconfigureEffect;
   profileBefore: RegistryConversation["generations"][number]["launchProfile"];
-  apply: (effect?: StructuredReconfigureEffect) => Promise<"applied" | "pending">;
+  apply: (effect?: StructuredReconfigureEffect) => Promise<"applied" | "pending" | "writer-busy">;
   deliveries: { before: HeldDelivery; uncertain: HeldDelivery; held: HeldDelivery | null };
 }
 

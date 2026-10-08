@@ -171,6 +171,15 @@
  * with no sentence of its own, one retry control inside the viewport, and no
  * text cut or scrolled inside the failure block.
  *
+ * With BOARD_CAPTURE_CASE=twice-switched-link it opens a link to a
+ * conversation switched between accounts twice whose payload carries both
+ * archived generations and not yet the current one (2026-10-07). The real
+ * `/api/files` answer is reshaped in the browser so three seeded transcripts
+ * are those generations: canonical `#c=` and legacy `#f=` links, with the
+ * archived rows in either order, must each open a reader with no not-found
+ * notice; then the third generation arrives and the reader must follow it
+ * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -6891,6 +6900,117 @@ async function installPingMain(): Promise<void> {
  * BOARD_CAPTURE_CASE=hydration uses only the synthetic home above. Set
  * HYDRATION_MUTATE_SHELL=1 to prove that a server/client text mismatch fails the gate.
  */
+/** A link to a conversation whose two archived generations are listed and its current one is not yet. */
+async function twiceSwitchedLinkMain(): Promise<void> {
+  seedHome();
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const conversationId = "conversation_twice-switched-link";
+  const failures: string[] = [];
+  const frames: Record<string, unknown> = {};
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    /* Three transcripts of one project; the first scan can still hold them under a project it has not resolved. */
+    let seeded: string[] = [];
+    let seededProject = "";
+    for (const deadline = Date.now() + 60_000; seeded.length < 3 && Date.now() < deadline; await Bun.sleep(1_000)) {
+      const byProject = new Map<string, string[]>();
+      for (const file of ((await (await fetch(`${baseUrl}/api/files`)).json()) as FilesPayload).files ?? []) {
+        if (file.project && file.path?.endsWith(".jsonl")) byProject.set(file.project, [...byProject.get(file.project) ?? [], file.path]);
+      }
+      seededProject = byProject.has(PROJECT_NAME) ? PROJECT_NAME : [...byProject.entries()].sort((a, b) => b[1].length - a[1].length)[0]?.[0] ?? "";
+      seeded = [...byProject.get(seededProject) ?? []].sort();
+    }
+    if (seeded.length < 3) throw new Error(`the scan listed ${seeded.length} seeded transcripts of one project, three are needed`);
+    const [older, newer, successor] = seeded as [string, string, string];
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const lang of ["en", "uk"] as const) for (const order of ["older-first", "newer-first"] as const) for (const link of ["canonical", "legacy"] as const) {
+      const tag = `${lang}-${order}-${link}`;
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      let arrived = false;
+      /* The catalog answers served once the successor arrived, by request scope. */
+      const servedAfter: string[] = [];
+      await context.route(/\/api\/files(\?|$)/, async (route) => {
+        if (arrived) servedAfter.push(new URL(route.request().url()).searchParams.get("path") === null ? "plain" : "pinned");
+        try {
+          /* A 304 would keep the page on the shape it was served before the successor arrived. */
+          const headers = { ...route.request().headers() };
+          delete headers["if-none-match"];
+          delete headers["if-modified-since"];
+          const response = await route.fetch({ headers });
+          if (response.status() !== 200) return route.fulfill({ response });
+          const body = await response.json() as { files?: Array<Record<string, unknown> & { path?: string }> };
+          /* All three generations stay in the project the link opened: the fixture's first scans can
+             place a transcript under a project they have not resolved yet. */
+          const generation = (file: Record<string, unknown>, value: number, migratedTo: string | null) =>
+            ({ ...file, project: seededProject, conversationId, generation: value, ...(migratedTo ? { migratedTo } : {}) });
+          const rows = body.files ?? [];
+          const at = rows.findIndex((file) => file.path === older || file.path === newer);
+          const olderRow = rows.find((file) => file.path === older);
+          const newerRow = rows.find((file) => file.path === newer);
+          const successorRow = rows.find((file) => file.path === successor);
+          const rest = rows.filter((file) => file.path !== older && file.path !== newer && file.path !== successor);
+          const archived = olderRow && newerRow
+            ? (order === "older-first" ? [generation(olderRow, 1, newer), generation(newerRow, 2, successor)] : [generation(newerRow, 2, successor), generation(olderRow, 1, newer)])
+            : [];
+          const current = arrived && successorRow ? [{ ...generation(successorRow, 3, null), predecessorPath: newer }] : [];
+          body.files = [...rest.slice(0, Math.max(0, at)), ...archived, ...current, ...rest.slice(Math.max(0, at))];
+          await route.fulfill({ response, json: body });
+        } catch {
+          /* the context is gone */
+        }
+      });
+      const page = await context.newPage();
+      const hash = link === "canonical" ? `#c=${encodeURIComponent(conversationId)}` : `#f=${encodeURIComponent(older)}`;
+      await page.goto(`${baseUrl}/${hash}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      const readersOf = (paths: string[]) => page.evaluate((wanted: string[]) => [...document.querySelectorAll("[data-kanban-board] [data-kanban-reader]")]
+        .filter((reader) => wanted.some((file) => reader.matches(`[data-link-path="${CSS.escape(file)}"]`) || reader.querySelector(`[data-link-path="${CSS.escape(file)}"]`) !== null)).length, paths);
+      const drawn = (file: string) => page.evaluate((wanted: string) => document.querySelector(`[data-kanban-board] [data-member="${CSS.escape(wanted)}"]`) !== null, file);
+      const notice = () => page.evaluate(() => document.querySelector("[data-stale-focus-notice]") !== null);
+      const opened = await page.waitForFunction(() => document.querySelector("[data-kanban-board] [data-kanban-reader]") !== null, null, { timeout: 30_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const before = { readers: await readersOf([older, newer]), notice: await notice() };
+      await page.screenshot({ path: path.join(OUT_DIR, `twice-switched-${tag}-opened.png`) });
+      if (!opened || before.readers < 1) failures.push(`${tag}: the link opened ${before.readers} readers of the conversation`);
+      if (before.notice) failures.push(`${tag}: a not-found notice for a link that resolves`);
+      arrived = true;
+      await page.evaluate((event: string) => window.dispatchEvent(new Event(event)), "llv:files-changed");
+      const followed = await page.waitForFunction((wanted: string) => [...document.querySelectorAll("[data-kanban-board] [data-kanban-reader]")]
+        .some((reader) => reader.matches(`[data-link-path="${CSS.escape(wanted)}"]`) || reader.querySelector(`[data-link-path="${CSS.escape(wanted)}"]`) !== null), successor, { timeout: 30_000 }).then(() => true, () => false);
+      await page.waitForTimeout(600);
+      const after = {
+        successorReaders: await readersOf([successor]),
+        archivedReaders: await readersOf([older, newer]),
+        archivedDrawn: (await drawn(older)) || (await drawn(newer)),
+        notice: await notice(),
+      };
+      await page.screenshot({ path: path.join(OUT_DIR, `twice-switched-${tag}-followed.png`) });
+      if (!followed || after.successorReaders !== 1) failures.push(`${tag}: ${after.successorReaders} readers followed the arriving generation`);
+      if (after.archivedReaders || after.archivedDrawn) failures.push(`${tag}: an archived generation is still drawn beside its successor`);
+      if (after.notice) failures.push(`${tag}: a not-found notice after the successor arrived`);
+      const language = await page.evaluate(() => document.documentElement.lang);
+      if (language !== lang) failures.push(`${tag}: the page speaks ${language}`);
+      frames[tag] = { language, before, after, servedAfter };
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+  }
+  const report = JSON.stringify({ commit: captureCommit(), frames, failures }, null, 2) + "\n";
+  fs.writeFileSync(path.join(OUT_DIR, "twice-switched-link.json"), report);
+  if (failures.length) throw new Error(failures.join("; "));
+  console.log(`twice-switched link: ${path.join(OUT_DIR, "twice-switched-link.json")}`);
+}
+
 async function hydrationMain(): Promise<void> {
   const { reviewers } = seedHome();
   /* Scanner-only transcripts have no canonical conversation id. Register a
@@ -7211,6 +7331,7 @@ async function relayAnswersMain(): Promise<void> {
 }
 
 if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "relay-answers") await relayAnswersMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
