@@ -40,7 +40,7 @@ test("scoped heavy steps retain pin, host interpreter and both native fixture ve
   expect(steps.find(step => step.name === "Viewer build")!.pinned).toBeTrue();
   expect(steps.find(step => step.name === "runtime host")!.pinned).toBeTrue();
   expect(steps.find(step => step.name === "runtime negative controls")!.pinned).toBeTrue();
-  expect(steps.filter(step => step.selection === "--engine-only").map(step => step.codex)).toEqual(["0.154.0", "0.159.0"]);
+  expect(steps.filter(step => step.codex).map(step => step.codex)).toEqual(["0.154.0", "0.159.0"]);
   expect(steps.some(step => step.name === "supply chain")).toBeTrue();
   expect(plan("pre-push", ["src/example.ts"], context()).some(step => step.pinned)).toBeFalse();
 });
@@ -50,7 +50,7 @@ test("native Codex runs its engine files once per version and its shared contrac
   expect(native.map(step => [step.name, step.codex, step.selection, step.deferrable === true])).toEqual([
     ["native Codex 0.154.0", "0.154.0", "--engine-only", false],
     ["native Codex 0.159.0", "0.159.0", "--engine-only", false],
-    ["native Codex shared contracts", "0.154.0", "--shared-only", true],
+    ["native Codex shared contracts", undefined, "--shared-only", true],
   ]);
   // One contiguous group: the runner starts all three at once.
   const first = steps.indexOf(native[0]!);
@@ -68,6 +68,37 @@ test("the engine and shared selections are exactly the hosted job's selection, s
   for (const file of shared) expect(readFileSync(path.join(root, file), "utf8"), file).not.toMatch(startsCodex);
   for (const file of engine) expect(readFileSync(path.join(root, file), "utf8"), file).toMatch(startsCodex);
 });
+test("the shared native runner needs no Codex fixture and exposes no executable to its tests", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-shared-native-")); roots.push(dir);
+  const shared = nativeBatches("--shared-only").flat();
+  for (const file of shared) {
+    const target = path.join(dir, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, `import { expect, test } from "bun:test";
+      test("shared contracts have no Codex executable", () => {
+        for (const key of ["NATIVE_CODEX_QUEUE_TEST_BINARY", "LLV_CODEX_HISTORY_CLI", "LLV_CODEX_BINARY"])
+          expect(process.env[key]).toBeUndefined();
+      });`);
+  }
+  const result = spawnSync(process.execPath, [path.join(root, "scripts/verify-native-codex-runtime.ts"), "--shared-only"], {
+    cwd: dir, env: { ...process.env, NATIVE_CODEX_QUEUE_TEST_BINARY: "inherited-fixture", LLV_CODEX_HISTORY_CLI: "inherited-fixture", LLV_CODEX_BINARY: "inherited-fixture" }, encoding: "utf8", timeout: 30_000,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect((result.stderr.match(/\(pass\) shared contracts have no Codex executable/g) ?? []).length).toBe(shared.length);
+}, 40_000);
+
+test("native engine and hosted selections still require an executable fixture", () => {
+  for (const args of [[], ["--engine-only"], ["--steering-only"]]) {
+    const result = spawnSync(process.execPath, [path.join(root, "scripts/verify-native-codex-runtime.ts"), ...args], {
+      env: process.env, encoding: "utf8", timeout: 5_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Pass an absolute Codex fixture executable");
+  }
+});
+
 test("only a caller's deadline bounds the push, and it must be a Unix time in milliseconds", () => {
   expect(pushDeadline({}, 1_000)).toBeNull();
   expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "" }, 1_000)).toBeNull();

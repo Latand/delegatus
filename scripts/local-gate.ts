@@ -12,7 +12,7 @@ export interface Step {
   isolated?: boolean;
   pinned?: boolean;
   codex?: string;
-  /** Passed after the Codex fixture path. */
+  /** Passed after the optional Codex fixture path. */
   selection?: string;
   /** Consecutive steps with the same group run at once, under one phase marker. */
   group?: string;
@@ -102,7 +102,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     // judges them, and it is the long tail the hosted job can take.
     const native = { command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, group: NATIVE_GROUP };
     for (const version of env.codexVersions) steps.push({ ...native, name: `native Codex ${version}`, codex: version, selection: "--engine-only" });
-    steps.push({ ...native, name: "native Codex shared contracts", codex: env.codexVersions[0], selection: "--shared-only", deferrable: true });
+    steps.push({ ...native, name: "native Codex shared contracts", selection: "--shared-only", deferrable: true });
   }
   if (supplyChainChanged) {
     steps.push({ name: "audit retry tests", command: ["bun", "test", "./scripts/audit-with-retry.test.ts", "./scripts/supply-chain-check.test.ts"], capped: true, isolated: true });
@@ -637,8 +637,9 @@ async function main(mode: Mode): Promise<void> {
       if (step.codex) {
         // Members of one group share a version's install instead of racing on its prefix.
         if (!fixtures.has(step.codex)) fixtures.set(step.codex, codexFixture(root, cache, step.codex, until, process.env, cancel));
-        command.push(await fixtures.get(step.codex)!, ...(step.selection ? [step.selection] : []));
+        command.push(await fixtures.get(step.codex)!);
       }
+      if (step.selection) command.push(step.selection);
       if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {

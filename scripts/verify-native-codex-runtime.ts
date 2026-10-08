@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join } from "node:path";
 
 /** `--engine-only` runs the files that start the Codex executable named on the
     command line, the only part whose verdict depends on the Codex version.
-    `--shared-only` runs the rest, which starts no Codex executable at all.
+    `--shared-only` runs the rest without a Codex fixture argument or executable.
     Together they are exactly the default selection: the pre-push hook runs the
     engine part once per supported version and the shared part once. */
 export const SELECTIONS = ["--steering-only", "--engine-only", "--shared-only"] as const;
@@ -136,18 +136,21 @@ export function nativeBatches(selection?: Selection): string[][] {
 }
 
 if (import.meta.main) {
-  const binary = process.argv[2];
-  const selection = process.argv[3];
+  const sharedOnly = process.argv[2] === "--shared-only" && process.argv[3] === undefined;
+  const binary = sharedOnly ? undefined : process.argv[2];
+  const selection = sharedOnly ? "--shared-only" : process.argv[3];
   if (selection !== undefined && !(SELECTIONS as readonly string[]).includes(selection)) throw new Error(`Only ${SELECTIONS.join(", ")} are supported as a selection`);
-  if (!binary || !isAbsolute(binary) || !existsSync(binary)) throw new Error("Pass an absolute Codex fixture executable");
+  if (!sharedOnly && (!binary || !isAbsolute(binary) || !existsSync(binary))) throw new Error("Pass an absolute Codex fixture executable");
   const roots = mkdtempSync(join(tmpdir(), "n-"));
   const bin = join(roots, "bin"); mkdirSync(bin); symlinkSync(process.execPath, join(bin, "bun"));
   const env: NodeJS.ProcessEnv = {
     PATH: [bin, dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
     LANG: "C.UTF-8", NODE_ENV: "test",
-    NATIVE_CODEX_QUEUE_TEST_BINARY: binary,
-    LLV_CODEX_HISTORY_CLI: binary,
-    LLV_CODEX_BINARY: binary,
+    ...(selection === "--shared-only" ? {} : {
+      NATIVE_CODEX_QUEUE_TEST_BINARY: binary,
+      LLV_CODEX_HISTORY_CLI: binary,
+      LLV_CODEX_BINARY: binary,
+    }),
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
   };
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
