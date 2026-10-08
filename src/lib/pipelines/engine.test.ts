@@ -23501,7 +23501,11 @@ for (const engine of ["claude", "codex"] as const) {
     f.h.setConversationActive(false);
     await tick();
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.turnTs).toBe(f.now());
-    while (f.now() < Date.parse("2026-10-05T23:05:00Z")) { f.advance(30_000); await tick(); }
+    // Each tick scans the whole 9 MiB history: tick past the bounded wait, then around the reset.
+    for (const at of ["2026-10-05T21:45:00Z", "2026-10-05T23:00:30Z"]) { f.advance(Date.parse(at) - f.now()); await tick(); }
+    expect({ sends: f.sends.length, state: loadPipelines()[0]!.state }).toEqual({ sends: 1, state: "running" });
+    f.advance(Date.parse("2026-10-05T23:01:30Z") - f.now());
+    await tick();
     expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, spawns: f.h.spawnInputs.length })
       .toEqual({ sends: 2, state: "running", spawns: 1 });
   });
