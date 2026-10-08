@@ -108,6 +108,10 @@ export interface StructuredRecoveryDependencies {
     revision: number;
     owns: () => Promise<boolean>;
     releaseHost: (key: SessionKey) => Promise<boolean>;
+    /** Throws when the operation's owner no longer allows the account the
+        successor host would start on. A recorded account resumes through
+        continuity, which asks no project pool, so the owner is asked here. */
+    authorizeAccount?: (accountId: string | null) => void | Promise<void>;
   };
   /** The staged-launch probe and settlement a resume's publication is driven
       through; tests substitute the runtime boundary behind them. */
@@ -145,6 +149,7 @@ async function awaitResumePublication(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   dependencies: StructuredRecoveryDependencies,
+  authorize: () => Promise<void>,
 ): Promise<string | null> {
   const now = dependencies.now ?? Date.now;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -152,6 +157,16 @@ async function awaitResumePublication(
   const staged = registry.readOnlySnapshot().receipts[launchId];
   const deadline = (stagedLaunchRecovery(staged)?.startedAt ?? now()) + RESUME_PUBLICATION_BOUND_MS;
   for (;;) {
+    /* The probe may publish a host that no continuation of this process holds,
+       so the owner is asked before each one. A refused resume ends here: its
+       receipt fails and the host it started is retired. */
+    try {
+      await authorize();
+    } catch (error) {
+      await (dependencies.failStagedLaunch ?? failStagedResume)(launchId, registry, client,
+        error instanceof Error ? error.message : "structured recovery account is no longer allowed");
+      throw error;
+    }
     const receipt = await probe(launchId, registry, client, { now, eligible: () => true });
     if (receipt.state === "completed") return receipt.artifactPath;
     if (receipt.state === "failed" || receipt.state === "conflicted") {
@@ -412,12 +427,16 @@ async function recoverCandidate(
       current.accountId,
       current.project,
     );
+    const assertAccountAuthorized = async (): Promise<void> => {
+      await ownership?.authorizeAccount?.(account.accountId ?? null);
+    };
     let begun: SpawnBeginResult;
     try {
-      begun = await withAccountMutationLockAsync(() => {
+      begun = await withAccountMutationLockAsync(async () => {
         // Admission may have closed while recovery waited for this lease.
         assertRecoveryAdmission(request, registry);
-        return registry.beginSpawnRequestAsync({
+        await assertAccountAuthorized();
+        return await registry.beginSpawnRequestAsync({
           engine: current.engine,
           cwd: current.spec.cwd,
           transport: "structured",
@@ -446,6 +465,12 @@ async function recoverCandidate(
       registry.failSpawn(begun.receipt.launchId, "structured recovery operation was superseded");
       throw error;
     }
+    try {
+      await assertAccountAuthorized();
+    } catch (error) {
+      registry.failSpawn(begun.receipt.launchId, "structured recovery account is no longer allowed");
+      throw error;
+    }
     const response = await (dependencies.spawn ?? spawnStructuredConversation)({
       engine: current.engine,
       receipt: begun.receipt,
@@ -454,17 +479,19 @@ async function recoverCandidate(
       "prompt": "",
       registry,
       client,
+      authorize: assertAccountAuthorized,
     });
     let publishedPath = response.ok ? response.path : null;
     /* A staged resume with no path has not published its host yet. One that
        names its path has, and only its transcript is pending. */
     if (response.ok && !publishedPath && response.state === "path-pending") {
-      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies)
+      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies, assertAccountAuthorized)
         ?? current.path;
     }
     if (!response.ok || !publishedPath) throw new Error("structured recovery host did not publish its transcript");
     try {
       await assertOwnership();
+      await assertAccountAuthorized();
     } catch (error) {
       await ownership?.releaseHost(current.key);
       registry.terminateStructuredHost(current.key);

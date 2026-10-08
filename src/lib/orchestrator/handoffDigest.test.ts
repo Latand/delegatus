@@ -480,7 +480,8 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    and other-project section and the issue-reporter row (#2518), which
    measured 14 558; 17 400 bytes still hold two. The visual-critic row and
    the UI-lane step measured 14 760 on main. With the prototype-review
-   pointer and the merged role rows, the directive measures 14 807, inside a 14 900
+   pointer and the merged role rows, the directive measures 14 807, and with
+   the applyNow pointer on the override-stage line 14 823, inside a 14 900
    byte share that still leaves more than two history budgets. */
 const DELIVERED_DIRECTIVE_BUDGET_BYTES = 14_900;
 

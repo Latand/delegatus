@@ -57,6 +57,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (typeof raw.fingerprint !== "string" || !raw.fingerprint) return null;
   if (typeof raw.eventsThrough !== "number" || !Number.isInteger(raw.eventsThrough) || raw.eventsThrough < 0) return null;
   return {
+    ...(raw.diskPressure && typeof raw.diskPressure === "object" && "episode" in raw.diskPressure && "version" in raw.diskPressure && typeof raw.diskPressure.episode === "string" && typeof raw.diskPressure.version === "string" ? { diskPressure: { episode: raw.diskPressure.episode, version: raw.diskPressure.version } } : {}),
     proposal: raw.proposal === true,
     reasons: (Array.isArray(raw.reasons) ? raw.reasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
@@ -232,6 +233,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     if (typeof count === "number" && Number.isInteger(count) && count >= 0) wakesWithoutChange[kind] = count;
   }
   return {
+    ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
     lastCheckAt: isoOrNull(raw.lastCheckAt),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
@@ -342,6 +344,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
   return {
     ...emptySeatTickState(),
     seatEpoch,
+    diskPressureShown: row.diskPressureShown,
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,
     lastProposalAt: row.lastProposalAt,

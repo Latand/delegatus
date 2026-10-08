@@ -704,3 +704,85 @@ test("the agent's last event ignores Codex token counts and a shutdown abort, an
   ]);
   expect((await durableStageTurnEvidence("codex", worked))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:05:00.000Z"));
 });
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} exposes the native turn start before an early final answer`, async () => {
+    const start = "2026-10-01T10:00:01.000Z";
+    const end = "2026-10-01T10:00:02.000Z";
+    const file = writeTranscript(`${engine}-continuation-start.jsonl`, engine === "claude" ? [
+      { type: "user", timestamp: start, message: { role: "user", content: "Continue" } },
+      { type: "user", timestamp: "2026-10-01T10:00:01.500Z", message: { role: "user", content: [{ type: "tool_result", content: "result" }, { type: "text", text: "Tool context" }] } },
+      { type: "assistant", timestamp: end, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: PASS_TEXT }] } },
+    ] : [
+      { timestamp: start, payload: { type: "task_started", turn_id: "continued-turn" } },
+      { timestamp: end, payload: { type: "agent_message", message: PASS_TEXT } },
+      { timestamp: end, payload: { type: "task_complete", turn_id: "continued-turn", last_agent_message: PASS_TEXT } },
+    ]);
+    expect(await durableStageTurnEvidence(engine, file, null, "2026-10-01T10:00:00.000Z"))
+      .toMatchObject({ turn: "terminal", turnStartedAt: Date.parse(start), message: { text: PASS_TEXT } });
+  });
+}
+
+
+test("continuation evidence widens to its native start when the final filled the first tail", async () => {
+  const start = "2026-10-01T10:00:01.000Z";
+  const admitted = "2026-10-01T10:00:00.000Z";
+  const file = writeTranscript("wide-continuation-native-start.jsonl", [
+    { timestamp: start, payload: { type: "task_started" } },
+    { timestamp: "2026-10-01T10:00:02.000Z", payload: { type: "function_call_output", output: "t".repeat(150_000) } },
+    { timestamp: "2026-10-01T10:00:03.000Z", payload: { type: "agent_message", message: PASS_TEXT } },
+    { timestamp: "2026-10-01T10:00:03.000Z", payload: { type: "task_complete", last_agent_message: PASS_TEXT } },
+  ]);
+  expect(await durableStageTurnEvidence("codex", file, admitted, admitted))
+    .toMatchObject({ turn: "terminal", turnStartedAt: Date.parse(start), message: { text: PASS_TEXT } });
+});
+
+
+for (const engine of ["claude", "codex"] as const) {
+  for (const shape of ["many records", "one oversized record"] as const) {
+    test(`${engine} recovers continuation start beyond the final evidence cap after ${shape}`, async () => {
+      const admitted = "2026-10-01T10:00:00.000Z"; const start = "2026-10-01T10:00:01.000Z"; const end = "2026-10-01T10:00:03.000Z";
+      const output = "t".repeat(shape === "many records" ? 100_000 : 10_000_000);
+      const middle = Array.from({ length: shape === "many records" ? 100 : 1 }, () => engine === "claude"
+        ? { type: "user", timestamp: "2026-10-01T10:00:02.000Z", message: { role: "user", content: [{ type: "tool_result", content: output }] } }
+        : { timestamp: "2026-10-01T10:00:02.000Z", payload: { type: "function_call_output", output } });
+      const file = writeTranscript(`${engine}-capped-start-${shape}.jsonl`, engine === "claude" ? [
+        { type: "user", timestamp: start, message: { role: "user", content: "Continue" } }, ...middle,
+        { type: "assistant", timestamp: end, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: PASS_TEXT }] } },
+      ] : [
+        { timestamp: start, payload: { type: "task_started" } }, ...middle,
+        { timestamp: end, payload: { type: "agent_message", message: PASS_TEXT } },
+        { timestamp: end, payload: { type: "task_complete", last_agent_message: PASS_TEXT } },
+      ]);
+      expect(await durableStageTurnEvidence(engine, file, admitted, admitted))
+        .toMatchObject({ turn: "terminal", turnStartedAt: Date.parse(start), message: { text: PASS_TEXT } });
+    });
+  }
+}
+
+
+test("large continuation recovery refuses a native start before admission", async () => {
+  const admitted = "2026-10-01T10:00:01.000Z";
+  const file = writeTranscript("large-predecessor-native-start.jsonl", [
+    { timestamp: "2026-10-01T10:00:00.000Z", payload: { type: "task_started" } },
+    { timestamp: "2026-10-01T10:00:02.000Z", payload: { type: "function_call_output", output: "t".repeat(10_000_000) } },
+    { timestamp: "2026-10-01T10:00:03.000Z", payload: { type: "task_complete", last_agent_message: PASS_TEXT } },
+  ]);
+  expect(await durableStageTurnEvidence("codex", file, admitted, admitted))
+    .toMatchObject({ turn: "terminal", turnStartedAt: null });
+});
+
+test("large native-start recovery refuses a transcript changed after its final tail read", async () => {
+  const admitted = "2026-10-01T10:00:00.000Z";
+  const file = writeTranscript("large-raced-native-start.jsonl", [
+    { timestamp: "2026-10-01T10:00:01.000Z", payload: { type: "task_started" } },
+    { timestamp: "2026-10-01T10:00:02.000Z", payload: { type: "function_call_output", output: "t".repeat(10_000_000) } },
+    { timestamp: "2026-10-01T10:00:03.000Z", payload: { type: "task_complete", last_agent_message: PASS_TEXT } },
+  ]);
+  const evidence = await durableStageTurnEvidence("codex", file, admitted, admitted, async (pathname, bytes) => {
+    const read = await readStableTailRecords(pathname, bytes);
+    if (bytes === MAX_REPORT_EVIDENCE_BYTES) fs.appendFileSync(pathname, JSON.stringify({ timestamp: "2026-10-01T10:00:04.000Z", payload: { type: "token_count" } }) + "\n");
+    return read;
+  });
+  expect(evidence).toMatchObject({ turn: "terminal", message: { text: PASS_TEXT }, turnStartedAt: null });
+});

@@ -1496,6 +1496,9 @@ export async function bindStructuredDeliveryQueue(
       }
     }
     if (abandoned()) return async () => {};
+    /* The journal read above is an await of its own: the operation is asked
+       again before anything about this host is projected. */
+    if (ownsOperation && !await ownsOperation()) return async () => {};
     await publishHostState(client, registry, item, initialState);
     if (abandoned() || (ownsOperation && !await ownsOperation())) {
       const restoreCurrentProjection = async () => {

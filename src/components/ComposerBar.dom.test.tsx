@@ -74,6 +74,18 @@ function Harness({ onRecover }: { onRecover?: () => void } = {}) {
   />;
 }
 
+test("the agent composer does not invoke native spelling on pasted transcripts", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<Harness />));
+    expect(host.querySelector("textarea")!.getAttribute("spellcheck")).toBe("false");
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
 function AdditiveVoiceHarness() {
   const composer = useComposer({ initialText: () => "", persistText: () => {}, submit: () => {} });
   return (
