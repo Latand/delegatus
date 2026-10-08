@@ -1074,6 +1074,7 @@ test("a create on a vacated seat carries replaceIncumbent on the first attempt",
   await settle();
   expect(seatPosts).toHaveLength(1);
   expect(seatPosts[0]!.replaceIncumbent).toBe(true);
+  expect(seatPosts[0]!.expectedIncumbentSeatEpoch).toBe(2);
 });
 
 test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
@@ -1092,6 +1093,7 @@ test("a retry after a refused create on a vacated seat still carries replaceIncu
   expect(seatPosts).toHaveLength(2);
   expect(seatPosts[1]!.clientRequestId).not.toBe(seatPosts[0]!.clientRequestId);
   expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([true, true]);
+  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([2, 2]);
 });
 
 test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
@@ -1110,6 +1112,7 @@ test("a same-key replay after a lost reply on a vacated seat still carries repla
   expect(seatPosts).toHaveLength(2);
   expect(seatPosts[1]!.clientRequestId).toBe(seatPosts[0]!.clientRequestId);
   expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([true, true]);
+  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([2, 2]);
 });
 
 test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {
@@ -1125,6 +1128,7 @@ test("a create with no seat record never carries replaceIncumbent, on the first 
   await settle();
   expect(seatPosts).toHaveLength(2);
   expect(seatPosts.map((post) => "replaceIncumbent" in post)).toEqual([false, false]);
+  expect(seatPosts.map((post) => "expectedIncumbentSeatEpoch" in post)).toEqual([false, false]);
 });
 
 test("a live seat offers no create form, so nothing can replace it from there", async () => {
@@ -1721,6 +1725,7 @@ test("the draft a closed conversation returns to can actually create — it says
   flushSync(() => confirmButton(fresh).click());
   await settle();
   expect(seatPosts[0]!.replaceIncumbent).toBeUndefined();
+  expect(seatPosts[0]!.expectedIncumbentSeatEpoch).toBeUndefined();
 }, SEAT_POLL_MS + 4_000);
 
 /* #1166: the seat DELIVERS the mandate, so it lands in the transcript as an

@@ -100,7 +100,10 @@ describe("the panel names every state in the map (#977)", () => {
     expect(seatVacated(status({ seat: seat(), exists: true }))).toBe(false);
     expect(seatVacated(status({ seat: seat(), exists: false }))).toBe(true);
     expect(seatVacated(status({ seat: null, exists: false }))).toBe(false);
-    expect(vacatedSeatReplacement(status({ seat: seat(), exists: false }))).toEqual({ replaceIncumbent: true });
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: false }))).toEqual({
+      replaceIncumbent: true,
+      expectedIncumbentSeatEpoch: 4,
+    });
     expect(vacatedSeatReplacement(status({ seat: seat(), exists: true }))).toEqual({});
     expect(vacatedSeatReplacement(status())).toEqual({});
     expect(vacatedSeatReplacement(null)).toEqual({});

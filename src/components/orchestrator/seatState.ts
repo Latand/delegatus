@@ -688,13 +688,19 @@ export function seatVacated(status: Pick<OrchestratorSeatStatus, "seat" | "exist
  * The create body's fragment for a vacated seat. The seat command refuses a
  * spawn over a designated seat as an accidental rotation unless the body says
  * `replaceIncumbent`; over a vacated seat that is exactly what the operator
- * means. Empty for a live seat and for no seat: replacing a live orchestrator
- * is the rotate flow's job, never a create form's.
+ * means. The flag is bound to the seat the read showed: the status behind it
+ * can be old (a failed re-read keeps the last answer), and without the epoch
+ * the flag would replace whatever orchestrator is designated when the POST
+ * lands. `expectedIncumbentSeatEpoch` makes the command refuse the replacement
+ * when another seat has been designated since. Empty for a live seat and for no
+ * seat: replacing a live orchestrator is the rotate flow's job, never a create
+ * form's.
  */
 export function vacatedSeatReplacement(
   status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null,
-): { replaceIncumbent: true } | Record<string, never> {
-  return seatVacated(status) ? { replaceIncumbent: true } : {};
+): { replaceIncumbent: true; expectedIncumbentSeatEpoch: number } | Record<string, never> {
+  if (!status || !status.seat || status.exists) return {};
+  return { replaceIncumbent: true, expectedIncumbentSeatEpoch: status.seat.seatEpoch };
 }
 
 /** The warning is eligible only after the mandate has produced a visible

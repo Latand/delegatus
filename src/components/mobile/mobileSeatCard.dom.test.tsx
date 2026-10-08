@@ -941,6 +941,7 @@ test("a create on a vacated seat carries replaceIncumbent on the first attempt",
   const posts = seatPosts();
   expect(posts).toHaveLength(1);
   expect(posts[0]!.body.replaceIncumbent).toBe(true);
+  expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBe(4);
 });
 
 test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
@@ -956,6 +957,7 @@ test("a retry after a refused create on a vacated seat still carries replaceIncu
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body.clientRequestId).not.toBe(posts[0]!.body.clientRequestId);
   expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
 });
 
 test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
@@ -971,6 +973,7 @@ test("a same-key replay after a lost reply on a vacated seat still carries repla
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body.clientRequestId).toBe(posts[0]!.body.clientRequestId);
   expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
 });
 
 test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {
@@ -983,6 +986,7 @@ test("a create with no seat record never carries replaceIncumbent, on the first 
   const posts = seatPosts();
   expect(posts).toHaveLength(2);
   expect(posts.map((post) => "replaceIncumbent" in post.body)).toEqual([false, false]);
+  expect(posts.map((post) => "expectedIncumbentSeatEpoch" in post.body)).toEqual([false, false]);
 });
 
 test("a live seat opens no create form, so nothing can replace it from the sheet", async () => {

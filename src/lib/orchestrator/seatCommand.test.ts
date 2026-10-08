@@ -1013,6 +1013,38 @@ test("HIGH 5: a spawn-mode designation for an ALREADY-SEATED project refuses ins
   expect(replaced.status).toBe(200);
 });
 
+test("replaceIncumbent bound to a stale seat epoch is refused and the live seat stays designated", async () => {
+  const { deps, recorded } = dependencies();
+  expect((await executeOrchestratorSeatRequest(spawnRequest("req_00000200"), deps)).status).toBe(200);
+  const vacated = orchestratorSeatFor("proj-a").active!;
+  /* Another designation lands after the create form read the seat. */
+  const live = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000201"), replaceIncumbent: true }, deps);
+  expect(live.status).toBe(200);
+  const seated = orchestratorSeatFor("proj-a").active!;
+  expect(seated.seatEpoch).toBeGreaterThan(vacated.seatEpoch);
+  const spawnsBefore = recorded.spawns.length;
+
+  const refused = await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000202"),
+    replaceIncumbent: true,
+    expectedIncumbentSeatEpoch: vacated.seatEpoch,
+  }, deps);
+  expect(refused.status).toBe(409);
+  expect(refused.body.code).toBe("incumbent_changed");
+  expect(recorded.spawns).toHaveLength(spawnsBefore);
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(seated.conversationId);
+  expect(orchestratorRevocations().some((revocation) => revocation.conversationId === seated.conversationId)).toBeFalse();
+
+  /* The epoch of the seat actually designated still replaces it. */
+  const replaced = await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000203"),
+    replaceIncumbent: true,
+    expectedIncumbentSeatEpoch: seated.seatEpoch,
+  }, deps);
+  expect(replaced.status).toBe(200);
+});
+
 test("rotation with no incumbent refuses and points at create", async () => {
   const { deps } = dependencies();
   const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00000011" }, deps);
