@@ -658,6 +658,7 @@ Rounds and critiques:
 | Critique 1: zero-time successor, cut 1, pause/resume, harness or reply, output, cut 2 (or cut 3) | R2, R8, R10 | the inherited wait, its cancellation and its budget are discharged; cut 2 (cut 3) recovered with a fresh budget |
 | Critique 2: parked capacity or authentication cut, output, quota cut (and the reverse, and a third cut of another kind) | R2, R9 | the move opens the new chain's own wait; quota retries at the earliest allowed reset, capacity after one minute |
 | Critique 2: unknown confirmation at 19:01, hours of work, cut 2, a held delivery at 23:01 | R9, R10 | the 19:01 wait went with chain 1; 23:01 starts its own ten minutes; a short hold resumes, a lasting one still withdraws, a delivered reply cancels |
+| Build review 2: running lane, continuation refused at 19:01, output, cut 2 over the read bound at 21:30 | R10 | the 19:01 wait went with chain 1; chain 2 starts its own ten minutes at its own cut |
 
 `engine.test.ts` (line numbers at `52d7f9bd3`). Every case stays with its
 assertions unchanged.
@@ -850,3 +851,19 @@ before the fix:
   first tick therefore saw incomplete history and parked. The trigger now uses
   the final turn's reading. A Claude API error with no closing stop reason
   stays busy, and a reply after the cut still cancels.
+
+## Review of the build (one P2, 2026-10-09)
+
+**A running chain's confirmation wait.** On a running lane the tick removed a
+closed chain's budget and wait and left `attempt.controllerWait` behind, which
+R10 names with them. A continuation refused at 19:01 opened that wait; output
+at 19:01:30 closed the chain; at 21:30 a new chain whose history after its
+first cut ran past the read bound booked its first transport round against
+the 19:01 clock and parked at once, "exhausted after 10 minutes". The tick now
+clears the confirmation wait with the budget wherever agent output closes the
+chain: when the reader proves the saved wait's chain closed, and when a newer
+agent message follows the saved cut. The parked path already did so in
+`providerCutActivity`. "a closed running chain's confirmation wait never binds
+the next cut" (both engines, pinned and pool) failed in all four cases before
+the fix: the new chain now starts its own ten minutes at its own cut, and
+output followed by a later cut recovers after that cut's reset.

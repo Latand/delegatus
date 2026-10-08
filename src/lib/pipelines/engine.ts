@@ -5990,10 +5990,11 @@ async function tickRunStage(
       return;
     }
     // Agent output closed the saved wait's chain, or the chain a zero-time
-    // successor inherited, and its budget goes with it. An open chain owes its
-    // own recovery, budget and cancellation test.
+    // successor inherited, and its budget and confirmation wait go with it.
+    // An open chain owes its own recovery, budget and cancellation test.
     if (attempt.providerWait && durable?.requestedCutOpen === false) {
       delete attempt.providerRecoveryBudget;
+      delete attempt.controllerWait;
       if (durable.firstProviderCutAt) delete attempt.providerWait;
     }
     if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
@@ -6036,7 +6037,10 @@ async function tickRunStage(
     const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
       && !newerProviderNotice;
     if (newerNormalTurn || newerStageOutput || newerActiveTurn) {
-      if (durable?.message && durable.message.ts > attempt.providerWait!.turnTs) delete attempt.providerRecoveryBudget;
+      if (durable?.message && durable.message.ts > attempt.providerWait!.turnTs) {
+        delete attempt.providerRecoveryBudget;
+        delete attempt.controllerWait;
+      }
       delete attempt.providerWait;
       pipeline.stateDetail = null;
     } else if (attempt.providerWait?.actionAt && attempt.providerWait.turnTs > 0 && attempt.conversationId

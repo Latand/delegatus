@@ -23511,6 +23511,73 @@ for (const engine of ["claude", "codex"] as const) {
   });
 }
 
+// A running chain closed by agent output leaves no confirmation wait to the next one.
+for (const engine of ["claude", "codex"] as const) {
+  test.each([false, true])(`${engine} a closed running chain's confirmation wait never binds the next cut (pool=%p)`, async pool => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+    f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+    let reset = CHAIN_RESET["10pm"];
+    if (pool) {
+      f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+      f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
+        ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: reset, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] };
+    }
+    let refused = true;
+    f.h.ports.resumeSeveredTurn = async (input) => {
+      if (refused) return false;
+      f.sends.push(input.clientMessageId);
+      f.h.setConversationActive(true);
+      return true;
+    };
+    const records: Record<string, unknown>[] = [];
+    const file = stageTranscript(`chain-confirmation-${engine}-${pool}`, []);
+    const k = cutChainKit(f, engine, () => file, records);
+    k.notice("10pm", reset);
+    k.write();
+    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+    const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+    const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    await tick();
+    // The continuation is refused after the reset: the chain opens its bounded wait.
+    f.advance(Date.parse("2026-10-05T19:01:00Z") - f.now());
+    await tick();
+    expect(attempt().controllerWait?.startedAt).toBe("2026-10-05T19:01:00.000Z");
+    refused = false;
+    f.advance(30_000);
+    await k.harnessWake();
+    k.output();
+    k.write();
+    await tick();
+    expect({ wait: attempt().providerWait, confirmation: attempt().controllerWait, state: loadPipelines()[0]!.state })
+      .toEqual({ wait: undefined, confirmation: undefined, state: "running" });
+    // Two and a half hours later a new chain opens over history past the read bound.
+    f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now());
+    reset = CHAIN_RESET["2am"];
+    k.notice("2am", reset);
+    const work = { type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(1100) };
+    for (let row = 0; row < 8500; row++) records.push(work);
+    f.advance(1_000);
+    k.notice("2am", reset);
+    k.write();
+    f.h.setConversationActive(false);
+    await tick();
+    expect({ state: loadPipelines()[0]!.state, startedAt: attempt().controllerWait?.startedAt })
+      .toEqual({ state: "running", startedAt: "2026-10-05T21:30:01.000Z" });
+    // Output closes the large chain; the next cut recovers after its reset.
+    f.advance(30_000);
+    k.output();
+    f.advance(30_000);
+    k.notice("2am", reset);
+    k.write();
+    await tick();
+    expect(attempt().providerWait?.turnTs).toBe(f.now());
+    for (const at of ["2026-10-05T21:45:00Z", "2026-10-05T23:00:30Z", "2026-10-05T23:01:30Z"]) { f.advance(Date.parse(at) - f.now()); await tick(); }
+    expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, spawns: f.h.spawnInputs.length })
+      .toEqual({ sends: 1, state: "running", spawns: 1 });
+  });
+}
+
 // Tool or reasoning output closes a chain as text does; its budget goes with it.
 for (const engine of ["claude", "codex"] as const) {
   for (const pool of [false, true]) {
