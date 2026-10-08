@@ -181,8 +181,9 @@ test("an unproven launch (no receipt) still escalates to attention", async () =>
 });
 
 /* Regression 3: a stream re-subscribe during the watch resets the window — the
-   slow admission clears back to the plain confirming state, and the watch keeps
-   going without ever giving up into attention. */
+   slow admission clears back to the plain confirming state, which shows the
+   opening shape and no sentence, and the watch keeps going without ever giving
+   up into attention. */
 test("a stream reconnect during the watch resets the window", async () => {
   setLocale("uk");
   globalThis.fetch = (async (input) => {
@@ -208,5 +209,7 @@ test("a stream reconnect during the watch resets the window", async () => {
 
   expect(host.textContent).not.toContain("Запускається повільно");
   expect(host.textContent).not.toContain("Агент, можливо, вже працює");
-  expect(host.textContent).toContain("Запущено — підтверджую агента");
+  /* Back inside its window the launch says nothing: the opening shape stands for it. */
+  expect(host.textContent).not.toContain("Запущено — підтверджую агента");
+  expect(host.querySelectorAll('[data-draft-opening] [data-skeleton="feed"]')).toHaveLength(1);
 });

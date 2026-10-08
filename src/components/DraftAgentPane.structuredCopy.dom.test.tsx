@@ -9,8 +9,8 @@ import { DraftAgentPane } from "./DraftAgentPane";
 
 /* Issue #266: the draft composer grounds its launch copy in the spawn host
    capability it already negotiates (`spawnTransport`). A structured (pane-less)
-   spawn drops the tmux wording from the hint, placeholder, window title, and the
-   frozen post-launch card; a legacy tmux spawn keeps it. */
+   spawn drops the tmux wording from the placeholder and from the status line a
+   launch shows once it needs the operator; a legacy tmux spawn keeps it. */
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -64,7 +64,7 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test("a structured spawn drops the tmux wording from the composer hint, placeholder, and frozen card (#266)", async () => {
+test("a structured spawn drops the tmux wording from the placeholder and says nothing while it starts (#266)", async () => {
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url === "/api/spawn" && init?.method === "POST") {
@@ -86,11 +86,9 @@ test("a structured spawn drops the tmux wording from the composer hint, placehol
   await settle();
 
   /* Unlaunched composer copy follows the negotiated structured host. */
-  expect(host.textContent).toContain("the agent will start, and the conversation");
   expect(host.textContent).not.toContain("tmux");
   const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
   expect(textarea.placeholder).toBe("first prompt — the agent will start…");
-  expect(host.innerHTML).toContain('title="new structured session with a fresh agent"');
   expect(host.innerHTML).not.toContain("tmux");
 
   /* The frozen card after launch stays tmux-free too. */
@@ -100,12 +98,13 @@ test("a structured spawn drops the tmux wording from the composer hint, placehol
   flushSync(() => host.querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
   await settle();
 
-  const status = host.querySelector('[role="status"]') as HTMLElement;
-  expect(status.textContent).toContain("confirming the agent");
+  /* While all is well the launch says nothing: the pane is the conversation's opening shape. */
+  expect(host.querySelector("[data-draft-opening] [data-message-row]")!.textContent).toContain("Start the structured agent");
+  expect(host.textContent).not.toContain("confirming the agent");
   expect(host.textContent).not.toContain("tmux");
 });
 
-test("a legacy tmux spawn keeps the pane, window, and target wording (#266)", async () => {
+test("a legacy tmux spawn keeps the tmux wording in the placeholder (#266)", async () => {
   globalThis.fetch = (async (input) => {
     const url = String(input);
     const auxiliary = auxiliaryResponse(url);
@@ -119,8 +118,6 @@ test("a legacy tmux spawn keeps the pane, window, and target wording (#266)", as
   flushSync(() => root!.render(<DraftAgentPane draftId="legacy-copy" project="proj" files={[]} onClose={() => {}} onSpawned={() => {}} />));
   await settle();
 
-  expect(host.textContent).toContain("the agent will start in tmux");
   const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
   expect(textarea.placeholder).toBe("first prompt — the agent will start in tmux…");
-  expect(host.innerHTML).toContain('title="new tmux window with a fresh agent"');
 });
