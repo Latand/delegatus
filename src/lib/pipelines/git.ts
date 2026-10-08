@@ -23,8 +23,21 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   preservedLocalRef?: PreservedProvisionRef;
   /** The controller must retry this committing attempt after collecting fresh evidence. */
   deferred?: true;
+  /** Set only when `git commit` itself answered no for a passed stage. */
+  commitRefusal?: StageCommitRefusal;
 };
+/** A refused stage commit, handed back to the stage that wrote it. The
+    controller does not judge what the hook printed: the stage reads it, repairs
+    its files or reports why it cannot. `paths` are the files the refused commit
+    held, for the message to name. */
+export type StageCommitRefusal = { paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
+
+async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
+  if (staged) return { paths: [...staged] };
+  const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
+  return { paths: index.code === 0 ? index.stdout.split("\0").filter(Boolean) : [] };
+}
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
   return { ok: false, error: `${step}: ${(result.stderr || result.stdout || "no output").trim()}` };
@@ -665,7 +678,10 @@ export async function commitPipelineStage(
   }
   const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
-  if (commit.code !== 0) return failure("committing the passed stage", commit);
+  if (commit.code !== 0) {
+    return { ...failure("committing the passed stage", commit),
+      commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
+  }
   const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
   if (receipt && receiptFile) {
