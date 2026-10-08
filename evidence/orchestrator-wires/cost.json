@@ -5,7 +5,7 @@
       "form": "desktop",
       "cards": 101,
       "links": 34,
-      "linksMs": 0.03,
+      "linksMs": 0.020999999940395354,
       "wired": 12,
       "drawnWires": 2,
       "counts": [
@@ -13,20 +13,20 @@
       ],
       "scrollFrames": 30,
       "updates": 31,
-      "totalMs": 113.50000005960464,
-      "maxMs": 6.399999976158142,
+      "totalMs": 80.10000020265579,
+      "maxMs": 5.900000035762787,
       "rectReads": 1178,
       "wires": 3,
       "stubs": 1,
       "elements": 15,
-      "msPerUpdate": 3.6612903245033754,
+      "msPerUpdate": 2.583870974279219,
       "rectReadsPerUpdate": 38
     },
     {
       "form": "phone",
       "cards": 101,
       "links": 34,
-      "linksMs": 0.021500000059604646,
+      "linksMs": 0.02,
       "wired": 12,
       "drawnWires": 5,
       "counts": [
@@ -34,13 +34,13 @@
       ],
       "scrollFrames": 30,
       "updates": 31,
-      "totalMs": 42.69999998807907,
-      "maxMs": 2.800000011920929,
+      "totalMs": 25.300000190734863,
+      "maxMs": 1.5,
       "rectReads": 806,
       "wires": 6,
       "stubs": 1,
       "elements": 26,
-      "msPerUpdate": 1.3774193544541635,
+      "msPerUpdate": 0.8161290384108021,
       "rectReadsPerUpdate": 26
     }
   ]

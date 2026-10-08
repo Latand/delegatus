@@ -39,6 +39,8 @@ import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { conversationIdentity } from "@/lib/accounts/identity";
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
@@ -106,6 +108,7 @@ export type ConversationWindowCase =
   | "agent-images"
   | "image-viewers"
   | "own-message-steps"
+  | "payload-notice"
   | "prototype-notice";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -1062,6 +1065,68 @@ function mountPrototypeNotice(root: HTMLElement): void {
   }) as typeof fetch;
 }
 
+/* The operator's report, 2026-10-07: «Автоматичну перевірку зупинено» in a
+   box over the composer, under a «Перевірити доставку» that did nothing. Two
+   messages are retained in this browser's storage before the production
+   composer mounts: one whose delivery ended while the tab was away, whose
+   record answers `delivered` at once, and one whose record has no ending yet.
+   The driver flips the second through `window.payloadNotice.deliver()`; every
+   read of an operation record is counted in `[data-fixture-operation-reads]`. */
+const PAYLOAD_NOTICE = {
+  earlier: { key: "payload-notice-earlier", operationId: "op-payload-notice-earlier", text: "Merge the release branch once the checks are green." },
+  owed: { key: "payload-notice-owed", operationId: "op-payload-notice-owed", text: "Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond." },
+};
+const payloadNoticeState = { delivered: false, reads: [] as string[] };
+
+function PayloadNoticeFixture() {
+  useFakeHost();
+  const [ready, setReady] = useState(false);
+  const [reads, setReads] = useState(0);
+  useEffect(() => {
+    const conversationId = conversationIdentity(lifeFile());
+    void (async () => {
+      for (const seed of [PAYLOAD_NOTICE.earlier, PAYLOAD_NOTICE.owed]) {
+        const ref = await composerSubmissionPayloads.retain({ conversationId, key: seed.key }, { text: seed.text, images: [], files: [] });
+        await composerSubmissionPayloads.seal(ref, { route: "runtime", body: { conversationId, text: seed.text, idempotencyKey: seed.key } });
+        await composerSubmissionPayloads.beginAttempt(ref);
+        composerSubmissionPayloads.consumeAttempt(ref);
+        await composerSubmissionPayloads.observe(ref, { operationId: seed.operationId, idempotencyKey: seed.key, conversationId,
+          revision: 1, status: "queued", at: "2026-10-07T18:00:00.000Z" });
+      }
+      setReady(true);
+    })();
+    const timer = setInterval(() => setReads(payloadNoticeState.reads.length), 50);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div data-evidence-case="payload-notice" className="flex min-h-dvh flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
+          paused={false} follow setFollow={() => undefined} />
+      </div>
+      {ready ? <TmuxComposer file={lifeFile()} /> : null}
+      <span data-fixture-operation-reads hidden>{reads}</span>
+    </div>
+  );
+}
+
+function mountPayloadNotice(root: HTMLElement): void {
+  mountLifecycle(root, <PayloadNoticeFixture />);
+  (window as unknown as { payloadNotice: { deliver(): void } }).payloadNotice = { deliver: () => { payloadNoticeState.delivered = true; } };
+  const transport = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const match = /^\/api\/runtime\/operations\/([^/?]+)$/.exec(url);
+    if (!match) return transport(input, init);
+    const operationId = decodeURIComponent(match[1]!);
+    payloadNoticeState.reads.push(operationId);
+    const seed = Object.values(PAYLOAD_NOTICE).find((candidate) => candidate.operationId === operationId);
+    if (!seed || (seed === PAYLOAD_NOTICE.owed && !payloadNoticeState.delivered)) return Response.json({ error: "no ending recorded" }, { status: 404 });
+    return Response.json({ receipt: { operationId, idempotencyKey: seed.key, conversationId: conversationIdentity(lifeFile()), kind: "send",
+      status: "delivered", resend: "not-needed", text: seed.text, at: "2026-10-07T18:01:00.000Z", revision: 2 } });
+  }) as typeof fetch;
+}
+
 function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture />): void {
   setRuntimeUiEnabledForTests(false);
   setLogFeedDependenciesForTests({
@@ -1673,6 +1738,7 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "prototype-notice") mountPrototypeNotice(root);
+else if (root && requested === "payload-notice") mountPayloadNotice(root);
 else if (root && requested === "long-history") mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root) {

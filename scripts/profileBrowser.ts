@@ -827,3 +827,244 @@ export async function armDocuments(cdp: Cdp): Promise<void> {
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: NETWORK_PROBE });
   await cdp.send("Page.bringToFront");
 }
+
+/** Optional server-memory case in the shared profiling driver. Requires a
+ * production build. The probe, forced collections and optional heap snapshots
+ * exist only in a child with an invented home and a loopback ephemeral listener.
+ * Usage: bun scripts/profileBrowser.ts --server-memory [--seconds 30]
+ *   [--corpus 128,2048] [--snapshots] [--out aggregate.json]
+ * The board cases replay HTTP routes; they do not claim browser measurements.
+ */
+async function serverMemoryProfile(childMode: boolean): Promise<void> {
+  const { heapStats, fullGC } = await import("bun:jsc");
+  const { createServer } = await import("node:http");
+  const { createRequire } = await import("node:module");
+  const { tmpdir } = await import("node:os");
+  const args = parseArgs();
+  const repo = path.resolve(import.meta.dir, "..");
+  const identity = (pid: number): string | null => {
+    try { return fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]!.split(" ")[19]!; }
+    catch { return null; }
+  };
+  if (childMode) {
+    const root = args.get("root")!;
+    if (!root || process.env.LLV_STATE_DIR !== path.join(root, "home/.config/agent-log-viewer/state")
+      || process.env.HOME !== path.join(root, "home") || process.env.LLV_VIEWER_CONTROL_URL !== "http://127.0.0.1:1") {
+      throw new Error("server-memory child requires its isolated parent environment");
+    }
+    const gauge = () => {
+      const heap = heapStats();
+      const global = globalThis as unknown as { __llvCaches?: Record<string, Map<string, unknown>> };
+      return { utc: new Date().toISOString(), ...process.memoryUsage(),
+        heapSize: heap.heapSize, heapCapacity: heap.heapCapacity, extraMemorySize: heap.extraMemorySize,
+        objectCount: heap.objectCount, caches: Object.fromEntries(Object.entries(global.__llvCaches ?? {}).map(([key, value]) => [key, value.size])) };
+    };
+    const require = createRequire(path.join(repo, "package.json"));
+    const next = require("next") as typeof import("next").default;
+    const server = createServer(async (request, response) => {
+      if (request.url?.startsWith("/__memory")) {
+        const action = new URL(request.url, "http://localhost").searchParams.get("action");
+        if (action === "gc") fullGC();
+        if (action === "snapshot") fs.writeFileSync(path.join(root, `heap-${Date.now()}.heapsnapshot`), Bun.generateHeapSnapshot("v8"));
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(gauge()));
+        return;
+      }
+      await handle(request, response);
+    });
+    const app = next({ dev: false, dir: repo, hostname: "127.0.0.1", httpServer: server });
+    const handle = app.getRequestHandler();
+    await app.prepare();
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("missing ephemeral endpoint");
+      fs.writeFileSync(path.join(root, "endpoint.json"), JSON.stringify({ port: address.port }));
+    });
+    setInterval(() => fs.appendFileSync(path.join(root, "metrics.jsonl"), JSON.stringify(gauge()) + "\n"), 500).unref();
+    return;
+  }
+
+  if (process.platform !== "linux") throw new Error("server-memory PID and descriptor measurements require Linux");
+  const seconds = Number(args.get("seconds") ?? 30);
+  const counts = (args.get("corpus") ?? "128,2048").split(",").map(Number);
+  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 300 || counts.some(count => !Number.isSafeInteger(count) || count < 1 || count > 12000)) {
+    throw new Error("seconds must be 1..300; corpus counts must be 1..12000");
+  }
+  const scratch = fs.mkdtempSync(path.join(tmpdir(), "delegatus-memory-"));
+  fs.chmodSync(scratch, 0o700);
+  const results: unknown[] = [];
+  for (const count of counts) {
+    const root = path.join(scratch, String(count));
+    const env = { ...seededEnvironment(root, { nodeEnv: "production" }),
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_STRUCTURED_HOSTS: "0", LLV_RUNTIME_EVENTS: "0", DELEGATUS_TELEMETRY: "0" };
+    const cwd = path.join(root, "home/fixture");
+    fs.mkdirSync(cwd, { recursive: true });
+    const paths: string[] = [];
+    for (let index = 0; index < count; index++) {
+      const id = `00000000-0000-4000-8000-${(index + 1).toString(16).padStart(12, "0")}`;
+      const codex = index % 2 === 0;
+      const directory = path.join(root, "home", codex ? ".codex/sessions/2026/10/05" : ".claude/projects/fixture");
+      fs.mkdirSync(directory, { recursive: true });
+      const filename = path.join(directory, `${codex ? "rollout-2026-10-05T00-00-00-" : ""}${id}.jsonl`);
+      const rows: unknown[] = codex ? [{ type: "session_meta", timestamp: "2026-10-05T00:00:00Z", payload: { id, cwd } }] : [];
+      for (let record = 0; record < 64; record++) {
+        const text = `Synthetic record ${record} ` + "detail ".repeat(145);
+        const role = record % 2 ? "assistant" : "user";
+        rows.push(codex
+          ? { type: "response_item", timestamp: "2026-10-05T00:00:00Z", payload: { type: "message", role, content: [{ type: record % 2 ? "output_text" : "input_text", text }] } }
+          : { type: role, uuid: id + record, timestamp: "2026-10-05T00:00:00Z", cwd, sessionId: id, message: { role, content: text } });
+      }
+      fs.writeFileSync(filename, rows.map(row => JSON.stringify(row) + "\n").join(""));
+      paths.push(filename);
+    }
+    const child = spawn(process.execPath, [import.meta.filename, "--server-memory-child", "--root", root], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const logs = outputLines(child);
+    const owned = new Map<number, string>();
+    const recordChildren = (pid: number) => {
+      const token = identity(pid);
+      if (!token || owned.get(pid) === token) return;
+      owned.set(pid, token);
+    };
+    const discoverChildren = (pid: number): void => {
+      recordChildren(pid);
+      try {
+        const children = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/).filter(Boolean).map(Number);
+        for (const member of children) { recordChildren(member); discoverChildren(member); }
+      } catch { /* An owned process already exited. */ }
+    };
+    const recorder = setInterval(() => {
+      if (child.pid) discoverChildren(child.pid);
+      fs.writeFileSync(path.join(root, "owned-pids.json"), JSON.stringify([...owned]));
+    }, 100);
+    if (child.pid) recordChildren(child.pid);
+    fs.writeFileSync(path.join(root, "owned-pids.json"), JSON.stringify([...owned]));
+    try {
+      const endpoint = path.join(root, "endpoint.json");
+      const deadline = Date.now() + 120_000;
+      while (!fs.existsSync(endpoint)) {
+        if (child.exitCode !== null || Date.now() > deadline) throw new Error(`memory server startup failed\n${logs()}`);
+        await Bun.sleep(100);
+      }
+      const origin = `http://127.0.0.1:${JSON.parse(fs.readFileSync(endpoint, "utf8")).port}`;
+      const request = async (route: string) => {
+        const response = await fetch(origin + route, { signal: AbortSignal.timeout(40_000) });
+        if (!response.ok) throw new Error(`${route.split("?")[0]} returned ${response.status}`);
+        return response.json();
+      };
+      const phases = async (name: string, routes: string[], interval: number) => {
+        const before = await request("/__memory?action=gc");
+        const started = Date.now();
+        let polls = 0;
+        while (Date.now() - started < seconds * 1000) {
+          for (const route of routes) await request(route);
+          polls++;
+          await Bun.sleep(interval);
+        }
+        const natural = await request("/__memory");
+        const afterGC = await request("/__memory?action=gc");
+        if (args.has("snapshots")) await request("/__memory?action=snapshot");
+        const fdCounts: Record<string, number> = {};
+        for (const descriptor of fs.readdirSync(`/proc/${child.pid}/fd`)) {
+          try {
+            const filename = path.basename(fs.readlinkSync(`/proc/${child.pid}/fd/${descriptor}`));
+            if (/^state\.sqlite(?:-wal|-shm)?$/.test(filename)) fdCounts[filename] = (fdCounts[filename] ?? 0) + 1;
+          } catch { /* A descriptor closed during the read. */ }
+        }
+        results.push({ corpus: count, phase: name, polls, before, natural, afterGC, fdCounts });
+        console.log(JSON.stringify({ corpus: count, phase: name, heapSize: afterGC.heapSize, rss: afterGC.rss, fdCounts }));
+      };
+      await phases("idle", [], 1000);
+      const scan = await request("/api/files");
+      const project = scan.files?.[0]?.project ?? "fixture";
+      await phases("board-closed", ["/api/files"], 2000);
+      await phases("board-open", ["/api/files", `/api/board?project=${encodeURIComponent(project)}`, `/api/tasks?project=${encodeURIComponent(project)}`, `/api/pipelines?project=${encodeURIComponent(project)}`, `/api/flows?project=${encodeURIComponent(project)}`], 2000);
+      await phases("resource-poll", ["/api/resources"], Math.min(seconds * 1000, 10000));
+      await phases("transcript", [`/api/log?path=${encodeURIComponent(paths[0]!)}&before=999999999&bytes=4194304`], 250);
+      await phases("cooldown", [], 1000);
+    } finally {
+      clearInterval(recorder);
+      if (child.pid) discoverChildren(child.pid);
+      for (const [pid, token] of [...owned].reverse()) {
+        if (identity(pid) !== token) continue;
+        try { process.kill(pid, "SIGTERM"); } catch { continue; }
+        const deadline = Date.now() + 5000;
+        while (identity(pid) === token && Date.now() < deadline) await Bun.sleep(100);
+        if (identity(pid) === token) { try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ } }
+      }
+      if (child.exitCode === null && child.signalCode === null) await stop(child);
+      fs.writeFileSync(path.join(root, "server.log"), logs());
+    }
+  }
+  const output = JSON.stringify({ runtime: Bun.version, next: JSON.parse(fs.readFileSync(path.join(repo, "node_modules/next/package.json"), "utf8")).version, results }, null, 2) + "\n";
+  fs.writeFileSync(args.get("out") ?? path.join(scratch, "aggregate.json"), output);
+}
+
+/** Cross-connection deletion case; writes only an invented registry. Keeping
+ * this alongside the HTTP cases makes the retention claim independently
+ * repeatable without an operator database or a heap dump.
+ * Usage: bun scripts/profileBrowser.ts --registry-churn --out aggregate.json
+ */
+async function registryChurnProfile(): Promise<void> {
+  const args = parseArgs();
+  if (!args.has("registry-churn-child")) {
+    const { tmpdir } = await import("node:os");
+    const root = fs.mkdtempSync(path.join(tmpdir(), "delegatus-registry-memory-"));
+    fs.chmodSync(root, 0o700);
+    const env = { ...seededEnvironment(root, { nodeEnv: "production" }), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", DELEGATUS_TELEMETRY: "0" };
+    const child = spawn(process.execPath, [import.meta.filename, "--registry-churn-child", "--root", root], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const logs = outputLines(child);
+    fs.writeFileSync(path.join(root, "owned-pid.json"), JSON.stringify({ pid: child.pid }));
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
+      if (code !== 0) throw new Error(`registry profile failed\n${logs()}`);
+      const output = fs.readFileSync(path.join(root, "aggregate.json"), "utf8");
+      if (args.get("out")) fs.writeFileSync(args.get("out")!, output);
+      console.log(output);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) await stop(child);
+    }
+    return;
+  }
+  const root = args.get("root")!;
+  if (!root || process.env.HOME !== path.join(root, "home")
+    || process.env.LLV_STATE_DIR !== path.join(root, "home/.config/agent-log-viewer/state")
+    || process.env.LLV_VIEWER_CONTROL_URL !== "http://127.0.0.1:1") throw new Error("registry profile requires its isolated parent environment");
+  const { heapStats, fullGC } = await import("bun:jsc");
+  const { SqliteAgentRegistryStore } = await import("../src/lib/agent/sqliteRegistryStore");
+  const { normalizeRegistry } = await import("../src/lib/agent/registry");
+  const initialSnapshot = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  const filename = path.join(root, "registry.sqlite");
+  const writer = new SqliteAgentRegistryStore(filename, { initialSnapshot, normalize: normalizeRegistry });
+  const reader = new SqliteAgentRegistryStore(filename, { initialSnapshot, normalize: normalizeRegistry, readOnly: true });
+  // Diagnostic access to an isolated instance, never a production API.
+  const cache = (reader as unknown as { rowCache: Map<string, Map<string, { valueJson: string }>> }).rowCache;
+  const startedAt = new Date().toISOString();
+  const rows = [];
+  try {
+    for (let cycle = 0; cycle < 8; cycle++) {
+      writer.mutate(file => {
+        for (let index = 0; index < 200; index++) {
+          const id = `synthetic-intent-${cycle}-${index}`;
+          file.migrationIntents[id] = { id, engine: "codex", targetId: "synthetic", origin: "manual", revision: 1,
+            state: "complete", createdAt: startedAt, updatedAt: startedAt, stoppedAt: null, evidence: null,
+            requestIds: Array.from({ length: 100 }, (_, request) => `${id}-request-${request}`) };
+        }
+      });
+      reader.readOnlySnapshot();
+      writer.mutate(file => { for (let index = 0; index < 200; index++) delete file.migrationIntents[`synthetic-intent-${cycle}-${index}`]; });
+      const currentRows = Object.keys(reader.readOnlySnapshot().file.migrationIntents).length;
+      fullGC();
+      const values = [...cache.values()].flatMap(collection => [...collection.values()]);
+      rows.push({ cycle: cycle + 1, currentRows, cachedRows: values.length,
+        cachedJsonBytes: values.reduce((sum, value) => sum + Buffer.byteLength(value.valueJson), 0),
+        heapSize: heapStats().heapSize, rss: process.memoryUsage().rss });
+    }
+    fs.writeFileSync(path.join(root, "aggregate.json"), JSON.stringify({ runtime: Bun.version, startedAt, completedAt: new Date().toISOString(), rows }, null, 2) + "\n");
+  } finally { reader.close(); writer.close(); }
+}
+
+if (import.meta.main && (parseArgs().has("registry-churn") || parseArgs().has("registry-churn-child"))) {
+  await registryChurnProfile();
+} else if (import.meta.main && (parseArgs().has("server-memory") || parseArgs().has("server-memory-child"))) {
+  await serverMemoryProfile(parseArgs().has("server-memory-child"));
+}

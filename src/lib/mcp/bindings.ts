@@ -5365,6 +5365,7 @@ function deploymentList(result: Record<string, unknown>, compact = false): {
   nextCursor?: string | null;
   hasMore?: boolean;
   legacySnapshot?: true;
+  legacyTerminal?: true;
   runtimeHostRequests?: RuntimeHostRequestHealth;
 } {
   if (
@@ -5375,9 +5376,14 @@ function deploymentList(result: Record<string, unknown>, compact = false): {
   ) {
     throw new ViewerControlResponseError("Viewer control returned a malformed deployment list");
   }
-  if ((result.nextCursor !== undefined || result.hasMore !== undefined)
-    && (typeof result.hasMore !== "boolean" || !(result.nextCursor === null || typeof result.nextCursor === "string")
-      || result.hasMore !== (typeof result.nextCursor === "string" && result.nextCursor.length > 0))) {
+  /* A checkout or packaged Viewer up to 2fda8a4e ends its page with a null
+     cursor and no hasMore; that page declares itself the last one. It ignores
+     a cursor too, so the caller refuses that shape on a continuation. */
+  const legacyTerminal = result.nextCursor === null && result.hasMore === undefined;
+  const hasMore = legacyTerminal ? false : result.hasMore;
+  if ((result.nextCursor !== undefined || hasMore !== undefined)
+    && (typeof hasMore !== "boolean" || !(result.nextCursor === null || typeof result.nextCursor === "string")
+      || hasMore !== (typeof result.nextCursor === "string" && result.nextCursor.length > 0))) {
     throw new ViewerControlResponseError("Viewer control returned malformed deployment pagination");
   }
   const health = runtimeHostRequestHealth(result.runtimeHostRequests);
@@ -5387,7 +5393,8 @@ function deploymentList(result: Record<string, unknown>, compact = false): {
   return {
     deployments: result.deployments,
     ...(result.legacySnapshot === true ? { legacySnapshot: true } : {}),
-    ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor as string | null, hasMore: result.hasMore as boolean } : {}),
+    ...(legacyTerminal ? { legacyTerminal: true } : {}),
+    ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor as string | null, hasMore: hasMore as boolean } : {}),
     ...(health ? { runtimeHostRequests: health } : {}),
   };
 }
@@ -5502,8 +5509,9 @@ async function deploymentStatus(
       const deployments = fromLedger.value;
       return { count: deployments.length, deployments };
     });
-  const { deployments: listed, runtimeHostRequests, nextCursor, hasMore, legacySnapshot } = deploymentList(result, args.compact === true);
+  const { deployments: listed, runtimeHostRequests, nextCursor, hasMore, legacySnapshot, legacyTerminal } = deploymentList(result, args.compact === true);
   if (cursor && nextCursor === undefined) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
+  if (cursor && legacyTerminal) throw new Error("Viewer deployment pagination is unavailable from this Viewer revision; restart the list");
   /* #1845 defect C: newest first, whatever order the source answered in — a
      Viewer revision that still serves the id-ordered list included. */
   const deployments = listed.every(row => isDeploymentStatus(row)) ? newestDeploymentsFirst(listed) : listed;
