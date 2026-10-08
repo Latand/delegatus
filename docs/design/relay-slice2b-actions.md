@@ -129,7 +129,7 @@ Items not listed are unchanged from 2a §9.
 | R3 | Denials stay results, for actions too. `unavailable` is retried with the same body as for reads. | `toolLoop.ts:95-99` |
 | R4 | `mayQuote` on the index and on every result, as 2a; for actions the gate removes content and never changes the status (§3.4). | `toolLoop.ts:7-10`, `:165-168` |
 | R5 | `delivered: true` ends calling (kept from 2a) and is shown to the model; the final schema allows `ignore`. | `toolLoop.ts:87`, prompt |
-| R6 | `calls_remaining: 0` ends calling (2a). After `outcome_unknown` the final answer must be a reply saying the action may have happened (§8). | `runner.ts:372`, `protocol.ts` |
+| R6 | An action's `calls_remaining: 0` ends new calls, including on replay; an already admitted `pending` call still polls to its result. Positive historical replay budgets keep the 2a accounting. After `outcome_unknown` the final answer must be a reply saying the action may have happened (§8). | `toolLoop.ts`, `runner.ts:372`, `protocol.ts` |
 | L1 | Actions count like reads; `callsLeft` unchanged. | `toolLoop.ts:68` |
 | L2 | At most one action per round, sent alone after the round's reads settled (§3.2). | `toolLoop.ts:126-160` |
 | L3 | 20 s / `pending` / 300 s on their side; the install's 330 s guard maps an action to local `outcome_unknown`. | `toolLoop.ts:77`, `:91` |
@@ -216,13 +216,14 @@ says so.
 | network error, timeout, 5xx, a 200 that fails `toolCallResultSchema` or names another `call_id`/`tool` | resend identical body after 1, 2, 4 s; then local `error` | resend identical body after 1, 2, 4 s; then local **`outcome_unknown`** (§4.3) |
 | 429 | wait `retry_after_s`, resend | same; giving up → `outcome_unknown` if any earlier attempt was ambiguous, else local `error` |
 | 400, 413 (request) | local `error` | local `error` only if no earlier attempt was ambiguous, else `outcome_unknown` |
-| 401, 426 | local error, request terminal | same (refused before admission) |
+| 401, 426 | local error, request terminal | request terminal; local `outcome_unknown` if an earlier attempt was ambiguous, otherwise local `error` |
 | 409 `call_conflict` | local `error` | local **`outcome_unknown`**: the id names a ledger entry whose body is not ours, so the install cannot say what ran |
 | 404, 409 `lease_lost`, keeper abort | lease lost, no completion | same (§4.2) |
 | pending past 330 s | local `error` "The read did not finish." | local **`outcome_unknown`** |
 
-"Ambiguous" means the attempt ended without an HTTP status the install can
-read as a refusal before admission: `ExternalRelayError.status === 0`
+"Ambiguous" means an earlier `pending` proved admission, or an attempt ended
+without an HTTP status the install can read as a refusal before admission:
+`ExternalRelayError.status === 0`
 (`client.ts:52`, `:94-95`, including a response destroyed as too large,
 `client.ts:45`), any 5xx, or a 200 that failed parsing. One boolean per
 action send tracks it.
@@ -335,7 +336,9 @@ retries; resend an action with any byte changed; hand off after an action
 The install reports exactly what it knows. An action whose send ended with a
 final 200 status is that status. One that ended with a refusal the wire
 defines as pre-admission (400, 401, 413, 426, 429) and no ambiguous attempt
-before it was not executed: local `error`, calls continue. Every other ending
+before it was not executed: local `error`; 401/426 end calling. A refusal after
+`pending`, a network failure or a 5xx cannot establish the earlier action's
+fate and becomes terminal local `outcome_unknown`. Every other ending
 (timeout, network failure, 5xx, unparsable 200, `call_conflict`, the 330 s
 guard) is local `outcome_unknown` with output "The service did not confirm
 whether this action happened.", terminal, `local: true` in the record. The
@@ -510,6 +513,13 @@ TMPDIR, as `runner.test.ts:17-18` does; stub servers bind port 0
 Nothing runs against the live state directory.
 
 ### 12.1 X1 action replay (`runner.test.ts`, beside `:1098-1152`)
+
+The runner/HTTP regressions also cover `pending`, network failure and 5xx
+followed by 401/426: byte-identical retry, local `outcome_unknown`, final
+`replyAnswerSchema` and refusal of a model's `ignore`. First-attempt 401/426
+remain errors. Replayed `ok` and `error` actions with zero budget stop new
+calls after polling, including when the pending response already carried
+zero; positive historical action replays preserve the fresh budget.
 
 Request: `claimed_tools_actions_admin.json` as copied, request id varied per
 case. The stub model (`loopStub`, `runner.test.ts:1041-1051`) calls the

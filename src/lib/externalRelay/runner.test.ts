@@ -1587,6 +1587,52 @@ for (const status of [400, 413, 429, 401, 426])
     if ([401, 426].includes(status)) expect(run.rounds[1].schema).toEqual(answerSchema);
   });
 
+for (const rejection of ["unauthorized", "unsupported_version"])
+  for (const first of ["pending", "transport", "503"])
+    test(`an action's ${first} then ${rejection} preserves uncertainty and rejects ignore`, async () => {
+      const run = await runLoopCase({ role: "actions_admin",
+        plan: actionPlan("react_to_message", `{action:'ignore',text:'',reply_to:null}`),
+        response: (body, attempt) => attempt > 1 ? x1Errors[rejection]!
+          : first === "pending" ? actionResponse("action_pending", body)
+          : first === "transport" ? { drop: true } : { status: 503 } });
+      expect(run.calls).toHaveLength(2);
+      expect(run.calls[0]).toEqual(run.calls[1]);
+      expect(projectionsOf(run)[0]).toMatchObject({ status: "outcome_unknown", effect: "action" });
+      expect(run.record!.toolCalls![0]).toMatchObject({ status: "outcome_unknown", local: true });
+      expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+      expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+      expect(run.completions).toHaveLength(1);
+    });
+
+for (const status of ["ok", "error"])
+  for (const pendingRemaining of [15, 0])
+    test(`a replayed action ${status} with zero ends calls after polling pending with ${pendingRemaining} left`, async () => {
+      const run = await runLoopCase({ role: "actions_admin",
+        plan: `if(final)return reply;return round<=2?{action:'call',text:'',reply_to:null,calls:[call(round===1?'generate_voice':'react_to_message',{})]}:reply;`,
+        response: (body, attempt) => ({ body: {
+          ...actionResponse(attempt === 1 ? "action_pending" : "action_error", body).body,
+          status: attempt === 1 ? "pending" : status, delivered: false,
+          calls_remaining: attempt === 1 ? pendingRemaining : 0, replayed: attempt > 1,
+        } }) });
+      expect(run.calls).toHaveLength(2);
+      expect(run.calls[0]).toEqual(run.calls[1]);
+      expect(projectionsOf(run)[0]).toMatchObject({ status, effect: "action" });
+      expect(run.rounds).toHaveLength(2);
+      expect(run.rounds[1].schema).toEqual(answerSchema);
+      expect(run.completion).toMatchObject({ outcome: "answered" });
+    });
+
+test("a positive historical action replay keeps the fresh remaining-call budget", async () => {
+  const run = await runLoopCase({ role: "actions_admin",
+    plan: `return round<=2?{action:'call',text:'',reply_to:null,calls:[call('react_to_message',{message_id:String(round)})]}:reply;`,
+    response: (body, attempt) => ({ body: { ...actionResponse("action_ok", body).body,
+      calls_remaining: attempt === 1 ? 2 : 15, replayed: attempt === 2 } }) });
+  expect(run.calls).toHaveLength(2);
+  expect(run.rounds[2].prompt).toContain("2 calls are left.");
+  expect(run.rounds[2].schema.properties.action.enum).toContain("call");
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+});
+
 test("C6 action identity survives a new lease with one execution", async () => {
   const request = { ...x1Request("actions_admin"), request_id: "rq_reclaim_action" };
   let first: WireCall | undefined;
