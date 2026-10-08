@@ -54,8 +54,17 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
   let remaining = 16;
   let outputBytes = 0;
   let terminal = false;
+  // Authorization/version rejection stops siblings without ending the lease.
+  let rejectionCode: string | undefined;
+  const rejected = new AbortController();
+  const callSignal = AbortSignal.any([lease.signal, rejected.signal]);
+  const rejectedResult = () => ({ result: null, code: rejectionCode, output: "The call could not be completed." });
   const now = runtime.now ?? Date.now;
   const sleep = runtime.sleep ?? toolSleep;
+  const wait = async (ms: number) => {
+    try { await sleep(ms, callSignal); }
+    catch (error) { if (lease.signal.aborted || !rejectionCode) throw error; }
+  };
   const callsLeft = () => terminal ? 0 : Math.max(0, Math.min(remaining, 16 - sent));
   async function send(body: ReturnType<typeof callBody>, tool: string) {
     if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
@@ -64,10 +73,12 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     let unavailable = 0;
     let pending = false;
     while (!lease.signal.aborted) {
+      if (rejectionCode) return rejectedResult();
       if (pending && now() - started >= 330_000) return { result: null, output: "The read did not finish." };
       try {
         const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: lease.signal });
+          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal });
+        if (rejectionCode) return rejectedResult();
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
         const result = parsed.data;
@@ -78,30 +89,35 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (result.status === "pending") {
           pending = true;
           if (now() - started >= 330_000) return { result: null, output: "The read did not finish." };
-          await sleep(Math.min((result.retry_after_s ?? 1) * 1000, 330_000 - (now() - started)), lease.signal);
+          await wait(Math.min((result.retry_after_s ?? 1) * 1000, 330_000 - (now() - started)));
           continue;
         }
         if (result.status === "denied" && result.code === "unavailable" && unavailable++ < 2) {
-          await sleep((result.retry_after_s ?? 1) * 1000, lease.signal);
+          await wait((result.retry_after_s ?? 1) * 1000);
           continue;
         }
         return { result };
       } catch (error) {
         if (lease.signal.aborted) throw error;
+        if (rejectionCode) return rejectedResult();
         if (error instanceof ExternalRelayError) {
           if (error.status === 404 || (error.status === 409 && error.code === "lease_lost")) {
             lease.lose(); throw error;
           }
-          if ([401, 426].includes(error.status)) terminal = true;
+          if ([401, 426].includes(error.status)) {
+            terminal = true;
+            rejectionCode = error.code;
+            rejected.abort();
+          }
           if ([400, 401, 409, 413, 426].includes(error.status)) return { result: null, code: error.code, output: "The call could not be completed." };
           if (error.status === 429) {
             if (++failures > 3) return { result: null, code: error.code, output: "The call could not be completed." };
-            await sleep(Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1)) * 1000, lease.signal);
+            await wait(Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1)) * 1000);
             continue;
           }
         }
         if (++failures > 3) return { result: null, output: "The call could not be completed." };
-        await sleep(1000 * 2 ** (failures - 1), lease.signal);
+        await wait(1000 * 2 ** (failures - 1));
       }
     }
     lease.signal.throwIfAborted();

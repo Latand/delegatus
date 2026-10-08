@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
-import { callBody, callableReads, canonical, mayQuote } from "./toolLoop";
-import { x1Bodies, x1Request, x1Results } from "./toolLoop.fixture";
+import { callBody, callableReads, canonical, createToolLoop, mayQuote } from "./toolLoop";
+import { x1Bodies, x1Errors, x1Request, x1Results } from "./toolLoop.fixture";
+import { startTestRelay } from "./testRelay";
+import type { PairedRelay } from "./store";
 
 test("X1 role indexes admit exactly the direct reads for their audience", () => {
   for (const [role, count] of Object.entries({ member: 6, admin: 18, owner: 22, anonymous_admin: 18, admin_owner_member: 6, actions_admin: 18 }))
@@ -28,3 +30,42 @@ test("X1 audience gates pending, timeout and replay alike, including anonymous a
   expect(mayQuote(undefined, null)).toBe(true);
   expect(mayQuote("unknown", x1Request("owner").input.requester)).toBe(false);
 });
+
+for (const rejection of ["unauthorized", "unsupported_version"])
+  for (const retry of ["pending", "unavailable", "rate_limited", "transport"])
+    test(`${rejection} suppresses a sibling ${retry} retry without losing the lease`, async () => {
+      const controller = new AbortController();
+      let lost = false;
+      let waiting!: () => void;
+      const siblingWaiting = new Promise<void>((resolve) => { waiting = resolve; });
+      const posts: ReturnType<typeof callBody>[] = [];
+      const server = await startTestRelay(async (_req, body) => {
+        const call = body as ReturnType<typeof callBody>;
+        posts.push(call);
+        if ("arguments" in call && call.arguments?.query === "reject") {
+          await siblingWaiting;
+          return x1Errors[rejection]!;
+        }
+        if (posts.filter((post) => post.call_id === call.call_id).length > 1)
+          return { body: { ...x1Results.ok, call_id: call.call_id } };
+        if (retry === "transport") return { drop: true };
+        if (retry === "rate_limited") return x1Errors.rate_limited!;
+        return { body: { ...x1Results[retry]!, tool: "search_docs", call_id: call.call_id } };
+      });
+      const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) } as PairedRelay,
+        x1Request("member"), { signal: controller.signal, ack: async () => true, lose: () => { lost = true; controller.abort(); } },
+        { sleep: async () => {
+          waiting();
+          const deadline = Date.now() + 2000;
+          while (loop.callsLeft() > 0 && Date.now() < deadline) await Bun.sleep(1);
+          expect(loop.callsLeft()).toBe(0);
+        } });
+      try {
+        await loop.runCalls(["reject", "sibling"].map((query) => ({ tool: "search_docs", arguments: JSON.stringify({ query }), cursor: null })), 1);
+        expect(posts).toHaveLength(2);
+        expect(loop.results.map((result) => result.code)).toEqual([rejection, rejection]);
+        expect(loop.records.every((record) => record.local)).toBe(true);
+        expect(lost).toBe(false);
+        expect(controller.signal.aborted).toBe(false);
+      } finally { await server.close(); }
+    });
