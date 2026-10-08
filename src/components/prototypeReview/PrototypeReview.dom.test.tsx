@@ -339,6 +339,37 @@ test("a round published while speech is recorded leaves the speech, and the stag
   expect(commentField().value).toBe("");
 });
 
+test("a round a later decision retired says so where a waiting round asks for a choice, and opens its choice only when the operator asks", async () => {
+  const read = twoRounds();
+  const [older, newer] = read.rounds.map((entry) => entry.id) as [string, string];
+  read.rounds[1] = { ...read.rounds[1]!, decision: { chosen: [2], comment: "", at: "2026-08-30T11:00:00.000Z", delivery: { state: "sent", retryable: false } } };
+  read.rounds[0] = { ...read.rounds[0]!, supersededBy: newer };
+  read.waitingReviewId = null;
+  await mountReview(read);
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.click(); });
+  expect(shownRound()).toBe(older);
+  /* The tab's mark is as large as the decided check, and its words show on hover. */
+  const mark = document.querySelector<SVGElement>(`[data-prototype-round="${older}"] [data-prototype-superseded]`)!;
+  expect([mark.tagName.toLowerCase(), mark.getAttribute("aria-label"), mark.getAttribute("class")?.includes("h-3 w-3")]).toEqual(["svg", "superseded by round 2", true]);
+  expect(document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.title).toEndWith(" · superseded by round 2");
+  const footer = () => document.querySelector<HTMLElement>("footer")!;
+  expect(footer().querySelector("[data-prototype-superseded-line]")?.textContent).toContain("Superseded by round 2, decided on 30 Aug 2026.");
+  expect(footer().textContent).not.toContain("nothing yet");
+  expect(document.querySelector("[data-prototype-save]")).toBeNull();
+  expect(document.querySelector("[data-prototype-comment-field]")).toBeNull();
+  expect(document.querySelector<HTMLButtonElement>('[data-prototype-choose="1"]')!.disabled).toBe(true);
+  /* The link opens the round that decided. */
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-open-round="${newer}"]`)!.click(); });
+  expect(shownRound()).toBe(newer);
+  /* Deciding the retired round is still the operator's to ask for. */
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.click(); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-decide-anyway]")!.click(); });
+  expect(document.querySelector("[data-prototype-decide-anyway]")).toBeNull();
+  expect(footer().querySelector("[data-prototype-superseded-line]")).not.toBeNull();
+  expect(document.querySelector<HTMLButtonElement>('[data-prototype-choose="1"]')!.disabled).toBe(false);
+  expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
+});
+
 test("a decided round opens on its first chosen variant, and the accent marks the chosen rows only, never the row merely on the stage", async () => {
   const read = reviewRead({ chosen: [2], comment: "" });
   read.rounds[0]!.variants.push(variant(3, "Wide"));

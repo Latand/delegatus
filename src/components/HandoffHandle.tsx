@@ -26,8 +26,9 @@ interface Props {
  * The handoff handle pinned outside the pane, at its bottom-left — right where
  * child arrows leave the card. It sits still (no cursor chasing), grows on
  * hover into a labeled chip with a down arrow pointing at where the draft
- * conversation will land, and a click drops that draft below: a full
- * DraftAgentPane that inherits this conversation's transcript and directory.
+ * conversation will land, and a click drops that draft below: the new-agent
+ * composer (`DraftAgentPane`), which carries this conversation's transcript and
+ * directory into its launch without showing a field for either.
  * Pulling the handle instead of clicking still links to an existing pane.
  */
 export function HandoffHandle({ file, onHandoff, inline = false }: Props) {
