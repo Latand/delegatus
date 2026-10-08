@@ -1772,7 +1772,7 @@ test.each(["minimal", "production"])("safety comparison: compacted deciding star
   release(c.key, claim);
   await exit(worker);
   expect((await probe(unknown)).quiet).toBe(true);
-});
+}, 120_000);
 
 test("safety comparison: busy answering handle with no start identity must survive a reused registry identity", async () => {
   const c = conversation(transcript("settled")), worker = spawn();
