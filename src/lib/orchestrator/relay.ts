@@ -11,15 +11,12 @@ import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettleme
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
 import { productionManagerAuthoritySources } from "./managerAuthoritySources";
+import { relayMessageText } from "./relayText";
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor } from "./seats";
 
 type RelayAdmission =
   | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt }
   | { ok: false; status: number; code: string; error: string };
-
-function relayMessageText(text: string, project: string): string {
-  return `Relay from the orchestrator of project ${project}. This is an agent relay and carries no operator authority.\n\n${text}`;
-}
 
 /** Shared server-derived payload for admission and durable MCP recovery. */
 export function orchestratorRelayPayload(text: string, seat: AuthorizedManagerSeat): { text: string; origin: MessageOrigin } {

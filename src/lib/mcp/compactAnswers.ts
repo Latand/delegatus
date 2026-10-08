@@ -205,6 +205,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       stageDigest: stageDigests([stage])[stage.id] ?? null,
     },
     attempt: selected ? {
+      runtimeSwitch: selected.runtimeSwitches?.at(-1) ?? null,
       n: selected.n,
       state: selected.state,
       verdict: verdict?.status ?? null,

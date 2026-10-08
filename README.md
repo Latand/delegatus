@@ -154,7 +154,9 @@ nothing works on, cards that look safe to close and, for a GitHub project,
 open issues ranked by their recorded priority.
 In the seat tick panel, **Board maintenance** can also start one maintainer
 agent per project on a timer, every 3 hours by default and off until you
-switch it on. [docs/orchestrator.md](docs/orchestrator.md) covers the rest.
+switch it on. The panel's text reaches the orchestrator on every wake as
+your standing instructions. [docs/orchestrator.md](docs/orchestrator.md)
+covers the rest.
 
 The **Reports** log beside its chat lists what it reported, newest first: a
 stage that passed or failed, a review verdict, a blocked pipeline, a
@@ -173,9 +175,14 @@ project.
 
 The board shows every task in a project and what it is waiting for.
 
-Each task is a card in one of four columns: Inbox, Assigned, Blocked and
+Each task is a card in one of four columns: Inbox, In progress, Waiting and
 Done. A card shows its icon and colour, the agents working on it, and each
-pipeline with its stages and pull request. Cards with a working agent sit at
+pipeline with its stages and pull request. A state line under the title says
+whether the task is moving, waiting or stopped; the status menu sets the
+reason for a wait, such as your decision, another task or a usage limit. A
+status note of up to 280 characters, written by an agent, the orchestrator
+or a parked pipeline, says what is happening now. Cards with a working
+agent sit at
 the top of their column. A task can be high, normal or low priority, and high
 tasks lead the Inbox. **Images** on a card opens every screenshot and render
 its agents made. Ctrl+Z undoes your own moves, edits and hides on the board,
@@ -187,6 +194,12 @@ arrive, or a stage waiting on your decision. ✓ clears it until something new
 comes up. **Waiting** at the top of the board counts what waits across all
 projects. Its panel lists each item by project, with the waiting agent's
 role, and lets you dismiss an item or answer a permission prompt in place.
+While something waits, the funnel (or the F key) dims every card
+that does not wait on you.
+
+**Ask** on a card puts that task above the orchestrator's composer as a
+chip, so your next message is about it. On a phone the button is on the
+task's screen.
 
 The Overview board shows what is running across all projects. A rail beside
 the columns lists the agents you have open in cards; click one to jump to
@@ -228,7 +241,10 @@ pipeline whose reviews passed, one at a time per repository, once every
 check on the head has finished green. It updates a branch that fell behind
 and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
 stopped" or "merged". A stopped merge appears under **Waiting** with **Try
-the merge again**.
+the merge again**. The orchestrator can also hand several reviewed pull
+requests to one **merger** stage, which lands them as a single batch pull
+request with one commit per original;
+[docs/merge-batch.md](docs/merge-batch.md) has the procedure.
 
 Mark a pipeline **Finishes the task** and its task moves to Done when the
 pipeline finishes, or, with merging on, when its pull request is merged. An
@@ -257,6 +273,19 @@ press overrides it for that card. A Codex agent can also run on a service tier
 you set per launch, stage or role. Agents use the bundled [MCP server](#mcp-server-for-agents)
 to reach the board, tasks, pipelines and each other's conversations. The
 orchestrator does its work through the same server.
+
+Claude and Codex keep separate memories. `search_memory` lets an agent on
+either engine query what both have learned. With **Shared memory for this
+project** switched on in Settings, each message you send to a Claude or
+Codex agent also carries the memories selected as relevant to it. Selection
+needs an OpenRouter key, entered in the same dialog, sends redacted context
+to that provider and shares the Asks-you monthly cap. Settings shows the
+month's counts and says why injection is not running.
+
+Agents commit with the Delegatus machine identity, so a personal Git
+identity stays out of their commits. For a repository listed in
+`forge-app-repositories.json` in the state directory, their pushes, pull
+requests and merges go out as the Delegatus GitHub App.
 
 Add as many Claude, Codex and Copilot accounts as you like, each with its own
 login. The sidebar shows the active account's usage windows: five-hour and
@@ -395,6 +424,8 @@ at the foot of the sidebar.
   or an image). Files are sent only from the **Document folders** set in
   the panel, `handoff/` in your home by default, and a text file holding a
   password or a key is refused. The orchestrator can send its reports to one of these chats.
+  When the installation's owner replies to a report there, the reply goes to
+  that project's orchestrator.
 - **Your own account.** Enter your `api_id` and `api_hash` from
   my.telegram.org, then scan a QR code with the Telegram app. Delegatus
   registers a read-only Telegram MCP server, named `telegram`, for Claude
@@ -479,7 +510,8 @@ The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md
 
 A relay service can send this install questions from its own chats.
 **External relay** in the rail menu (the ⋯ sheet on a phone), or the
-**Relay service** step of the setup guide, pairs the two. The install asks
+**Relay service** step of the setup guide, pairs the two; **Connect
+Celestia** pairs with that service in one click. The install asks
 the service for work, so nothing reaches it from outside. Each question is
 answered by a one-shot agent on your signed-in Claude or Codex account, with
 no shell, no tools and none of your instruction files. The page shows each
@@ -519,7 +551,8 @@ Code and Codex configurations and in every account Delegatus manages.
 The tools, by area:
 
 - **conversations:** `list_conversations`, `get_conversation`,
-  `conversation_messages`, `search_transcripts`, `send_message`,
+  `conversation_messages`, `search_transcripts`, `search_memory`,
+  `send_message`,
   `message_receipt`, `conversation_deliverability`, `conversation_action`
   (interrupt, kill, resume, compact), `spawn_agent`, `suggest_replies`;
 - **board and tasks:** `board_snapshot`, `create_task`, `list_tasks`,
@@ -531,7 +564,11 @@ The tools, by area:
 - **the orchestrator seat:** `create_orchestrator`, `get_orchestrator`,
   `rotate_orchestrator`, `send_message_to_orchestrator`,
   `seat_tick_settings`, `bridge_report` (files an entry in the Reports log),
-  `bridge_directive`;
+  `bridge_directive`. Work for another project goes from seat to seat: a
+  seat's `create_task`, `create_pipeline` or `spawn_agent` on another project
+  is refused with a pointer to `send_message_to_orchestrator`, which
+  designates that project's orchestrator first when it has none, unless you
+  asked for it and the seat quotes your request in `crossProjectRequest`;
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
 - **roles:** `role_presets` reads which engine, model and effort each role
@@ -543,6 +580,17 @@ The tools, by area:
   dialog shows and, for the Delegatus project's orchestrator seat and your own
   session, turns automatic updates on or off (the same switch as the dialog;
   each switch is listed in the dialog's history with who made it);
+- **bug reports:** `issue_report` takes a Delegatus bug report from preview to
+  publication. An orchestrator that hits a Delegatus failure asks you first,
+  then an `issue-reporter` writes the report, runs the advisory hint tool and
+  re-reads the whole text to make its own privacy judgment. A hint may be a false
+  alarm; a clean result proves nothing. The orchestrator shows the exact title
+  and body in chat with the agent's judgment and remaining hints as a short list.
+  You decide last and may approve text with hints. The approving reply names the
+  whole digest of that text. Publication takes the
+  preview's digest and reads your reply in the conversation itself: nothing
+  the orchestrator says about your answer counts, a reply for an earlier
+  wording does not carry over, and one preview is filed once;
 - **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a
   chat you allowed in the Telegram panel, signed with the calling
   conversation), `telegram_bot_send_document` (posts a report file from
@@ -692,6 +740,36 @@ A recorded OOM raises a **Needs you** item naming its stage and limit for 24
 hours. A fatal stage OOM retries once after memory recovers, retaining its
 worktree. A second consecutive OOM, or a 30-minute wait without recovery, stops
 for a decision. See [the design](docs/design/agent-memory-isolation.md).
+
+### Agent CPU
+
+On Linux with a systemd user manager, hosts the operator talks to run in
+`delegatus-agents.slice` with `CPUWeight=1000`, tmux panes included. Pipeline
+and flow hosts, workflow stage and pane-reviewer tmux panes, headless reviews,
+gates from `scripts/gate-slot.sh` (the merger's included), workflow setup,
+pipeline publication and release installs and builds run in
+`delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a CPU per scope and 75%
+of the logical CPUs for the whole slice. This placement is independent of the
+memory mode. Where it should work and cannot, work is refused with the reason,
+a release build included; operator hosts still run.
+
+A pipeline stage, workflow setup or stage, publication install, release install
+or build, or gate waits while CPU pressure (`some avg10`) is at or above 20%
+and starts once it has stayed below 10% for ten seconds; the wait shows in the
+pipeline's or workflow's detail line and in the update step's log. Operator
+messages never wait on it.
+
+| Variable | Effect |
+|---|---|
+| `DELEGATUS_AGENT_CPU` | `off` turns CPU placement off. |
+| `DELEGATUS_WORK_SCOPE_CPU_QUOTA`, `DELEGATUS_WORK_CPU_QUOTA` | Percent of one CPU per work scope (default `300`) and for the work slice (default 75% of the CPUs). |
+| `DELEGATUS_CPU_PRESSURE` | `off` turns the pressure wait off; `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` set the thresholds (`20`, `10`). |
+
+To give the service itself `CPUWeight=1000` beside the agents, run
+`node bin/install-cpu-placement.mjs`. It writes three files under
+`$HOME/.config/systemd/user` and prints the reload and restart that apply them;
+restart at a quiet moment. Dedicated CPUs for production need root; see
+[the design](docs/design/cpu-placement.md).
 
 ## Platform support
 

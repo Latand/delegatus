@@ -185,8 +185,9 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
     "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
   ]) delete env[key];
   for (const key of Object.keys(env)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) delete env[key];
-  // Keep slots shared even when TMPDIR below becomes private to the test run.
-  env.LLV_GATE_LOCK_DIR = inherited.LLV_GATE_LOCK_DIR ?? path.join(inherited.XDG_RUNTIME_DIR ?? tmpdir(), "delegatus-gate");
+  // Keep slots shared even when TMPDIR below becomes private to the test run:
+  // /var/tmp is the one machine namespace both gate implementations lock in.
+  env.LLV_GATE_LOCK_DIR = inherited.LLV_GATE_LOCK_DIR ?? "/var/tmp";
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });

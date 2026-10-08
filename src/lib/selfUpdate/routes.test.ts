@@ -590,19 +590,18 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       }
       starts = 0;
       const previousIntent = retry ? JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")) : null;
-      h.deps.quiet = {
-        pipelines: () => [], presence: () => [], registryHealth: () => [],
-        runtimeSnapshot: async () => {
-          // Each route reads an initial snapshot, then its final admission
-          // snapshot. Hold the latter inside the real production observer,
-          // after checkoutPart has already computed busy:null for both.
-          reads++;
-          if (reads === 3 || reads === 4) {
-            if (reads === 4) bothObserved();
-            await observation;
-          }
-          return { sessions: [] };
-        },
+      const snapshot = h.service.snapshot.bind(h.service);
+      h.service.snapshot = async () => {
+        // Each route reads an initial snapshot, then its final admission
+        // snapshot. Hold the latter once the real snapshot has computed
+        // busy:null for both, before either reaches its reservation.
+        const read = ++reads;
+        const result = await snapshot();
+        if (read === 3 || read === 4) {
+          if (read === 4) bothObserved();
+          await observation;
+        }
+        return result;
       };
       const routes = Promise.allSettled(["tab-a", "tab-b"].map(key => updatePost(post("/update", { key, retry }))));
       await Promise.race([observed, Bun.sleep(3000).then(() => { throw new Error("Final observations did not reach the barrier"); })]);
@@ -682,13 +681,14 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
           expect((await updatePost(post("/update", { key: "failed-first" }))).status).toBe(202);
           await until(next => next.update.state === "failed");
         }
-        h.deps.quiet = {
-          pipelines: () => [], presence: () => [], registryHealth: () => [],
-          runtimeSnapshot: async () => {
-            reads++;
-            if (reads === (delayed === "Update" || delayed === "Retry" ? 2 : 1)) { reached(); await observation; }
-            return { sessions: [] };
-          },
+        // The delayed action's admission snapshot (Update and Retry read an
+        // initial one first) is held after it computed busy:null.
+        const snapshot = h.service.snapshot.bind(h.service);
+        h.service.snapshot = async () => {
+          const read = ++reads;
+          const result = await snapshot();
+          if (read === (delayed === "Update" || delayed === "Retry" ? 2 : 1)) { reached(); await observation; }
+          return result;
         };
         const losing = invoke(delayed);
         await Promise.race([barrier, Bun.sleep(3000).then(() => { throw new Error("Admission observation missed barrier"); })]);

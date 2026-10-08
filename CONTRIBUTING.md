@@ -98,6 +98,14 @@ App holds no permission for (an issue, a workflow dispatch, a run rerun, a
 release, a comment) is not on the list, is not rerouted, and runs as it always
 did. Adding a kind is a decision about the App's permissions.
 
+One issue is filed by Delegatus itself: the bug report an operator approved
+(`issue_report`, `src/lib/issueReports/publish.ts`). In a declared App
+repository it goes out as the App on a token asked for `issues: write` and
+`metadata: read` alone (`FORGE_APP_ISSUE_PERMISSIONS`), so the App needs the
+`issues` permission granted before a report can be filed there; without it the
+report is refused and nothing is sent as a person. An agent's own
+`gh issue create` is not covered and runs as it always did.
+
 One action has one classification in every spelling `gh` accepts: `pr new`
 for `pr create`, a pull request given as its URL (which names the repository
 from any directory, before `--repo`), a REST path or its absolute
@@ -271,23 +279,24 @@ also run the shared supply-chain check; CI audits weekly and by dispatch.
 
 Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
-(default `8G`), and a default Node heap of 6144 MB. Linux gates require a user
-systemd manager. Each command runs in a transient service with
+(default `8G`), and a default Node heap of 6144 MB. The slot locks live in
+`/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
+share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. On Linux a
+gate waits while CPU pressure is high (sampled again when it takes its slot),
+then runs in its own scope in
+`delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
+systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
+refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
+(docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted. Linux commands run in a transient service with
 `KillMode=control-group`, a two-second TERM-to-KILL bound and a finite deadline
 (`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes). A recorded caller start
-identity lets the service detect a hard-killed wrapper. Detached descendants
-stay in that service's cgroup. Surviving children fail the command before the
-manager reaps them. macOS uses a separate identity-bound guardian and omits
-the slot lock when flock is absent. Windows test comparison uses the same
-guardian with the existing kernel creation-time identity backend.
-macOS and Windows permit best-effort execution and print one warning per
-owning run: a detached descendant can escape between guardian polls of a
-short-lived parent. Nested runners inherit the warning marker. The strong
-lifetime guarantee applies to Linux with native containment; Linux refuses
-admission when that containment is unavailable. The platform decision and
-verification limits are recorded in `docs/verification/test-child-lifetime.md`.
-`LLV_GATE_LOCK_DIR=/var/tmp` joins the existing machine gate's lock files.
-Otherwise locks live in a `delegatus-gate` directory under the runtime/temp root.
+identity detects a hard-killed wrapper; detached descendants stay owned by the
+service. Surviving children fail the command before the manager reaps them.
+Linux requires a reachable user systemd manager. macOS and Windows use an
+independent identity-bound guardian with best-effort execution and one warning
+per owning run; a detached child can escape between guardian polls. The strong
+lifetime guarantee applies to Linux native containment, as recorded in
+`docs/verification/test-child-lifetime.md`.
 An existing `NODE_OPTIONS` is preserved.
 
 Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
@@ -304,8 +313,12 @@ when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
 CI OCR. The two required privacy checks remain strict and unchanged; local
 hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
-Docker PR builds are limited to image inputs, with a 45-minute timeout and
-cancellation of superseded runs. Main and v* tag image publishing are preserved,
+Docker PR builds are limited to image inputs, push nothing, end at the
+45-minute job timeout, and are cancelled when superseded or closed. Merge-batch branches skip image verification. App changes verify
+amd64; image recipes, installation and native runtime inputs verify both Linux
+architectures. One PR build and one publication can run at once in separate
+single-build slots, leaving publication independent of the PR queue.
+Main and v* tag image publishing are preserved,
 as are npm publishing and the in-image candidate rehearsal.
 
 `scripts/rebuild.test.ts` exercises the actual host deploy command against a

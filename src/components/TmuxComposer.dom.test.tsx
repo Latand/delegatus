@@ -292,6 +292,41 @@ test("repeated identical attempts share one grouped row with counts and final st
   flushSync(() => root.unmount());
 });
 
+test("a Telegram refusal reads as a short cause on the row and the chip, and the action once in the detail", async () => {
+  /* One message refused twice, each attempt behind a different wrapper. */
+  const refused = (n: number, reason: string): RuntimeReceipt => ({
+    operationId: `op-telegram-${n}`, idempotencyKey: `key-telegram-${n}`, conversationId: "conversation_telegram_notice",
+    kind: "send", status: "failed", text: "are you there?", at: `2026-08-31T10:00:0${n}.000Z`, revision: 1, reason,
+  });
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    const { host, root } = await renderInto(<Receipts
+      receipts={[
+        refused(2, "structured host recovery failed: telegram MCP connector is not connected at launch"),
+        refused(1, "conversation host was reclaimed; automatic resume did not establish a deliverable host: telegram MCP connector is not connected at launch"),
+      ]}
+      session={{ host: "unhosted", turn: "unknown" }}
+      onRetry={() => {}} onEdit={() => {}} onDismiss={() => {}}
+    />);
+    const cause = translate(locale, "receipt.cause.telegramOff");
+    const remedy = translate(locale, "receipt.remedy.telegramOff");
+    expect(host.querySelector("[data-delivery-notice-cause]")?.textContent).toBe(`${translate(locale, "composer.deliveryFailed")} — ${cause}`);
+    expect(host.querySelector("[data-delivery-notice-count] [aria-hidden]")?.textContent).toBe("×2");
+    /* What to do is on the page, wrapped, where a phone reads it. */
+    expect(host.querySelector("[data-delivery-notice-sentence]")?.textContent).toBe(remedy);
+    expect(host.querySelectorAll("[data-delivery-notice-remediation]")).toHaveLength(0);
+    const chips = [...host.querySelectorAll("[data-receipt-status]")].map((chip) => chip.textContent);
+    expect(chips).toEqual([translate(locale, "receipt.human.verbatim", { reason: cause })]);
+    /* The earlier attempt ended the same way: the counter says so, no second line does. */
+    expect(host.querySelectorAll("[data-receipt-history]")).toHaveLength(0);
+    const text = host.textContent ?? "";
+    expect(text.split(remedy)).toHaveLength(2);
+    expect(text).not.toMatch(/MCP|connector|structured host|reclaimed/i);
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 test("multiple delivery attempts collapse into one bounded accessible receipt stack", () => {
   setLocale("uk");
   const host = document.createElement("div");

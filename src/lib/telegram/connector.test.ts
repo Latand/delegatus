@@ -652,3 +652,50 @@ test("stop waits through SIGKILL escalation until a TERM-resistant connector exi
     if (childIdentity) await stopFixtureIdentity(childIdentity);
   }
 }, 5_000);
+
+/* ── A connector that outlived the release that started it ─────────────────── */
+
+test("the release that takes over after a self-update adopts the connector the previous release started", async () => {
+  const { asRelease, endConnectorProcess, releaseTakeover, startConnectorFromRelease } = await import("./fixtures/releaseConnector");
+  const { readTelegramLaunchState } = await import("./launchReadiness");
+  const { readTelegramConnection, saveTelegramSession, writeTelegramConnection } = await import("./sessionStore");
+  const session = saveTelegramSession(PLACEHOLDER_SESSION);
+  /* What the new release kept publishing while it refused the old connector. */
+  writeTelegramConnection({ version: 1, status: "error", credentialRef: session.credentialRef, identity: null,
+    lastHealthCheckAt: null, errorCode: "bridge_failed", identityIdUpgradedAt: null });
+  const earlier = startConnectorFromRelease(path.join(SANDBOX, "release-a"));
+  try {
+    await asRelease(path.join(SANDBOX, "release-b"), async () => {
+      expect(readTelegramLaunchState()).toEqual({ kind: "recoverable" });
+      const { service, calls } = releaseTakeover(session.connectorToken);
+      await service.checkHealth();
+      expect(readTelegramConnection().status).toBe("connected");
+      expect(readTelegramLaunchState()).toEqual({ kind: "ready", token: session.connectorToken });
+      /* One connector: the one already running, and nothing started beside it. */
+      expect(calls.spawns).toBe(0);
+      expect(() => process.kill(earlier.pid, 0)).not.toThrow();
+      const recorded = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "telegram", "connector.json"), "utf8")) as { pid: number; entrypoint: string };
+      expect(recorded.pid).toBe(earlier.pid);
+      expect(recorded.entrypoint).toBe(earlier.entrypoint);
+      /* The release that took over can also stop it, which a sign-out and a
+         replacement after a failed probe both need. */
+      await stopTelegramConnector();
+      expect(() => process.kill(earlier.pid, 0)).toThrow();
+    });
+  } finally {
+    endConnectorProcess(earlier.pid);
+  }
+}, 20_000);
+
+test("a recorded process that is alive under another command line is never signalled and is reported as unverified", async () => {
+  const { telegramConnectorUnverified } = await import("./connector");
+  const { procBackend } = await import("@/lib/proc");
+  expect(telegramConnectorUnverified()).toBe(false);
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "telegram", "connector.json"), JSON.stringify({
+    version: 1, pid: process.pid, identity: procBackend.processIdentity(process.pid), credentialRef: CONNECTOR_SESSION.credentialRef,
+    connectorTokenSha256: "0".repeat(64), command: "python", entrypoint: "telegram-mcp-server.py",
+  }), { mode: 0o600 });
+  expect(telegramConnectorUnverified()).toBe(true);
+  await expect(stopTelegramConnector()).rejects.toThrow("ownership could not be verified");
+  fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "telegram", "connector.json"));
+});

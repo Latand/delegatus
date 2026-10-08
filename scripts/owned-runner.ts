@@ -85,7 +85,8 @@ if (args[0] === "--portable") {
   const file = path.join(directory, "launch.json");
   const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs } satisfies Launch), { mode: 0o600 });
-  const service = spawn("systemd-run", ["--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", `RuntimeMaxSec=${Math.ceil(timeoutMs / 1000) + 5}s`, "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "8G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
+  const cpu = process.env.LLV_OWNED_RUN_CPU_SLICE ? [`--slice=${process.env.LLV_OWNED_RUN_CPU_SLICE}`, "-p", "CPUWeight=100", "-p", `CPUQuota=${process.env.LLV_OWNED_RUN_CPU_QUOTA}%`, "-p", "CPUQuotaPeriodSec=20ms"] : [];
+  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", `RuntimeMaxSec=${Math.ceil(timeoutMs / 1000) + 5}s`, "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "8G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     service.once("error", error => { console.error(`owned runner: systemd admission failed: ${error.message}`); resolve(1); });

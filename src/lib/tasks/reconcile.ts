@@ -128,7 +128,7 @@ function reconcileAssignment(
   return { assignment: current, dirty };
 }
 
-export function reconcileTasks(files: FileEntry[], tasks: BoardTask[], env: ReconcileEnv = {}): { tasks: BoardTask[]; dirty: boolean } {
+export function reconcileTasks<Tasks extends readonly BoardTask[]>(files: FileEntry[], tasks: Tasks, env: ReconcileEnv = {}): { tasks: Tasks | BoardTask[]; dirty: boolean } {
   let dirty = false;
   const filesByPath = new Map(files.map((file) => [file.path, file]));
   const indexedEnv: ReconcileEnv = env.successorForPath

@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { createPortal } from "react-dom";
 
 import { ChevronLeft, ChevronRight, X } from "@/components/icons";
+import { useImageGesture } from "@/hooks/useImageGesture";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { useLocale } from "@/lib/i18n";
 import { Z } from "@/components/layers";
@@ -17,6 +18,8 @@ interface Props {
   detail?: string;
   /** The picture's place among the pictures its feed row draws. */
   at?: number;
+  /** Told each picture the viewer moves to, so the surface that opened it can follow. */
+  onShow?: (image: GalleryImage) => void;
   onClose: () => void;
 }
 
@@ -29,6 +32,11 @@ export interface GalleryImage {
   detail?: string;
   owner?: unknown;
   at?: number;
+  /** The counter's words for it when its list numbers it its own way. */
+  place?: string;
+  /** The same picture before a change. A press swaps the two in place, at the
+      zoom and the pan the operator is at, so one region is compared exactly. */
+  before?: { src: string; alt: string; caption?: string };
 }
 
 /* The pictures of the conversation a viewer was opened from, in feed order.
@@ -43,7 +51,6 @@ export const ImageGalleryProvider = GalleryContext.Provider;
 const OwnerContext = createContext<unknown>(null);
 export const GalleryOwnerProvider = OwnerContext.Provider;
 
-const MIN_SCALE = 0.25;
 const MAX_SCALE = 8;
 /** Pointer travel, in px, past which a press is a pan rather than a click. */
 const CLICK_SLOP = 6;
@@ -57,51 +64,60 @@ function openAt(images: readonly GalleryImage[], opened: GalleryImage, owner: un
   let start = opened.at === undefined ? -1 : images.findIndex((image) => inRow(image) && image.at === opened.at);
   if (start < 0) start = images.findIndex(inRow);
   if (start < 0) start = images.findIndex((image) => image.src === opened.src);
-  if (start < 0) return { images: [opened], start: 0 };
-  return { images: images.map((image, at) => (at === start ? { ...image, alt: opened.alt, caption: opened.caption, detail: opened.detail } : image)), start };
+  /* The original of a pair opens on its pair, showing the original. */
+  if (start < 0) {
+    start = images.findIndex((image) => image.before?.src === opened.src);
+    if (start >= 0) return { images, start, before: true };
+  }
+  if (start < 0) return { images: [opened], start: 0, before: false };
+  return { images: images.map((image, at) => (at === start ? { ...image, alt: opened.alt, caption: opened.caption, detail: opened.detail } : image)), start, before: false };
 }
 
 /**
- * Fullscreen image viewer: wheel zooms around the cursor, drag pans, double
- * click toggles fit/200%, Esc or a click on the dimmed backdrop closes. ←/→
- * and the edge buttons step through the conversation's pictures and stop at
- * either end. A picture loads when it comes within one step of the shown one,
+ * Fullscreen image viewer: wheel and pinch zoom around the cursor or the
+ * fingers, a drag pans a zoomed picture, a double click or tap toggles
+ * fit/200% (`useImageGesture`), Esc or a click on the dimmed backdrop closes.
+ * ←/→, the edge buttons and a sideways swipe at fit step through the
+ * conversation's pictures and stop at either end; a swipe up or down at fit
+ * closes. A picture loads when it comes within one step of the shown one,
  * hidden, so it is on screen the moment it is reached. Every picture loaded
  * stays mounted until the viewer closes: a picture no mounted feed row draws
  * has no other holder, and once let go the browser may download it again.
+ * A picture with an original carries a two-way switch at the bottom of the
+ * screen: the original takes the picture's place at the same zoom and pan.
  */
-export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
+export function Lightbox({ src, alt, caption, detail, at, onShow, onClose }: Props) {
   const { t } = useLocale();
   const gallery = useContext(GalleryContext);
   const owner = useContext(OwnerContext);
   /* Read once, when the viewer opens: the list holds still under the operator
      while a live feed keeps growing. */
-  const [{ images, start }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption, detail, at }, owner));
+  const [{ images, start, before: openedBefore }] = useState(() => openAt(gallery?.() ?? [], { src, alt, caption, detail, at }, owner));
   const [index, setIndex] = useState(start);
+  const [before, setBefore] = useState(openedBefore);
+  const told = useRef(onShow);
+  useEffect(() => { told.current = onShow; }, [onShow]);
   /* The first and the last picture shown so far. A move is one step, so every
      picture between them has been shown too. */
   const [reach, setReach] = useState({ from: start, to: start });
-  const [scale, setScale] = useState(1);
-  const [tx, setTx] = useState(0);
-  const [ty, setTy] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const press = useRef<{ x: number; y: number; backdrop: boolean } | null>(null);
 
   useOverlayEscape(onClose);
 
-  const reset = useCallback(() => {
-    setScale(1);
-    setTx(0);
-    setTy(0);
-  }, []);
+  const step = (direction: -1 | 1) => {
+    const next = index + direction;
+    if (next >= 0 && next < images.length) show(next);
+  };
+  const { frameRef, imageRef, bind, fit, view, moving, zoomBy, reset } = useImageGesture({ maxScale: MAX_SCALE, zoomedScale: () => 2, swipe: { step, close: onClose } });
 
-  /* Every move, by key or by button, starts the next picture unzoomed. */
+  /* Every move, by key, by button or by swipe, starts the next picture unzoomed, on its changed side. */
   const show = useCallback((next: number) => {
     setIndex(next);
+    setBefore(false);
     setReach((reach) => ({ from: Math.min(reach.from, next), to: Math.max(reach.to, next) }));
     reset();
-  }, [reset]);
+    told.current?.(images[next]!);
+  }, [reset, images]);
 
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
@@ -128,17 +144,8 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [index, images.length, show]);
 
-  const clamp = (value: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
-  const zoomBy = (factor: number, cx = 0, cy = 0) => {
-    const next = clamp(scale * factor);
-    const ratio = next / scale;
-    /* Keep the point under the cursor stationary while zooming. */
-    setScale(next);
-    setTx(cx - (cx - tx) * ratio);
-    setTy(cy - (cy - ty) * ratio);
-  };
-
   const image = images[index]!;
+  const showing = before && image.before ? { ...image, ...image.before } : image;
   const first = Math.max(0, reach.from - 1);
   const mounted = Array.from({ length: Math.min(images.length - 1, reach.to + 1) - first + 1 }, (_, at) => first + at);
   /* A phone's toolbar buttons keep a whole finger's target. */
@@ -150,12 +157,12 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
      overlay would fill the pane, not the screen. Portal to <body> escapes it. */
   return createPortal(
     <div
-      className={`fixed inset-0 ${Z.overlay} flex flex-col bg-black/85 backdrop-blur-sm`}
+      className={`fixed inset-0 ${Z.overlay} flex flex-col bg-black/85 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] backdrop-blur-sm`}
       role="dialog"
       aria-modal="true"
-      aria-label={image.alt}
+      aria-label={showing.alt}
       onPointerDown={(event) => {
-        press.current = { x: event.clientX, y: event.clientY, backdrop: !(event.target as Element).closest("img, button") };
+        press.current = { x: event.clientX, y: event.clientY, backdrop: !(event.target as Element).closest("img, button, [data-lightbox-compare]") };
       }}
       onClick={(event) => {
         /* The dimmed area closes the viewer: a press that began off the
@@ -163,7 +170,7 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
            click wherever the pointer was released, so it never closes. */
         const pressed = press.current;
         press.current = null;
-        if (!pressed?.backdrop || (event.target as Element).closest("img, button")) return;
+        if (!pressed?.backdrop || (event.target as Element).closest("img, button, [data-lightbox-compare]")) return;
         if (Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > CLICK_SLOP) return;
         onClose();
       }}
@@ -171,7 +178,7 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
       <div className={`flex items-center gap-x-2 px-4 py-2.5 ${image.detail ? "flex-wrap gap-y-1" : ""}`}>
         {images.length > 1 ? (
           <span data-lightbox-position className="shrink-0 text-[12.5px] font-semibold tabular-nums text-white/85">
-            {index + 1} / {images.length}
+            {image.place ?? `${index + 1} / ${images.length}`}
           </span>
         ) : null}
         {image.detail ? (
@@ -179,11 +186,11 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
              no room, so it takes its own line under them, the name above the
              source; a wide screen keeps it in the toolbar. */
           <span data-lightbox-caption className="order-last flex min-w-0 basis-full flex-col text-[12.5px] font-semibold text-white/85 sm:order-none sm:flex-1 sm:basis-0 sm:flex-row sm:gap-1">
-            <span className="min-w-0 truncate">{image.caption ?? image.alt}</span>
+            <span className="min-w-0 truncate">{showing.caption ?? showing.alt}</span>
             <span data-lightbox-detail className="min-w-0 truncate text-white/65"><span aria-hidden className="hidden sm:inline">· </span>{image.detail}</span>
           </span>
         ) : (
-          <span data-lightbox-caption className="min-w-0 truncate text-[12.5px] font-semibold text-white/85">{image.caption ?? image.alt}</span>
+          <span data-lightbox-caption className="min-w-0 truncate text-[12.5px] font-semibold text-white/85">{showing.caption ?? showing.alt}</span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
           <button
@@ -198,7 +205,7 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
             aria-label={t("lightbox.resetZoom")}
             onClick={reset}
           >
-            {Math.round(scale * 100)}%
+            {Math.round(view.scale * 100)}%
           </button>
           <button
             className={`${tool} px-2.5 py-1`}
@@ -216,48 +223,33 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
           </button>
         </span>
       </div>
-      <div className="relative min-h-0 flex-1">
-        <div
-          className="h-full touch-none overflow-hidden"
-          onWheel={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            const cx = event.clientX - rect.left - rect.width / 2;
-            const cy = event.clientY - rect.top - rect.height / 2;
-            zoomBy(event.deltaY < 0 ? 1.18 : 1 / 1.18, cx, cy);
-          }}
-          onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            drag.current = { x: event.clientX, y: event.clientY, tx, ty };
-            setDragging(true);
-          }}
-          onPointerMove={(event) => {
-            if (!drag.current) return;
-            setTx(drag.current.tx + (event.clientX - drag.current.x));
-            setTy(drag.current.ty + (event.clientY - drag.current.y));
-          }}
-          onPointerUp={() => {
-            drag.current = null;
-            setDragging(false);
-          }}
-          onPointerCancel={() => {
-            drag.current = null;
-            setDragging(false);
-          }}
-          onDoubleClick={() => (scale === 1 ? zoomBy(2) : reset())}
-        >
+      {/* The hand is read here rather than on the frame, so a finger that
+          lands on an edge button still pinches with one on the picture. */}
+      <div className="relative min-h-0 flex-1 touch-none" {...bind}>
+        <div ref={frameRef} className="h-full overflow-hidden">
           <div className="flex h-full items-center justify-center">
-            {mounted.map((at) => (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                key={at}
-                src={images[at]!.src}
-                alt={images[at]!.alt}
-                hidden={at !== index}
-                draggable={false}
-                className={`max-h-full max-w-full select-none ${dragging ? "" : "transition-transform duration-75"} ${scale > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in"}`}
-                style={at === index ? { transform: `translate(${tx}px, ${ty}px) scale(${scale})` } : undefined}
-              />
-            ))}
+            {mounted.flatMap((at) => {
+              const entry = images[at]!;
+              /* An original is loaded with its pair, so the switch shows it at once. */
+              const sides = entry.before ? [{ side: "before" as const, ...entry.before }, { side: "after" as const, ...entry }] : [{ side: "after" as const, ...entry }];
+              return sides.map((picture) => {
+                const current = at === index && (picture.side === "before") === (before && Boolean(entry.before));
+                return (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    key={`${at}:${picture.side}`}
+                    ref={current ? imageRef : undefined}
+                    src={picture.src}
+                    alt={picture.alt}
+                    hidden={!current}
+                    data-lightbox-side={entry.before ? picture.side : undefined}
+                    draggable={false}
+                    className={`max-h-full max-w-full select-none ${moving ? "" : "transition-transform duration-75"} ${fit ? "cursor-zoom-in" : "cursor-grab active:cursor-grabbing"}`}
+                    style={current ? { transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})` } : undefined}
+                  />
+                );
+              });
+            })}
           </div>
         </div>
         {index > 0 ? (
@@ -269,6 +261,23 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
           <button type="button" data-lightbox-step="next" className={`${edge} right-2`} aria-label={t("lightbox.next")} onClick={() => show(index + 1)}>
             <ChevronRight className="h-5 w-5" aria-hidden />
           </button>
+        ) : null}
+        {image.before ? (
+          /* Under the thumb on a phone, clear of the edge buttons. */
+          <div role="group" aria-label={t("lightbox.compare")} data-lightbox-compare="" className="absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-1 rounded-xl border border-white/25 bg-black/55 p-1">
+            {([["before", "lightbox.original"], ["after", "lightbox.changed"]] as const).map(([side, key]) => (
+              <button
+                key={side}
+                type="button"
+                data-lightbox-compare-side={side}
+                aria-pressed={before === (side === "before")}
+                className="inline-flex min-h-11 items-center rounded-lg px-3.5 text-[12.5px] font-semibold text-white/80 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 aria-pressed:bg-white/90 aria-pressed:text-black sm:min-h-8"
+                onClick={() => setBefore(side === "before")}
+              >
+                {t(key)}
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
     </div>,

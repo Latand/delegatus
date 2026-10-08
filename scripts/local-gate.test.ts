@@ -84,7 +84,8 @@ test("state isolation replaces inherited roots and removes the live owner claim"
   }
   expect(env.LLV_STATE_OWNER).toBeUndefined(); expect(env.LLV_INBOX_DIR).toBeUndefined();
   for (const key of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) expect(env[key]).toBeUndefined();
-  expect(env.LLV_GATE_LOCK_DIR).toBe(path.join(sandbox, "delegatus-gate"));
+  expect(env.LLV_GATE_LOCK_DIR).toBe("/var/tmp");
+  expect(isolatedEnvironment(sandbox, { NODE_ENV: "test", LLV_GATE_LOCK_DIR: sandbox }).LLV_GATE_LOCK_DIR).toBe(sandbox);
   expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
 });
 test("scope uses executed import closure and the workflow test lists", () => {

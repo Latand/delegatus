@@ -1,5 +1,5 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
-import { runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
+import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
 import { isPermissionRequest, permissionCommandExcerpt } from "./permissionRequests";
@@ -272,10 +272,94 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   };
 }
 
+const DELTA_TEXT_LIMIT_BYTES = 8 * 1024;
+
+/**
+ * The event pump answers one socket round trip per journal append. A Codex
+ * answer streams a delta every few characters, so a 60 000-character final
+ * answer was about 6 000 appends; under a loaded Viewer each took 80–200 ms and
+ * the journal finished replaying the answer seven minutes after the turn ended.
+ * Meanwhile the card kept streaming text and every idle retirement fence was
+ * overtaken by those late deltas.
+ *
+ * Deltas the host has already produced are folded into one delta under the
+ * last folded sequence, which is the producer cursor the journal keeps. Only
+ * deltas of the same turn under consecutive sequences fold, up to the
+ * projection's text bound, and only while the next event is ready, so a live
+ * stream is never held back. A folded delta names the text length of each
+ * delta it joined, so the journal can drop the ones another writer already
+ * recorded under the same cursor.
+ *
+ * The journal bounds the serialized payload, and JSON doubles a backslash, a
+ * quote or a newline, so a fold also ends before its projected payload would
+ * pass that budget. The pump retries a refused append with the same event
+ * forever, so one oversized fold would hold back the rest of the turn and its
+ * end. A delta that ends a fold opens the next one with its own sequence.
+ */
+export type CoalescedEngineEvent = RuntimeEvent | (Extract<RuntimeEvent, { kind: "delta" }> & { foldedTextLengths: number[] });
+
+export function coalesceReadyEngineDeltas(
+  events: AsyncIterator<RuntimeEvent>,
+  conversationId = "",
+  maxTextBytes = DELTA_TEXT_LIMIT_BYTES,
+  maxPayloadBytes = RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES,
+): AsyncIterator<CoalescedEngineEvent> {
+  // Summed per delta, which is exact for whole text and an upper bound when a
+  // surrogate pair is split across two deltas.
+  const serializedTextBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
+  type Read = { result: IteratorResult<RuntimeEvent> } | { error: unknown };
+  let pending: Promise<Read> | null = null;
+  let carried: Read | null = null;
+  const pull = () => (pending ??= events.next().then((result) => ({ result }), (error: unknown) => ({ error })));
+  const settle = (read: Read): IteratorResult<RuntimeEvent> => {
+    if ("error" in read) throw read.error;
+    return read.result;
+  };
+  return {
+    async next() {
+      const first = carried ?? await pull();
+      carried = null;
+      pending = null;
+      const head = settle(first);
+      if (head.done || head.value.kind !== "delta") return head;
+      let merged = head.value;
+      let bytes = Buffer.byteLength(merged.text);
+      let payloadBytes = Buffer.byteLength(JSON.stringify({ conversationId, turnId: merged.turnId, text: "" }))
+        + serializedTextBytes(merged.text);
+      const lengths = [merged.text.length];
+      while (true) {
+        const ready = await Promise.race([pull(), new Promise<null>((resolve) => setImmediate(() => resolve(null)))]);
+        if (!ready) break;
+        pending = null;
+        const value = "result" in ready && !ready.result.done ? ready.result.value : null;
+        const added = value?.kind === "delta" && value.turnId === merged.turnId && value.seq === merged.seq + 1
+          ? Buffer.byteLength(value.text)
+          : null;
+        const addedPayload = value?.kind === "delta" ? serializedTextBytes(value.text) : 0;
+        if (value?.kind !== "delta" || added === null || bytes + added > maxTextBytes
+          || payloadBytes + addedPayload > maxPayloadBytes) {
+          carried = ready;
+          break;
+        }
+        merged = { ...value, text: merged.text + value.text };
+        bytes += added;
+        payloadBytes += addedPayload;
+        lengths.push(value.text.length);
+      }
+      return { done: false, value: lengths.length > 1 ? { ...merged, foldedTextLengths: lengths } : merged };
+    },
+    async return(value?: unknown) {
+      carried = null;
+      pending = null;
+      return await events.return?.(value) ?? { done: true, value: undefined };
+    },
+  };
+}
+
 export function projectEngineHostEvent(
   conversationId: string,
   hostKey: string,
-  event: RuntimeEvent,
+  event: CoalescedEngineEvent,
 ): RuntimeEventInput | null {
   const base = {
     scope: { type: "session" as const, id: conversationId },
@@ -286,7 +370,9 @@ export function projectEngineHostEvent(
     return { ...base, kind: "turn-started", payload: { conversationId, turnId: event.turnId } };
   }
   if (event.kind === "delta") {
-    return { ...base, kind: "delta", payload: { conversationId, turnId: event.turnId, text: clipped(event.text, 8 * 1024) } };
+    const text = clipped(event.text, 8 * 1024);
+    const folded = "foldedTextLengths" in event && text === event.text ? { foldedTextLengths: event.foldedTextLengths } : {};
+    return { ...base, kind: "delta", payload: { conversationId, turnId: event.turnId, text }, ...folded };
   }
   if (event.kind === "voice-transcript") {
     return {

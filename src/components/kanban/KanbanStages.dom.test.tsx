@@ -254,7 +254,13 @@ const type = (field: HTMLTextAreaElement, value: string) => {
 };
 /* The lane's actions are a group in the card's ⋯ (#2148). */
 const laneMenu = (host: HTMLElement) => card(host).querySelector<HTMLElement>("[data-menu]");
-const menuItem = (host: HTMLElement, label: string) => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].find((item) => item.querySelector(".lbl")?.firstChild?.textContent === label) ?? null;
+/* A pipeline's actions are a page of the card's ⋯: where the label is not on the resting list, the row that opens the page is pressed on the way. */
+const menuItem = (host: HTMLElement, label: string) => {
+  const find = () => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].find((item) => item.querySelector(".lbl")?.firstChild?.textContent === label) ?? null;
+  const lane = host.querySelector<HTMLElement>('.menu [data-cm-section^="lane:"]');
+  if (!find() && lane) click(lane);
+  return find();
+};
 const menuLabels = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].map((item) => [item.querySelector(".lbl")?.firstChild?.textContent, item.getAttribute("aria-disabled") === "true", item.querySelector(".why")?.textContent ?? null]);
 const receiptTexts = (host: HTMLElement) => [...host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent);
 const sheet = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-stages-sheet]");
@@ -263,7 +269,7 @@ const pane = (host: HTMLElement, stageId: string) => sheet(host)?.querySelector<
 const same = (actual: unknown, expected: unknown) => expect(actual === expected && expected !== null && expected !== undefined).toBe(true);
 const readerIn = (element: Element | null): string | null => element?.querySelector<HTMLElement>("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
 
-test("the lane row's head opens Stages; the pipeline actions are a group in the card's one ⋯, each with the engine's own refusal (#2148)", async () => {
+test("the lane row's head opens Stages; the pipeline actions are a page of the card's one ⋯, each with the engine's own refusal (#2148)", async () => {
   const { host } = mount(searchPipeline());
   await tick();
   const head = card(host).querySelector(".pblock .pb-head")!;
@@ -273,10 +279,14 @@ test("the lane row's head opens Stages; the pipeline actions are a group in the 
   /* One ⋯ per card: the lane draws none of its own. */
   expect(card(host).querySelector("[data-pipeline-menu]")).toBeNull();
   click(laneMenu(host));
-  expect([...host.querySelectorAll(".menu .head")].map((node) => node.textContent)).toEqual(["Move to", "Priority", "Colour", "Pipeline actions"]);
-  const labels = menuLabels(host);
-  const start = labels.findIndex(([label]) => label === "Expand stages");
-  expect(labels.slice(start, start + 7)).toEqual([
+  /* The pipeline's actions sit behind one row of the card's ⋯, which opens them as a page. */
+  const lane = host.querySelector<HTMLElement>('.menu [data-cm-section^="lane:"]')!;
+  expect([lane.querySelector(".lbl")?.firstChild?.textContent, lane.getAttribute("data-cm-opens"), lane.getAttribute("aria-haspopup")]).toEqual(["Pipeline actions", "drill", "menu"]);
+  /* The card's own items stay at rest around it: its links and Hide in the icon cells. */
+  expect([...host.querySelectorAll('.menu .cm-quick [role="menuitem"]')].map((node) => node.getAttribute("aria-label")).slice(-2)).toEqual(["Attach PR or issue…", "Hide from board"]);
+  click(lane);
+  expect(host.querySelector(".menu [data-cm-back]")?.textContent).toBe("Pipeline actions");
+  expect(menuLabels(host).slice(1)).toEqual([
     ["Expand stages", false, null],
     ["Attach PR or issue to the pipeline…", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
@@ -285,9 +295,6 @@ test("the lane row's head opens Stages; the pipeline actions are a group in the 
     ["Finishes the task", false, "When the pipeline completes and its PR merges, the task moves to Done."],
     ["Close the pipeline", false, "Stops its agents. Uncommitted work stays in the worktree."],
   ]);
-  /* The card's own items stay around the group: its links before, Hide after. */
-  expect(labels[start - 1]?.[0]).toBe("Attach PR or issue…");
-  expect(labels.at(-1)?.[0]).toBe("Hide from board");
 });
 
 test("Pause goes to the pipeline route, the header says it is on its way, and the receipt says what the server did", async () => {
