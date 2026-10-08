@@ -5,7 +5,7 @@
       "lang": "en",
       "width": 1440,
       "row": "5",
-      "rowTitle": "atlas · 3 need you · 5 working · 21 conversations · updated 31s",
+      "rowTitle": "atlas · 3 need you · 5 working · 21 conversations · updated 30s",
       "overview": "8",
       "rows": [
         {
@@ -44,7 +44,8 @@
       "railNeeds": "5",
       "railLive": "8",
       "topLine": "8 agents working in 3 projects · Only what is working right now",
-      "summary": "5 need you·15 tasks on the board",
+      "summary": "16 tasks on the board",
+      "island": "5",
       "column": "3 working"
     },
     {
@@ -101,7 +102,8 @@
       "railNeeds": "5",
       "railLive": "8",
       "topLine": "8 агентів працюють у 3 проєктах · Тільки те, над чим працюють зараз",
-      "summary": "5 чекають на вас·16 задач на дошці",
+      "summary": "16 задач на дошці",
+      "island": "5",
       "column": "3 працюють"
     },
     {

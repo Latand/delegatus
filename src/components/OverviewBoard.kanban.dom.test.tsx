@@ -347,13 +347,16 @@ test("an archived project's working agent is not on the Overview's top line", ()
   expect(topLine).toContain(translate("en", "overview.archived", { count: 1 }));
 });
 
-test("the Overview bar's «need you» is the rail's Overview row 👤", () => {
-  /* The rail sums the needs-you queue per project; the bar says that sum,
-     whatever the cards on the board carry. */
+test("the Overview bar leaves «need you» to the attention island", () => {
+  /* The island at the bar's right end says the rail's Overview row 👤; the
+     bar's summary says only the board's task count, as a project board's bar
+     leaves need-you to the island. */
   const { host } = mount(FILES, TASKS, new Set(), new Map([[LEDGER, 3], [ATLAS, 2]]));
   const header = host.querySelector<HTMLElement>(".bar .summary")?.textContent ?? "";
 
-  expect(header).toContain(translate("en", "kanban.overviewNeeds", { count: 5 }));
+  expect(header).not.toContain(translate("en", "kanban.overviewNeeds", { count: 5 }));
+  expect(header).toBe(translate("en", "kanban.overviewTasks", { count: 5 }));
+  expect(host.querySelector(".bar .summary .dot.warn")).toBeNull();
 });
 
 test("nothing that navigates is nested inside anything else that navigates (#699)", () => {

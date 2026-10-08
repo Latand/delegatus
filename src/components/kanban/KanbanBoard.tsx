@@ -112,9 +112,6 @@ export interface KanbanOverviewScope {
   /** The cards the Overview keeps. Applied exactly where search is applied,
       so a rejected card leaves the columns and no count. */
   keep: (card: KanbanCardModel) => boolean;
-  /** The decisions waiting on the operator, the number the rail's Overview
-      row 👤 shows (`attentionTotal`): the header's «N need you» says this one. */
-  needsYou: number;
 }
 
 export interface KanbanBoardProps {
@@ -2770,17 +2767,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {props.overview ? (
         /* The Overview keeps the bar it had before the project board's header was put in order
            (#1801 was the project board only), and the tools wrapping under the island on its
-           narrow faces. Who is working is said once, on the Overview's top line above it; the
-           need-you number is the rail's Overview row's. */
+           narrow faces. Who is working is said once, on the Overview's top line above it; who
+           needs you is said once, by the attention island at the bar's right end, as on a
+           project board. */
         <header className="bar" data-bar="overview">
           <span className="summary">
-            {props.overview.needsYou ? (
-              <>
-                <span className="dot warn" aria-hidden="true" />
-                <span className="num">{t("kanban.overviewNeeds", { count: props.overview.needsYou })}</span>
-                <span aria-hidden="true">·</span>
-              </>
-            ) : null}
             <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
           </span>
           {reachStatus}

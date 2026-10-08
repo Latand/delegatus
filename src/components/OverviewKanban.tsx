@@ -76,8 +76,6 @@ export interface OverviewKanbanProps {
   tasks: readonly BoardTask[];
   flows: Flow[];
   pipelines: Pipeline[];
-  /** The decisions waiting on the operator, as the rail's Overview row counts them. */
-  needsYou: number;
   loaded: boolean;
   catalogFailures: number;
   /** A card's project label opens that project's own board. */
@@ -100,7 +98,7 @@ export interface OverviewPhoneDoors {
   onHiddenCount?: (count: number) => void;
 }
 
-export function OverviewKanban({ projects, displayNames, files, tasks, flows, pipelines, needsYou, loaded, catalogFailures, onSelectProject, onOpenConversations, phone = null, lead = null }: OverviewKanbanProps) {
+export function OverviewKanban({ projects, displayNames, files, tasks, flows, pipelines, loaded, catalogFailures, onSelectProject, onOpenConversations, phone = null, lead = null }: OverviewKanbanProps) {
   const { t } = useLocale();
   /* The dashboard's board clock, shared by cadence: the working predicate is
      read from row states that age, so it must advance between scans. */
@@ -122,8 +120,8 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
   const surfacePipelines = useMemo(() => pipelinesForProjects(pipelines, shown, files), [pipelines, shown, files]);
   const boardTasks = useMemo(() => tasks.filter((task) => shown.has(task.project)), [tasks, shown]);
   const scope = useMemo<KanbanOverviewScope>(
-    () => ({ names: displayNames, onOpenProject: onSelectProject, keep: cardHasLiveWork, needsYou }),
-    [displayNames, onSelectProject, needsYou],
+    () => ({ names: displayNames, onOpenProject: onSelectProject, keep: cardHasLiveWork }),
+    [displayNames, onSelectProject],
   );
   /* The phone's pin walks the queue the bar's ⚠ sheet lists on the Overview:
      every project's. Keyed by value, since the queue is rebuilt each render. */

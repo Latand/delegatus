@@ -22749,7 +22749,8 @@ describe("sidebar and board count working agents by one rule", () => {
    * the Overview row is the sum of the rows, the In progress column counts the
    * same agents on its own cards, and the phone's project list says the
    * desktop's number in the same green ● style. On the Overview the top line
-   * says who is working and the bar's «need you» is the rail's Overview row 👤.
+   * says who is working, and the attention island alone says who needs you,
+   * with the rail's Overview row 👤.
    * Desktop 1440 and phone 390, English and Ukrainian.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one rule"
@@ -22798,8 +22799,8 @@ describe("sidebar and board count working agents by one rule", () => {
           await desk.page.screenshot({ path: path.join(out, `${lang}-1440.png`) });
           readings.push({ lang, width: 1440, ...read, sum });
 
-          /* The Overview says who is working once, on its top line, and its bar's «need you»
-             is the rail's Overview row 👤. */
+          /* The Overview says who is working once, on its top line, and who needs you once,
+             in the attention island, whose number is the rail's Overview row 👤. */
           await desk.page.locator("aside[data-project-rail] [data-rail-overview]").click();
           await desk.page.waitForSelector(".bar[data-bar='overview']", { timeout: 20_000 });
           await desk.page.waitForTimeout(500);
@@ -22810,6 +22811,7 @@ describe("sidebar and board count working agents by one rule", () => {
               railLive: text(document.querySelector("aside[data-project-rail] [data-rail-overview] [data-rail-live]")),
               topLine: text(document.querySelector("h1")?.nextElementSibling),
               summary: text(document.querySelector(".bar[data-bar='overview'] .summary")),
+              island: text(document.querySelector("[data-attention-island] [data-attention-count] .tabular-nums")),
               column: text(document.querySelector("[data-kanban-board] [data-status='assigned'] .col-head .live .ct")),
             };
           });
@@ -22817,7 +22819,9 @@ describe("sidebar and board count working agents by one rule", () => {
           expect(overview.topLine).toContain(translate(lang, "overview.agentsWorkingIn", { count: working, projects: translate(lang, "overview.projects", { count: read.rows.filter((row) => count(row.live) > 0).length }) }));
           expect(overview.summary).not.toContain(translate(lang, "kanban.overviewWorking", { count: working }));
           expect(count(overview.railNeeds)).toBeGreaterThan(0);
-          expect(overview.summary).toContain(translate(lang, "kanban.overviewNeeds", { count: count(overview.railNeeds) }));
+          expect(count(overview.island)).toBe(count(overview.railNeeds));
+          expect(overview.summary).not.toContain(translate(lang, "kanban.overviewNeeds", { count: count(overview.railNeeds) }));
+          expect(overview.summary).toBe(translate(lang, "kanban.overviewTasks", { count: count(overview.summary) }));
           if (overview.column) expect(overview.column).toBe(translate(lang, "kanban.columnWorking", { count: count(overview.column) }));
           await desk.page.screenshot({ path: path.join(out, `${lang}-1440-overview.png`) });
           expect(desk.pageErrors).toEqual([]);
