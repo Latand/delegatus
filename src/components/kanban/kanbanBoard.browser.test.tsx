@@ -16164,6 +16164,521 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 });
 
 
+describe("seat tick switch: four stops in the seat header and the phone's seat row, dragged, stepped and clicked", () => {
+  /*
+   * The tick's switch (docs/design/seat-tick-slider.md, variant 4) in the two
+   * places it is mounted: the kanban seat's header at 1440×900 and the phone's
+   * seat sheet at 390×844 with a touch pointer, over `?scenario=seat-head&tick=driver`.
+   * The driver holds the tick's record and answers the settings route the way
+   * the module does (the reason it requires off the default, the expiry it
+   * clears), so every frame after a move is a read-back.
+   *
+   * In en and uk, light and dark: every state at rest (off, the three presets,
+   * 15 min and 12 h set in the settings, a temporary 10 min, 10 min with a
+   * stale tick), then a held drag and its release sampled frame by frame, a
+   * quick stroke to off, two arrow steps back to the default, and a press that does
+   * not move, which opens the settings. At 768 px, where the seat's row gives
+   * up the word, the thumb is a round knob. Under reduced motion the thumb has
+   * no travel to sample.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 LLV_SEAT_TICK_SWITCH_FRAMES=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "seat tick switch"
+   *
+   * Frames go to LLV_SEAT_TICK_SWITCH_FRAMES (default `.artifacts/seat-tick-switch/frames`);
+   * the readings go to `evidence/seat-tick-switch/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-tick-switch");
+  const EVIDENCE = path.resolve("evidence/seat-tick-switch");
+  const FRAMES = path.resolve(process.env.LLV_SEAT_TICK_SWITCH_FRAMES ?? ".artifacts/seat-tick-switch/frames");
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const gateway = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const REFUSAL = "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
+
+  interface Row { enabled: boolean; wakeIntervalMinutes: number | null; reason: string | null; until: string | null; checkedAgo: number }
+  const STORED = "Release week: wake more often until every lane has merged.";
+  const STATES: Record<string, () => Row> = {
+    off: () => ({ enabled: false, wakeIntervalMinutes: null, reason: STORED, until: null, checkedAgo: 2 }),
+    "4h": () => ({ enabled: true, wakeIntervalMinutes: 240, reason: STORED, until: null, checkedAgo: 2 }),
+    "1h": () => ({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null, checkedAgo: 2 }),
+    "10m": () => ({ enabled: true, wakeIntervalMinutes: 10, reason: STORED, until: null, checkedAgo: 2 }),
+    "15m": () => ({ enabled: true, wakeIntervalMinutes: 15, reason: STORED, until: null, checkedAgo: 2 }),
+    "12h": () => ({ enabled: true, wakeIntervalMinutes: 720, reason: STORED, until: null, checkedAgo: 2 }),
+    until: () => ({ enabled: true, wakeIntervalMinutes: 10, reason: STORED, until: new Date(Date.now() + 150 * 60_000).toISOString(), checkedAgo: 2 }),
+    stale: () => ({ enabled: true, wakeIntervalMinutes: 10, reason: STORED, until: null, checkedAgo: 41 }),
+  };
+  /** What each state must draw: the stop, the thumb's kind, the dot, and the thumb's word in en and uk. */
+  const EXPECTED: Record<string, { stop: string; thumb: string; dot: string; en: string; uk: string }> = {
+    off: { stop: "0", thumb: "preset", dot: "muted", en: "off", uk: "вимк." },
+    "4h": { stop: "1", thumb: "preset", dot: "ok", en: "4 h", uk: "4 год" },
+    "1h": { stop: "2", thumb: "preset", dot: "ok", en: "1 h", uk: "1 год" },
+    "10m": { stop: "3", thumb: "preset", dot: "ok", en: "10 min", uk: "10 хв" },
+    "15m": { stop: "custom", thumb: "custom", dot: "ok", en: "15 min", uk: "15 хв" },
+    "12h": { stop: "custom", thumb: "custom", dot: "ok", en: "12 h", uk: "12 год" },
+    until: { stop: "3", thumb: "preset", dot: "ok", en: "10 min", uk: "10 хв" },
+    stale: { stop: "3", thumb: "preset", dot: "warn", en: "10 min", uk: "10 хв" },
+  };
+
+  const READ = `() => {
+    const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+    if (!control) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left * 10) / 10, y: Math.round(r.top * 10) / 10, w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 }; };
+    const thumb = control.querySelector("[data-seat-tick-thumb]");
+    const track = control.querySelector("[data-seat-tick-track]");
+    const face = control.querySelector("[data-seat-tick-face]");
+    const controls = control.closest("[data-orchestrator-controls]");
+    const row = control.closest("[data-seat-tick-row]");
+    const label = row ? row.querySelector('[data-mobile2-open="tick"] span:last-child') : null;
+    const tops = controls ? [...controls.children].map(el => Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2)) : [];
+    const edge = thumb.getBoundingClientRect();
+    /* A notch that is drawn at all, within 1 px of the thumb's edge or under it. */
+    const notchesTouching = [...control.querySelectorAll(".seat-tick-notch")].flatMap((notch, index) => {
+      const r = notch.getBoundingClientRect();
+      const opacity = Number(getComputedStyle(notch).opacity);
+      return opacity > 0.02 && r.right > edge.left - 1 && r.left < edge.right + 1 ? [index + ":" + opacity.toFixed(2)] : [];
+    });
+    return {
+      state: control.getAttribute("data-seat-tick-chip"),
+      stop: control.getAttribute("data-seat-tick-stop"),
+      mode: control.getAttribute("data-seat-tick-switch"),
+      now: control.getAttribute("aria-valuenow"),
+      valueText: control.getAttribute("aria-valuetext"),
+      expanded: control.getAttribute("aria-expanded"),
+      title: control.getAttribute("title"),
+      word: face ? face.textContent : null,
+      wordShown: face ? face.getClientRects().length > 0 : false,
+      thumbKind: thumb.getAttribute("data-seat-tick-thumb"),
+      dot: control.querySelector("[data-seat-tick-dot]").getAttribute("data-seat-tick-dot"),
+      dotInsideTrack: track.contains(control.querySelector("[data-seat-tick-dot]")),
+      until: control.querySelector("[data-seat-tick-until]") !== null,
+      control: box(control), track: box(track), thumb: box(thumb),
+      notchesTouching,
+      thumbInsideTrack: thumb.getBoundingClientRect().left >= track.getBoundingClientRect().left - 0.5 && thumb.getBoundingClientRect().right <= track.getBoundingClientRect().right + 0.5,
+      wordFits: face ? face.getBoundingClientRect().width <= thumb.getBoundingClientRect().width - 2 : true,
+      controlsOnOneRow: tops.length ? Math.max(...tops) - Math.min(...tops) <= 2 : null,
+      labelTruncated: label ? label.scrollWidth > label.clientWidth : null,
+      labelText: label ? label.textContent : null,
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  }`;
+  /** Every animation frame's drawn thumb, in stops, from `start()` to `stop()`. */
+  const TRACE = `() => {
+    const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+    const trace = [];
+    let on = true;
+    const t0 = performance.now();
+    const tick = () => {
+      if (!on) return;
+      trace.push([Math.round(performance.now() - t0), Number(control.style.getPropertyValue("--tick-pos"))]);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    window.__tickMark = () => trace.length;
+    window.__tickTrace = () => { on = false; return trace; };
+  }`;
+  type Reading = { state: string; stop: string; mode: string; now: string; valueText: string; expanded: string; title: string; word: string | null; wordShown: boolean; thumbKind: string; dot: string; dotInsideTrack: boolean; until: boolean; notchesTouching: string[]; offTint?: { tint: number[]; pill: number[] }; ring?: { before: number[]; after: number[] }; control: { x: number; y: number; w: number; h: number }; track: { x: number; y: number; w: number; h: number }; thumb: { x: number; y: number; w: number; h: number }; thumbInsideTrack: boolean; wordFits: boolean; controlsOnOneRow: boolean | null; labelTruncated: boolean | null; labelText: string | null; pageOverflow: boolean };
+
+  /** A column of captioned crops on the page's own background, as one PNG. */
+  async function sheet(file: string, rows: Array<{ caption: string; png: Buffer }>, scheme: Scheme, captionWidth: number): Promise<void> {
+    const metas = await Promise.all(rows.map((row) => sharp(row.png).metadata()));
+    const gap = 16;
+    const width = captionWidth + Math.max(...metas.map((meta) => meta.width ?? 0)) + gap * 3;
+    const height = metas.reduce((sum, meta) => sum + (meta.height ?? 0) + gap, gap);
+    const ink = scheme === "dark" ? "#e8e6f0" : "#23202b";
+    const escape = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    let y = gap;
+    const layers: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
+    const captions: string[] = [];
+    rows.forEach((row, index) => {
+      const h = metas[index]!.height ?? 0;
+      captions.push(`<text x="${gap}" y="${y + h / 2 + 8}" font-family="DejaVu Sans, Noto Sans, sans-serif" font-size="24" font-weight="600" fill="${ink}">${escape(row.caption)}</text>`);
+      layers.push({ input: row.png, left: captionWidth + gap * 2, top: y });
+      y += h + gap;
+    });
+    layers.unshift({ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${captions.join("")}</svg>`), left: 0, top: 0 });
+    await sharp({ create: { width, height, channels: 4, background: scheme === "dark" ? "#14141c" : "#f3f0eb" } }).composite(layers).png({ compressionLevel: 9, palette: true }).toFile(file);
+  }
+
+  browserTest("every state, a drag with its release, a quick stroke, arrows and a click, at 1440 and 390 px in en and uk, light and dark", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.mkdirSync(FRAMES, { recursive: true });
+    let row: Row = STATES["1h"]!();
+    let writes: Array<Record<string, unknown>> = [];
+    const answerOf = (project: string) => {
+      const isDefault = row.enabled && row.wakeIntervalMinutes === null;
+      const updatedAt = isDefault && !row.reason ? null : ago(40);
+      return {
+        maintenance: {
+          enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+          updatedAt: null, setBy: null, live: null, lastRun: null, nextEligibleAt: null, nextRunAt: null, waitingOn: "off", pauseReason: null, runsError: null,
+        },
+        project, changed: false, at: new Date().toISOString(), actor: gateway,
+        settings: { project, enabled: row.enabled, wakeIntervalMinutes: row.wakeIntervalMinutes, reason: row.reason, monitorPrompt: null, until: row.until, updatedAt, setBy: updatedAt ? gateway : null },
+        effective: {
+          enabled: row.enabled, wakeIntervalMinutes: row.wakeIntervalMinutes ?? 60, reason: row.reason, monitorPrompt: null, until: row.until,
+          isDefault, configured: updatedAt !== null, lapsed: false, updatedAt,
+        },
+        defaults: { project, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null },
+        defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
+        policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+        state: { lastCheckAt: ago(row.checkedAgo), lastWakeAt: ago(38), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
+        stateError: null, lastRun: null, lastDelivery: { at: ago(38), outcome: "landed" }, journalError: null,
+      };
+    };
+    const server = await serveEvidenceFixture(OUT, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        const project = new URL(request.url).searchParams.get("project") ?? "atlas";
+        if (request.method !== "PUT") return Response.json(answerOf(project));
+        const change = await request.json() as Record<string, unknown>;
+        writes.push(change);
+        const next = { ...row };
+        if ("enabled" in change) next.enabled = change.enabled as boolean;
+        if ("wakeIntervalMinutes" in change) next.wakeIntervalMinutes = change.wakeIntervalMinutes as number | null;
+        if ("reason" in change) next.reason = change.reason as string | null;
+        if ("untilMinutes" in change) next.until = change.untilMinutes === null ? null : new Date(Date.now() + Number(change.untilMinutes) * 60_000).toISOString();
+        const isDefault = next.enabled && next.wakeIntervalMinutes === null;
+        if (!isDefault && !next.reason) return Response.json({ error: REFUSAL }, { status: 400 });
+        if (isDefault) next.until = null;
+        row = next;
+        return Response.json({ ...answerOf(String(change.project ?? project)), changed: true });
+      },
+      "/api/roles": {
+        revision: "fixture", health: "ok",
+        launchChoices: [{ engine: "claude", models: [{ id: "opus", label: "Opus", shortLabel: "Opus", use: "build", efforts: ["low", "medium", "high", "xhigh", "max"] }] }],
+        roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const must = (ok: boolean, text: string) => { if (!ok) failures.push(text); };
+    const CONTROL = '[role="slider"][data-seat-tick-switch]';
+    const read = (page: Page) => page.evaluate(`(${READ})()`) as Promise<Reading | null>;
+
+    /** The control drawn in its place, with the record read. */
+    async function open(width: number, lang: "en" | "uk", scheme: Scheme, state: string, motion: "no-preference" | "reduce" = "no-preference") {
+      row = STATES[state]!();
+      writes = [];
+      const phone = width < 640;
+      const fixture = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: phone ? 844 : 900 }, scheme, lang, motion, phone, 2);
+      const { page } = fixture;
+      await page.evaluate((value) => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
+      await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+      if (phone) {
+        await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+        await page.locator("[data-mobile2-open=seat]").first().click();
+        await page.waitForSelector(`[data-mobile2-sheet='seat'] [data-seat-tick-row] ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+      } else {
+        await page.waitForSelector(`[data-kanban-seat] ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+      }
+      await page.waitForTimeout(500);
+      return { ...fixture, phone, crop: phone ? "[data-mobile2-sheet='seat'] [data-seat-tick-row]" : "[data-kanban-seat] [data-orchestrator-controls]" };
+    }
+    const shot = (page: Page, selector: string) => page.locator(selector).first().screenshot();
+    /** One pixel's colour, averaged over the device pixels under a CSS pixel. */
+    const pixel = async (page: Page, x: number, y: number) => {
+      const { data, info } = await sharp(await page.screenshot({ clip: { x, y, width: 1, height: 1 } })).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const sum = [0, 0, 0];
+      for (let i = 0; i < data.length; i += 3) for (let c = 0; c < 3; c += 1) sum[c]! += data[i + c]!;
+      const n = info.width * info.height;
+      return sum.map((value) => Math.round(value / n)) as [number, number, number];
+    };
+    const centre = async (page: Page) => {
+      const box = (await page.locator(CONTROL).first().boundingBox())!;
+      return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+    };
+    /** One pointer for both surfaces: the mouse on the desktop, a finger on the phone. */
+    async function pointer(page: Page, phone: boolean) {
+      const cdp = phone ? await page.context().newCDPSession(page) : null;
+      const touch = (type: "touchStart" | "touchMove" | "touchEnd", points: Array<{ x: number; y: number }>) => cdp!.send("Input.dispatchTouchEvent", { type, touchPoints: points });
+      return {
+        down: (x: number, y: number) => (cdp ? touch("touchStart", [{ x, y }]) : page.mouse.move(x, y).then(() => page.mouse.down())),
+        move: (x: number, y: number) => (cdp ? touch("touchMove", [{ x, y }]) : page.mouse.move(x, y)),
+        up: () => (cdp ? touch("touchEnd", []) : page.mouse.up()),
+      };
+    }
+
+    try {
+      for (const width of [1440, 390] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const scheme of ["light", "dark"] as const) {
+            const key = `${width}-${lang}-${scheme}`;
+            const rest: Array<{ caption: string; png: Buffer }> = [];
+            const states: Record<string, Reading | null> = {};
+            try {
+              /* Every state at rest. */
+              for (const state of Object.keys(STATES)) {
+                const { context, page, pageErrors, phone, crop } = await open(width, lang, scheme, state);
+                try {
+                  const reading = await read(page);
+                  states[state] = reading;
+                  const want = EXPECTED[state]!;
+                  const tag = `${key} ${state}`;
+                  if (!reading) { failures.push(`${tag}: no switch was drawn`); continue; }
+                  must(reading.stop === want.stop && reading.thumbKind === want.thumb, `${tag}: stop ${reading.stop} / ${reading.thumbKind}, wanted ${want.stop} / ${want.thumb}`);
+                  must(reading.word === want[lang], `${tag}: the thumb says «${reading.word}», wanted «${want[lang]}»`);
+                  must(reading.dot === want.dot && !reading.dotInsideTrack, `${tag}: dot ${reading.dot}${reading.dotInsideTrack ? " inside the pill" : ""}, wanted ${want.dot} outside it`);
+                  must(reading.until === (state === "until"), `${tag}: hourglass ${reading.until ? "drawn" : "missing"}`);
+                  must(reading.thumbInsideTrack && reading.wordFits, `${tag}: the thumb leaves the pill or its word does not fit`);
+                  must(reading.notchesTouching.length === 0, `${tag}: notches ${reading.notchesTouching.join(", ")} touch the thumb`);
+                  if (state === "off") {
+                    /* The tint in the inset left of the thumb against the bare pill
+                       at its right end: off adds no hue, so it is no warmer. */
+                    const mid = reading.track.y + reading.track.h / 2 - 0.5;
+                    const tint = await pixel(page, reading.track.x + 1.5, mid);
+                    const pill = await pixel(page, reading.track.x + reading.track.w - 5, mid);
+                    must(tint[0] - tint[2] <= pill[0] - pill[2] + 1, `${tag}: the tint left of the off thumb is rgb(${tint.join(",")}), warmer than the pill's rgb(${pill.join(",")})`);
+                    reading.offTint = { tint, pill };
+                  }
+                  {
+                    /* The ring 1 px out from the thumb on either side: the tint
+                       reaches past the thumb's far edge, so the two match and
+                       no bare crescent shows beside it, the last stop included. */
+                    const mid = reading.thumb.y + reading.thumb.h / 2 - 0.5;
+                    const before = await pixel(page, reading.thumb.x - 1.5, mid);
+                    const after = await pixel(page, reading.thumb.x + reading.thumb.w + 0.5, mid);
+                    const seam = Math.max(...before.map((value, channel) => Math.abs(value - after[channel]!)));
+                    must(seam <= 4, `${tag}: the ring beside the thumb is rgb(${before.join(",")}) on its left and rgb(${after.join(",")}) on its right`);
+                    reading.ring = { before, after };
+                  }
+                  must(reading.control.h === (phone ? 36 : 24), `${tag}: the control is ${reading.control.h} px tall`);
+                  must(!reading.pageOverflow, `${tag}: the page scrolls sideways`);
+                  if (phone) must(reading.labelTruncated === false, `${tag}: the row's label «${reading.labelText}» is truncated`);
+                  else must(reading.controlsOnOneRow === true, `${tag}: the header's controls are not on one row`);
+                  must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+                  rest.push({ caption: state, png: await shot(page, crop) });
+                } finally {
+                  await context.close();
+                }
+              }
+              await sheet(path.join(FRAMES, `states-${key}.png`), rest, scheme, 110);
+
+              /* A held drag from the default toward 10 min, its release, a
+                 quick stroke to off, two arrows back, and a press that does not move. */
+              const { context, page, pageErrors, phone, crop } = await open(width, lang, scheme, "1h");
+              try {
+                const motion: Array<{ caption: string; png: Buffer }> = [];
+                const hand = await pointer(page, phone);
+                const at = await centre(page);
+                const stepPx = 20;
+                motion.push({ caption: "rest: 1 h", png: await shot(page, crop) });
+                await page.evaluate(`(${TRACE})()`);
+                await hand.down(at.x, at.y);
+                /* 0.6 of a stop in three quick moves, then held still: the thumb
+                   trails the pointer and swings softly past where it stopped. */
+                const reach = Math.round(stepPx * 0.6);
+                for (let step = 1; step <= 3; step += 1) await hand.move(at.x + Math.round((reach * step) / 3), at.y);
+                motion.push({ caption: "drag, on the way", png: await shot(page, crop) });
+                motion.push({ caption: "drag, just held", png: await shot(page, crop) });
+                await page.waitForTimeout(450);
+                const held = await read(page);
+                motion.push({ caption: "held at rest", png: await shot(page, crop) });
+                const released = await page.evaluate("window.__tickMark()") as number;
+                await hand.up();
+                for (const caption of ["release +1", "release +2", "release +3", "release +4"]) motion.push({ caption, png: await shot(page, crop) });
+                await page.waitForTimeout(700);
+                motion.push({ caption: "settled: 10 min", png: await shot(page, crop) });
+                const trace = await page.evaluate("window.__tickTrace()") as Array<[number, number]>;
+                const afterDrag = await read(page);
+                const dragWrites = [...writes];
+                const heldAt = Number(held?.now ?? "0");
+                /* The trace's two halves: up to the held position, then on to the stop. */
+                const peakHeld = Math.max(...trace.slice(0, released).map(([, pos]) => pos));
+                const peak = Math.max(...trace.map(([, pos]) => pos));
+                must(peakHeld > heldAt && peakHeld - heldAt < 0.25, `${key}: while held the thumb peaked at ${peakHeld} for a pointer at ${heldAt}, wanted a soft swing past it`);
+                must(peak - 3 < peakHeld - heldAt, `${key}: the release swings ${peak - 3} past its stop, more than the ${peakHeld - heldAt} it swung while held`);
+                must(held?.mode === "dragging" && heldAt > 2.4 && heldAt < 2.8, `${key}: the held drag reads ${held?.mode} at ${held?.now}`);
+                must(afterDrag?.stop === "3" && afterDrag.mode === "rest", `${key}: the release landed on ${afterDrag?.stop}`);
+                must(trace.filter(([, pos]) => pos > 2.02 && pos < 2.98).length >= 6, `${key}: the thumb jumped (${trace.length} samples)`);
+                must(peak > 3 && peak <= 3.08, `${key}: the release peaked at ${peak}, wanted a small overshoot past 3`);
+                must(trace[trace.length - 1]![1] === 3, `${key}: the thumb rested at ${trace[trace.length - 1]![1]}`);
+
+                /* A quick stroke to the left, released moving. It travels the whole
+                   way: a scripted pointer on a busy machine is not reliably faster
+                   than the flick speed, and the carry itself is held in the dom test. */
+                const from = await centre(page);
+                await hand.down(from.x, from.y);
+                for (let step = 1; step <= 4; step += 1) await hand.move(from.x - step * 16, from.y);
+                await hand.up();
+                await page.waitForTimeout(900);
+                const afterFlick = await read(page);
+                motion.push({ caption: "quick stroke left: off", png: await shot(page, crop) });
+                must(afterFlick?.stop === "0", `${key}: the stroke to the left landed on ${afterFlick?.stop}`);
+
+                /* Two arrows: one write, back to the default. */
+                await page.locator(CONTROL).first().focus();
+                await page.keyboard.press("ArrowRight");
+                await page.keyboard.press("ArrowRight");
+                await page.waitForTimeout(200);
+                const pendingStep = await read(page);
+                motion.push({ caption: "two arrows, pending", png: await shot(page, crop) });
+                await page.waitForTimeout(1_100);
+                const afterKeys = await read(page);
+                must(pendingStep?.mode === "pending" && pendingStep.now === "2", `${key}: the arrows read ${pendingStep?.mode} at ${pendingStep?.now}`);
+                must(afterKeys?.stop === "2" && afterKeys.mode === "rest", `${key}: the arrows landed on ${afterKeys?.stop}`);
+                const sent = [...writes];
+                const sentence = (en: string, uk: string) => (lang === "uk" ? uk : en);
+                const wanted = [
+                  { enabled: true, wakeIntervalMinutes: 10, untilMinutes: null, reason: sentence("The operator set the activity slider to «every 10 minutes».", "Оператор поставив повзунок активності на «кожні 10 хвилин».") },
+                  { enabled: false, untilMinutes: null, reason: sentence("Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.", "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок.") },
+                  { enabled: true, wakeIntervalMinutes: null, untilMinutes: null, reason: null },
+                ];
+                must(JSON.stringify(sent.map((change) => Object.fromEntries(Object.entries(change).filter(([name]) => name !== "project")))) === JSON.stringify(wanted), `${key}: the route was sent ${JSON.stringify(sent)}`);
+                must(dragWrites.length === 1, `${key}: the drag sent ${dragWrites.length} writes`);
+
+                /* A press that does not move opens the settings and writes nothing. */
+                const spot = await centre(page);
+                await hand.down(spot.x, spot.y);
+                await hand.move(spot.x + 2, spot.y);
+                await hand.up();
+                await page.waitForSelector(phone ? '[data-testid="mobile-seat-tick-sheet"]' : "[data-seat-tick-popover]", { timeout: 10_000 });
+                await page.waitForTimeout(500);
+                must(writes.length === sent.length, `${key}: the click wrote ${JSON.stringify(writes.slice(sent.length))}`);
+                must(await page.locator("[data-seat-tick-enabled]").count() === 1, `${key}: the settings did not open with their form`);
+                const whole = await page.screenshot(phone ? {} : { clip: { x: 760, y: 0, width: 680, height: 620 } });
+                await sharp(whole).resize({ width: phone ? 390 : 680 }).png({ compressionLevel: 9, palette: true }).toFile(path.join(FRAMES, `settings-${key}.png`));
+                await sheet(path.join(FRAMES, `motion-${key}.png`), motion, scheme, 290);
+                must(pageErrors.length === 0, `${key}: page errors ${pageErrors.join(" | ")}`);
+                readings[key] = {
+                  states,
+                  drag: { heldAt, peakWhileHeld: peakHeld, heldSwingPx: Math.round((peakHeld - heldAt) * stepPx * 100) / 100, releasePeak: peak, releaseOvershootPx: Math.round((peak - 3) * stepPx * 100) / 100, samples: trace.length, releasedAtSample: released, trace: trace.map(([at, pos]) => `${at}:${pos}`).join(" ") },
+                  writes: sent,
+                };
+              } finally {
+                await context.close();
+              }
+            } catch (error) {
+              failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            }
+          }
+        }
+      }
+
+      /* Where the row gives up the word, the thumb is a round knob: every
+         state, with no notch against it, then the drag on the short pill. */
+      for (const lang of ["en", "uk"] as const) {
+        const knobs: Array<{ caption: string; png: Buffer }> = [];
+        for (const state of Object.keys(STATES)) {
+          const { context, page, pageErrors, crop } = await open(768, lang, "light", state);
+          try {
+            const reading = await read(page);
+            const tag = `768-${lang} ${state}`;
+            must(reading !== null && !reading.wordShown && reading.thumb.w === 18, `${tag}: the thumb is ${reading?.thumb.w} px with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+            must(reading?.notchesTouching.length === 0, `${tag}: notches ${reading?.notchesTouching.join(", ")} touch the knob`);
+            must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            knobs.push({ caption: state, png: await shot(page, crop) });
+          } finally {
+            await context.close();
+          }
+        }
+        await sheet(path.join(FRAMES, `knob-768-${lang}-light.png`), knobs, "light", 110);
+        const { context, page, pageErrors } = await open(768, lang, "light", "10m");
+        try {
+          const reading = await read(page);
+          must(reading !== null && !reading.wordShown && reading.thumb.w === 18 && reading.thumb.h === 18, `768-${lang}: the thumb is ${reading?.thumb.w} × ${reading?.thumb.h} with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+          /* The knob on half the travel: 18 + 30 + 2 × 2 px of inset + the border, then the dot. */
+          must(reading?.track.w === 54 && reading.control.w === 66, `768-${lang}: the pill is ${reading?.track.w} px and the control ${reading?.control.w} px`);
+          /* The drag follows the pill that is drawn: 10 px a stop there. */
+          const at = await centre(page);
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.down();
+          await page.mouse.move(at.x - 11, at.y, { steps: 4 });
+          await page.waitForTimeout(250);
+          const dragged = await read(page);
+          await page.keyboard.press("Escape");
+          await page.mouse.up();
+          must(dragged?.now === "1.9", `768-${lang}: 11 px of drag on the short pill reads ${dragged?.now}, wanted 1.9`);
+          must(writes.length === 0, `768-${lang}: Escape still wrote ${JSON.stringify(writes)}`);
+          must(reading?.controlsOnOneRow === true && !reading.pageOverflow, `768-${lang}: the controls wrapped or the page scrolls`);
+          must(pageErrors.length === 0, `768-${lang}: page errors ${pageErrors.join(" | ")}`);
+          readings[`768-${lang}-knob`] = reading;
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The seat docked to the side at 1440: the row gives up the word there
+         too, and with an expiry the hourglass rides in the knob, so every
+         control of the row stays inside the seat — «Зупинити хост» was cut
+         by 9 px in uk when the hourglass stood beside the pill. */
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const side: Array<{ caption: string; png: Buffer }> = [];
+          for (const state of ["until", "stale", "15m"]) {
+            const { context, page, pageErrors } = await open(1440, lang, scheme, state);
+            const tag = `side-1440-${lang}-${scheme} ${state}`;
+            try {
+              await page.locator("[data-kanban-seat] [data-seat-placement]").click();
+              await page.waitForSelector(`[data-kanban-seat].side ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              const reading = await read(page);
+              const fit = await page.evaluate(() => {
+                const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+                const controls = document.querySelector("[data-kanban-seat] [data-orchestrator-controls]")!;
+                const head = document.querySelector("[data-kanban-seat] .seat-head") as HTMLElement;
+                const control = controls.querySelector('[role="slider"][data-seat-tick-switch]')!;
+                const glass = control.querySelector(".seat-tick-knob-until");
+                return {
+                  seatRight: Math.round(seat.right * 10) / 10,
+                  past: [...controls.children].flatMap((child) => {
+                    const right = child.getBoundingClientRect().right;
+                    return right > seat.right + 0.5 ? [`${(child.textContent ?? "").trim() || child.tagName} ${Math.round((right - seat.right) * 10) / 10} px`] : [];
+                  }),
+                  headOverflow: head.scrollWidth > head.clientWidth,
+                  outsideHourglass: control.querySelector("[data-seat-tick-until]")?.getClientRects().length ?? 0,
+                  knobHourglass: glass ? glass.getClientRects().length : 0,
+                };
+              });
+              must(reading !== null && !reading.wordShown && reading.thumb.w === 18, `${tag}: the thumb is ${reading?.thumb.w} px with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+              must(fit.past.length === 0, `${tag}: past the seat's right edge at ${fit.seatRight}: ${fit.past.join(", ")}`);
+              must(!fit.headOverflow, `${tag}: the seat's header scrolls sideways`);
+              must(reading?.controlsOnOneRow === true && !reading.pageOverflow, `${tag}: the controls wrapped or the page scrolls`);
+              must(fit.outsideHourglass === 0 && fit.knobHourglass === (state === "until" ? 1 : 0), `${tag}: hourglass beside the pill ${fit.outsideHourglass}, in the knob ${fit.knobHourglass}`);
+              must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+              readings[tag.replace(" ", "-")] = { ...fit, control: reading?.control, track: reading?.track, thumb: reading?.thumb };
+              side.push({ caption: state, png: await shot(page, "[data-kanban-seat] .seat-head") });
+            } catch (error) {
+              failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            } finally {
+              await context.close();
+            }
+          }
+          if (side.length) await sheet(path.join(FRAMES, `side-1440-${lang}-${scheme}.png`), side, scheme, 110);
+        }
+      }
+
+      /* Reduced motion: the thumb is where the pointer is, and on the stop the
+         frame after the release. Nothing travels, so nothing overshoots. */
+      {
+        const { context, page, pageErrors } = await open(1440, "en", "light", "1h", "reduce");
+        try {
+          const at = await centre(page);
+          await page.evaluate(`(${TRACE})()`);
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.down();
+          await page.mouse.move(at.x + 12, at.y, { steps: 3 });
+          await page.waitForTimeout(200);
+          await page.mouse.up();
+          await page.waitForTimeout(400);
+          const trace = await page.evaluate("window.__tickTrace()") as Array<[number, number]>;
+          const seen = [...new Set(trace.map(([, pos]) => pos))];
+          must(Math.max(...seen) === 3 && seen.every((pos) => [2, 2.2, 2.4, 2.6, 3].includes(pos)), `reduced motion: the thumb was drawn at ${seen.join(", ")}`);
+          must(pageErrors.length === 0, `reduced motion: page errors ${pageErrors.join(" | ")}`);
+          readings["1440-en-light-reduced-motion"] = { drawnAt: seen };
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ what: "The seat tick switch in the kanban seat header (1440×900) and the phone's seat sheet (390×844, touch): every state at rest, a held drag and its release sampled per animation frame (`trace` is milliseconds:drawn thumb position in stops), a quick stroke to off, two arrow steps and a click. Positions are in stops: 0 off, 1 every 4 h, 2 the default, 3 every 10 min.", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+
 describe("task motion and waiting reasons", () => {
   browserTest("states and reasons stay readable at 1440, 1280, 1024 and 390 px in en and uk", async () => {
     const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");

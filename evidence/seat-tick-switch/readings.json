@@ -1,0 +1,4106 @@
+{
+  "what": "The seat tick switch in the kanban seat header (1440×900) and the phone's seat sheet (390×844, touch): every state at rest, a held drag and its release sampled per animation frame (`trace` is milliseconds:drawn thumb position in stops), a quick stroke to off, two arrow steps and a click. Positions are in stops: 0 off, 1 every 4 h, 2 the default, 3 every 10 min.",
+  "readings": {
+    "1440-en-light": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "off. off since 40m ago · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: off since 40m ago · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "off",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1080.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              228,
+              226,
+              224
+            ],
+            "pill": [
+              248,
+              245,
+              240
+            ]
+          },
+          "ring": {
+            "before": [
+              228,
+              226,
+              224
+            ],
+            "after": [
+              228,
+              226,
+              224
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "every 4 hours. every 4 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 4 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "4 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1100.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              205,
+              223,
+              233
+            ],
+            "after": [
+              205,
+              223,
+              233
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "every hour, the default. every 60 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 60 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "1 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1120.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              215,
+              216,
+              240
+            ],
+            "after": [
+              215,
+              216,
+              240
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1140.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 min, not a preset. every 15 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 15 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "15 min",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1135.6,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              231,
+              213,
+              231
+            ],
+            "after": [
+              228,
+              210,
+              228
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 h, not a preset. every 12 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 12 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "12 h",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1095.5,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              208,
+              222,
+              229
+            ],
+            "after": [
+              211,
+              225,
+              232
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes, until 23:15. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 1059.2,
+            "y": 103,
+            "w": 142,
+            "h": 24
+          },
+          "track": {
+            "x": 1059.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1122.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · stale: last check 41m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · stale: last check 41m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1140.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.7468,
+        "heldSwingPx": 2.94,
+        "releasePeak": 3.024,
+        "releaseOvershootPx": 0.48,
+        "samples": 113,
+        "releasedAtSample": 48,
+        "trace": "13:2 47:2 53:2 58:2 75:2 92:2 108:2 125:2.0154 142:2.0835 158:2.1911 175:2.3172 192:2.4421 208:2.5539 225:2.6414 242:2.7025 258:2.7366 275:2.7468 292:2.7382 308:2.7165 325:2.6873 342:2.6558 358:2.6263 375:2.6012 392:2.5824 409:2.5704 425:2.5646 442:2.5643 458:2.568 475:2.5743 492:2.5819 508:2.5896 525:2.5964 541:2.6019 558:2.6058 575:2.6081 591:2.6089 608:2.6085 625:2.6073 642:2.6055 658:2.6036 675:2.6018 692:2.6003 708:2.5991 725:2.5983 741:2.5979 758:2.5978 775:2.6 791:2.6 808:2.6 825:2.6022 842:2.6351 859:2.6909 875:2.7563 893:2.821 909:2.8787 925:2.9268 943:2.9639 958:2.9908 976:3.0086 991:3.0188 1009:3.0234 1025:3.024 1043:3.022 1058:3.0186 1076:3.0147 1091:3.0108 1109:3.0073 1125:3.0044 1141:3.0022 1158:3.0006 1175:2.9995 1192:2.9989 1208:3 1225:3 1241:3 1258:3 1275:3 1291:3 1308:3 1325:3 1341:3 1358:3 1375:3 1391:3 1408:3 1425:3 1441:3 1458:3 1475:3 1491:3 1508:3 1525:3 1541:3 1558:3 1575:3 1591:3 1608:3 1625:3 1641:3 1658:3 1675:3 1691:3 1708:3 1725:3 1741:3 1758:3 1775:3 1791:3 1808:3 1825:3 1841:3 1859:3 1875:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "The operator set the activity slider to «every 10 minutes»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "1440-en-dark": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "off. off since 40m ago · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: off since 40m ago · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "off",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1080.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              32,
+              33,
+              40
+            ],
+            "pill": [
+              20,
+              21,
+              27
+            ]
+          },
+          "ring": {
+            "before": [
+              32,
+              33,
+              40
+            ],
+            "after": [
+              32,
+              33,
+              40
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "every 4 hours. every 4 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 4 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "4 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1100.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              45,
+              60
+            ],
+            "after": [
+              29,
+              45,
+              60
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "every hour, the default. every 60 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 60 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "1 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1120.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              38,
+              39,
+              61
+            ],
+            "after": [
+              38,
+              39,
+              61
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1140.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 min, not a preset. every 15 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 15 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "15 min",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1135.6,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              48,
+              39,
+              57
+            ],
+            "after": [
+              47,
+              38,
+              56
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 h, not a preset. every 12 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 12 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "12 h",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1095.5,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              42,
+              55
+            ],
+            "after": [
+              29,
+              42,
+              54
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes, until 23:15. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 1059.2,
+            "y": 103,
+            "w": 142,
+            "h": 24
+          },
+          "track": {
+            "x": 1059.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1122.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · stale: last check 41m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · stale: last check 41m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1077.2,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1140.2,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.747,
+        "heldSwingPx": 2.94,
+        "releasePeak": 3.0238,
+        "releaseOvershootPx": 0.48,
+        "samples": 111,
+        "releasedAtSample": 47,
+        "trace": "14:2 27:2 42:2 59:2 75:2 92:2.0135 108:2.0796 125:2.1869 141:2.313 158:2.4382 175:2.5501 191:2.6386 208:2.7008 225:2.7359 242:2.747 259:2.739 275:2.7175 292:2.6884 308:2.6571 325:2.6274 342:2.602 359:2.5829 375:2.5706 391:2.5647 408:2.5642 425:2.5678 442:2.5741 458:2.5816 475:2.5893 492:2.5962 508:2.6018 525:2.6057 542:2.6081 558:2.6089 575:2.6085 591:2.6073 608:2.6056 625:2.6037 641:2.6019 658:2.6003 675:2.5991 697:2.5983 708:2.5979 724:2.5978 741:2.6 758:2.6 774:2.6 792:2.6 808:2.6056 825:2.6441 843:2.7026 859:2.7684 877:2.8319 892:2.8886 911:2.9345 925:2.9698 943:2.9947 958:3.011 974:3.0201 993:3.0238 1008:3.0238 1026:3.0215 1041:3.018 1060:3.014 1075:3.0101 1093:3.0068 1108:3.004 1125:3.0018 1141:3.0003 1158:2.9993 1175:2.9988 1191:3 1208:3 1225:3 1241:3 1258:3 1274:3 1291:3 1308:3 1325:3 1341:3 1358:3 1375:3 1392:3 1408:3 1425:3 1441:3 1458:3 1475:3 1491:3 1508:3 1524:3 1542:3 1558:3 1575:3 1591:3 1608:3 1625:3 1641:3 1658:3 1674:3 1691:3 1708:3 1725:3 1741:3 1758:3 1775:3 1791:3 1808:3 1827:3 1841:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "The operator set the activity slider to «every 10 minutes»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "1440-uk-light": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "вимкнено. вимкнено 40 хв тому · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: вимкнено 40 хв тому · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "вимк.",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1037.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              228,
+              226,
+              224
+            ],
+            "pill": [
+              248,
+              245,
+              240
+            ]
+          },
+          "ring": {
+            "before": [
+              228,
+              226,
+              224
+            ],
+            "after": [
+              228,
+              226,
+              224
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "кожні 4 години. кожні 4 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 4 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "4 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1057.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              205,
+              223,
+              233
+            ],
+            "after": [
+              205,
+              223,
+              233
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 60 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "1 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1077.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              215,
+              216,
+              240
+            ],
+            "after": [
+              215,
+              216,
+              240
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1097.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 15 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "15 хв",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1093.3,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              228,
+              210,
+              228
+            ],
+            "after": [
+              231,
+              213,
+              231
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 год, не пресет. кожні 12 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 12 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "12 год",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1053.1,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              210,
+              224,
+              231
+            ],
+            "after": [
+              210,
+              224,
+              231
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин, до 23:15. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 1016.8,
+            "y": 103,
+            "w": 142,
+            "h": 24
+          },
+          "track": {
+            "x": 1016.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1079.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · застаріло: остання перевірка 41 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · застаріло: остання перевірка 41 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1097.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.74,
+        "heldSwingPx": 2.8,
+        "releasePeak": 3.0241,
+        "releaseOvershootPx": 0.48,
+        "samples": 122,
+        "releasedAtSample": 52,
+        "trace": "14:2 25:2 40:2 56:2 75:2 93:2.0144 106:2.0675 123:2.1578 140:2.2746 157:2.3979 173:2.5117 193:2.6069 207:2.6772 224:2.7209 239:2.74 256:2.7388 273:2.7226 289:2.6968 306:2.6668 323:2.6371 340:2.6108 356:2.59 373:2.5755 389:2.5675 406:2.5651 422:2.5672 439:2.5724 456:2.5793 473:2.5868 489:2.5938 507:2.5998 522:2.6042 539:2.6071 556:2.6084 572:2.6085 589:2.6076 606:2.6061 623:2.6043 639:2.6025 656:2.6008 672:2.5995 689:2.5986 705:2.5981 722:2.5979 739:2.598 756:2.5983 773:2.5987 790:2.5991 806:2.5996 824:2.5999 839:2.6 856:2.6 876:2.6 889:2.6004 906:2.6288 923:2.6828 942:2.7477 956:2.8129 975:2.8717 990:2.9212 1006:2.9597 1026:2.9879 1039:3.0068 1059:3.0179 1073:3.0231 1089:3.0241 1106:3.0224 1125:3.0191 1142:3.0152 1156:3.0113 1173:3.0078 1190:3.0048 1206:3.0024 1225:3.0007 1239:2.9996 1259:2.9989 1273:3 1289:3 1306:3 1322:3 1339:3 1356:3 1373:3 1389:3 1406:3 1422:3 1439:3 1456:3 1472:3 1489:3 1506:3 1522:3 1539:3 1556:3 1572:3 1589:3 1606:3 1623:3 1639:3 1656:3 1672:3 1689:3 1706:3 1722:3 1739:3 1755:3 1772:3 1789:3 1806:3 1822:3 1839:3 1855:3 1873:3 1889:3 1906:3 1922:3 1939:3 1955:3 1972:3 1989:3 2007:3 2022:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "1440-uk-dark": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "вимкнено. вимкнено 40 хв тому · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: вимкнено 40 хв тому · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "вимк.",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1037.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              32,
+              33,
+              40
+            ],
+            "pill": [
+              20,
+              21,
+              27
+            ]
+          },
+          "ring": {
+            "before": [
+              32,
+              33,
+              40
+            ],
+            "after": [
+              32,
+              33,
+              40
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "кожні 4 години. кожні 4 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 4 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "4 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1057.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              45,
+              60
+            ],
+            "after": [
+              29,
+              45,
+              60
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 60 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "1 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1077.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              38,
+              39,
+              61
+            ],
+            "after": [
+              38,
+              39,
+              61
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1097.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 15 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "15 хв",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1093.3,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              47,
+              38,
+              56
+            ],
+            "after": [
+              47,
+              38,
+              55
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 год, не пресет. кожні 12 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 12 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "12 год",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1053.1,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              42,
+              55
+            ],
+            "after": [
+              29,
+              42,
+              55
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин, до 23:16. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 1016.8,
+            "y": 103,
+            "w": 142,
+            "h": 24
+          },
+          "track": {
+            "x": 1016.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1079.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · застаріло: остання перевірка 41 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · застаріло: остання перевірка 41 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 124,
+            "h": 24
+          },
+          "track": {
+            "x": 1034.8,
+            "y": 103,
+            "w": 112,
+            "h": 24
+          },
+          "thumb": {
+            "x": 1097.8,
+            "y": 106,
+            "w": 46,
+            "h": 18
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": true,
+          "labelTruncated": null,
+          "labelText": null,
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.7471,
+        "heldSwingPx": 2.94,
+        "releasePeak": 3.024,
+        "releaseOvershootPx": 0.48,
+        "samples": 119,
+        "releasedAtSample": 49,
+        "trace": "11:2 24:2 41:2 58:2 74:2 92:2.011 107:2.0753 124:2.1816 141:2.3075 158:2.4331 175:2.546 192:2.6357 207:2.699 224:2.7352 241:2.7471 257:2.7398 274:2.7187 291:2.6899 308:2.6584 324:2.6285 341:2.6029 357:2.5835 374:2.571 391:2.5648 407:2.5641 424:2.5675 441:2.5737 458:2.5812 474:2.589 491:2.5959 507:2.6016 524:2.6056 540:2.608 557:2.6089 576:2.6086 590:2.6074 607:2.6057 624:2.6038 641:2.6019 657:2.6004 674:2.5991 690:2.5983 707:2.5979 724:2.5978 742:2.598 757:2.5983 774:2.5988 790:2.5993 807:2.5997 824:2.6 840:2.6 858:2.6024 874:2.6354 892:2.6918 907:2.7572 925:2.8214 942:2.8794 960:2.9274 974:2.9644 993:2.9911 1007:3.0087 1026:3.0189 1041:3.0234 1057:3.024 1074:3.022 1093:3.0186 1107:3.0147 1126:3.0108 1141:3.0073 1157:3.0044 1177:3.0022 1190:3.0005 1210:2.9995 1224:2.9989 1241:3 1257:3 1274:3 1290:3 1307:3 1324:3 1341:3 1357:3 1374:3 1391:3 1407:3 1424:3 1441:3 1457:3 1474:3 1490:3 1508:3 1524:3 1541:3 1557:3 1574:3 1591:3 1607:3 1624:3 1641:3 1657:3 1674:3 1690:3 1707:3 1724:3 1740:3 1757:3 1774:3 1790:3 1807:3 1824:3 1840:3 1857:3 1874:3 1891:3 1907:3 1924:3 1941:3 1959:3 1974:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "390-en-light": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "off. off since 40m ago · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: off since 40m ago · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "off",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 226,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              229,
+              227,
+              225
+            ],
+            "pill": [
+              248,
+              245,
+              240
+            ]
+          },
+          "ring": {
+            "before": [
+              228,
+              226,
+              224
+            ],
+            "after": [
+              228,
+              226,
+              224
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "every 4 hours. every 4 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 4 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "4 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 246,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              205,
+              223,
+              233
+            ],
+            "after": [
+              205,
+              223,
+              233
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "every hour, the default. every 60 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 60 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "1 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              215,
+              216,
+              240
+            ],
+            "after": [
+              215,
+              216,
+              240
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 min, not a preset. every 15 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 15 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "15 min",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 281.5,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              228,
+              210,
+              228
+            ],
+            "after": [
+              231,
+              213,
+              231
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 h, not a preset. every 12 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 12 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "12 h",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 241.3,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              208,
+              222,
+              229
+            ],
+            "after": [
+              211,
+              225,
+              232
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes, until 23:16. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 202,
+            "y": 467.5,
+            "w": 156,
+            "h": 36
+          },
+          "track": {
+            "x": 202,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · stale: last check 41m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · stale: last check 41m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.7477,
+        "heldSwingPx": 2.95,
+        "releasePeak": 3.0239,
+        "releaseOvershootPx": 0.48,
+        "samples": 112,
+        "releasedAtSample": 48,
+        "trace": "13:2 26:2 44:2 60:2 77:2 93:2 112:2 127:2 145:2.018 161:2.0945 177:2.2078 194:2.336 210:2.4602 227:2.5689 245:2.6535 260:2.7103 278:2.7407 294:2.7477 310:2.7365 327:2.713 343:2.6831 360:2.6514 377:2.6221 394:2.5977 410:2.5798 427:2.5688 444:2.564 460:2.5644 477:2.5686 493:2.5752 510:2.583 527:2.5906 543:2.5973 560:2.6027 577:2.6063 593:2.6084 610:2.609 626:2.6084 643:2.6071 660:2.6053 677:2.6034 693:2.6015 710:2.6 727:2.5989 743:2.5982 760:2.5978 777:2.5978 793:2.6 811:2.6 829:2.6 843:2.603 860:2.6374 878:2.6944 893:2.7595 911:2.824 927:2.8815 944:2.9291 960:2.9657 978:2.9919 994:3.0092 1011:3.0192 1027:3.0235 1044:3.0239 1060:3.0219 1077:3.0184 1093:3.0145 1110:3.0106 1127:3.0072 1143:3.0043 1160:3.0021 1176:3.0005 1193:2.9994 1210:2.9988 1226:3 1243:3 1260:3 1276:3 1293:3 1310:3 1326:3 1343:3 1360:3 1376:3 1393:3 1410:3 1426:3 1443:3 1460:3 1476:3 1493:3 1510:3 1526:3 1543:3 1560:3 1576:3 1593:3 1610:3 1626:3 1643:3 1660:3 1676:3 1693:3 1710:3 1726:3 1743:3 1760:3 1776:3 1793:3 1810:3 1826:3 1843:3 1860:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "The operator set the activity slider to «every 10 minutes»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "390-en-dark": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "off. off since 40m ago · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: off since 40m ago · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "off",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 226,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              33,
+              34,
+              41
+            ],
+            "pill": [
+              20,
+              21,
+              27
+            ]
+          },
+          "ring": {
+            "before": [
+              32,
+              33,
+              40
+            ],
+            "after": [
+              32,
+              33,
+              40
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "every 4 hours. every 4 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 4 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "4 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 246,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              45,
+              60
+            ],
+            "after": [
+              29,
+              45,
+              60
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "every hour, the default. every 60 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 60 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "1 h",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              38,
+              39,
+              61
+            ],
+            "after": [
+              38,
+              39,
+              61
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 min, not a preset. every 15 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 15 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "15 min",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 281.5,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              47,
+              38,
+              56
+            ],
+            "after": [
+              48,
+              39,
+              57
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 h, not a preset. every 12 h · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 12 h · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "12 h",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 241.3,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              42,
+              55
+            ],
+            "after": [
+              30,
+              43,
+              56
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes, until 23:16. every 10 min · last check 2m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 202,
+            "y": 467.5,
+            "w": 156,
+            "h": 36
+          },
+          "track": {
+            "x": 202,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "every 10 minutes. every 10 min · stale: last check 41m ago",
+          "expanded": "false",
+          "title": "Tick: every 10 min · stale: last check 41m ago\nDrag to change how often the seat wakes · click for settings",
+          "word": "10 min",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Seat tick",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.7467,
+        "heldSwingPx": 2.93,
+        "releasePeak": 3.0242,
+        "releaseOvershootPx": 0.48,
+        "samples": 112,
+        "releasedAtSample": 48,
+        "trace": "11:2 25:2 42:2 58:2 75:2 92:2 109:2 125:2 142:2.0296 159:2.1155 175:2.2327 193:2.3607 209:2.4834 226:2.5878 243:2.6666 259:2.7184 276:2.7437 292:2.7467 309:2.7327 326:2.7074 342:2.6766 359:2.6453 376:2.6168 392:2.5936 409:2.5771 425:2.5674 442:2.5637 458:2.565 475:2.5698 492:2.5767 508:2.5845 525:2.5921 542:2.5985 558:2.6035 576:2.6069 592:2.6086 608:2.6089 625:2.6082 642:2.6067 659:2.6049 675:2.603 692:2.6012 710:2.5998 725:2.5987 742:2.5981 758:2.5978 776:2.5979 792:2.5981 809:2.5985 825:2.599 842:2.6247 859:2.6775 876:2.7421 892:2.8073 912:2.8672 925:2.9176 943:2.9571 959:2.9861 976:3.0055 992:3.0173 1009:3.0229 1025:3.0242 1043:3.0226 1058:3.0195 1075:3.0156 1092:3.0116 1110:3.008 1125:3.005 1142:3.0026 1158:3.0008 1175:2.9997 1192:2.999 1208:3 1225:3 1242:3 1258:3 1275:3 1292:3 1308:3 1325:3 1342:3 1358:3 1375:3 1392:3 1408:3 1425:3 1441:3 1458:3 1475:3 1492:3 1508:3 1525:3 1542:3 1558:3 1575:3 1592:3 1608:3 1625:3 1642:3 1658:3 1675:3 1692:3 1709:3 1725:3 1742:3 1758:3 1775:3 1792:3 1808:3 1825:3 1842:3 1858:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "The operator set the activity slider to «every 10 minutes»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "390-uk-light": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "вимкнено. вимкнено 40 хв тому · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: вимкнено 40 хв тому · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "вимк.",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 226,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              229,
+              227,
+              225
+            ],
+            "pill": [
+              248,
+              245,
+              240
+            ]
+          },
+          "ring": {
+            "before": [
+              228,
+              226,
+              224
+            ],
+            "after": [
+              228,
+              226,
+              224
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "кожні 4 години. кожні 4 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 4 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "4 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 246,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              205,
+              223,
+              233
+            ],
+            "after": [
+              205,
+              223,
+              233
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 60 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "1 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              215,
+              216,
+              240
+            ],
+            "after": [
+              215,
+              216,
+              240
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 15 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "15 хв",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 281.5,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              228,
+              210,
+              228
+            ],
+            "after": [
+              231,
+              213,
+              231
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 год, не пресет. кожні 12 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 12 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "12 год",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 241.3,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              208,
+              222,
+              229
+            ],
+            "after": [
+              211,
+              225,
+              232
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин, до 23:16. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 202,
+            "y": 467.5,
+            "w": 156,
+            "h": 36
+          },
+          "track": {
+            "x": 202,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · застаріло: остання перевірка 41 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · застаріло: остання перевірка 41 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              233,
+              212,
+              226
+            ],
+            "after": [
+              233,
+              212,
+              226
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.7466,
+        "heldSwingPx": 2.93,
+        "releasePeak": 3.0242,
+        "releaseOvershootPx": 0.48,
+        "samples": 110,
+        "releasedAtSample": 46,
+        "trace": "11:2 26:2 43:2 59:2 76:2 93:2 110:2 126:2 143:2.0307 161:2.1174 177:2.235 193:2.3638 210:2.4861 226:2.59 243:2.6682 260:2.7193 276:2.7441 293:2.7466 310:2.7322 326:2.7067 343:2.676 359:2.6446 376:2.6162 393:2.5933 409:2.5769 426:2.5672 443:2.5637 459:2.565 476:2.5699 493:2.5769 509:2.5847 526:2.5922 543:2.5987 559:2.6036 576:2.6069 592:2.6086 609:2.6089 626:2.6082 643:2.6067 660:2.6049 676:2.6029 693:2.6012 709:2.5997 726:2.5987 743:2.5981 759:2.5978 777:2.5979 793:2.5981 810:2.6238 826:2.677 844:2.7413 860:2.8071 876:2.8667 893:2.9173 910:2.9571 926:2.986 943:3.0056 959:3.0173 976:3.0229 993:3.0242 1010:3.0227 1026:3.0195 1044:3.0156 1059:3.0117 1077:3.0081 1093:3.005 1109:3.0026 1126:3.0008 1143:2.9997 1159:2.999 1176:3 1193:3 1209:3 1226:3 1243:3 1259:3 1276:3 1293:3 1309:3 1326:3 1343:3 1359:3 1376:3 1393:3 1410:3 1426:3 1443:3 1459:3 1476:3 1493:3 1509:3 1526:3 1542:3 1559:3 1576:3 1593:3 1609:3 1626:3 1643:3 1659:3 1677:3 1693:3 1709:3 1726:3 1743:3 1759:3 1776:3 1792:3 1810:3 1826:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "390-uk-dark": {
+      "states": {
+        "off": {
+          "state": "paused",
+          "stop": "0",
+          "mode": "rest",
+          "now": "0",
+          "valueText": "вимкнено. вимкнено 40 хв тому · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: вимкнено 40 хв тому · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "вимк.",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "muted",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 226,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "offTint": {
+            "tint": [
+              33,
+              34,
+              41
+            ],
+            "pill": [
+              20,
+              21,
+              27
+            ]
+          },
+          "ring": {
+            "before": [
+              32,
+              33,
+              40
+            ],
+            "after": [
+              32,
+              33,
+              40
+            ]
+          }
+        },
+        "4h": {
+          "state": "healthy",
+          "stop": "1",
+          "mode": "rest",
+          "now": "1",
+          "valueText": "кожні 4 години. кожні 4 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 4 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "4 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 246,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              45,
+              60
+            ],
+            "after": [
+              29,
+              45,
+              60
+            ]
+          }
+        },
+        "1h": {
+          "state": "healthy",
+          "stop": "2",
+          "mode": "rest",
+          "now": "2",
+          "valueText": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 60 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "1 год",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              38,
+              39,
+              61
+            ],
+            "after": [
+              38,
+              39,
+              61
+            ]
+          }
+        },
+        "10m": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "15m": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "2.77",
+          "valueText": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 15 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "15 хв",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 281.5,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              47,
+              38,
+              56
+            ],
+            "after": [
+              48,
+              39,
+              57
+            ]
+          }
+        },
+        "12h": {
+          "state": "healthy",
+          "stop": "custom",
+          "mode": "rest",
+          "now": "0.76",
+          "valueText": "12 год, не пресет. кожні 12 год · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 12 год · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "12 год",
+          "wordShown": true,
+          "thumbKind": "custom",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 241.3,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              29,
+              42,
+              55
+            ],
+            "after": [
+              30,
+              43,
+              56
+            ]
+          }
+        },
+        "until": {
+          "state": "healthy",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин, до 23:17. кожні 10 хв · остання перевірка 2 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "ok",
+          "dotInsideTrack": false,
+          "until": true,
+          "control": {
+            "x": 202,
+            "y": 467.5,
+            "w": 156,
+            "h": 36
+          },
+          "track": {
+            "x": 202,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 266,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        },
+        "stale": {
+          "state": "stale",
+          "stop": "3",
+          "mode": "rest",
+          "now": "3",
+          "valueText": "кожні 10 хвилин. кожні 10 хв · застаріло: остання перевірка 41 хв тому",
+          "expanded": "false",
+          "title": "Тікер: кожні 10 хв · застаріло: остання перевірка 41 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+          "word": "10 хв",
+          "wordShown": true,
+          "thumbKind": "preset",
+          "dot": "warn",
+          "dotInsideTrack": false,
+          "until": false,
+          "control": {
+            "x": 222,
+            "y": 467.5,
+            "w": 136,
+            "h": 36
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "w": 124,
+            "h": 36
+          },
+          "thumb": {
+            "x": 286,
+            "y": 471.5,
+            "w": 56,
+            "h": 28
+          },
+          "notchesTouching": [],
+          "thumbInsideTrack": true,
+          "wordFits": true,
+          "controlsOnOneRow": null,
+          "labelTruncated": false,
+          "labelText": "Тікер оркестратора",
+          "pageOverflow": false,
+          "ring": {
+            "before": [
+              49,
+              38,
+              55
+            ],
+            "after": [
+              49,
+              38,
+              55
+            ]
+          }
+        }
+      },
+      "drag": {
+        "heldAt": 2.6,
+        "peakWhileHeld": 2.7461,
+        "heldSwingPx": 2.92,
+        "releasePeak": 3.0242,
+        "releaseOvershootPx": 0.48,
+        "samples": 110,
+        "releasedAtSample": 46,
+        "trace": "13:2 29:2 46:2 62:2 79:2 95:2 112:2 129:2 146:2.035 163:2.1245 179:2.2435 196:2.3723 212:2.4937 230:2.5961 246:2.6724 263:2.7215 279:2.7449 296:2.7461 312:2.7307 329:2.7049 346:2.6739 362:2.6426 379:2.6146 396:2.592 412:2.576 429:2.5668 446:2.5636 462:2.5653 479:2.5703 496:2.5774 512:2.5852 529:2.5926 546:2.599 562:2.6039 579:2.6071 595:2.6087 612:2.6089 629:2.6081 645:2.6066 662:2.6047 679:2.6028 695:2.6011 712:2.5997 729:2.5986 746:2.598 762:2.5978 779:2.5979 795:2.5982 813:2.6238 829:2.6767 846:2.741 862:2.8067 879:2.8668 896:2.9174 913:2.9569 929:2.986 947:3.0055 962:3.0173 979:3.0229 995:3.0242 1012:3.0227 1029:3.0195 1046:3.0156 1062:3.0117 1079:3.0081 1095:3.005 1112:3.0026 1129:3.0009 1145:2.9997 1162:2.999 1179:3 1195:3 1212:3 1229:3 1245:3 1262:3 1279:3 1295:3 1312:3 1329:3 1345:3 1362:3 1379:3 1395:3 1412:3 1429:3 1445:3 1462:3 1479:3 1495:3 1512:3 1528:3 1545:3 1562:3 1579:3 1595:3 1612:3 1629:3 1645:3 1662:3 1679:3 1695:3 1712:3 1729:3 1745:3 1762:3 1779:3 1795:3 1813:3 1829:3"
+      },
+      "writes": [
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": 10,
+          "untilMinutes": null,
+          "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+        },
+        {
+          "project": "atlas",
+          "enabled": false,
+          "untilMinutes": null,
+          "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+        },
+        {
+          "project": "atlas",
+          "enabled": true,
+          "wakeIntervalMinutes": null,
+          "untilMinutes": null,
+          "reason": null
+        }
+      ]
+    },
+    "768-en-knob": {
+      "state": "healthy",
+      "stop": "3",
+      "mode": "rest",
+      "now": "3",
+      "valueText": "every 10 minutes. every 10 min · last check 2m ago",
+      "expanded": "false",
+      "title": "Tick: every 10 min · last check 2m ago\nDrag to change how often the seat wakes · click for settings",
+      "word": "10 min",
+      "wordShown": false,
+      "thumbKind": "preset",
+      "dot": "ok",
+      "dotInsideTrack": false,
+      "until": false,
+      "control": {
+        "x": 527.2,
+        "y": 269.6,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 527.2,
+        "y": 269.6,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 560.2,
+        "y": 272.6,
+        "w": 18,
+        "h": 18
+      },
+      "notchesTouching": [],
+      "thumbInsideTrack": true,
+      "wordFits": true,
+      "controlsOnOneRow": true,
+      "labelTruncated": null,
+      "labelText": null,
+      "pageOverflow": false
+    },
+    "768-uk-knob": {
+      "state": "healthy",
+      "stop": "3",
+      "mode": "rest",
+      "now": "3",
+      "valueText": "кожні 10 хвилин. кожні 10 хв · остання перевірка 2 хв тому",
+      "expanded": "false",
+      "title": "Тікер: кожні 10 хв · остання перевірка 2 хв тому\nПотягніть, щоб змінити частоту пробуджень · клік — налаштування",
+      "word": "10 хв",
+      "wordShown": false,
+      "thumbKind": "preset",
+      "dot": "ok",
+      "dotInsideTrack": false,
+      "until": false,
+      "control": {
+        "x": 484.8,
+        "y": 288.1,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 484.8,
+        "y": 288.1,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 517.8,
+        "y": 291.1,
+        "w": 18,
+        "h": 18
+      },
+      "notchesTouching": [],
+      "thumbInsideTrack": true,
+      "wordFits": true,
+      "controlsOnOneRow": true,
+      "labelTruncated": null,
+      "labelText": null,
+      "pageOverflow": false
+    },
+    "side-1440-en-light-until": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 1,
+      "control": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 432.2,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-en-light-stale": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 432.2,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-en-light-15m": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 429.9,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-en-dark-until": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 1,
+      "control": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 432.2,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-en-dark-stale": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 432.2,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-en-dark-15m": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 399.2,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 429.9,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-uk-light-until": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 1,
+      "control": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 393.3,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-uk-light-stale": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 393.3,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-uk-light-15m": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 391,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-uk-dark-until": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 1,
+      "control": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 393.3,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-uk-dark-stale": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 393.3,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "side-1440-uk-dark-15m": {
+      "seatRight": 628,
+      "past": [],
+      "headOverflow": false,
+      "outsideHourglass": 0,
+      "knobHourglass": 0,
+      "control": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 66,
+        "h": 24
+      },
+      "track": {
+        "x": 360.3,
+        "y": 168.5,
+        "w": 54,
+        "h": 24
+      },
+      "thumb": {
+        "x": 391,
+        "y": 171.5,
+        "w": 18,
+        "h": 18
+      }
+    },
+    "1440-en-light-reduced-motion": {
+      "drawnAt": [
+        2,
+        2.4,
+        2.6,
+        3
+      ]
+    }
+  },
+  "failures": []
+}

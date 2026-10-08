@@ -305,6 +305,10 @@ const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") 
 /* The seat holds the Telegram tool and Telegram waits on the operator: the
    status read names the action: `sign_in`, `check` or `restart`. */
 const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("telegram") : null;
+/* The seat tick switch in that header and in the phone's seat sheet
+   (`&tick=driver`): the driver holds the tick's record and answers the
+   settings route, so a drag reads back the way the real route answers. */
+const SEAT_TICK_DRIVER = SEAT_HEAD && new URLSearchParams(location.search).get("tick") === "driver";
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -2936,7 +2940,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
-  if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
+  if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
