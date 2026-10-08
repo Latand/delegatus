@@ -5206,6 +5206,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         <button type="button" data-payload-recheck aria-label={t("composer.payloadRecheck")} title={t("composer.payloadRecheck")}
           disabled={checking} className={`${noticeActionClass} hover:text-accent`} onClick={onRecheck}>
           <RotateCw className={`h-3 w-3 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden />
+          <span className="sr-only">{t("composer.payloadRecheck")}</span>
         </button>
         {actions}
         <button type="button" data-payload-dismiss aria-label={t("runtime.receipt.dismiss")} title={t("runtime.receipt.dismiss")}

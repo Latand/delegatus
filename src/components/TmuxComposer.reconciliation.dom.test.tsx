@@ -511,7 +511,7 @@ test("a delayed receipt reconciles one text-plus-images generation on desktop an
       expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("delivering");
       /* Its admitted operation owns delivery; the complete copy remains available for re-check. */
       expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(0);
-      expect([...host.querySelectorAll("button")].some((button) => (button.textContent || button.getAttribute("aria-label")) === translate("en", "composer.payloadRecheck"))).toBe(true);
+      expect([...host.querySelectorAll("button")].some((button) => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
       expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBeUndefined();
       expect(host.querySelector(`[aria-label="${translate("en", "runtime.receipt.retry")}"]`)).toBeNull();
       if (mobile) {
@@ -601,7 +601,7 @@ test("only a confirmed retryable failure exposes Retry after a timeout", async (
     expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
     /* Its complete copy is retained, so an unknown fate is re-checked, never re-driven from here. */
     expect(host.querySelectorAll("[data-receipt-uncertain-retry]")).toHaveLength(0);
-    expect([...host.querySelectorAll("button")].some((button) => (button.textContent || button.getAttribute("aria-label")) === translate("en", "composer.payloadRecheck"))).toBe(true);
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
     expect(retries().filter(button => !button.hasAttribute("data-receipt-uncertain-retry"))).toHaveLength(0);
     expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("delivering");
 
