@@ -549,9 +549,10 @@ export type PipelineStageAttempt = {
       replay after a crash keeps it; only an outright refusal clears it, and
       never after `sendUncertain` recorded an answer that may have followed an
       admission; `requestedAt` takes that moment once the
-      surface accepted the request, and `settledAt` is set once the commit was
-      tried again; `refusedAt` bounds the whole wait. A refusal that finds this
-      record already written parks. */
+      surface accepted the request. `outcome` and `settledAt` checkpoint the
+      accepted or rejected repair before final settlement, so a rejected repair
+      replays as parked with its reason. `refusedAt` bounds the whole wait. A
+      refusal that finds this record already written parks. */
   commitRepair?: {
     refusedAt: string;
     detail: string;
@@ -561,6 +562,8 @@ export type PipelineStageAttempt = {
     sendUncertain?: true;
     requestedAt?: string;
     clientMessageId?: string;
+    /** Missing on older settled repairs, which already permitted a commit. */
+    outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
     settledAt?: string;
   };
   /** Spawn calls this attempt has made across its activations, immediate

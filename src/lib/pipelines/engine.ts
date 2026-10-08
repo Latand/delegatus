@@ -3670,15 +3670,24 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   return !asked || reason.includes(asked) ? reason : `${reason}\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
 }
 
-/** False while a requested repair is still out: the commit waits for it. */
+/** True when no repair is owed or a finished repair permits another commit. */
 async function stageCommitRepairSettled(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   const repair = attempt.commitRepair;
-  if (!repair || repair.settledAt) return true;
-  const expired = unixMs(ports.now()) - unixMs(repair.refusedAt) >= COMMIT_REPAIR_WAIT_MS;
+  if (!repair) return true;
+  // The intent checkpoint can outlive final settlement. Replay its rejection
+  // before considering settledAt permission to try the commit again.
+  if (repair.outcome?.status === "rejected") {
+    park(pipeline, `${repair.detail}\n${repair.outcome.reason}`, attempt);
+    return false;
+  }
+  if (repair.settledAt) return true;
+  const deadline = unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS;
+  const expired = unixMs(ports.now()) >= deadline;
   const giveUp = async (why: string) => {
+    repair.outcome = { status: "rejected", reason: why };
     repair.settledAt = ports.now();
     park(pipeline, `${repair.detail}\n${why}`, attempt);
     await persist();
@@ -3696,12 +3705,19 @@ async function stageCommitRepairSettled(
     && ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true
     && await ports.conversationAgentActive(attempt.conversationId) !== true
     && liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
+  // A delayed tick may first see a terminal turn. Its durable timestamps must
+  // still fall inside the repair window; a timely turn can survive a late tick.
+  const completedAt = Math.max(durable?.lastRecordAt ?? 0, durable?.message?.ts ?? 0);
+  if (answered && completedAt >= deadline) {
+    return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
+  }
   if (!answered) {
     if (expired) return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
     return false;
   }
   const declined = stageCommitRepairDeclined(durable.message?.text ?? "");
   if (declined !== null) return giveUp(`The stage was asked once to repair its files and reported it cannot: ${declined}`);
+  repair.outcome = { status: "accepted" };
   repair.settledAt = ports.now();
   if (pipeline.stateDetail === COMMIT_REPAIR_DETAIL) pipeline.stateDetail = null;
   await persist();
@@ -7828,7 +7844,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
           // and a hook refusal handed back to the stage must survive one before
           // the request leaves. Persist only those two intents, under the same
           // full lane/flow fence used for final settlement, then advance our
-          // own observation fingerprint.
+          // own observation fingerprint. The repair's terminal outcome and
+          // rejection reason travel with settledAt in this same write.
           await withPipelineMutation((pipelines, persist) => {
             const current = pipelines.find((pipeline) => pipeline.id === preview.id);
             if (!current || !matches(current)) { abort.abort(); return; }

@@ -353,6 +353,88 @@ const BLOCKED_REASON = "the hook's own tooling failed; no edit to my files answe
 const BLOCKED = `My files cannot answer this refusal.\n\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: BLOCKED_REASON })}\n\`\`\``;
 const study = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
 
+test.each(["blocked", "deadline"] as const)("a rejected %s repair replays as parked after a crash at its settled checkpoint", async (kind) => {
+  const h = harness();
+  await runningStage(h);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(kind === "deadline" ? REPAIR_WAIT_MS : TICK_MS);
+  if (kind === "blocked") h.endTurn(BLOCKED);
+  else h.keepWorking();
+
+  const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const prototype = SqliteStateCollection.prototype as InstanceType<typeof SqliteStateCollection<Pipeline>>;
+  const original = prototype.mutate;
+  let checkpoint: Pipeline | null = null;
+  // Complete the real write, then interrupt before final lane settlement.
+  prototype.mutate = function<R>(
+    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => void) => Promise<R> | R,
+    ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]
+  ): Promise<R> {
+    return original.call(this, (records, persist) => operation(records, (changed) => {
+      persist(changed);
+      const record = loadPipelines()[0];
+      if (!checkpoint && record?.runs[0]?.attempts[0]?.commitRepair?.settledAt) {
+        checkpoint = structuredClone(record);
+        throw new Error("simulated crash after repair checkpoint");
+      }
+    }), ...args) as Promise<R>;
+  };
+  try {
+    await expect(tickPipelines([], h.ports)).rejects.toThrow("simulated crash after repair checkpoint");
+  } finally { prototype.mutate = original; }
+  expect(checkpoint).not.toBeNull();
+  expect(structuredClone(study().commitRepair)).toMatchObject({
+    detail: `committing the passed stage: ${WHITESPACE_REFUSAL}`,
+    settledAt: expect.any(String),
+    outcome: { status: "rejected", reason: expect.stringContaining(kind === "blocked" ? BLOCKED_REASON : "did not finish that turn in time") },
+  });
+
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
+  expect(parked.stateDetail).toContain(kind === "blocked" ? BLOCKED_REASON : "did not finish that turn in time");
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.requests).toHaveLength(1);
+});
+
+test.each([
+  ["after", REPAIR_WAIT_MS + 60_000, "needs_decision", 1],
+  ["at", REPAIR_WAIT_MS, "needs_decision", 1],
+  ["before", REPAIR_WAIT_MS - 1, "running", 2],
+] as const)("a repair completed %s the deadline is judged by completion evidence on a later tick", async (_when, elapsed, state, commits) => {
+  const h = harness();
+  await runningStage(h);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(elapsed);
+  h.endTurn("Removed the trailing whitespace.");
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe(state);
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(commits);
+  expect(h.requests).toHaveLength(1);
+  if (state === "needs_decision") {
+    expect(current.stateDetail).toContain(WHITESPACE_REFUSAL);
+    expect(current.stateDetail).toContain("did not finish that turn in time");
+    expect(study()).toMatchObject({ state: "needs_decision", error: current.stateDetail });
+  } else {
+    expect(study().state).toBe("passed");
+    expect(current.cursor?.stageId).toBe("verify");
+  }
+});
+
 test.each(["read-only", "read-write"] as const)("a passed %s stage whose output a pre-commit hook refuses repairs it in the same conversation and advances without the operator", async (access) => {
   const h = harness({ access });
   await runningStage(h, access);
