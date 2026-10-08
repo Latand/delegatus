@@ -126,7 +126,7 @@ Items not listed are unchanged from 2a §9.
 | R2 `confirmation_pending` | Terminal; projected with `summary` and `expires_in_s`; final round may reply or ignore, never call (§7). | `toolLoop.ts:87`, projection `:177-182` |
 | R2 `outcome_unknown` | Terminal; final round is reply-only (§8). Also produced locally when the install cannot prove an action's fate (§4.3). | `toolLoop.ts`, `protocol.ts` |
 | R2 `pending` (action) | Polled with the identical body; the audience gate never stops an action's polling (§3.4); 330 s without a final status → local `outcome_unknown`. | `toolLoop.ts:88-94` |
-| R3 | Denials stay results, for actions too. `unavailable` is retried with the same body as for reads. | `toolLoop.ts:95-99` |
+| R3 | Denials stay results, for actions too. `unavailable` is retried with the same body as for reads; exhaustion closes calling and preserves action uncertainty (§4.3). | `toolLoop.ts` |
 | R4 | `mayQuote` on the index and on every result, as 2a; for actions the gate removes content and never changes the status (§3.4). | `toolLoop.ts:7-10`, `:165-168` |
 | R5 | `delivered: true` ends calling (kept from 2a) and is shown to the model; the final schema allows `ignore`. | `toolLoop.ts:87`, prompt |
 | R6 | An action's `calls_remaining: 0` ends new calls, including on replay; an already admitted `pending` call still polls to its result. Positive historical replay budgets keep the 2a accounting. After `outcome_unknown` the final answer must be a reply saying the action may have happened (§8). | `toolLoop.ts`, `runner.ts:372`, `protocol.ts` |
@@ -212,7 +212,7 @@ says so.
 |---|---|---|
 | 200 `pending` | poll with identical body | same |
 | 200 final status | result | result; **status never rewritten** (§3.4) |
-| 200 `denied`/`unavailable` | retry twice, then the denial | same (the service's `unavailable` is pre-execution) |
+| 200 `denied`/`unavailable` | retry twice, then the denial | retry twice with the identical body; if exhausted, keep the denial, end calling and require a reply explaining uncertain execution |
 | 200 other `denied` | result | keep the denial and end calling: switch-off withholding can hide an executed action |
 | network error, timeout, 5xx, a 200 that fails `toolCallResultSchema` or names another `call_id`/`tool` | resend identical body after 1, 2, 4 s; then local `error` | resend identical body after 1, 2, 4 s; then local **`outcome_unknown`** (§4.3) |
 | other unresolved HTTP response, including redirects, 408 and an unrecognized 409 | local `error` for 409; otherwise retry as above | latch ambiguity and retry the identical body as above; a later refusal cannot erase it |
@@ -229,7 +229,10 @@ without a valid result or one of the wire-defined pre-admission refusals
 destroyed as too large, invalid 200 results, 5xx, redirects, 408 and
 unrecognized 409 responses. The established lease-loss paths still abort
 without completion; `call_conflict` is immediately unknown. One boolean per
-action send tracks ambiguity and never clears on a later refusal.
+action send tracks ambiguity and never clears on a later refusal. An action
+`denied`/`unavailable` also latches ambiguity: Celestia reauthorizes a saved
+`ok` before replaying it, and an unavailable dispatcher can withhold that
+completed effect with `replayed:true` and positive `calls_remaining`.
 
 Every local `outcome_unknown` sets `terminal = true`, exactly as a wire
 `outcome_unknown` does (`toolLoop.ts:87`).
@@ -263,6 +266,7 @@ written only for action results so a read projection keeps its 2a bytes:
 ```ts
 effect?: "action";        // on every action result, local ones included
 delivered?: true;         // only when the result says delivered: true
+execution_unknown?: true; // exhausted unavailable action denial, prompt-only
 summary?: string;         // confirmation_pending, after the audience gate
 expires_in_s?: number;    // confirmation_pending: max(0, ceil((expires_at - now) / 1000))
 ```
@@ -347,11 +351,16 @@ fate and becomes terminal local `outcome_unknown`. Every other ending
 whether this action happened.", terminal, `local: true` in the record. The
 final answer then follows R6 (§8).
 
-A final action denial keeps its wire status and code. Except for the
-pre-execution `unavailable` retry, it ends calling even with a positive
-`calls_remaining`: Celestia can return `denied`/`not_permitted` after the
-effect when its action switch turns off. Switching back on cannot reopen
-this request's calls, and the final schema offers no hand-off (§5).
+A final action denial keeps its wire status and code. It ends calling even
+with a positive `calls_remaining`: Celestia can return
+`denied`/`not_permitted` after the effect when its action switch turns off.
+`unavailable` permits two wire retries of the identical call; exhaustion
+sets the request's uncertainty flag and adds prompt-only
+`execution_unknown:true` to the unchanged denial projection. The next schema
+is reply-only, and local validation rejects call, hand-off and ignore. This
+applies whether the denial says `replayed:true` or `false`; neither proves
+non-execution. A successful same-ID retry still resolves the result normally.
+Switching back on cannot reopen this request's calls (§5).
 
 ## 5. Hand-off after an action (E2)
 
@@ -591,6 +600,13 @@ Each counts the fake's POSTs per `call_id` and the fake's executions.
     without `call` or `handoff`, invalid retry rejected locally.
 13. A stub that returns `handoff` in the final round after an action (schema
     ignored): `failed`/`invalid_answer`; no `declined` body on the wire.
+14. A completed ban whose first HTTP result is lost, followed by three
+    `denied`/`unavailable` replays with positive `calls_remaining`: four
+    byte-identical POSTs and one effect; unchanged denial plus
+    `execution_unknown:true`, reply-only next schema, and call, hand-off and
+    ignore rejected locally. Direct loop checks also cover exhaustion with
+    either replay flag, successful same-ID recovery, and an unavailable
+    replay followed by a pre-admission refusal.
 
 ### 12.3 Rights-violation probes
 

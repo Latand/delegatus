@@ -33,7 +33,7 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
 }
 export type ToolProjection = {
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
-  effect?: "action"; delivered?: true; summary?: string; expires_in_s?: number;
+  effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
 export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number };
@@ -105,8 +105,8 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (!result.replayed) remaining = Math.min(remaining, result.calls_remaining);
         // R6 zero ends new actions even on replay; an admitted pending call still polls below.
         if (action && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
-        // Switch-off withholding can deny an action after it executed. Keep the
-        // denial, but close calls; only unavailable guarantees a safe wire retry.
+        // Reauthorization can deny a saved success after execution. Keep the
+        // denial; unavailable permits only retries of this same wire identity.
         if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
         if (action && result.status === "outcome_unknown") sawUnknown = true;
         if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
@@ -117,9 +117,16 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           await wait(Math.min((result.retry_after_s ?? 1) * 1000, 330_000 - (now() - started)));
           continue;
         }
-        if (result.status === "denied" && result.code === "unavailable" && unavailable++ < 2) {
-          await wait((result.retry_after_s ?? 1) * 1000);
-          continue;
+        if (result.status === "denied" && result.code === "unavailable") {
+          if (action) ambiguous = true;
+          if (unavailable++ < 2) {
+            await wait((result.retry_after_s ?? 1) * 1000);
+            continue;
+          }
+          if (action) {
+            unknown();
+            return { result, unknown: true };
+          }
         }
         return { result };
       } catch (error) {
@@ -228,6 +235,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         ...(body && "arguments" in body ? { arguments: body.arguments } : call.cursor ? { page_of: call.cursor } : {}),
         status, output, truncated,
         ...(action ? { effect: "action" as const } : {}),
+        ...(action && raw && "unknown" in value && value.unknown ? { execution_unknown: true as const } : {}),
         ...(action && raw?.delivered ? { delivered: true as const } : {}),
         ...(action && !withheld && raw?.status === "confirmation_pending" ? {
           ...(raw.summary !== undefined ? { summary: raw.summary } : {}),

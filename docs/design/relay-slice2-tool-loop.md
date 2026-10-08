@@ -511,7 +511,7 @@ included), which the replay test asserts.
 | L2 actions run alone | At most one action per round, after reads settle under a held lease; [2b §3.2](relay-slice2b-actions.md#32-scheduling-a-round-l2). |
 | `confirmation_pending`, R5 `delivered` | Summary and relative `expires_in_s`, terminal final; no confirmation call or repeated delivery; [2b §7](relay-slice2b-actions.md#7-confirmation_pending-flow-and-expiry). |
 | R6 `outcome_unknown` | Local ambiguity also produces terminal unknown; final schema and validation require reply; [2b §8](relay-slice2b-actions.md#8-outcome_unknown). |
-| Post-execution action denial | Denial remains a result, closes calls and prevents hand-off; unresolved HTTP outcomes retain ambiguity across later refusals; [2b §4.3](relay-slice2b-actions.md#43-the-fate-of-an-action-the-install-could-not-observe). |
+| Post-execution action denial | Denial remains a result, closes calls and prevents hand-off. Exhausted same-ID `unavailable` retries keep the denial with prompt-only `execution_unknown:true` and require a reply; unresolved outcomes retain ambiguity across later refusals; [2b §4.3](relay-slice2b-actions.md#43-the-fate-of-an-action-the-install-could-not-observe). |
 | E2 `handoff_after_action` | Hand-off removed after a POST is sent; 409 completion resent as failed/invalid_answer; [2b §5](relay-slice2b-actions.md#5-hand-off-after-an-action-e2). |
 | L5 stamped request | Service ledger plus stamp, no install state; [2b §4](relay-slice2b-actions.md#4-an-action-is-never-issued-twice). |
 | Records | Action rows add effect; read rows remain byte-identical; [2b §3.6](relay-slice2b-actions.md#36-records). |

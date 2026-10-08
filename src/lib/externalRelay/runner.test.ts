@@ -1506,6 +1506,37 @@ test("a post-execution switch-off denial prevents a changed-reason ban after swi
   expect(run.completions).toHaveLength(1);
 });
 
+for (const choice of ["reply", "call", "handoff", "ignore"])
+  test(`an exhausted unavailable replay preserves the completed ban's uncertainty with ${choice}`, async () => {
+    const executed = new Set<string>();
+    const run = await runLoopCase({ role: "actions_admin",
+      plan: `if(round===1||'${choice}'==='call'&&!final)return {action:'call',text:'',reply_to:null,calls:[call('ban_participant',{
+        target_message_id:'m_b40b71a0a9d43622ee0e2e6a',reason:round===1?'Spam':'Repeated spam'})]};
+        if('${choice}'==='call')return {action:'call',text:'',reply_to:null,calls:[call('ban_participant',{reason:'Repeated spam'})]};
+        return '${choice}'==='reply'?{...reply,text:'The ban may have happened; I will not repeat it.'}:{action:'${choice}',text:'',reply_to:null};`,
+      response: (body) => {
+        if (!executed.has(body.call_id)) {
+          executed.add(body.call_id);
+          return { drop: true }; // Ban finished, but its first HTTP result was lost.
+        }
+        // Celestia reauthorizes a saved ok result before replaying it. The
+        // pinned dispatcher returns this denial when that check is unavailable.
+        return { body: { call_id: body.call_id, tool: "ban_participant", status: "denied", output: "",
+          truncated: false, effect: "action", delivered: false, replayed: true, calls_remaining: 15,
+          code: "unavailable", retry_after_s: 1 } };
+      } });
+    expect(executed.size).toBe(1);
+    expect(run.calls).toHaveLength(4);
+    expect(new Set(run.calls.map((body) => JSON.stringify(body))).size).toBe(1);
+    expect(projectionsOf(run)[0]).toMatchObject({ status: "denied", code: "unavailable", effect: "action", execution_unknown: true });
+    expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
+    expect(run.rounds[1].prompt).toContain("execution_unknown means the action may have happened");
+    expect(run.rounds).toHaveLength(2);
+    expect(run.record!.toolCalls![0]).toMatchObject({ status: "denied", code: "unavailable", replayed: true, local: false });
+    expect(run.completion).toMatchObject(choice === "reply" ? { outcome: "answered" } : { outcome: "failed", reason: "invalid_answer" });
+    expect(run.completions).toHaveLength(1);
+  });
+
 for (const sample of ["action_ok", "action_error", "action_denied", "confirmation_pending", "outcome_unknown", "action_replayed", "action_delivered"])
   test(`X1 ${sample} crosses the real action loop`, async () => {
     const wire = x1Results[sample]!;

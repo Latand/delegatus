@@ -99,6 +99,60 @@ async function actionLoopCase(handler: Parameters<typeof startTestRelay>[0], req
 }
 const actionCall = (tool = "react_to_message", args = {}) => ({ tool, arguments: JSON.stringify(args), cursor: null });
 
+for (const replayed of [false, true])
+  test(`exhausted action unavailable closes new calls even with replayed ${replayed}`, async () => {
+    const posts: ReturnType<typeof callBody>[] = [];
+    const { loop, server } = await actionLoopCase((_req, body) => {
+      const call = body as ReturnType<typeof callBody>; posts.push(call);
+      return { body: { ...x1Results.unavailable, call_id: call.call_id, tool: "react_to_message",
+        effect: "action", replayed, calls_remaining: 15 } };
+    });
+    try {
+      await loop.runCalls([actionCall()], 1);
+      expect(loop.callsLeft()).toBe(0);
+      expect(loop.sawUnknown).toBe(true);
+      expect(loop.results[0]).toMatchObject({ status: "denied", code: "unavailable", execution_unknown: true });
+      await loop.runCalls([actionCall("react_to_message", { emoji: "👍" })], 2);
+      expect(posts).toHaveLength(3);
+      expect(posts.every((post) => JSON.stringify(post) === JSON.stringify(posts[0]))).toBe(true);
+      expect(loop.records[1]).toMatchObject({ local: true, code: "too_many_calls" });
+    } finally { await server.close(); }
+  });
+
+test("unavailable action retries can recover the same identity without closing new calls", async () => {
+  const posts: ReturnType<typeof callBody>[] = [];
+  const { loop, server } = await actionLoopCase((_req, body) => {
+    const call = body as ReturnType<typeof callBody>; posts.push(call);
+    return { body: { ...(posts.length < 3 ? x1Results.unavailable : x1Results.action_ok),
+      call_id: call.call_id, tool: "react_to_message", effect: "action" } };
+  });
+  try {
+    await loop.runCalls([actionCall()], 1);
+    expect(posts).toHaveLength(3);
+    expect(posts.every((post) => JSON.stringify(post) === JSON.stringify(posts[0]))).toBe(true);
+    expect(loop.callsLeft()).toBeGreaterThan(0);
+    expect(loop.sawUnknown).toBe(false);
+    expect(loop.results[0]).toMatchObject({ status: "ok" });
+    expect(loop.results[0]).not.toHaveProperty("execution_unknown");
+  } finally { await server.close(); }
+});
+
+test("unavailable reauthorization followed by a pre-admission refusal keeps action uncertainty", async () => {
+  let posts = 0;
+  const { loop, server } = await actionLoopCase((_req, body) => {
+    const call = body as ReturnType<typeof callBody>;
+    if (++posts > 1) return { status: 400 };
+    return { body: { ...x1Results.unavailable, call_id: call.call_id, tool: "react_to_message", effect: "action", replayed: true } };
+  });
+  try {
+    await loop.runCalls([actionCall()], 1);
+    expect(posts).toBe(2);
+    expect(loop.callsLeft()).toBe(0);
+    expect(loop.sawUnknown).toBe(true);
+    expect(loop.results[0]).toMatchObject({ status: "outcome_unknown" });
+  } finally { await server.close(); }
+});
+
 for (const status of ["ok", "denied", "confirmation_pending", "outcome_unknown"] as const)
   test(`an action's withheld ${status} keeps status and removes every content field`, async () => {
     let posts = 0;
