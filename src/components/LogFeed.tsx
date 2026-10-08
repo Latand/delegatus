@@ -571,6 +571,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const lastPrependRef = useRef(0);
   const pulseTimer = useRef<number | null>(null);
   const glueAtRef = useRef(0);
+  /* A glue wrote the offset and the scroll event for that write has not come.
+     A frame dispatches its scroll events before its animation callbacks, so
+     the next frame's callback ends the wait: a glue whose writes moved
+     nothing leaves no mark on a later scroll. */
+  const glueScrollPendingRef = useRef(false);
+  const glueScrollFrameRef = useRef<number | null>(null);
   const scrollCauseRef = useRef<ScrollCause | null>(null);
   /* One scrollbar press can drive many scroll events. Its moving baseline
      lives through the gesture; a stamped programmatic cause still wins. */
@@ -694,6 +700,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   };
   useEffect(() => () => {
     if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+    if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
   }, []);
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
@@ -711,6 +718,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     markProgrammaticScroll();
     el.scrollTop = el.scrollHeight;
     alignFollowedTop(el);
+    glueScrollPendingRef.current = true;
+    if (typeof requestAnimationFrame === "function") {
+      if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
+      glueScrollFrameRef.current = requestAnimationFrame(() => {
+        glueScrollFrameRef.current = null;
+        glueScrollPendingRef.current = false;
+      });
+    }
     const pendingUser = scrollCauseRef.current;
     if (pendingUser?.kind === "user") pendingUser.fromBottom = distanceFromBottom(el);
   };
@@ -1999,14 +2014,19 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           if (scrollbarPointer) scrollbarPointer.fromBottom = fromBottom;
           if (scrollbarPointer || cause?.kind !== "user" || userDelta !== 0) scrollCauseRef.current = null;
           const settling = nowMs() - glueAtRef.current < GLUE_SETTLE_MS;
+          const glueOwnScroll = glueScrollPendingRef.current;
+          glueScrollPendingRef.current = false;
           if (!settling || userInitiated) pendingRestoreRef.current = null;
           if (userReturnedToBottom && !magnetRef.current) setMagnet(true, true);
           else if ((userReleasedMagnet || !atBottom) && magnetRef.current) {
             /* Off-bottom right after a programmatic glue is layout settling
                (initial row windows, pane resizes during a scheme
                reshuffle) — hold the magnet and glue again. A preceding input
-               event identifies an operator release inside the same window. */
-            if (settling && !userInitiated) glue();
+               event identifies an operator release inside the same window.
+               A glue's own scroll event holds it whenever it arrives: a busy
+               page delivers it past the window, after rows that landed
+               above have left the offset short of the tail. */
+            if ((settling || glueOwnScroll) && !userInitiated) glue();
             else setMagnet(false);
           }
           if (memoryKey && file && (!settling || userInitiated)) {

@@ -1,0 +1,384 @@
+{
+  "case": "BOARD_CAPTURE_CASE=twice-switched-link (scripts/capture-board-geometry.ts), 1440x900, en and uk",
+  "fixed": {
+    "commit": "the commit that adds this file, captured from its working tree over b4154c5d4",
+    "frames": {
+      "en-older-first-canonical": {
+        "language": "en",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "en-older-first-legacy": {
+        "language": "en",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "en-newer-first-canonical": {
+        "language": "en",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "en-newer-first-legacy": {
+        "language": "en",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-older-first-canonical": {
+        "language": "uk",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-older-first-legacy": {
+        "language": "uk",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-newer-first-canonical": {
+        "language": "uk",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-newer-first-legacy": {
+        "language": "uk",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned"
+        ]
+      }
+    },
+    "failures": []
+  },
+  "preFix": {
+    "commit": "b4154c5d456ecde25b6a4ad68ea3474878409bdc (git archive export)",
+    "frames": {
+      "en-older-first-canonical": {
+        "language": "en",
+        "before": {
+          "readers": 0,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 0,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "plain",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "plain",
+          "pinned"
+        ]
+      },
+      "en-older-first-legacy": {
+        "language": "en",
+        "before": {
+          "readers": 0,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 0,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "plain",
+          "pinned",
+          "plain",
+          "pinned"
+        ]
+      },
+      "en-newer-first-canonical": {
+        "language": "en",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "en-newer-first-legacy": {
+        "language": "en",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-older-first-canonical": {
+        "language": "uk",
+        "before": {
+          "readers": 0,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 0,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "plain",
+          "pinned",
+          "plain",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-older-first-legacy": {
+        "language": "uk",
+        "before": {
+          "readers": 0,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 0,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "plain",
+          "pinned",
+          "plain",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-newer-first-canonical": {
+        "language": "uk",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned"
+        ]
+      },
+      "uk-newer-first-legacy": {
+        "language": "uk",
+        "before": {
+          "readers": 1,
+          "notice": false
+        },
+        "after": {
+          "successorReaders": 1,
+          "archivedReaders": 0,
+          "archivedDrawn": false,
+          "notice": false
+        },
+        "servedAfter": [
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned",
+          "pinned"
+        ]
+      }
+    },
+    "failures": [
+      "en-older-first-canonical: the link opened 0 readers of the conversation",
+      "en-older-first-canonical: 0 readers followed the arriving generation",
+      "en-older-first-legacy: the link opened 0 readers of the conversation",
+      "en-older-first-legacy: 0 readers followed the arriving generation",
+      "uk-older-first-canonical: the link opened 0 readers of the conversation",
+      "uk-older-first-canonical: 0 readers followed the arriving generation",
+      "uk-older-first-legacy: the link opened 0 readers of the conversation",
+      "uk-older-first-legacy: 0 readers followed the arriving generation"
+    ]
+  }
+}

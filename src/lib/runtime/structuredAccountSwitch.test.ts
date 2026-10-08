@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 
 import { advanceConversationMigration, drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
@@ -11,6 +12,7 @@ import { registerAccountMigrationTick } from "@/lib/accounts/migration/controlle
 import { runtimeReceiptForSend, sendReceiptFor } from "./sendSettlement";
 import { translate } from "@/lib/i18n";
 import { messageRowModel } from "@/components/conversation/messageRow";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS } from "@/components/runtime/runtimeModel";
 import type { OutboxEntry } from "@/components/conversation/outbox";
 import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
@@ -111,7 +113,7 @@ interface SwitchCase {
   successorPath: string;
   effect: StructuredReconfigureEffect;
   releasedKeys: SessionKey[];
-  reconfigure: (provider?: SuccessorProviderPort) => Promise<"applied" | "pending">;
+  reconfigure: (provider?: SuccessorProviderPort) => Promise<"applied" | "pending" | "writer-busy">;
   hostTurn: (activeTurnRef: string | null) => void;
 }
 
@@ -550,4 +552,172 @@ test("held receipts follow a failed switch, retry and rollback in both languages
   registry.rollbackConversationMigration(conversation.id);
   expect(registry.deliverySnapshotForOperation(held.command.operationId)!.heldDeliveries[held.id]).toMatchObject({ state: "assigned", waitReason: null });
   expect(receipt()!.reason).not.toBe("switching-accounts");
+});
+
+/** The run 3 race on production (2026-10-07): the operator picked account B
+    in the composer of an idle conversation and sent a message 0.09 s later.
+    The send was admitted before the queue claimed the pick, so it was claimed
+    on account A and journaled behind the pick. */
+function sendClaimedBehindPick(storage: { sqliteMode: "sqlite"; sqliteWriterDeadlineMs?: number } | null = null) {
+  const root = path.join(sandbox, `case-${caseNumber += 1}`);
+  fs.mkdirSync(root);
+  setBoardFileForTests(path.join(root, "board.json"));
+  const sqliteFilename = path.join(root, "registry.sqlite");
+  const registry = storage
+    ? new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { ...storage, sqliteFilename })
+    : new AgentRegistry(path.join(root, "registry.json"));
+  const sourcePath = path.join(root, "source.jsonl");
+  const successorPath = path.join(root, "successor.jsonl");
+  claudeTranscript(sourcePath);
+  registry.reconcileConversations([{
+    engine: "claude",
+    path: sourcePath,
+    accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "terminal", source: "assistant", terminalAt: "2026-07-21T10:00:26.000Z" },
+    observedAt: "2026-07-21T10:00:30.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  const generationId = conversation.generations.at(-1)!.id;
+  recordStructuredHost(registry, { engine: "claude", sessionId: generationId }, sourcePath, "account-a", null);
+  const admitted = registry.holdDelivery(conversation.id, "Second message: reply with the single word OK", "send-behind-pick",
+    "text", [], null, { operationId: "send-behind-pick" });
+  const claimed = registry.beginDeliveryAttempt(admitted.id, generationId);
+  expect(claimed).toMatchObject({ state: "delivery-uncertain", generationId });
+  const effect: StructuredReconfigureEffect = {
+    operationId: "pick-account-b",
+    conversationId: conversation.id,
+    kind: "reconfigure",
+    model: "claude-haiku-4-5",
+    effort: "low",
+    fast: false,
+    accountId: "account-b",
+    eventSeq: 7,
+  };
+  const reconfigure = (carriedSends?: readonly string[]) => applyStructuredReconfigure(effect, {
+    registry,
+    validateAccount: async () => {},
+    resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: root, engine })) as never,
+    releaseHost: async () => true,
+    recover: (async () => true) as never,
+    migrate: (conversationId, targetAccountId, store, ownsOperation, reconfigureOperationId) =>
+      advanceConversationMigration(conversationId, store, successorProvider(successorPath), {
+        ownsOperation,
+        reconfigureOperationId,
+        deferBoardRepair: true,
+      }),
+    ...(carriedSends ? { carriedSends } : {}),
+  });
+  return { registry, conversation, successorPath, reconfigure, sqliteFilename };
+}
+
+/** Another process's writer: the registry's write lock taken on a second
+    connection and kept until released. */
+function holdRegistryWriter(sqliteFilename: string) {
+  const database = new Database(sqliteFilename);
+  database.exec("BEGIN IMMEDIATE");
+  return { release: () => { database.exec("ROLLBACK"); database.close(); } };
+}
+
+/** The longest stretch a 10 ms heartbeat went unserved while `work` ran. */
+async function longestHeartbeatGap<T>(work: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
+  let last = performance.now();
+  let gapMs = 0;
+  const beat = setInterval(() => {
+    const at = performance.now();
+    gapMs = Math.max(gapMs, at - last);
+    last = at;
+  }, 10);
+  try {
+    const value = await work();
+    gapMs = Math.max(gapMs, performance.now() - last);
+    return { value, gapMs };
+  } finally {
+    clearInterval(beat);
+  }
+}
+
+test("a send claimed on the old account behind the pick moves with the switch and goes out on the new account", async () => {
+  const { registry, conversation, successorPath, reconfigure } = sendClaimedBehindPick();
+
+  expect(await reconfigure(["send-behind-pick"])).toBe("applied");
+
+  const switched = registry.conversation(conversation.id)!;
+  expect(switched.migration?.phase).toBe("committed");
+  expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  /* The message waits for the successor's host, never for itself. */
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "send-behind-pick",
+    state: "assigned",
+    generationId: "successor-native",
+  }]);
+});
+
+test("a send the queue may already have handed the old host still holds the switch", async () => {
+  const { registry, conversation, reconfigure } = sendClaimedBehindPick();
+
+  expect(await reconfigure()).toBe("pending");
+
+  expect(registry.conversation(conversation.id)!.migration?.phase).toBe("waiting-turn");
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
+});
+
+test("the switch hands its carried sends over without holding the Viewer while another writer has the lock", async () => {
+  const { registry, conversation, successorPath, reconfigure, sqliteFilename } = sendClaimedBehindPick({ sqliteMode: "sqlite" });
+  /* The handover's write comes after the pick's own reseat write, so the lock
+     is taken once that has committed: the next write is the handover. */
+  const reseat = registry.requestConversationReseat.bind(registry);
+  let writer: ReturnType<typeof holdRegistryWriter> | null = null;
+  registry.requestConversationReseat = (...args) => {
+    const conversationAfter = reseat(...args);
+    writer = holdRegistryWriter(sqliteFilename);
+    setTimeout(() => writer!.release(), 600);
+    return conversationAfter;
+  };
+
+  const { value, gapMs } = await longestHeartbeatGap(() => reconfigure(["send-behind-pick"]));
+
+  expect(writer).not.toBeNull();
+  expect(value).toBe("applied");
+  expect(gapMs).toBeLessThan(50);
+  expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ clientMessageId: "send-behind-pick", state: "assigned" }]);
+  registry.close();
+});
+
+test("a handover refused at its deadline writes nothing, says why, and the next pass carries the send once", async () => {
+  const { registry, conversation, successorPath, reconfigure, sqliteFilename } = sendClaimedBehindPick({ sqliteMode: "sqlite", sqliteWriterDeadlineMs: 100 });
+  const reseat = registry.requestConversationReseat.bind(registry);
+  let writer: ReturnType<typeof holdRegistryWriter> | null = null;
+  let deliveriesBeforeHandover: unknown = null;
+  registry.requestConversationReseat = (...args) => {
+    const conversationAfter = reseat(...args);
+    if (!writer) {
+      deliveriesBeforeHandover = structuredClone(registry.readOnlySnapshot().heldDeliveries);
+      writer = holdRegistryWriter(sqliteFilename);
+    }
+    return conversationAfter;
+  };
+
+  const { value, gapMs } = await longestHeartbeatGap(() => reconfigure(["send-behind-pick"]));
+  writer!.release();
+
+  expect(value).toBe("writer-busy");
+  expect(gapMs).toBeLessThan(50);
+  /* Nothing was written: the claim still sits on the old account. */
+  expect(registry.readOnlySnapshot().heldDeliveries).toEqual(deliveriesBeforeHandover as never);
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
+  /* The composer names the wait from the switch's receipt. */
+  expect(translate("en", humanReceiptReasonKey("switch-writer-busy")!)).toContain("retries");
+  expect(SWITCH_WAIT_REASONS.has("switch-writer-busy")).toBe(true);
+
+  expect(await reconfigure(["send-behind-pick"])).toBe("applied");
+
+  expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "send-behind-pick",
+    state: "assigned",
+    generationId: "successor-native",
+  }]);
+  registry.close();
 });
