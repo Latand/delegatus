@@ -951,6 +951,11 @@
    row or wrapped. It keeps one form at every width: it names the agents it
    counts and stands as tall as the header's other buttons. */
 .kb .bar .open-agents-slot { flex: 0 0 auto; width: 104px; height: 32px; display: flex; align-items: center; }
+/* A wrapped bar breaks its rows on the search's basis, so the search gives up
+   the slot and its gap there: the first row asks for what it did before the
+   slot, keeps the search beside the project's name, and the rows stay where
+   they were. The search still grows into whatever the row leaves it. */
+.kb .bar[data-bar="project"][data-bar-wrap] .bar-find { flex-basis: calc(240px - 104px - 16px); }
 .kb .bar .open-agents-pill { max-width: 100%; padding: 0 8px 0 10px; }
 .kb .bar .open-agents-pill .num { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kb .bar .open-agents-pill svg { flex-shrink: 0; width: 13px; height: 13px; color: var(--color-secondary); }

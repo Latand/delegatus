@@ -315,7 +315,9 @@ above where the critique of the prototypes (lane 23485fd0, attempt 2) asked:
 - **The header's pill has a slot of its own.** The slot keeps one width and
   height (104 × 32 px) whether or not anything is open, so the first open and
   the last close move nothing in the header, on one row or wrapped at 1000 px.
-  The search field does not give up width. The pill has one form at every
+  In a header wrapped at 1000 px the search field gives up the slot's width
+  and its gap, so it keeps the first row and the header keeps the rows it had
+  before the slot. The pill has one form at every
   width: it names what it counts («2 агенти ⤢», «2 agents ⤢») and is as tall
   as the header's other buttons. The pill never reads «0»: it is
   drawn only with an agent open. While the window is open the pill stays in

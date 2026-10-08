@@ -9824,7 +9824,7 @@ describe("interface polish round 2: press and open/close motion, the status menu
 });
 
 describe("the agent window: a click on the board opens the agent in one window, the open agents on its left (docs/design/agent-window.md, Variant 1)", () => {
-  /* The `stages` scenario at 1440×900 and 1000×800, in English and
+  /* The `stages` scenario at 1440×900 and 1000×700, in English and
      Ukrainian, light and dark. One run per face opens the retry banner's
      Build from its chip, closes the window with Escape, opens the export
      implementer from its tile, closes the window from its corner with the
@@ -9833,7 +9833,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
      every animation frame of the run: what the window shows, its feed, any
      skeleton, the composer toolbar, the search field, the header's pill slot
      and both cards' boxes. What only a browser settles, and is gated here:
-     the cards and the header never move; no frame shows the window with an
+     the cards and the header never move; the search keeps the first row of
+     the header beside the pill's slot, and no header control lies under the
+     attention toast; no frame shows the window with an
      empty or skeleton reader; closing one agent never takes the window off
      the screen; an incoming agent keeps one toolbar layout; the window's
      margins hold no board text; ‹ › are absent with one agent and stand in
@@ -9914,6 +9916,17 @@ describe("the agent window: a click on the board opens the agent in one window, 
       readerRing: reader ? reader.matches(":focus-visible") : null,
       focus: active?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? active?.getAttribute("data-open-agent-jump") ?? active?.tagName ?? null,
       search: rect(document.querySelector("[data-kanban-search]")),
+      slot: rect(document.querySelector("[data-open-agents-slot]")),
+      /* The header's controls the attention toast lies over. */
+      underToast: (() => {
+        const toast = document.querySelector("[data-attention-toast]");
+        const over = toast?.getBoundingClientRect();
+        if (!toast || !over) return [];
+        return [...document.querySelectorAll<HTMLElement>('.kb .bar[data-bar="project"] :is(button, input, a)')].filter((control) => {
+          const box = control.getBoundingClientRect();
+          return !toast.contains(control) && box.width > 0 && box.left < over.right && box.right > over.left && box.top < over.bottom && box.bottom > over.top;
+        }).map((control) => control.getAttribute("aria-label") ?? control.textContent?.trim() ?? control.tagName);
+      })(),
       cards: Object.fromEntries(["t-rounds", "t-export"].map((id) => [id, rect(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))])),
     };
   });
@@ -9955,7 +9968,7 @@ describe("the agent window: a click on the board opens the agent in one window, 
     return out;
   };
 
-  browserTest("open, switch, close one and close all at 1440×900 and 1000×800, en and uk, light and dark, every frame traced", async () => {
+  browserTest("open, switch, close one and close all at 1440×900 and 1000×700, en and uk, light and dark, every frame traced", async () => {
     const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
     const out = path.resolve(".artifacts/agent-window");
     fs.mkdirSync(out, { recursive: true });
@@ -9968,7 +9981,7 @@ describe("the agent window: a click on the board opens the agent in one window, 
     try {
       for (const scheme of ["light", "dark"] as const) {
         for (const lang of ["en", "uk"] as const) {
-          for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 800 }] as const) {
+          for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const) {
             const label = `${viewport.width}-${lang}-${scheme}`;
             if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
             const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
@@ -9986,6 +9999,13 @@ describe("the agent window: a click on the board opens the agent in one window, 
               /* Everything the run clicks on the board well in view first: a click scrolls its target in, and that scroll is the test's, never the product's. */
               await page.evaluate((targets) => {
                 for (const target of targets) document.querySelector(target)?.closest(".card")?.scrollIntoView({ block: "center" });
+                /* At 700 px centring the export card leaves its tile under the column's head: bring the tile itself in, with air round it. */
+                const tile = document.querySelector<HTMLElement>(targets[0]!);
+                if (tile) {
+                  tile.style.scrollMarginBlock = "16px";
+                  tile.scrollIntoView({ block: "nearest" });
+                  tile.style.scrollMarginBlock = "";
+                }
               }, [EXPORT_TILE, chip("build")]);
               await page.mouse.move(viewport.width / 2, 12);
               await settle(page);
@@ -10001,6 +10021,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
               const board = await readWindow(page);
               steps["01-board"] = board;
               await shot("01-board");
+              /* The header keeps its rows at every width: the search beside the pill's slot, nothing under the toast. */
+              if (board.search?.y !== board.slot?.y) fail(`the search stands at y ${board.search?.y}, out of the pill slot's row at y ${board.slot?.y}`);
+              if (board.underToast.length) fail(`the attention toast lies over the header's ${JSON.stringify(board.underToast)}`);
 
               await phase(page, "open-build");
               await page.locator(chip("build")).click();
