@@ -806,6 +806,11 @@ export type PipelinePublicationFailure = {
   changedFiles?: number;
   /** The command budget the step ran past, when that is what ended it. */
   timedOutMs?: number;
+  /** The push budget at which the repository hook stopped a check that was
+      still running, so the push carries no verdict. */
+  hookBudgetMs?: number;
+  /** The check the hook named as stopped without a verdict. */
+  hookStoppedCheck?: string;
 };
 
 export type PipelinePublicationResult = (

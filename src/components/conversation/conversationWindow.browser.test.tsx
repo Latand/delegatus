@@ -2335,6 +2335,146 @@ describe("delivery check card", () => {
   }, 300_000);
 });
 
+describe("retained message notice over the composer", () => {
+  /*
+   * The operator's report of 2026-10-07: a boxed «Автоматичну перевірку
+   * зупинено» over the composer whose «Перевірити доставку» did nothing. Over
+   * the production composer with two messages retained in the browser's
+   * storage: the one whose delivery ended while the tab was away clears on
+   * open; the other stays one line with Re-check and ×, a tap reads its
+   * operation record and says it checked, and once the record says delivered
+   * the next tap takes the line away. A phone with touch and a desktop, both
+   * languages. Geometry goes to `evidence/delivery-check-notice/line.json`;
+   * frames to `.artifacts/delivery-check-notice/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844, touch: true },
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+  ] as const;
+
+  browserTest("one line, a tap rechecks, a settled delivery takes it away", async () => {
+    const out = path.resolve(".artifacts/delivery-check-notice");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=payload-notice&lang=${lang}`,
+          { width: viewport.width, height: viewport.height }, "dark", lang, "reduce", viewport.touch);
+        const key = `${viewport.name}-${lang}`;
+        const owed = page.locator('[data-payload-key="payload-notice-owed"]');
+        const recheck = owed.locator("[data-payload-recheck]");
+        const press = async () => (viewport.touch ? recheck.tap() : recheck.click());
+        const reads = async () => Number(await page.locator("[data-fixture-operation-reads]").textContent());
+        try {
+          await owed.waitFor();
+          /* The earlier message's delivery ended while the tab was away: its
+             record is read on open and its line never stays. */
+          await page.waitForFunction(() => !document.querySelector('[data-payload-key="payload-notice-earlier"]'));
+          const read = () => page.evaluate(() => {
+            const line = document.querySelector('[data-payload-key="payload-notice-owed"]') as HTMLElement;
+            const text = line.querySelector("[data-payload-reason]") as HTMLElement;
+            const field = document.querySelector("textarea")!.getBoundingClientRect();
+            const rect = line.getBoundingClientRect();
+            const style = getComputedStyle(line);
+            const actions = [...line.querySelectorAll("button")].map((button) => {
+              const box = button.getBoundingClientRect();
+              return { label: button.getAttribute("aria-label"), width: Math.round(box.width), height: Math.round(box.height) };
+            });
+            const excerpt = (line.querySelector("[data-payload-excerpt]") as HTMLElement).getBoundingClientRect();
+            const shown = text.getBoundingClientRect();
+            return {
+              height: Math.round(rect.height), width: Math.round(rect.width),
+              /* How much of the message excerpt the line actually shows. */
+              excerptShown: Math.round(Math.max(0, Math.min(excerpt.right, shown.right) - excerpt.left)),
+              statusWidth: Math.round((line.querySelector('[role="status"]') as HTMLElement).getBoundingClientRect().width),
+              lineHeight: parseFloat(getComputedStyle(text).lineHeight),
+              textHeight: Math.round(text.getBoundingClientRect().height),
+              border: style.borderTopWidth, paragraphs: line.querySelectorAll("p").length,
+              status: line.querySelector('[role="status"]')?.textContent,
+              text: text.textContent, actions,
+              clearOfField: rect.bottom <= field.top + 0.5,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          const before = await read();
+          await page.screenshot({ path: path.join(out, `${key}-owed.png`) });
+          expect(before.status).toBe(translate(lang, "composer.deliveryCheckEnded"));
+          expect(before.text).toContain("Here is the phone screenshot");
+          expect(before.text).not.toContain(lang === "uk" ? "Автоматичну перевірку" : "Automatic checking");
+          expect(before.paragraphs).toBe(0);
+          expect(before.border).toBe("0px");
+          /* One line: the text is one line high and the row is no taller than
+             its touch targets. */
+          expect(before.textHeight).toBeLessThanOrEqual(Math.ceil(before.lineHeight) + 1);
+          expect(before.height).toBeLessThanOrEqual(viewport.touch ? 44 : 24);
+          expect(before.actions.map((action) => action.label))
+            .toEqual([translate(lang, "composer.payloadRecheck"), translate(lang, "runtime.receipt.dismiss")]);
+          for (const action of before.actions) expect(action.height).toBe(viewport.touch ? 44 : 24);
+          expect(before.clearOfField).toBe(true);
+          expect(before.overflowX).toBe(0);
+
+          /* A tap reads the record and the line says it checked. */
+          const readsBefore = await reads();
+          await press();
+          await owed.locator("[data-payload-checked]").waitFor();
+          await page.waitForFunction((count) => Number(document.querySelector("[data-fixture-operation-reads]")?.textContent) > count, readsBefore);
+          const checked = await read();
+          /* Still unconfirmed: the status itself carries the time of the
+             check, so the tap shows a result where a 390 px phone can see it. */
+          expect(checked.status).toMatch(new RegExp(`^${translate(lang, "composer.deliveryCheckEndedAt", { time: "\\d\\d:\\d\\d" })}$`));
+          expect(checked.status).not.toBe(before.status);
+          const visible = await page.evaluate(() => {
+            const status = document.querySelector('[data-payload-key="payload-notice-owed"] [role="status"]') as HTMLElement;
+            const reason = status.parentElement!.getBoundingClientRect();
+            const box = status.getBoundingClientRect();
+            return box.left >= reason.left && box.right <= reason.right + 0.5;
+          });
+          expect(visible).toBe(true);
+          expect(checked.textHeight).toBeLessThanOrEqual(Math.ceil(checked.lineHeight) + 1);
+          /* The checked status is no wider than the one it replaces, so the
+             excerpt keeps its room. */
+          expect(checked.statusWidth).toBeLessThanOrEqual(before.statusWidth);
+          expect(checked.excerptShown).toBeGreaterThanOrEqual(before.excerptShown);
+          expect(checked.overflowX).toBe(0);
+          await page.screenshot({ path: path.join(out, `${key}-checked.png`) });
+
+          /* Delivered: the next tap takes the line and the region away. */
+          await page.evaluate(() => (window as unknown as { payloadNotice: { deliver(): void } }).payloadNotice.deliver());
+          await press();
+          await page.waitForFunction(() => !document.querySelector('[data-testid="composer-payload-recovery"]'));
+          await page.screenshot({ path: path.join(out, `${key}-settled.png`) });
+          readings[key] = { before, checked };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+
+        /* × hides the line for that message. */
+        const second = await openFixture(browser, `${served.base}?case=payload-notice&lang=${lang}`,
+          { width: viewport.width, height: viewport.height }, "dark", lang, "reduce", viewport.touch);
+        try {
+          const line = second.page.locator('[data-payload-key="payload-notice-owed"]');
+          await line.waitFor();
+          const dismiss = line.locator("[data-payload-dismiss]");
+          if (viewport.touch) await dismiss.tap(); else await dismiss.click();
+          await second.page.waitForFunction(() => !document.querySelector("[data-payload-key]"));
+          expect(second.pageErrors).toEqual([]);
+        } finally { await second.context.close(); }
+      }
+      const file = "evidence/delivery-check-notice/line.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`retained message notice: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 300_000);
+});
+
 describe("own-message step row", () => {
   /*
    * The row that steps between the operator's own messages

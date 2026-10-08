@@ -1,3 +1,5 @@
+import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
+import { openSeatAuthIncident } from "./seatAuthIncident";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -34,7 +36,7 @@ import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
 import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
-import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
+import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
 import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
@@ -42,6 +44,7 @@ import {
   defaultSeatTickSources,
   gatherSeatTickInput,
   refreshSeatTickEvidence,
+  seatInput,
   repoDirForProject,
   seatTickProjects,
   SeatTickEvidenceRefreshCanceledError,
@@ -113,6 +116,7 @@ import type {
  */
 
 export interface SeatTickControllerDependencies {
+  seatAuth?: SeatAuthRecoveryPorts;
   maintenance?: BoardMaintenanceController | null;
   sources?: SeatTickSources;
   /** Records the identity successions seated projects owe (#1874); the sweep
@@ -230,6 +234,7 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
+  if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -287,6 +292,9 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
  * very outage was carded by an earlier check.
  */
 function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
+  // Authentication notices are separate occurrences. An older owed card can
+  // finish beside a newer incident without rewriting or closing its notice.
+  if (card.kind === "auth-failed" && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -951,8 +959,8 @@ async function reconcileOutstandingWake(context: {
   deliver?: typeof deliverConversationMessage;
   /** Rebuild only after a returned refusal and proven absence. */
   refreshWake?: (state: SeatTickProjectState, wake: SeatTickOutstandingWake) => Promise<Pick<SeatTickOutstandingWake, "text" | "commit"> | null>;
-  /** Recheck the seat's MCP immediately before a same-key dispatch. */
-  mayDispatch?: () => boolean;
+  /** Recheck authentication and MCP immediately before a same-key dispatch. */
+  mayDispatch?: () => boolean | Promise<boolean>;
   /** When the project's tick settings were last written, which a refusal run
       is counted against. Only the re-dispatching reconcile needs it. */
   settingsUpdatedAt?: string | null;
@@ -1072,10 +1080,12 @@ async function reconcileOutstandingWake(context: {
       return state;
     }
     const held = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project).readState() : state;
-    const authority = context.sources.seatFor(context.project).active;
     if (held.outstandingWake?.clientMessageId !== wake.clientMessageId) return held;
+    if (context.mayDispatch && await context.mayDispatch() === false) return state;
+    // The admission read can await transcript evidence. Re-read authority
+    // afterward so a designation during that wait fences the old retry.
+    const authority = context.sources.seatFor(context.project).active;
     if (!authority || authority.conversationId !== wake.conversationId || authority.seatEpoch !== wake.seatEpoch) return state;
-    if (context.mayDispatch?.() === false) return state;
     const accounting = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project) : null;
     if (!accounting) return state;
     const token = accounting.beginDispatch(wake);
@@ -1446,8 +1456,15 @@ async function check(
         || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
       return alarmPayload(input, verdict, issues, wake.preparedAt);
     },
-    mayDispatch: () => !activeDrain() && (!openingSeat?.conversationId
-      || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead"),
+    mayDispatch: async () => {
+      if ((opened.authIncident && opened.authIncident.recoveredThrough === undefined) || activeDrain()) return false;
+      const seat = await seatInput(canonical, policy, sources);
+      if (seat && !seatTurnProgressing(seat)) {
+        const outcome = await sources.seatTurnOutcome?.(seat.conversationId) ?? null;
+        if (outcome && openSeatAuthIncident(canonical, seat, outcome, opened.authRecoveredThrough)) return false;
+      }
+      return !activeDrain() && (!seat || mcpHealthFor(seat, sources.now()).status !== "dead");
+    },
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
@@ -1466,6 +1483,7 @@ async function check(
      unread again at the next check. */
   let input = await refreshSeatTickEvidence(gathered, sources);
   input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
+  const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
   if (seatTickDecision(input).verdict.kind === "proactive") {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
@@ -1607,6 +1625,10 @@ async function check(
       // No attempt has entered transport; leave its work for the release tick.
       delivery = { clientMessageId, outcome: "update-held" };
       fenceDetail = "new seat work is held for the automatic update";
+    } else if (state.authIncident && state.authIncident.recoveredThrough === undefined && (state.authIncident.rotation.state !== "rotated"
+      || state.authIncident.seatEpoch !== input.seat?.seatEpoch)) {
+      delivery = { clientMessageId, outcome: "seat-auth-failed" };
+      fenceDetail = authDetail;
     } else if (mcpHealth?.status === "dead" && !(
       verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
       && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
@@ -1740,7 +1762,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, authDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;
