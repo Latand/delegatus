@@ -2491,3 +2491,42 @@ test("the inventory sidecar's hygiene waits for the lock off its loop, and an en
     made.cleanup();
   }
 });
+
+for (const intervening of ["retry", "new-attempt", "live-owner", "unchanged"] as const) {
+  test(`stale uncertain hygiene rechecks ${intervening} after the SQLite writer wait`, async () => {
+    const { sqliteRegistryFixture, registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+    const made = sqliteRegistryFixture("llv-hygiene-retry-race");
+    const registry = made.registry;
+    const holder = registryLockHolder(made.sqliteFilename);
+    try {
+      const conversation = registry.ensureConversation("codex", "/hygiene-retry.jsonl", "source");
+      const delivery = registry.holdDelivery(conversation.id, "keep the authorized send", "hygiene-retry-key");
+      registry.beginDeliveryAttempt(delivery.id, delivery.generationId!);
+      const later = Date.now() + 3 * 24 * 60 * 60_000;
+      await holder.hold(10_000);
+      const sweep = terminalizeStaleUndeliverableHeldDeliveries(registry, later);
+      await Bun.sleep(30);
+      await holder.release();
+      if (intervening === "retry") registry.retryUncertainDeliveryForOperation(delivery.command.operationId);
+      if (intervening === "new-attempt") {
+        const retried = registry.retryUncertainDeliveryForOperation(delivery.command.operationId)!;
+        registry.beginDeliveryAttempt(retried.id, retried.generationId!);
+      }
+      if (intervening === "live-owner") registry.upsert({
+        key: { engine: "codex", sessionId: "hygiene-live-owner" }, artifactPath: "/hygiene-retry.jsonl",
+        cwd: "/repo", accountId: "source", status: "live", host: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "test:live", process: { pid: process.pid, startIdentity: null },
+          eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+        claimEpoch: 1, claimOwner: "test-owner", pendingAction: null,
+      });
+      expect(await sweep).toEqual(intervening === "unchanged" ? [delivery.id] : []);
+      expect(registry.snapshot().heldDeliveries[delivery.id]?.state)
+        .toBe(intervening === "unchanged" ? "failed" : intervening === "retry" ? "assigned" : "delivery-uncertain");
+      expect(registry.snapshot().heldDeliveries[delivery.id]?.text).toBe("keep the authorized send");
+    } finally {
+      await holder.close();
+      registry.close();
+      made.cleanup();
+    }
+  });
+}

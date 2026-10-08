@@ -292,7 +292,11 @@ export async function applyConversationMigration(
     /* #1846: messages a failed account switch held go out on the account the conversation runs on. */
     const registry = registryForCommand();
     if (!registry.conversation(conversationId)) return { status: 404, body: { error: "viewer conversation is unknown" } };
-    const { released, conversation } = registry.releaseSwitchHold(conversationId);
+    const written = await registry.deliveryWrite({ label: "delivery.release-switch-hold",
+      operationId: command.requestOperationId ?? registry.switchHold(conversationId)?.operationId ?? null },
+      () => registry.releaseSwitchHold(conversationId));
+    if (!written.acquired) return registryBusy("the switch hold and its messages remain held");
+    const { released, conversation } = written.value;
     await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
     return { status: 200, body: { keepCurrent: released ? "released" : "nothing-held", conversation } };
   }

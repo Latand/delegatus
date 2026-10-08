@@ -50,6 +50,7 @@ export type StructuredControlResult =
       can tell "this process cannot ask any host generation" from a host that
       answered and refused (#1501). */
   | { status: 503; body: { error: string; code: typeof RUNTIME_HOST_UNAVAILABLE_CODE } }
+  | { status: 503; body: { error: string; retryable: true } }
   | { status: 400 | 409 | 503; body: { error: string } };
 
 export const RUNTIME_HOST_UNAVAILABLE_CODE = "runtime-host-unavailable";
@@ -378,7 +379,17 @@ export async function dispatchStructuredControl(
            pick still waiting, and it is how a message held by a failed switch goes out on this account. */
         const { accountId: _restated, ...profileOnly } = reconfiguration.value;
         reconfiguration.value = profileOnly;
-        if (conversation.switchHold) registry.releaseSwitchHold(conversation.id);
+        if (conversation.switchHold) {
+          const released = await registry.deliveryWrite({ label: "delivery.release-switch-hold",
+            operationId: request.operationId ?? conversation.switchHold.operationId },
+            () => registry.releaseSwitchHold(conversation.id));
+          if (!released.acquired) return { status: 503, body: {
+            error: "the delivery record's write lock is busy; the switch hold and its messages remain held", retryable: true,
+          } };
+          /* The hold committed: wake its accepted sends even if a later
+             profile update fails. The next queue pass remains the fallback. */
+          try { await (dependencies.kick ?? kickStructuredDeliveryQueue)(); } catch { /* committed hold stands */ }
+        }
         if (waiting) {
           const withdrawal = registry.withdrawConversationReconfigure(conversation.id, waiting.operationId);
           /* The claim won the race with this withdrawal: the move is under way, and a profile-only reconfigure

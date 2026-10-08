@@ -12,6 +12,19 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const noTimer = (() => 0 as unknown as ReturnType<typeof setTimeout>);
 
+test("a new rearm clears the ended executor, including after the progress store restarts", () => {
+  const filename = path.join(root, "rearm-executor.sqlite");
+  let store = new DeliveryProgressStore(filename, Date.now, noTimer);
+  store.note("rearm-executor", "conversation-rearm", { waitReason: "dispatching", executorId: "ended-queue" });
+  store.settle("rearm-executor", "uncertain", "lost acknowledgement");
+  store.flush();
+  store.close();
+  store = new DeliveryProgressStore(filename, Date.now, noTimer);
+  store.rearm("rearm-executor", "conversation-rearm", { waitReason: "checking" });
+  expect(store.get("rearm-executor")).toMatchObject({ terminal: null, executorId: null });
+  store.close();
+});
+
 test("a record keeps its reason, attempt, progress, deadline and next wake across a restart, and a reader in another process sees it", () => {
   let now = Date.parse("2026-10-06T12:06:26.209Z");
   const filename = path.join(root, "restart.sqlite");

@@ -265,7 +265,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       lastProgressAt: at,
       nextWakeAt: note.nextWakeMs === undefined || note.nextWakeMs === null ? null : new Date(this.now() + Math.max(0, note.nextWakeMs)).toISOString(),
       stalledSince: null,
-      executorId: note.executorId ?? current.executorId,
+      executorId: note.executorId ?? null,
       terminal: null,
       updatedAt: at,
     });

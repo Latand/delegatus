@@ -235,7 +235,7 @@ nothing to decide on that path.
 | P18 | Native Codex queue: an ordinary queue send on a capable Codex host | `runtime-host/journal.ts:576`–`:585` converts it to `runtime.native-queue`; queue `:1466`, `:1681`; `NativeQueueExecutor.execute` `nativeQueueExecutor.ts:34` | **gap**: the P1 record stays `queued` while the executor waits for a successor (`:53`, `:68`), an unreadable health (`:81`) or an unreadable status (queue `:1521`–`:1527`), with no note; A1, A6 | per conversation already | native `settled` → `recordDeliveryOutcomeForOperation` controller `:767` synchronous; C3 |
 | P19 | Startup continuations: (a) the one an interruption obligation is owed (#1835); (b) the interrupted-Codex continuation and its one retry | (a) `deliverInterruptionContinuations` `startup.ts:491` → `enqueueStructuredMessage` `:509`; (b) `enqueueInterruptedCodexContinuations` `:655`: `client.retryOperation` `:675`, `client.command` `:687`; caller `:1656`–`:1667` | (a) as P1; (b) **gap**: journal only, no reservation, no owner row, no record, no deadline; its retry of a continuation older code admitted has no row to relate to (`registry.ts:9311` returns false); A1, A2 (adoption) | **gap**: both `for` loops await each admission (`:499`, `:663`); a throw in (b) stops the hosts after it; B2 | (b) none written; after A1 as P1; C2 |
 | P20 | Operator discard | `handleRuntimeDiscard` `http.ts:580`–`:692` | ending mirrored by the queue and sweep; A3 restores a lost one | — | `recordDeliveryOutcomeForOperation` `:601`, `discardDeliveryForOperation` `:662` synchronous; C2 |
-| P21 | Operator switch and intent controls: Stop, retry failed, cancel switch, rollback, retry migration, pipeline reseat | `account-migrations/[intentId]/action.ts:22` `:37`; `conversationCommand.ts:305` `:322` `:345`; `pipelines/engine.ts:1544` | held sends keep their switch reason; endings mirrored | per conversation (the command drains its own conversation, `conversationCommand.ts:316` `:323` `:347`) | all synchronous; C2 |
+| P21 | Operator switch and intent controls: Stop, retry failed, cancel switch, rollback, retry migration, pipeline reseat, keep-current and current-account selection | `account-migrations/[intentId]/action.ts:22` `:37`; `conversationCommand.ts:305` `:322` `:345`, keep-current; `structuredControls.ts` current-account selection; `pipelines/engine.ts:1544` | held sends keep their switch reason; endings mirrored | per conversation (the command drains its own conversation, `conversationCommand.ts:316` `:323` `:347`) | all synchronous; C2 |
 | P22 | Hygiene in the inventory sidecar | `runReaperCycle` `reaperRuntime.ts:944` (runs only in the sidecar, `migration/controller.ts:149`–`:153`, `:335`–`:337`): `:870` `:893` `:925` `:928` `:935` `:972` | endings mirrored; A3 restores a lost one | sidecar cycle | all synchronous in the sidecar's loop; C4 |
 | P23 | Withdrawals: seat wake, Telegram reply | `seatTickSources.ts:603`–`:620`, `:674`; `telegram/bot/reportReplies.ts:71` | endings mirrored | — | synchronous; C2, and the `held` precondition decided inside the write it waited for (C0, round 9) |
 | P24 | Spawn first message bookkeeping and launch failure | `structuredSpawn.ts:399` (delivered), `:407` (initial message timed out); `failSpawn` `registry.ts:6503`, `failStructuredSpawn` `:6563`, which end a never-attempted first message inside the launch's own transaction (`terminalizeFailedSpawnDeliveriesInFile` `:2599`, called at `:6529` and `:6597`); about thirty callers | the first message's record is P1's; its failure ending is mirrored, A3 restores a lost one | — | synchronous; C2, C5 |
@@ -569,11 +569,51 @@ the retry correctly.
   terminal record (terminal cleared, attempt + 1, phase and progress dated now,
   `stalledSince` cleared, `wakeLostAt` kept as evidence) and creates one when
   missing. Only the retry route calls it, in the step after
-  `retryUncertainDeliveryForOperation` returns a live reservation, which the
+  `rearmUncertainDeliveryForOperation` returns a new live authorization, which the
   route reaches only once the journal's `retry` action claim has won
   (`http.ts:813`). The reopened record says `checking` for the claim and the
   journal's re-arm, then `queued` on its answer. The deadline is re-read from
   the re-armed reservation.
+
+**P13 replay and interrupted rearm (round 10).** A journal operation already
+`pending` or `queued` with an open reservation is an active retry. Its HTTP
+replay answers under the same operation without acquiring the conversation's
+actuation section, which the queue may hold across a stalled host read. It
+preserves the executor's entire record, including phase, attempt, stall and
+deadline. A `delivering`/`applying` replay retains the existing 409 refusal and
+also preserves that record (P13 × P8/P16). A missing record is restored from
+the reservation before the response. For an actual authorization, the route
+takes the section, re-reads journal status, and the registry mutation returns
+whether it really rearmed the row. Only a new rearm resets the progress
+attempt. A continued rearm carries its existing admission record.
+
+A new rearm clears the executor of the ended attempt; this is persisted by the
+progress store and remains cleared after restart (P13 × P9). The next held
+reconcile can then name its session read, recovery and republish under A5.
+Every later write checks its current ownership. If a claim is refused after
+the rearm, the record names `checking` with the writer refusal as detail, or
+`evidence-unreadable` for changed ownership, with a bounded next check and a
+queue kick. If the journal commits the original operation but its answer is
+lost, the record names the lost acknowledgement as `evidence-unreadable`, has
+that same next check, and kicks reconciliation. A queue that already advanced
+the record keeps its phase and clocks. Recovery uses the original operation
+and key and introduces no second input.
+
+**P14 replay and post-reservation recovery (round 10).** A replay whose journal
+lookup returns a queued retry leaf first records its durable owner, then asks
+`admissionRecordStanding`. It immediately opens a missing progress record from
+that owner's original key, admission time and deadline. An existing queue-led
+record remains byte-for-byte unchanged. A later A3 sweep is recovery for a
+crash and cannot replace this requirement before a successful HTTP response.
+
+When the hosted-conversation check refuses admission after the retry owner was
+written, the route records `recovering-host` before recovery, `checking` with
+“publishing the recovered host before retry admission” during republish, and
+`checking` with the admission detail for the next retry. Each step retains the
+same attempt and a bounded next check, marks a still-owned active step stalled
+within the stall bound, and passes its last written record to the next guard.
+A parallel queue's progress is preserved at every step and in the lost-answer
+catch. Recovery before reservation does not cover this sequence.
 
 ### A3. The sweep restores what the record missed
 
@@ -675,6 +715,11 @@ not list. For each one it now reads the reservation:
 - otherwise: `wake-lost` and a migration tick, as today.
 
 ### A5. The drain records what it decides, and leaves the acting record alone
+
+A genuine P13 rearm clears the ended executor before any new queue execution
+(P13 × P9, round 10). A restarted store reads that cleared owner, allowing this
+reconcile to record session, recovery and republish waits within the bound.
+An active P13 replay preserves the live executor under A2.
 
 A reconcile of an uncertain row writes only on a record no queue executor
 leads (no `executorId`, not ended), and asks that again at each write, since a
@@ -1091,12 +1136,13 @@ holds sends towards its commit).
 | `delivery.ts:955` `:1093` | `discardDelivery` after nothing was typed | settle | `delivery.discard` | stays; the drain or the sweep ends it |
 | `http.ts:601` | `recordDeliveryOutcomeForOperation` delivered | settle | `delivery.settle` | the answer still reports the journal's delivery; the queue's projection or the sweep writes it |
 | `http.ts:662` | `discardDeliveryForOperation` | settle | `delivery.discard` | the existing 503 `retryable` (`:669`–`:673`); the journal already holds the discard, so the sweep projects it, and a repeated discard converges (`claimDeliveryAction` answers discard as the winner) |
-| `http.ts:819` | `retryUncertainDeliveryForOperation` | rearm | `delivery.rearm` | nothing re-armed; 503 `retryable` |
+| `http.ts:819` | `rearmUncertainDeliveryForOperation` (returns whether authorization is new) | rearm | `delivery.rearm` | nothing re-armed; 503 `retryable` |
 | `http.ts:833` | `beginDeliveryAttempt` | claim | `delivery.claim` | the existing 503 `retryable`; the journal has not re-armed the operation yet |
 | `http.ts:88` (moved before the command, A2) | `recordDirectAdmission` (today `recordDeliveryRetryAttempt`) | create | `delivery.direct-admission` | the existing `retryRecordUnavailable` 503, now before anything is sent |
 | `action.ts:22` | `setMigrationIntentState` `stopped` (Stop) | settle | `migration.stop` | 503 `retryable`, "the stop could not be recorded; nothing changed"; the intent keeps draining |
 | `action.ts:37`, `conversationCommand.ts:345`, `engine.ts:1544` | `retryConversationMigration` | bind | `migration.retry` | routes: 503 `retryable`; engine: throws, and the engine waits and asks again (`engine.ts:2060`–`:2061`) |
 | `conversationCommand.ts:305` | `cancelConversationSwitch` | bind | `migration.cancel` | 503 `retryable`; nothing cancelled |
+| `conversationCommand.ts` keep-current; `structuredControls.ts` current-account selection | `releaseSwitchHold` through correlated `deliveryWrite` | bind: releases the barrier of accepted sends | `delivery.release-switch-hold`, the request operation or held switch operation | 503 `retryable`; hold and messages stay eligible and unchanged; a retry releases the hold once; kick follows commit |
 | `conversationCommand.ts:322` | `rollbackConversationMigration` | bind | `migration.rollback` | 503 `retryable`; nothing rolled back |
 | `seatTickSources.ts:614` `:616` | `recordDeliveryOutcomeForOperation`, `recordDeliveryOutcome` | settle | `delivery.settle` | answers null (not settled), as for an undecidable verdict; the next tick reads it again |
 | `seatTickSources.ts` `withdrawWake` | `withdrawHeldDelivery` (wake withdrawal): ends the row only if it is still `held` under the operation read before the wait | settle | `delivery.withdraw` | answers `unknown`, the existing answer for an undecided withdrawal; a row claimed during the wait answers `unknown` and stays as the claim left it |
@@ -1123,7 +1169,7 @@ holds sends towards its commit).
 
 | Site | Write | Effect | Label | A refused acquisition |
 |---|---|---|---|---|
-| `reaperRuntime.ts:870` | `recordDeliveryOutcome` (#652) | settle | `delivery.hygiene` | stays; next cycle |
+| `reaperRuntime.ts:870` | `terminalizeStaleUndeliverableHeldDelivery` (#652): rechecks operation, attempt, assignment, generation and current liveness inside the acquired mutation | settle | `delivery.hygiene` | stays; next cycle; a retry or new live owner during the writer wait preserves the send and returns no terminalized id |
 | `:893` | `terminalizeRolledBackMigrationDelivery` | settle | `delivery.hygiene` | stays; next cycle |
 | `:925` + `:928` | `terminalizeHeldDelivery` then `rollbackConversationMigration` | settle, bind | `delivery.hygiene`, `migration.rollback` | a refused ending skips that conversation's rollback this cycle, so the pair stays together; next cycle |
 | `:935` | `setMigrationIntentState` `stopped` (no progress) | settle | `migration.stop` | the intent stays `draining`; next cycle |
@@ -1134,6 +1180,14 @@ The hygiene sites run only in the sidecar (`migration/controller.ts:149`–`:153
 the sidecar's own drain lanes, never the Viewer's. The rule applies all the
 same: the sidecar drains accepted sends too. `runReaperCycle` already awaits;
 `terminalizeStaleUndeliverableHeldDeliveries` becomes async.
+
+**P22 × P13 (round 10).** The candidate snapshot only schedules a hygiene
+write. Inside that write, the current row must still name the candidate's
+operation, attempt, assignment and generation and satisfy the current stale
+uncertain/liveness predicate. The caller reports only the guarded mutation's
+returned result. A rearmed assignment or a live owner appearing during the
+SQLite writer wait remains deliverable; an unchanged stale candidate ends.
+This applies C0's existing read-before-wait rule to the #652 convergence.
 
 **C5. Launch failure and account retirement (Viewer, sidecar)**
 
@@ -1272,6 +1326,13 @@ both rows above now hold.
 | 9 | P2 the native executor's reads after a failure are untracked | P18 | (a) | open at `0ea702c31` | A6: both reads through `step` |
 | 9 | P2 a migration-raced request-local reservation waits on its discard with no record | P17, P5 | (a), (c) refusal | open at `0ea702c31` | A1: the record opened after the hold, the discard named, ended or left by its outcome |
 | 9 | P2 WRONG-PREMISE the sweep restores the sidecar's structured pre-journal waits | P9 | (a) | open at `0ea702c31` | A5: the sidecar claims no held send (`HeldDeliveryPort.actuates`); Notes corrected |
+| 10 | P1 hygiene ends a retry assigned during its SQLite writer wait | P22 × P13 | (c), once | implemented this round | C0/C4: current attempt and liveness checked in the acquired mutation; return its guarded answer |
+| 10 | P2 retry-uncertain replay resets the active queue record | P13 × P8/P16 | (a) step 4 | implemented this round | A2: queued replay bypasses the acting section and preserves every clock and executor |
+| 10 | P2 new rearm retains an ended executor | P13 × P9 | (a) | implemented this round | A2/A5: clear ended ownership on genuine rearm, persist across restart; active replay retains it |
+| 10 | P2 lost uncertain retry acknowledgement or refused claim has no cause or wake | P13 | (a) | implemented this round | A2: guarded cause, bounded next check and kick after durable rearm |
+| 10 | P2 terminal retry replay returns a leaf with no progress | P14 | (a) | implemented this round | A2: restore from durable owner under admissionRecordStanding before response |
+| 10 | P2 post-reservation retry recovery continues to report admission | P14 × P9/P16 | (a) step 4 | implemented this round | A2: recovery, republish and retry steps carry the last guarded record and bounded stall |
+| 10 | P2 keep-current and current-account selection release held sends synchronously | P21 | (c) | implemented this round | C2: correlated delivery.release-switch-hold; retryable refusal preserves the hold; kick after commit |
 
 Earlier rounds, all fixed at this head and kept: round 1 (async probe followed
 by a synchronous write → `withWriter`; one stalled conversation stopped the
@@ -1288,6 +1349,30 @@ from the record).
 ## Test map
 
 ### Tests added on this branch
+
+Round 10 uses the production retry route, real SQLite registry and
+RuntimeJournal, StructuredDeliveryQueue, and a child process holding the
+SQLite writer. The failing-first records and paired gate evidence are kept
+in the stage's local verification artifact.
+
+| Finding | Regression | Path and decisive assertion |
+|---|---|---|
+| hygiene/retry race | `reaperRuntime.test.ts`, “stale uncertain hygiene rechecks … after the SQLite writer wait” | P22 × P13 / C4; retry, new-attempt and live-owner cases survive; unchanged candidate ends with its existing content and uncertainty semantics |
+| uncertain replay | `http.retryProgress.test.ts`, checking/dispatching replay cases | P13 × P8/P16 / A2; entire active record unchanged; one original operation and one host input |
+| ended executor | `deliveryProgress.test.ts`, “a new rearm clears the ended executor …”; `http.retryProgress.test.ts`, restarted reconcile case | P13 × P9 / A2/A5; cleared owner persisted; stalled session read named within 4.1 s; existing A5 recovery/republish and live-executor regressions retained |
+| lost acknowledgement/refused claim | `http.retryProgress.test.ts`, lost-ack/refused-claim/queue-won cases | P13 / A2; real journal commit then lost answer; cause, bounded wake and kick; restart drain delivers once; queue advancement survives |
+| missing leaf record | `http.retryProgress.test.ts`, terminal replay cases | P14 / A2; immediate original key, admission, reason, deadline; active queue record unchanged |
+| recovery after reservation | `http.retryProgress.test.ts`, terminal retry recovery case | P14 × P9/P16 / A2; hosted check refusal after owner write; recovery/republish/admission named; stalled wait and one leaf/input |
+| current-account release | `structuredControls.test.ts`, keep-current/current-account writer cases | P21 / C2; both entry points, heartbeat <150 ms, operation-correlated asynchronous writer refusal, unchanged hold/message, successful replay |
+
+The merger's #2572 attribution names these six files, each run individually:
+`accounts/migration/coordinator.test.ts`, `accounts/removal.test.ts`,
+`reaperRuntime.test.ts`, `runtime/http.test.ts`,
+`runtime/structuredDeliveryController.migration.test.ts`, and
+`runtime/structuredMessageDelivery.test.ts`. The named assertions passed on
+the merged head before the round-10 source changes; their designed behavior
+and assertions are retained. Each handed finding was reproduced at its
+specified production seam before its respective fix.
 
 Round 7, one per finding, each failing on `0ceb54b7f`:
 `structuredAccountIntent.test.ts` "a failed move whose hold the lock refused
@@ -1434,6 +1519,7 @@ visible).
 | `structuredCompactDelivery.test.ts` (17) | compaction controls | none: controls carry no reservation |
 | `codexSteerDelivery.integration.test.ts` (1, real binary) | P8 steer | once |
 | `sendSettlement.test.ts` (51) | P11–P14 | receipts, deadlines, retry rows; (a) A3 |
+| `http.retryProgress.test.ts` | P13, P14, P9, P8, P16 | round-10 replay, durable acknowledgement loss, executor release, missing-record restoration and post-reservation recovery; (a), once |
 | `http.test.ts` (33) | P13, P14, P20 | retry authority; discard (`:1190`); once; (c) after C2 |
 | `TmuxComposer.operationReadBack.dom.test.tsx` (12) | P20 | discard read-back (`:273`); unchanged answers |
 | `http.refusedDelivery.test.ts` (5) | before acceptance | none: nothing reserved |

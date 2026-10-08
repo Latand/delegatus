@@ -61,7 +61,7 @@ import {
   type IdentityWaveSeat,
 } from "./identityWaveMigration";
 import { mcpServersForStoredSession, reboundAssembledMcpGrants, reboundEntryMcpGrant, reboundStoredMcpGrants, storedTelegramSeatGrantFor, type McpGrantPolicy } from "./mcpAllowlist";
-import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
+import { accountHasLiveSessions, liveAccountConversationIds, staleUndeliverableHeldDeliveryIds, type AccountLivenessOptions } from "./accountLiveness";
 import { loadSpawnNestingPolicy } from "./nestingPolicy";
 import {
   SpawnAdmissionError,
@@ -9367,6 +9367,21 @@ export class AgentRegistry {
     }, { deliveryOnly: true });
   }
 
+  /** Hygiene's stale candidate is rechecked against the current attempt and
+      liveness inside the mutation that acquired the writer (C4, P22 × P13).
+      A retry or a live owner that arrived during the wait keeps its send. */
+  terminalizeStaleUndeliverableHeldDelivery(expected: HeldDelivery, options: AccountLivenessOptions): HeldDelivery | null {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[expected.id];
+      if (!delivery || delivery.command.operationId !== expected.command.operationId
+        || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+        || delivery.generationId !== expected.generationId
+        || !staleUndeliverableHeldDeliveryIds(file, options).includes(expected.id)) return null;
+      return this.recordDeliveryOutcomeInFile(file, delivery.id, "failed",
+        "delivery-uncertain abandoned: owning migration settled with no live host or receipt (#652)");
+    }, { deliveryOnly: true });
+  }
+
   /** Ends a reservation only while it is still `held` under the operation the
       caller saw, decided inside the write transaction: a withdrawal that waited
       for the writer can find the row already claimed by an attempt, and then
@@ -9819,27 +9834,38 @@ export class AgentRegistry {
     /** How a delivered send reached the engine, when the journal recorded it. */
     route?: DeliveryRoute | null,
   ): HeldDelivery {
-    return this.mutate((file) => {
-      const delivery = file.heldDeliveries[id];
-      if (!delivery) throw new Error("held delivery is unknown");
-      if (delivery.state === "delivered" || terminalDeliveryFailureIsAbsorbing(delivery)) {
-        return clone(delivery);
-      }
-      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
-      const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
-      const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
-      delivery.state = state;
-      delivery.deliveredAt = state === "delivered" ? now() : null;
-      delivery.error = error?.slice(0, 240) ?? null;
-      if (state === "delivered") delivery.text = "";
-      if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
-      if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-      syncDeliveryOperationOwnerState(file, delivery, disposition);
-      if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
-      const settled = clone(delivery);
-      if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
-      return settled;
-    }, { deliveryOnly: true });
+    return this.mutate((file) => this.recordDeliveryOutcomeInFile(file, id, state, error, disposition, route), { deliveryOnly: true });
+  }
+
+  /** Shared settlement body so guarded hygiene retains every existing
+      uncertainty, payload, owner and compaction rule. */
+  private recordDeliveryOutcomeInFile(
+    file: RegistryFile,
+    id: string,
+    state: Extract<HeldDelivery["state"], "delivered" | "failed" | "delivery-uncertain">,
+    error: string | null,
+    disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
+  ): HeldDelivery {
+    const delivery = file.heldDeliveries[id];
+    if (!delivery) throw new Error("held delivery is unknown");
+    if (delivery.state === "delivered" || terminalDeliveryFailureIsAbsorbing(delivery)) {
+      return clone(delivery);
+    }
+    const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+    const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
+    const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
+    delivery.state = state;
+    delivery.deliveredAt = state === "delivered" ? now() : null;
+    delivery.error = error?.slice(0, 240) ?? null;
+    if (state === "delivered") delivery.text = "";
+    if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
+    if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
+    syncDeliveryOperationOwnerState(file, delivery, disposition);
+    if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
+    const settled = clone(delivery);
+    if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
+    return settled;
   }
 
   recordDeliveryOutcomeForOperation(
@@ -9966,6 +9992,12 @@ export class AgentRegistry {
       unchanged, so engine dedup and the operator-attention projection keep one
       identity across a lost HTTP response or repeated click. */
   retryUncertainDeliveryForOperation(operationId: string): HeldDelivery | null {
+    return this.rearmUncertainDeliveryForOperation(operationId)?.reservation ?? null;
+  }
+
+  /** The transaction's rearm decision lets an HTTP replay keep the active
+      attempt's progress and clocks (A2, P13). */
+  rearmUncertainDeliveryForOperation(operationId: string): { reservation: HeldDelivery; rearmed: boolean } | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
       const delivery = owner
@@ -9979,9 +10011,9 @@ export class AgentRegistry {
          outcomes remain terminal. */
       const unverifiedFailure = delivery.state === "failed"
         && owner?.terminalDisposition === "unverified";
-      if (delivery.state !== "delivery-uncertain" && !unverifiedFailure) return clone(delivery);
+      if (delivery.state !== "delivery-uncertain" && !unverifiedFailure) return { reservation: clone(delivery), rearmed: false };
       if (unverifiedFailure) delivery.state = "delivery-uncertain";
-      return clone(placeDeliveryForRetryInFile(file, delivery, true));
+      return { reservation: clone(placeDeliveryForRetryInFile(file, delivery, true)), rearmed: true };
     });
   }
 

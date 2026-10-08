@@ -22,7 +22,7 @@ import { sendReceiptFor, settlementDeadlineForRow } from "./sendSettlement";
  */
 
 export type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline">
-  & Partial<Pick<DeliveryProgressSink, "settle">>
+  & Partial<Pick<DeliveryProgressSink, "settle" | "stalled">>
   & { rearm?(operationId: string, conversationId: string, note: Parameters<DeliveryProgressSink["note"]>[2]): void };
 
 export interface RecordedWait {

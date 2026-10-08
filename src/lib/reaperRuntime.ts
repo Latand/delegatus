@@ -880,12 +880,11 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
       .map((pathname) => `${host.engine}:${pathname}`)));
   const terminalized = new Set<string>();
   for (const id of staleUndeliverableHeldDeliveryIds(snapshot, { ...liveness, now: () => now })) {
-    const settled = await offLoop("delivery.hygiene", id, () => registry.recordDeliveryOutcome(
-      id,
-      "failed",
-      "delivery-uncertain abandoned: owning migration settled with no live host or receipt (#652)",
+    const expected = snapshot.heldDeliveries[id]!;
+    const settled = await offLoop("delivery.hygiene", id, () => registry.terminalizeStaleUndeliverableHeldDelivery(
+      expected, { ...liveness, now: () => now },
     ));
-    if (settled?.value.state === "failed") terminalized.add(id);
+    if (settled?.value?.state === "failed") terminalized.add(id);
   }
   for (const intent of Object.values(snapshot.migrationIntents)) {
     const owned = Object.values(snapshot.conversations)
