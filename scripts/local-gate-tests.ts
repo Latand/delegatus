@@ -145,33 +145,38 @@ function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout
   return result.stdout;
 }
 
+/** Bun arguments that run only the named cases of one file. */
+export function testNameFilter(sites: readonly TestSite[]): string[] {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Bun filters the outer-to-inner describe names joined by spaces. Its JUnit
+  // classname records the same ancestry in reverse, separated by " > ".
+  const names = sites.flatMap(site => {
+    const parts = site.suite ? site.suite.split(" > ") : [];
+    // JUnit uses the same delimiter for reverse ancestry and literal suite
+    // text. Enumerate possible boundaries, reversing groups while preserving
+    // the text and order inside each group.
+    const forms: string[] = [];
+    for (let mask = 0; mask < 2 ** Math.max(0, parts.length - 1); mask++) {
+      const groups: string[] = [];
+      let group = parts[0] ?? "";
+      for (let index = 1; index < parts.length; index++) {
+        if (mask & (1 << (index - 1))) { groups.push(group); group = parts[index]!; }
+        else group += ` > ${parts[index]}`;
+      }
+      if (group) groups.push(group);
+      forms.push([...groups.reverse(), site.name].join(" "));
+    }
+    return [...new Set(forms.map(escape))];
+  });
+  return [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"];
+}
+
 function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void } = {}): TestRun {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   for (const file of files) {
     const remaining = Math.floor(Math.min(RUN_BUDGET_MS - (performance.now() - started), (options.deadline ?? Infinity) - performance.now()));
     if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
-    const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Bun filters the outer-to-inner describe names joined by spaces. Its JUnit
-    // classname records the same ancestry in reverse, separated by " > ".
-    const names = options.sites?.filter(site => site.file === file).flatMap(site => {
-      const parts = site.suite ? site.suite.split(" > ") : [];
-      // JUnit uses the same delimiter for reverse ancestry and literal suite
-      // text. Enumerate possible boundaries, reversing groups while preserving
-      // the text and order inside each group.
-      const forms: string[] = [];
-      for (let mask = 0; mask < 2 ** Math.max(0, parts.length - 1); mask++) {
-        const groups: string[] = [];
-        let group = parts[0] ?? "";
-        for (let index = 1; index < parts.length; index++) {
-          if (mask & (1 << (index - 1))) { groups.push(group); group = parts[index]!; }
-          else group += ` > ${parts[index]}`;
-        }
-        if (group) groups.push(group);
-        forms.push([...groups.reverse(), site.name].join(" "));
-      }
-      return [...new Set(forms.map(escape))];
-    });
-    const filter = names ? [`--test-name-pattern=^(?:${names.join("|")})$`, "--pass-with-no-tests"] : [];
+    const filter = options.sites ? testNameFilter(options.sites.filter(site => site.file === file)) : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
     env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;

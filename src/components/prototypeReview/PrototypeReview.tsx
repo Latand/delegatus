@@ -59,18 +59,22 @@ function slidesOf(round: PrototypeRoundView): Slide[] {
 const shown = (media: PrototypeMediaView | undefined, broken: ReadonlySet<string>): media is PrototypeMediaView & { url: string } =>
   Boolean(media?.available && media.url && !broken.has(media.id));
 
-/** The pictures the full-screen viewer steps through, in the order the review
-    draws them; an original stands right before its change. */
+/** The pictures the full-screen viewer steps through: the frames of one
+    variant, in the order the review draws them, counted as the review counts
+    them. A pair is one picture whose original the viewer swaps in place. */
 function galleryOf(t: TFunction, round: PrototypeRoundView, slides: readonly Slide[], broken: ReadonlySet<string>): GalleryImage[] {
-  return slides.flatMap((slide) => {
+  return slides.flatMap((slide): GalleryImage[] => {
     if (!slide.frame) return [];
     const label = slideLabel(slide);
-    const one = (media: PrototypeMediaView | undefined, side?: "original" | "changed"): GalleryImage[] => {
-      if (!shown(media, broken)) return [];
-      const caption = side ? `${label} · ${t(`proto.pair.${side}`)}` : label;
-      return [{ src: media.url, alt: caption, caption, detail: round.title, place: `${slide.at + 1} / ${slide.of}` }];
-    };
-    return slide.frame.original ? [...one(slide.frame.original, "original"), ...one(slide.frame.image, "changed")] : one(slide.frame.image);
+    const named = (side?: "original" | "changed") => (side ? `${label} · ${t(`proto.pair.${side}`)}` : label);
+    const { image, original } = slide.frame;
+    const place = `${slide.at + 1} / ${slide.of}`;
+    const changed = shown(image, broken);
+    const before = shown(original, broken);
+    if (changed && before) return [{ src: image.url, alt: named("changed"), caption: named("changed"), detail: round.title, place, before: { src: original.url, alt: named("original"), caption: named("original") } }];
+    if (changed) return [{ src: image.url, alt: named(original ? "changed" : undefined), caption: named(original ? "changed" : undefined), detail: round.title, place }];
+    if (before) return [{ src: original.url, alt: named("original"), caption: named("original"), detail: round.title, place }];
+    return [];
   });
 }
 
@@ -96,18 +100,22 @@ interface PairPicture { url: string; alt: string; onError: () => void }
 /** An original over its change, cut by a slider. The frame, the two names and
     the slider's track are as wide as the changed picture is drawn, so the
     track's ends are the picture's edges: at one end the original covers the
-    whole change, at the other none of it. */
-function SliderPair({ original, changed, labels, tagClass, split, onSplit }: {
+    whole change, at the other none of it. A press on the frame opens it full
+    screen. On the phone (`fill`) the frame takes the stage's whole width and
+    its own height, and the names and the track keep the sheet's inset. */
+function SliderPair({ original, changed, labels, tagClass, split, onSplit, onOpen, fill = false }: {
   original: PairPicture;
   changed: PairPicture;
-  labels: { original: string; changed: string; slider: string };
+  labels: { original: string; changed: string; slider: string; open: string };
   tagClass: string;
   split: number;
   onSplit: (value: number) => void;
+  onOpen: () => void;
+  fill?: boolean;
 }) {
   const room = useRef<HTMLDivElement>(null);
   const names = useRef<HTMLDivElement>(null);
-  const track = useRef<HTMLInputElement>(null);
+  const track = useRef<HTMLDivElement>(null);
   const [space, setSpace] = useState<{ width: number; height: number } | null>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
@@ -123,34 +131,35 @@ function SliderPair({ original, changed, labels, tagClass, split, onSplit }: {
     observer?.observe(element);
     return () => observer?.disconnect();
   }, []);
-  const scale = space && natural ? Math.min(space.width / natural.width, space.height / natural.height) : 0;
-  const size = space && natural ? { width: Math.round(natural.width * scale), height: Math.round(natural.height * scale) } : space;
+  const scale = space && natural ? (fill ? space.width / natural.width : Math.min(space.width / natural.width, space.height / natural.height)) : 0;
+  const size = space && natural ? { width: Math.round(natural.width * scale), height: Math.round(natural.height * scale) } : space && fill ? { width: space.width, height: 0 } : space;
+  const inset = fill ? "px-4" : "";
   return (
-    <div data-prototype-pair="slider" className="absolute inset-0 p-3">
-      <div ref={room} className="flex h-full w-full flex-col items-center justify-center">
-        <div ref={names} className="flex shrink-0 items-center justify-between gap-2" style={{ width: size?.width }}>
+    <div data-prototype-pair="slider" className={fill ? "py-2" : "absolute inset-0 p-3"}>
+      <div ref={room} className={`flex w-full flex-col items-center ${fill ? "" : "h-full justify-center"}`}>
+        <div ref={names} className={`flex shrink-0 items-center justify-between gap-2 ${inset}`} style={{ width: size?.width }}>
           <span data-prototype-pair-label="original" className={tagClass}>{labels.original}</span>
           <span data-prototype-pair-label="changed" className={tagClass}>{labels.changed}</span>
         </div>
-        <div data-prototype-pair-frame="" className="relative mt-1 shrink-0 overflow-hidden" style={size ? { width: size.width, height: size.height } : undefined}>
+        <button type="button" data-prototype-pair-frame="" aria-label={labels.open} className="relative mt-1 block shrink-0 cursor-zoom-in overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40" style={size ? { width: size.width, height: size.height } : undefined} onClick={onOpen}>
           {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
           <img src={changed.url} alt={changed.alt} draggable={false} className="absolute inset-0 h-full w-full object-contain" onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} onError={changed.onError} />
           {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
           <img src={original.url} alt={original.alt} draggable={false} className="absolute inset-0 h-full w-full bg-sunken object-contain" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }} onError={original.onError} />
           <span aria-hidden className="absolute bottom-0 top-0 w-0.5 -translate-x-1/2 bg-accent" style={{ left: `${split}%` }} />
+        </button>
+        <div ref={track} className={`mt-2 shrink-0 ${inset}`} style={{ width: size?.width }}>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={split}
+            data-prototype-split=""
+            aria-label={labels.slider}
+            className="block h-6 w-full accent-[var(--color-accent)] [@media(pointer:coarse)]:h-11"
+            onChange={(event) => onSplit(Number(event.target.value))}
+          />
         </div>
-        <input
-          ref={track}
-          type="range"
-          min={0}
-          max={100}
-          value={split}
-          data-prototype-split=""
-          aria-label={labels.slider}
-          className="mt-2 h-6 shrink-0 accent-[var(--color-accent)] [@media(pointer:coarse)]:h-11"
-          style={{ width: size?.width }}
-          onChange={(event) => onSplit(Number(event.target.value))}
-        />
       </div>
     </div>
   );
@@ -180,7 +189,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [pairMode, setPairMode] = useState<PairMode | null>(null);
   const [split, setSplit] = useState(50);
-  const [viewer, setViewer] = useState<GalleryImage | null>(null);
+  /* The picture opened full screen, the press's own side of a pair, and the variant's pictures the viewer steps through. */
+  const [viewer, setViewer] = useState<{ src: string; image: GalleryImage; gallery: GalleryImage[] } | null>(null);
   const [broken, setBroken] = useState<ReadonlySet<string>>(() => new Set());
   const [guard, setGuard] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -204,7 +214,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const elsewhere = data?.unavailable === "another-installation";
   const open = Boolean(round && !round.decision && !elsewhere);
   const draft = (roundId && drafts[roundId]) || EMPTY_DRAFT;
-  const mode: PairMode = pairMode ?? (phone ? "slider" : "side");
+  /* Two pictures side by side are each half a phone wide, too small to read: the phone compares on one frame. */
+  const mode: PairMode = phone ? "slider" : pairMode ?? "side";
 
   useEffect(() => {
     if (round && !round.decision) markPrototypeReviewSeen(round.id);
@@ -319,13 +330,16 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     row.scrollLeft = starts.find((start) => right - start <= row.clientWidth - inset) ?? starts.at(-1) ?? 0;
   }, [variant?.number, roundId]);
 
-  const gallery = useMemo(() => (round ? galleryOf(t, round, slides, broken) : []), [t, round, slides, broken]);
-  const galleryRef = useRef(gallery);
-  useEffect(() => { galleryRef.current = gallery; }, [gallery]);
-  const readGallery = useCallback(() => galleryRef.current, []);
-  const zoom = (media: PrototypeMediaView | undefined) => {
-    const entry = media?.url ? gallery.find((image) => image.src === media.url) : undefined;
-    if (entry) setViewer(entry);
+  const zoom = (media: PrototypeMediaView | undefined, of: Slide) => {
+    if (!round || !media?.url) return;
+    const gallery = galleryOf(t, round, slides.filter((entry) => entry.variant === of.variant), broken);
+    const image = gallery.find((entry) => entry.src === media.url || entry.before?.src === media.url);
+    if (image) setViewer({ src: media.url, image, gallery });
+  };
+  /* The stage follows the viewer, so closing it leaves the operator on the picture they stepped to. */
+  const follow = (image: GalleryImage) => {
+    const at = slides.findIndex((entry) => entry.frame && (entry.frame.image.url === image.src || entry.frame.original?.url === image.src));
+    if (at >= 0) show(at);
   };
   const markBroken = (id: string) => setBroken((held) => (held.has(id) ? held : new Set([...held, id])));
 
@@ -475,51 +489,58 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       <span className="text-label font-semibold">{t(elsewhere ? "proto.goneElsewhere" : "proto.gone")}</span>
     </div>
   );
-  const picture = (media: PrototypeMediaView | undefined, alt: string, extra = "") => (shown(media, broken) ? (
+  /* On the desktop a picture is fitted into the stage; on the phone it takes
+     the stage's whole width and its own height, and the sheet scrolls. */
+  const picture = (media: PrototypeMediaView | undefined, alt: string, of: Slide) => (shown(media, broken) ? (
     <button
       type="button"
       data-prototype-zoom={media.id}
       aria-label={t("proto.zoomAria", { name: alt })}
-      className="absolute inset-0 flex cursor-zoom-in items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-      onClick={() => zoom(media)}
+      className={`${phone ? "block w-full" : "absolute inset-0 flex items-center justify-center"} cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`}
+      onClick={() => zoom(media, of)}
     >
       {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy; next/image cannot serve it */}
-      <img src={media.url} alt={alt} draggable={false} decoding="async" className={`max-h-full max-w-full object-contain ${extra}`} onError={() => markBroken(media.id)} />
+      <img src={media.url} alt={alt} draggable={false} decoding="async" className={phone ? "block h-auto w-full" : "max-h-full max-w-full object-contain"} onError={() => markBroken(media.id)} />
     </button>
-  ) : <div className="absolute inset-0">{gone}</div>);
+  ) : <div className={phone ? "h-[32vh]" : "absolute inset-0"}>{gone}</div>);
 
   const pairTag = "shrink-0 text-caption font-semibold uppercase tracking-wide text-muted";
   const stageBody = !slide ? (
     <div className="absolute inset-0 flex items-center justify-center text-label text-muted">{t("proto.noMedia")}</div>
   ) : slide.video ? (
     shown(slide.video, broken) ? (
-      <div className="absolute inset-0 flex items-center justify-center p-3">
-        <video key={slide.video.url} data-prototype-video={slide.video.id} src={slide.video.url} controls playsInline preload="metadata" aria-label={slideLabel(slide)} className="max-h-full max-w-full rounded-sm bg-black" onError={() => markBroken(slide.video!.id)} />
+      <div className={phone ? "" : "absolute inset-0 flex items-center justify-center p-3"}>
+        <video key={slide.video.url} data-prototype-video={slide.video.id} src={slide.video.url} controls playsInline preload="metadata" aria-label={slideLabel(slide)} className={phone ? "block h-auto w-full bg-black" : "max-h-full max-w-full rounded-sm bg-black"} onError={() => markBroken(slide.video!.id)} />
       </div>
-    ) : <div className="absolute inset-0">{gone}</div>
+    ) : <div className={phone ? "h-[32vh]" : "absolute inset-0"}>{gone}</div>
   ) : slide.frame?.original && mode === "slider" && shown(slide.frame.original, broken) && shown(slide.frame.image, broken) ? (
     <SliderPair
       key={slide.key}
       original={{ url: slide.frame.original.url, alt: `${slideLabel(slide)} · ${t("proto.pair.original")}`, onError: () => markBroken(slide.frame!.original!.id) }}
       changed={{ url: slide.frame.image.url, alt: `${slideLabel(slide)} · ${t("proto.pair.changed")}`, onError: () => markBroken(slide.frame!.image.id) }}
-      labels={{ original: t("proto.pair.original"), changed: t("proto.pair.changed"), slider: t("proto.pair.sliderAria") }}
+      labels={{ original: t("proto.pair.original"), changed: t("proto.pair.changed"), slider: t("proto.pair.sliderAria"), open: t("proto.zoomAria", { name: `${slideLabel(slide)} · ${t("proto.pair.changed")}` }) }}
       tagClass={pairTag}
       split={split}
       onSplit={setSplit}
+      onOpen={() => zoom(slide.frame!.image, slide)}
+      fill={phone}
     />
+  ) : slide.frame?.original && phone ? (
+    /* A pair with one side unreadable: the side that is left, at the stage's width. */
+    picture(shown(slide.frame.image, broken) ? slide.frame.image : slide.frame.original, `${slideLabel(slide)} · ${t(`proto.pair.${shown(slide.frame.image, broken) ? "changed" : "original"}`)}`, slide)
   ) : slide.frame?.original ? (
     <div data-prototype-pair="side" className="absolute inset-0 grid grid-cols-2 gap-2 p-3">
       {(["original", "changed"] as const).map((side) => (
         <figure key={side} data-prototype-pair-side={side} className="m-0 flex min-h-0 min-w-0 flex-col gap-1">
           <figcaption className={pairTag}>{t(`proto.pair.${side}`)}</figcaption>
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-sm border border-border bg-card">
-            {picture(side === "original" ? slide.frame!.original : slide.frame!.image, `${slideLabel(slide)} · ${t(`proto.pair.${side}`)}`)}
+            {picture(side === "original" ? slide.frame!.original : slide.frame!.image, `${slideLabel(slide)} · ${t(`proto.pair.${side}`)}`, slide)}
           </div>
         </figure>
       ))}
     </div>
-  ) : (
-    <div className="absolute inset-3">{picture(slide.frame?.image, slideLabel(slide))}</div>
+  ) : phone ? picture(slide.frame?.image, slideLabel(slide), slide) : (
+    <div className="absolute inset-3">{picture(slide.frame?.image, slideLabel(slide), slide)}</div>
   );
 
   const stage = round ? (
@@ -535,7 +556,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           </p>
         ) : <span className="flex-1" />}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {slide?.frame?.original ? (
+          {slide?.frame?.original && !phone ? (
             <span role="group" aria-label={t("proto.pair.mode")} className="flex items-center gap-1">
               <button type="button" className={TOOL} data-prototype-pair-mode="side" aria-pressed={mode === "side"} aria-label={t("proto.pair.side")} title={t("proto.pair.side")} onClick={() => setPairMode("side")}>
                 <Columns2 className="h-3.5 w-3.5" aria-hidden />
@@ -546,7 +567,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             </span>
           ) : null}
           {slide?.frame && shown(slide.frame.image, broken) ? (
-            <button type="button" className={TOOL} data-prototype-fullsize="" aria-label={t("proto.fullSize")} title={t("proto.fullSize")} onClick={() => zoom(slide.frame!.image)}>
+            <button type="button" className={TOOL} data-prototype-fullsize="" aria-label={t("proto.fullSize")} title={t("proto.fullSize")} onClick={() => zoom(slide.frame!.image, slide)}>
               <ZoomIn className="h-3.5 w-3.5" aria-hidden />
             </button>
           ) : null}
@@ -559,7 +580,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           </button>
         </span>
       </div>
-      <div data-prototype-canvas="" className={`relative min-h-0 bg-sunken ${phone ? "h-[32vh] shrink-0" : "flex-1"}`}>{stageBody}</div>
+      <div data-prototype-canvas="" className={`relative bg-sunken ${phone ? "min-h-24 shrink-0" : "min-h-0 flex-1"}`}>{stageBody}</div>
       {variantSlides.length > 1 ? (
         <div ref={strip} data-prototype-strip={variantSlides.length} className="flex shrink-0 gap-1.5 overflow-x-auto px-4 py-2">
           {variantSlides.map((entry) => {
@@ -697,15 +718,15 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   ) : null;
 
   const lightbox = viewer ? (
-    <ImageGalleryProvider value={readGallery}>
-      <Lightbox src={viewer.src} alt={viewer.alt} caption={viewer.caption} detail={viewer.detail} onClose={() => setViewer(null)} />
+    <ImageGalleryProvider value={() => viewer.gallery}>
+      <Lightbox src={viewer.src} alt={viewer.image.alt} caption={viewer.image.caption} detail={viewer.image.detail} onShow={follow} onClose={() => setViewer(null)} />
     </ImageGalleryProvider>
   ) : null;
 
   if (phone) {
     return (
       <>
-        <MobileSheet name="prototype-review" title={title} onClose={requestClose} footer={footer}>
+        <MobileSheet name="prototype-review" title={title} full onClose={requestClose} footer={footer}>
           <div data-prototype-review={taskId} data-prototype-round-shown={roundId ?? ""} className="relative flex flex-col gap-2 pb-1">
             {banners}
             {/* The round, its task and the variants' chips stay whole at the top
