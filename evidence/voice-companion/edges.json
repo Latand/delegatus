@@ -24,12 +24,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 29,
-        "maxBubbles": 3,
+        "samples": 35,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -64,12 +64,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
         "samples": 35,
-        "maxBubbles": 3,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -106,7 +106,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 51,
+        "samples": 60,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -146,7 +146,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 42,
+        "samples": 52,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -186,7 +186,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 30,
+        "samples": 31,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -226,7 +226,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 47,
+        "samples": 54,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -266,7 +266,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 53,
+        "samples": 46,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -306,7 +306,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 32,
+        "samples": 34,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -346,7 +346,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 52,
+        "samples": 54,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -386,7 +386,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 33,
+        "samples": 35,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -426,7 +426,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 32,
+        "samples": 41,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -466,7 +466,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 43,
+        "samples": 42,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -506,7 +506,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 57,
+        "samples": 63,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -546,7 +546,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 59,
+        "samples": 58,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -586,7 +586,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 39,
+        "samples": 45,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -626,7 +626,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 54,
+        "samples": 58,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -666,7 +666,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 57,
+        "samples": 58,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -706,7 +706,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 42,
+        "samples": 37,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -746,7 +746,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 58,
+        "samples": 60,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -786,7 +786,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 37,
+        "samples": 44,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,

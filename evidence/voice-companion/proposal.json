@@ -49,6 +49,37 @@
         "y": 206,
         "width": 280,
         "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -97,6 +128,37 @@
         "y": 206,
         "width": 280,
         "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -145,6 +207,37 @@
         "y": 206,
         "width": 280,
         "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -193,6 +286,37 @@
         "y": 206,
         "width": 280,
         "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -241,6 +365,37 @@
         "y": 292,
         "width": 280,
         "height": 260
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 122,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -289,6 +444,37 @@
         "y": 292,
         "width": 280,
         "height": 260
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 122,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -337,6 +523,37 @@
         "y": 372,
         "width": 280,
         "height": 180
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 1,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 0,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": true
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 45,
+        "bodyRoomPx": 56,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     },
     {
@@ -385,6 +602,37 @@
         "y": 372,
         "width": 280,
         "height": 180
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 1,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 0,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": true
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 45,
+        "bodyRoomPx": 56,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
       }
     }
   ],

@@ -50,7 +50,37 @@
         "reason": "I am not sure which plan is meant.",
         "bodyHeight": 109,
         "cardHeight": 221,
-        "laneHeight": 360
+        "laneHeight": 360,
+        "asItStands": {
+          "reason": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 3,
+            "shown": 3,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": false
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 109,
+          "bodyRoomPx": 222,
+          "reasonAndFirstLinePx": 45,
+          "canHold": true
+        }
       }
     },
     {
@@ -75,9 +105,9 @@
         "border": "color(srgb 0.176471 0.831373 0.74902 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 154,
+        "height": 143,
         "buttons": 2,
-        "text": "Надіслати оркестратору atlas? Claude request_orchestrator_delegation Я не певен, про який план мова. Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
+        "text": "Надіслати оркестратору atlas? request_orchestrator_delegation Я не певен, про який план мова. Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
         "instruction": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними."
       },
       "floatersInsideLane": true,
@@ -98,9 +128,39 @@
         "focusable": true,
         "lastLineReached": true,
         "reason": "Я не певен, про який план мова.",
-        "bodyHeight": 42,
-        "cardHeight": 154,
-        "laneHeight": 180
+        "bodyHeight": 45,
+        "cardHeight": 143,
+        "laneHeight": 180,
+        "asItStands": {
+          "reason": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 3,
+            "shown": 1,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 0,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": true
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 45,
+          "bodyRoomPx": 56,
+          "reasonAndFirstLinePx": 45,
+          "canHold": true
+        }
       }
     },
     {
@@ -150,7 +210,37 @@
         "reason": "Я не певен, про який план мова.",
         "bodyHeight": 109,
         "cardHeight": 221,
-        "laneHeight": 360
+        "laneHeight": 360,
+        "asItStands": {
+          "reason": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 3,
+            "shown": 3,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": false
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 109,
+          "bodyRoomPx": 222,
+          "reasonAndFirstLinePx": 45,
+          "canHold": true
+        }
       }
     },
     {
@@ -200,7 +290,37 @@
         "reason": "I am not sure which plan is meant.",
         "bodyHeight": 109,
         "cardHeight": 221,
-        "laneHeight": 260
+        "laneHeight": 260,
+        "asItStands": {
+          "reason": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 3,
+            "shown": 3,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": false
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 109,
+          "bodyRoomPx": 122,
+          "reasonAndFirstLinePx": 45,
+          "canHold": true
+        }
       }
     },
     {
@@ -225,9 +345,9 @@
         "border": "color(srgb 0.0509804 0.580392 0.533333 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 334,
+        "height": 333,
         "buttons": 2,
-        "text": "Send to the atlas orchestrator? Claude request_orchestrator_delegation I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday. Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults. Say yes or no, or tap. Cancel Send",
+        "text": "Send to the atlas orchestrator? request_orchestrator_delegation I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday. Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults. Say yes or no, or tap. Cancel Send",
         "instruction": "Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults."
       },
       "floatersInsideLane": true,
@@ -244,13 +364,43 @@
           true,
           true
         ],
-        "scrolls": true,
+        "scrolls": false,
         "focusable": true,
         "lastLineReached": true,
         "reason": "I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday.",
-        "bodyHeight": 222,
-        "cardHeight": 334,
-        "laneHeight": 360
+        "bodyHeight": 235,
+        "cardHeight": 333,
+        "laneHeight": 360,
+        "asItStands": {
+          "reason": {
+            "total": 3,
+            "shown": 3,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 8,
+            "shown": 8,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 1,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": false
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 235,
+          "bodyRoomPx": 236,
+          "reasonAndFirstLinePx": 81,
+          "canHold": true
+        }
       }
     },
     {
@@ -275,9 +425,9 @@
         "border": "color(srgb 0.176471 0.831373 0.74902 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 154,
+        "height": 150,
         "buttons": 2,
-        "text": "Надіслати оркестратору atlas? Claude request_orchestrator_delegation Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга. Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
+        "text": "Надіслати оркестратору atlas? request_orchestrator_delegation Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга. Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
         "instruction": "Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення."
       },
       "floatersInsideLane": true,
@@ -298,9 +448,39 @@
         "focusable": true,
         "lastLineReached": true,
         "reason": "Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга.",
-        "bodyHeight": 42,
-        "cardHeight": 154,
-        "laneHeight": 180
+        "bodyHeight": 52,
+        "cardHeight": 150,
+        "laneHeight": 180,
+        "asItStands": {
+          "reason": {
+            "total": 4,
+            "shown": 3,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 10,
+            "shown": 0,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 0,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": true
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 52,
+          "bodyRoomPx": 56,
+          "reasonAndFirstLinePx": 99,
+          "canHold": false
+        }
       }
     },
     {
@@ -325,9 +505,9 @@
         "border": "color(srgb 0.0509804 0.580392 0.533333 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 334,
+        "height": 323,
         "buttons": 2,
-        "text": "Надіслати оркестратору atlas? Claude request_orchestrator_delegation Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга. Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
+        "text": "Надіслати оркестратору atlas? request_orchestrator_delegation Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга. Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
         "instruction": "Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення."
       },
       "floatersInsideLane": true,
@@ -348,9 +528,39 @@
         "focusable": true,
         "lastLineReached": true,
         "reason": "Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга.",
-        "bodyHeight": 222,
-        "cardHeight": 334,
-        "laneHeight": 360
+        "bodyHeight": 225,
+        "cardHeight": 323,
+        "laneHeight": 360,
+        "asItStands": {
+          "reason": {
+            "total": 4,
+            "shown": 4,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 10,
+            "shown": 8,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 0,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": true
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 225,
+          "bodyRoomPx": 236,
+          "reasonAndFirstLinePx": 99,
+          "canHold": true
+        }
       }
     },
     {
@@ -375,9 +585,9 @@
         "border": "color(srgb 0.176471 0.831373 0.74902 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 234,
+        "height": 233,
         "buttons": 2,
-        "text": "Send to the atlas orchestrator? Claude request_orchestrator_delegation I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday. Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults. Say yes or no, or tap. Cancel Send",
+        "text": "Send to the atlas orchestrator? request_orchestrator_delegation I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday. Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults. Say yes or no, or tap. Cancel Send",
         "instruction": "Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults."
       },
       "floatersInsideLane": true,
@@ -398,9 +608,39 @@
         "focusable": true,
         "lastLineReached": true,
         "reason": "I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday.",
-        "bodyHeight": 122,
-        "cardHeight": 234,
-        "laneHeight": 260
+        "bodyHeight": 135,
+        "cardHeight": 233,
+        "laneHeight": 260,
+        "asItStands": {
+          "reason": {
+            "total": 3,
+            "shown": 3,
+            "cut": 0
+          },
+          "instruction": {
+            "total": 8,
+            "shown": 4,
+            "cut": 0
+          },
+          "hint": {
+            "total": 1,
+            "shown": 0,
+            "cut": 0
+          },
+          "cutLines": 0,
+          "cue": {
+            "shown": true
+          },
+          "hintOrCue": true,
+          "buttons": [
+            true,
+            true
+          ],
+          "bodyPx": 135,
+          "bodyRoomPx": 136,
+          "reasonAndFirstLinePx": 81,
+          "canHold": true
+        }
       }
     }
   ],
