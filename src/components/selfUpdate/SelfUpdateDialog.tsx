@@ -11,7 +11,7 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
 import { actionError, type ActionError } from "./selfUpdateCopy";
 import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
-import { useSelfUpdateFeed } from "./useSelfUpdateFeed";
+import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
 /**
  * The Update surface (#2007): how this install updates itself, reached from
@@ -65,6 +65,10 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
     setPending((value) => new Set(value).add(key));
     setError(null);
+    /* The snapshot this action answers with is ordered from now: a stream
+       state that arrives while it runs is newer and stays. Its outcome (the
+       error, the restart it began) is the action's own and always shown. */
+    const ticket = selfUpdateTicket();
     try {
       const response = await fetch(path, {
         method: "POST",
@@ -74,7 +78,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
       const payload = await response.json().catch(() => null) as ({ error?: string; code?: string; detail?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
       if (!response.ok) setError(actionError(response.status, payload));
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
-      if (next && next.meta) feed.accept(next);
+      if (next && next.meta) feed.accept(next, ticket);
       return response.ok;
     } catch {
       setError({ code: "offline" });
@@ -91,11 +95,14 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const confirmApply = () => {
     const work = s?.resumeWork;
     const lines = [t("selfUpdate.applyConfirm")];
-    if (work) {
+    /* Work not read yet is not "no work": it is said so, never counted as 0. */
+    if (s?.workEvidence?.state === "pending") lines.push(t("selfUpdate.work.pendingConfirm"));
+    else if (s?.workEvidence?.state === "unavailable") lines.push(t("selfUpdate.auto.block.unreadable", { detail: s.workEvidence.error ?? "" }));
+    if (work?.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
+    else if (work) {
       lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
       lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
       lines.push(...(work.turnList ?? []).filter(turn => !turn.stage).map(turn => `${turn.engine} · ${turn.project ?? turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`));
-      if (work.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
     }
     return window.confirm(lines.join("\n"));
   };
@@ -185,7 +192,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const title = t("selfUpdate.title");
   const body = s
     ? <SelfUpdateView snapshot={s} live={feed.live} state={state} actions={actions} />
-    : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
+    : feed.failure !== null
+      ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed")}</p>
+      : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
 
   if (isMobile) {
     return (

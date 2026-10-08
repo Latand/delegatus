@@ -351,6 +351,193 @@ describe("self-update reload notice", () => {
   }, 30_000);
 });
 
+/* #2594: the Updates dialog answers with the installation first. The dialog's
+   own stream is played by the driver, one event at a time: before any state,
+   a snapshot that failed, the installation with its work still being read,
+   the same once the reading landed, and the installation after a deployment
+   that already serves the available target (no "commits behind" left). Each
+   state is framed on the desktop and at 390 px, in en and uk, with the
+   dialog's controls measured and the Update press's confirmation read.
+   The last state arrives while a "Check now" is held: its late answer, and
+   then a late refusal of a second check, both carry the old installation and
+   neither brings back the old revision, its badge or the Update button. */
+describe("Updates dialog first state", () => {
+  browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/updates-dialog-first-state");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { MANAGED_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "7fb7345".padEnd(40, "1");
+    const TARGET = "2fda8a4".padEnd(40, "e");
+    const at = "2026-10-07T09:00:00.000Z";
+    const rev = (sha: string, version: string) => ({ sha, short: sha.slice(0, 7), version, date: "2026-10-07T08:00:00.000Z" });
+    const proc = (pid: number, revision: string) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: "2026-10-07T07:00:00.000Z", lastHealthAt: at, lastHealthOk: true, revision, tail: [] });
+    const snapshot = (installed: string, work: "pending" | "ready" | null) => ({
+      mode: "managed", unsupportedReason: null, installed: rev(installed, installed === TARGET ? "1.9.2" : "1.9.1"),
+      serving: { web: rev(installed, ""), runtimeHost: rev(installed, "") },
+      available: installed === TARGET ? null : rev(TARGET, "1.9.2"),
+      check: installed === TARGET
+        ? { ...idleCheck(), state: "up-to-date", at, nextPollAt: "2026-10-07T10:00:00.000Z", relation: "equal" }
+        : { ...idleCheck(), state: "update-available", at, nextPollAt: "2026-10-07T10:00:00.000Z", relation: "behind", behind: 17,
+          delta: { commits: [{ short: TARGET.slice(0, 7), subject: "Production gets CPU priority over tests and pipeline work (#2574)" }], summary: { commitCount: 17, entryCount: 0, counts: [], groups: [] } } },
+      update: idleUpdate(MANAGED_STEPS), busy: null,
+      processes: { web: { ...proc(4141, installed.slice(0, 7)), port: 8899 }, runtimeHost: proc(4242, installed.slice(0, 7)) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: null, pollMinutes: 60, serverTime: at },
+      ...(work ? { workEvidence: work === "pending"
+        ? { state: "pending", since: at, at: null, error: null, phases: null }
+        : { state: "ready", since: null, at, error: null, phases: null } } : {}),
+      ...(work === "ready" ? { resumeWork: { turns: 2, stages: 1, turnList: [], stageList: [], unreadable: null } } : {}),
+    });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: "light", reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const confirms: string[] = [];
+        page.on("dialog", (dialog) => { confirms.push(dialog.message()); void dialog.dismiss(); });
+        try {
+          await context.addInitScript(({ lang }) => {
+            localStorage.setItem("llv_lang", lang);
+            /* The fixture installs its silent EventSource. The dialog's own
+               stream (no readOnly) becomes one the driver speaks through. */
+            const dialogStreams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => installed,
+              set: (Source: typeof EventSource) => {
+                installed = class extends Source {
+                  constructor(url: string | URL) {
+                    super(url);
+                    if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                      const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                      dialogStreams.push(stream);
+                      Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                    }
+                  }
+                } as typeof EventSource;
+              },
+            });
+            /* The fixture installs its own fetch too. A "Check now" it is
+               handed is held here until the driver answers it. */
+            const heldChecks: ((status: number, body: unknown) => void)[] = [];
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/check")
+                  ? new Promise<Response>((resolve) => { heldChecks.push((status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }))); })
+                  : next(input, init)) as typeof fetch;
+              },
+            });
+            Object.assign(window, { selfUpdateEmit: (type: string, data: unknown) => {
+              for (const stream of dialogStreams) for (const listener of stream.listeners[type] ?? []) listener({ data: JSON.stringify(data) });
+              return dialogStreams.length;
+            }, selfUpdateHeldChecks: () => heldChecks.length,
+            selfUpdateAnswerCheck: (index: number, status: number, body: unknown) => heldChecks[index]!(status, body) });
+          }, { lang });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (type: string, data: unknown) => page.evaluate(([type, data]) => (window as unknown as { selfUpdateEmit(type: string, data: unknown): number }).selfUpdateEmit(type as string, data), [type, data] as const);
+          const frame = async (state: string, ready: string) => {
+            await dialog.locator(ready).first().waitFor();
+            const reading = await dialog.evaluate((element, width) => {
+              const controls = [...element.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.getClientRects().length > 0).map((button) => {
+                const box = button.getBoundingClientRect();
+                return { action: button.dataset.action ?? button.getAttribute("aria-label"), label: (button.textContent ?? "").trim(), disabled: button.disabled,
+                  clipped: button.scrollWidth > button.clientWidth + 1, inside: box.left >= 0 && box.right <= width, height: Math.round(box.height) };
+              });
+              return {
+                status: element.querySelector("[data-status]")?.textContent?.trim() ?? null,
+                loading: element.querySelector("[data-section], [data-self-update-failure]") ? null : element.querySelector("p")?.textContent?.trim() ?? null,
+                failure: element.querySelector("[data-self-update-failure]")?.textContent?.trim() ?? null,
+                actionError: element.querySelector("[data-error='action']")?.textContent?.trim() ?? null,
+                work: element.querySelector("[data-work]")?.textContent?.trim() ?? null,
+                behindBadge: /17/.test(element.querySelector("[data-status]")?.textContent ?? ""),
+                controls,
+              };
+            }, width);
+            for (const control of reading.controls) {
+              expect(control.clipped).toBe(false);
+              expect(control.inside).toBe(true);
+            }
+            await dialog.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
+            readings.push({ lang, width, state, ...reading });
+            return reading;
+          };
+
+          const pending = await frame("pending", "p");
+          expect(pending.loading).toBe(translate(lang, "selfUpdate.loading"));
+
+          expect(await emit("snapshot-error", { code: "snapshot-failed", error: "launcher record unreadable" })).toBe(1);
+          const failed = await frame("error", "[data-self-update-failure]");
+          /* The server's own words stay out of the operator's sentence. */
+          expect(failed.failure).toBe(translate(lang, "selfUpdate.loadFailed"));
+          expect(await dialog.textContent()).not.toContain("launcher record unreadable");
+
+          await emit("state", snapshot(OLD, "pending"));
+          const loaded = await frame("loaded-work-pending", "[data-work='pending']");
+          expect(loaded.work).toBe(translate(lang, "selfUpdate.work.pending"));
+          expect(loaded.controls.some((control) => control.action === "update" && !control.disabled)).toBe(true);
+          await dialog.locator("[data-action='update']").click();
+          await page.waitForTimeout(100);
+          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.work.pendingConfirm"));
+          expect(confirms.at(-1)).not.toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 0 }));
+
+          await emit("state", snapshot(OLD, "ready"));
+          const read = await frame("loaded-work-read", "[data-work='ready']");
+          expect(read.work).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          await dialog.locator("[data-action='update']").click();
+          await page.waitForTimeout(100);
+          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+
+          /* Each "Check now" is held until the driver answers it, after the
+             stream has moved on. */
+          type Driven = { selfUpdateHeldChecks(): number; selfUpdateAnswerCheck(index: number, status: number, body: unknown): void };
+          const heldChecks = () => page.evaluate(() => (window as unknown as Driven).selfUpdateHeldChecks());
+          const check = async () => {
+            const index = await heldChecks();
+            await dialog.locator("[data-action='check']").click();
+            for (let wait = 0; wait < 100 && await heldChecks() === index; wait++) await page.waitForTimeout(50);
+            expect(await heldChecks()).toBe(index + 1);
+            return (status: number, body: unknown) => page.evaluate(([index, status, body]) =>
+              (window as unknown as Driven).selfUpdateAnswerCheck(index as number, status as number, body), [index, status, body] as const);
+          };
+          const upToDate = translate(lang, "selfUpdate.status.upToDate", { time: "" }).split(",")[0]!;
+          const answerCheck = await check();
+          await emit("state", snapshot(TARGET, "ready"));
+          const serving = await frame("serving-target", "[data-section='update'][data-update='idle']");
+          expect(serving.behindBadge).toBe(false);
+          expect(serving.status).toContain(upToDate);
+          await answerCheck(202, snapshot(OLD, "ready"));
+          await dialog.locator("[data-action='check']:not([disabled])").waitFor();
+          const late = await frame("late-check-answer", "[data-section='update']");
+          expect(late.behindBadge).toBe(false);
+          expect(late.status).toContain(upToDate);
+          expect(late.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+
+          const refuseCheck = await check();
+          await emit("state", { ...snapshot(TARGET, "ready"), meta: { ...snapshot(TARGET, "ready").meta, serverTime: "2026-10-07T09:00:05.000Z" } });
+          await refuseCheck(409, { error: "An update is running.", code: "busy-update", snapshot: snapshot(OLD, "ready") });
+          const refused = await frame("late-refusal", "[data-error='action']");
+          expect(refused.actionError).toBe(translate(lang, "selfUpdate.refusal.busy-update"));
+          expect(refused.behindBadge).toBe(false);
+          expect(refused.status).toContain(upToDate);
+          expect(refused.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */
@@ -21218,7 +21405,9 @@ describe("prototype review on a task: the card's button, the review and the orch
           }, size.phone);
           /* Chips and thumbnails are rows that scroll on purpose: what leaves the frame there is off screen, not on top of anything. */
           const scrolled = (entry: string) => /^(chips|variant|tools)/.test(entry) && size.phone;
-          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry))];
+          /* On the phone a frame is drawn at its own height and the sheet's body scrolls: a part below the fold is scrolled to, and only a part out to a side is outside. */
+          const beside = (entry: string) => { const box = parts.boxes[entry]; return Boolean(box && (box[0]! < -0.5 || box[0]! + box[2]! > size.viewport.width + 0.5)); };
+          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry) && (!size.phone || beside(entry)))];
           /* The phone's chips stand in the sheet's sticky head: a part of the body scrolled up under that head is covered by it, not on top of it. */
           const headBottom = size.phone ? await page.evaluate(() => document.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect().bottom ?? 0) : 0;
           const underHead = (pair: string) => {
@@ -21231,6 +21420,12 @@ describe("prototype review on a task: the card's button, the review and the orch
           if (regions.overlaps.length || partOverlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...partOverlaps].join(", ")}`);
           if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
           if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
+          /* The phone's sheet is the screen: its footer stands at the screen's foot, under the sheet's 6 px inset, whatever the stage holds. */
+          if (size.phone) {
+            const footGap = await page.evaluate(() => Math.round((innerHeight - document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect().bottom) * 10) / 10);
+            record(`${name}-foot-gap`, footGap);
+            if (footGap > 6.5) failures.push(`${label} ${name}: an empty band of ${footGap}px under the sheet's footer`);
+          }
         };
         const stageState = () => page.evaluate(() => {
           const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
@@ -21669,7 +21864,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           const slider = await stageState();
           const clip = await page.evaluate(() => getComputedStyle(document.querySelectorAll<HTMLElement>("[data-prototype-pair] img")[1]!).clipPath);
           /* The two names against what each picture really paints inside its box. */
-          const sliderLabels = await page.evaluate(() => {
+          const sliderLabels = await page.evaluate((phone) => {
             const round = (value: number) => Math.round(value * 10) / 10;
             const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
             const drawn = [...document.querySelectorAll<HTMLImageElement>("[data-prototype-pair] img")].map((image) => {
@@ -21686,13 +21881,15 @@ describe("prototype review on a task: the card's button, the review and the orch
                 overPicture: drawn.some((picture) => box.left < picture.right - 0.5 && picture.left < box.right - 0.5 && box.top < picture.bottom - 0.5 && picture.top < box.bottom - 0.5),
               };
             });
-            /* The track and the two names end where the changed picture's drawn edges are. */
+            /* The track and the two names end where the changed picture's drawn
+               edges are; on the phone the picture runs edge to edge and they keep the sheet's 16 px inset. */
             const track = document.querySelector<HTMLElement>("[data-prototype-split]")!.getBoundingClientRect();
             const changed = drawn[0]!;
+            const inset = phone ? 16 : 0;
             const names = labels.map((entry) => [entry.box[0]!, entry.box[0]! + entry.box[2]!]);
-            const fitted = Math.abs(track.left - changed.left) <= 2 && Math.abs(track.right - changed.right) <= 2 && Math.abs(names[0]![0]! - changed.left) <= 2 && Math.abs(names[1]![1]! - changed.right) <= 2;
+            const fitted = Math.abs(track.left - changed.left - inset) <= 2 && Math.abs(changed.right - track.right - inset) <= 2 && Math.abs(names[0]![0]! - changed.left - inset) <= 2 && Math.abs(changed.right - names[1]![1]! - inset) <= 2;
             return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels, track: [round(track.left), round(track.right)], fitted };
-          });
+          }, size.phone);
           record("pair-slider", { ...slider, clip, labels: sliderLabels });
           captionParted("pair-slider", slider);
           if (sliderLabels.labels.length !== 2 || sliderLabels.labels.some((entry) => !entry.inside || entry.overPicture) || sliderLabels.labels[0]!.box[0]! + sliderLabels.labels[0]!.box[2]! > sliderLabels.labels[1]!.box[0]!) failures.push(`${label}: the slider's labels lie over a picture, leave the stage or meet: ${JSON.stringify(sliderLabels)}`);
@@ -21745,6 +21942,37 @@ describe("prototype review on a task: the card's button, the review and the orch
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
           if (!await page.locator(REVIEW).count()) failures.push(`${label}: Escape in the viewer closed the review too`);
+
+          /* 7b. A tall phone frame on the stage: fitted on the desktop, the stage's whole width on the phone. */
+          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
+          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await settle();
+          const tallFrame = await stageState();
+          record("tall-frame", tallFrame);
+          await shot("tall-frame");
+          await frameCheck("tall-frame");
+          const [tallWidth, tallHeight] = tallFrame.media[0] ?? [0, 0];
+          if (tallFrame.position?.trim() !== "3 / 3" || (size.phone ? Math.abs(tallWidth! - size.viewport.width) > 1 : !tallFrame.mediaInside || tallHeight! < tallFrame.canvas[1]! - 30)) failures.push(`${label}: the tall phone frame reads ${JSON.stringify(tallFrame)}`);
+
+          /* 7c. A pair full screen is one picture with a switch that puts the original in its place, at the same zoom. */
+          await showVariant(2);
+          await settle();
+          await page.locator("[data-prototype-fullsize]").click();
+          await page.waitForSelector("[data-lightbox-compare]", { timeout: 5_000 });
+          await page.locator(`[role=dialog] button[aria-label="${tr("lightbox.zoomIn")}"]`).click();
+          await page.locator('[data-lightbox-compare-side="before"]').click();
+          await settle();
+          const pairViewer = await page.evaluate(() => {
+            const shown = [...document.querySelectorAll<HTMLImageElement>("img[data-lightbox-side]")].filter((image) => !image.hidden);
+            const sides = [...document.querySelectorAll<HTMLElement>("[data-lightbox-compare-side]")].map((element) => [element.dataset.lightboxCompareSide, element.getAttribute("aria-pressed"), element.textContent]);
+            return { shown: shown.map((image) => image.dataset.lightboxSide), position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null, zoom: document.querySelector("[role=dialog] [data-lightbox-position]")?.parentElement?.textContent ?? null, sides };
+          });
+          record("viewer-pair", pairViewer);
+          await shot("viewer-pair-original");
+          if (JSON.stringify(pairViewer.shown) !== JSON.stringify(["before"]) || pairViewer.position?.trim() !== "1 / 3" || !pairViewer.caption?.includes(tr("proto.pair.original")) || !pairViewer.zoom?.includes("140%") || JSON.stringify(pairViewer.sides) !== JSON.stringify([["before", "true", tr("lightbox.original")], ["after", "false", tr("lightbox.changed")]])) failures.push(`${label}: the pair full screen reads ${JSON.stringify(pairViewer)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
 
           /* 8. A combination and a dictated comment. */
           if (size.phone) { await choose(2); await choose(3); } else { await page.keyboard.press("2"); await page.keyboard.press("3"); }
