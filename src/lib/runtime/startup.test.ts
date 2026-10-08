@@ -3533,12 +3533,19 @@ test("a busy Codex turn advances after container replacement without operator me
   expect(ledger.writes).toEqual([expect.objectContaining({
     text: expect.stringMatching(/^Viewer restarted and severed your structured host mid-turn\./),
   })]);
+  const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
+  expect(cuts()).toHaveLength(1);
+  const firstCut = cuts()[0]!;
+  expect(firstCut).toMatchObject({
+    reason: "viewer-restart", conversationId: conversation.id, operationId: ledger.writes[0]!.id,
+  });
   expect(fs.statSync(artifactPath).size).toBeGreaterThan(before);
   expect(registry.conversation(conversation.id)?.id).toBe(conversation.id);
   const advanced = fs.statSync(artifactPath).size;
 
   await startup();
   expect(ledger.writes).toHaveLength(1);
+  expect(cuts().map((cut) => cut.id)).toEqual([firstCut.id]);
   expect(fs.statSync(artifactPath).size).toBe(advanced);
 
   const nextLedger = createFakeDeliveryLedger();
@@ -3571,7 +3578,15 @@ test("a busy Codex turn advances after container replacement without operator me
     text: expect.stringMatching(/^Viewer restarted and severed your structured host mid-turn\./),
   })]);
   expect(nextLedger.writes[0]!.text).not.toBe(ledger.writes[0]!.text);
+  expect(cuts()).toHaveLength(2);
+  const nextCut = cuts().find((cut) => cut.id !== firstCut.id)!;
+  expect(nextCut).toMatchObject({
+    reason: "viewer-restart", conversationId: conversation.id, operationId: nextLedger.writes[0]!.id,
+  });
   expect(fs.statSync(artifactPath).size).toBeGreaterThan(advanced);
+  await startup();
+  expect(nextLedger.writes).toHaveLength(1);
+  expect(cuts()).toHaveLength(2);
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();

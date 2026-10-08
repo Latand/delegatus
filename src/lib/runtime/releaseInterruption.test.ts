@@ -876,6 +876,11 @@ test("an unpublished host the release cannot hand over still lets the published 
       healthFails: () => unhealthy,
     });
     expect(retrying.adopted).toEqual([unpublished.hostKey]);
+    const restartCuts = obligationsFor(unpublished.registryFile);
+    expect(restartCuts.map((cut) => [cut.reason, cut.hostKey]).sort()).toEqual([
+      ["viewer-restart", unpublished.hostKey],
+      ["viewer-restart", published.hostKey],
+    ].sort());
     unhealthy = true;
 
     const registry = new AgentRegistry(published.registryFile);
@@ -900,8 +905,14 @@ test("an unpublished host the release cannot hand over still lets the published 
     expect(released).toEqual([published.hostKey]);
     /* The retrying boot was itself a restart and recorded the cuts it found;
        the release records its own for the host it handed over. */
-    expect(obligationsFor(published.registryFile).filter((obligation) => obligation.reason === "viewer-release")
-      .map((obligation) => obligation.conversationId)).toEqual([published.conversationId]);
+    const cuts = obligationsFor(published.registryFile);
+    expect(cuts.map((cut) => [cut.reason, cut.hostKey]).sort()).toEqual([
+      ["viewer-restart", unpublished.hostKey],
+      ["viewer-restart", published.hostKey],
+      ["viewer-release", published.hostKey],
+    ].sort());
+    const releaseCut = cuts.find((cut) => cut.reason === "viewer-release")!;
+    expect(releaseCut.conversationId).toBe(published.conversationId);
     await bindStructuredDeliveryQueue([], { registry, client: null });
     /* The successor boots in this same test process, where the unpublished
        handle is still retained; the probe answers again so it only sees it as
@@ -915,6 +926,15 @@ test("an unpublished host the release cannot hand over still lets the published 
     const continuations = continuationsIn(ledger).filter((text) => text.includes("deployment interrupted"));
     expect(continuations).toHaveLength(1);
     expectDeploymentContinuation(continuations[0]);
+    const settled = obligationsFor(published.registryFile);
+    expect(settled.find((cut) => cut.id === releaseCut.id)?.operationId).toBe(
+      ledger.writes.find((write) => write.text === continuations[0])!.id,
+    );
+    expect(settled.find((cut) => cut.id === restartCuts.find((cut) => cut.hostKey === published.hostKey)!.id))
+      .toMatchObject({ state: "discharged", resolution: "a newer cut of this conversation owes its one continuation" });
+    await successorBoot(published.registryFile, journal, ledger);
+    await settle(() => false, 50);
+    expect(continuationsIn(ledger).filter((text) => text.includes("deployment interrupted"))).toEqual(continuations);
   } finally {
     journal.close();
   }

@@ -1104,6 +1104,40 @@ tests on top.
 
 ## Build notes
 
+### Existing contracts changed by restart capture
+
+Batch B's two failures attributed to this PR came from the reviewed test
+copies at PR #2609's head `50eb80c5f`, replayed against this PR's code. Both
+assertions describe the behavior before boot-time cut capture. Replaying those
+two cases in isolated state reproduces their failures:
+
+- `releaseInterruption.test.ts`, "an unpublished host the release cannot
+  hand over still lets the published hosts record their cuts and resume once":
+  its retrying boot finds two predecessor turns and records both restart
+  cuts before adoption. The later release records the published host's cut,
+  leaving three records. The older assertion expected the whole inventory
+  to contain only that release record. The updated case checks all three
+  records, the release's delivery operation, discharge of the published
+  host's earlier restart record, and one release continuation across repeat
+  boots. The unpublished host's failed health probe still allows the
+  published host to record and release.
+- `startup.test.ts`, "a busy Codex turn advances after container replacement
+  without operator messaging": a captured cut uses
+  `interruptionContinuationText`, whose opening is "Viewer restarted and
+  severed your structured host mid-turn." The older assertion expected
+  `INTERRUPTED_CODEX_CONTINUATION_TEXT` and a claim-epoch operation id. The
+  updated case checks the detailed continuation and its recorded operation,
+  one record and delivery for the first cut, a distinct record and delivery
+  for the next replacement, and no additional record or delivery when either
+  boot repeats. Its fake host dates the resumed turn after the first cut,
+  matching the order in which a real continuation arrives.
+
+These expectation changes follow the rule above: a boot captures every
+resolved cut before taking its row, and the durable obligation owns the
+continuation. The two older assertions fail on that behavior even when their
+cases run alone. The runtime implementation already supplies it; this
+integration strengthens the assertions and records the contract changes.
+
 What the build settled, 2026-10-07:
 
 - **Pending work on a held row waits in the queue.** Holding a row out of the
