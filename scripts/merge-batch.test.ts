@@ -100,7 +100,23 @@ test("a failure without clearing removal evidence holds the batch", async () => 
   const failure = site("new feature", "feature.test.ts");
   await expect(attributeBatchTests(recorded(), recorded([failure]), [12, 13, 14],
     async () => recorded([failure]), async () => recorded([failure])))
-    .rejects.toThrow("Cannot establish attribution for feature.test.ts > suite > new feature");
+    .rejects.toThrow("Cannot establish attribution for feature.test.ts > suite > new feature; detectors retained; batch not gated"
+      + " (rule: no removal clears it and it is no stale reviewed detector, so nothing narrows it to a PR)");
+});
+
+test("a stale detector's failure no removal clears is classified stale; a genuine one still holds the batch", async () => {
+  const old = site("old assertion", "limit.test.ts"), genuine = site("new feature", "feature.test.ts");
+  const calls: number[][] = [];
+  const stale = (test: TestSite) => test.file === "limit.test.ts" ? { pr: 12, reason: "stale reviewed detector: limit.test.ts" } : undefined;
+  const decision = await attributeBatchTests(recorded(), recorded([old]), [12, 13], async () => recorded([old]),
+    async removed => { calls.push(removed); return recorded([old]); }, undefined, stale);
+  expect(decision.attributed).toEqual([]);
+  expect(decision.stale!.map(entry => [entry.test, entry.prs, entry.reason])).toEqual([[old, [12], "stale reviewed detector: limit.test.ts"]]);
+  expect(decision.stale![0]!.removals.map(sample => [sample.removed, sample.outcome])).toEqual([[[12], "fail"], [[13], "fail"], [[12, 13], "fail"]]);
+  // One all-removed control serves every failure no single removal clears.
+  expect(calls).toEqual([[12], [13], [12, 13]]);
+  await expect(attributeBatchTests(recorded(), recorded([old, genuine]), [12, 13], async () => recorded([old, genuine]),
+    async () => recorded([old, genuine]), undefined, stale)).rejects.toThrow("Cannot establish attribution for feature.test.ts > suite > new feature;");
 });
 
 test("(a) native main's own file faults and failures are pre-existing; the same fault on a clean main file is new", async () => {
@@ -1452,7 +1468,7 @@ test("a Bun preload retains a literal detector and refuses publication without p
   const contents = "const { test, expect } = require('bun:test');\ntest('feature invariant', () => expect(1).toBe(1));\n";
   const detector = f.addPr(14, "feature.test.ts", contents);
   await f.batch.build(`12@${implementation},14@${detector}`);
-  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for feature\.test\.ts > .* > feature invariant; detectors retained; batch not gated/);
+  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for feature\.test\.ts > .* > feature invariant; detectors retained; batch not gated \(rule: no removal clears it and it is no stale reviewed detector/);
   const state = f.batch.read();
   expect(state.gated).toBeNull();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "clean"]);
@@ -1470,6 +1486,56 @@ test("a Bun preload retains a literal detector and refuses publication without p
     expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
   }
 }, 30_000);
+
+const limitTest = (expected: number, extra = "") => "const { test, expect } = require('bun:test');\n"
+  + `const { limit } = require('./limit.js');\ntest('limit', () => expect(limit).toBe(${expected}));\n// one\n// two\n// three\n${extra}`;
+
+test("an older PR tree's stale copy of a test file main changed defers only that PR and the rest lands", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  // Branched before main changed the module and its test; it touches neither.
+  const older = f.addPr(12, "older.txt", "older");
+  f.seed("limit.js", "exports.limit = 2;\n");
+  f.seed("limit.test.ts", limitTest(2));
+  const changed = git(f.repo, ["rev-parse", "main"]);
+  const newer = f.addPr(13, "limit.test.ts", limitTest(2, "test('limit is positive', () => expect(limit > 0).toBe(true));\n"));
+  const healthy = f.addPr(14, "healthy.txt", "healthy");
+  await f.batch.build(`12@${older},13@${newer},14@${healthy}`);
+  const gated = await f.batch.gate();
+  const reason = `stale reviewed detector: branch predates ${changed.slice(0, 12)} that changed limit.test.ts; merge main into the branch`;
+  expect(gated.rows.map(row => [row.number, row.status, row.detail])).toEqual([[12, "deferred", reason], [13, "clean", ""], [14, "clean", ""]]);
+  expect(gated.gated!.candidate.prs.map(pr => pr.number)).toEqual([13, 14]);
+  expect(gated.attributionLog.map(entry => [entry.test.name, entry.prs, entry.reason, entry.stale])).toEqual([["limit", [12], reason, true]]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["deferred", "merged", "merged"]);
+  expect(git(f.repo, ["log", "--reverse", "--format=%s", `${landed.base}..HEAD`]).split("\n")).toEqual(["Feature 13 (#13)", "Feature 14 (#14)"]);
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-12"]).split(/\s/)[0]).toBe(older);
+  const summary = report(landed);
+  expect(summary).toContain(`| #12 | needs-review pending resolution (${reason}) |`);
+  expect(summary).toContain("Stale reviewed detectors (rule: the PR did not change the file and main changed it after the PR's base; only that PR is deferred):\n"
+    + `- #12: ${reason}: limit.test.ts > `);
+  expect(summary).toContain("Attributed failures (rule: a removal clears them; only the PRs it narrows to are held):");
+}, 60_000);
+
+test("a PR that changed the same main-changed test file keeps today's unattributable stop", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("limit.js", "exports.limit = 1;\n");
+  f.seed("limit.test.ts", limitTest(1));
+  // The PR's own reviewed copy carries its added case and main's old assertion.
+  const own = f.addPr(12, "limit.test.ts", limitTest(1, "test('limit is set', () => expect(limit).toBeDefined());\n"));
+  f.seed("limit.js", "exports.limit = 2;\n");
+  f.seed("limit.test.ts", limitTest(2));
+  const healthy = f.addPr(14, "healthy.txt", "healthy");
+  await f.batch.build(`12@${own},14@${healthy}`);
+  expect(f.batch.read().rows.map(row => row.status)).toEqual(["clean", "clean"]);
+  await expect(f.batch.gate()).rejects.toThrow(/Cannot establish attribution for limit\.test\.ts > .* > limit; detectors retained; batch not gated \(rule: no removal clears it and it is no stale reviewed detector/);
+  const state = f.batch.read();
+  expect(state.gated).toBeNull();
+  expect(state.rows.map(row => [row.status, row.detail])).toEqual([["clean", ""], ["clean", ""]]);
+  expect(state.attributionLog).toEqual([]);
+  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
+}, 60_000);
 
 function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
   git(f.repo, ["checkout", `topic-${number}`]);

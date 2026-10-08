@@ -3,24 +3,32 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
-const binary = process.argv[2];
-const selection = process.argv[3];
-if (selection !== undefined && selection !== "--steering-only") throw new Error("Only --steering-only is supported as a selection");
-if (!binary || !isAbsolute(binary) || !existsSync(binary)) throw new Error("Pass an absolute Codex fixture executable");
-const roots = mkdtempSync(join(tmpdir(), "n-"));
-const bin = join(roots, "bin"); mkdirSync(bin); symlinkSync(process.execPath, join(bin, "bun"));
-const env: NodeJS.ProcessEnv = {
-  PATH: [bin, dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
-  LANG: "C.UTF-8", NODE_ENV: "test",
-  NATIVE_CODEX_QUEUE_TEST_BINARY: binary,
-  LLV_CODEX_HISTORY_CLI: binary,
-  LLV_CODEX_BINARY: binary,
-  LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
-};
-for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
-  env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);
-}
-const files = [
+/** `--engine-only` runs the files that start the Codex executable named on the
+    command line, the only part whose verdict depends on the Codex version.
+    `--shared-only` runs the rest without a Codex fixture argument or executable.
+    Together they are exactly the default selection: the pre-push hook runs the
+    engine part once per supported version and the shared part once. */
+export const SELECTIONS = ["--steering-only", "--engine-only", "--shared-only"] as const;
+export type Selection = (typeof SELECTIONS)[number];
+
+/* The files that start the executable through NATIVE_CODEX_QUEUE_TEST_BINARY,
+   LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY. They share one process, as they
+   do inside the main batch below. */
+export const engineFiles = [
+  "src/lib/runtime/nativeCodexQueue.test.ts",
+  "src/lib/runtime/codexHistoryReader.test.ts",
+  "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+  "src/lib/runtime/nativeQueueHost.integration.test.ts",
+  "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+];
+/* Engine files that install globals: one process each, like the other
+   injection files. */
+export const engineInjectionFiles = [
+  "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+  "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
+];
+
+export const files = [
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueRuntime.test.ts",
@@ -62,12 +70,12 @@ const files = [
 
 // These files install and remove a registry singleton. Give each its own
 // process so later files cannot inherit a registry whose fixture was removed.
-const registryFiles = [
+export const registryFiles = [
   "src/lib/runtime/voicePersonaMandate.test.ts",
   "src/lib/mcp/voiceUtteranceContext.test.ts",
 ];
 
-const injectionFiles = [
+export const injectionFiles = [
   "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
   "src/lib/runtime/codexAppServerHost.inject.test.ts",
   "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
@@ -85,7 +93,7 @@ const injectionFiles = [
    one key, the admitted retry over a real journal, and the composer's
    reconciliation and pending-image suites. Each installs its own globals, so
    each runs in its own process like the injection files. */
-const attachmentFiles = [
+export const attachmentFiles = [
   "src/components/retainedQueueAdmissions.dom.test.ts",
   "src/lib/runtime/nativeQueueHttp.files.test.ts",
   "src/lib/runtime/inboxWriters.integration.test.ts",
@@ -106,7 +114,7 @@ const attachmentFiles = [
  * document loaded first. They are a separate spawn for that reason, not because
  * they are optional.
  */
-const domFiles = [
+export const domFiles = [
   "src/components/NativeQueuePanel.dom.test.tsx",
   "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
   "src/components/VoiceConversation.dom.test.tsx",
@@ -115,13 +123,45 @@ const domFiles = [
   "src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts",
   "src/lib/realtime/codexRealtimeClient.transport.dom.test.ts",
 ];
-const batches = selection === "--steering-only"
-  ? [["src/lib/runtime/codexSteerDelivery.integration.test.ts"]]
-  : [files, ...[...domFiles, ...registryFiles, ...injectionFiles, ...attachmentFiles].map(file => [file])];
-for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
-for (const batch of batches) {
-  const result = spawnSync(process.execPath, ["test", ...batch], { env, stdio: "inherit" });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+/** The batches a selection runs, each one `bun test` process. */
+export function nativeBatches(selection?: Selection): string[][] {
+  const singles = [...domFiles, ...registryFiles, ...injectionFiles, ...attachmentFiles];
+  if (selection === "--steering-only") return [["src/lib/runtime/codexSteerDelivery.integration.test.ts"]];
+  if (selection === "--engine-only") return [engineFiles, ...engineInjectionFiles.map(file => [file])];
+  if (selection === "--shared-only") {
+    const engine = new Set([...engineFiles, ...engineInjectionFiles]);
+    return [files.filter(file => !engine.has(file)), ...singles.filter(file => !engine.has(file)).map(file => [file])];
+  }
+  return [files, ...singles.map(file => [file])];
 }
-process.exit(0);
+
+if (import.meta.main) {
+  const sharedOnly = process.argv[2] === "--shared-only" && process.argv[3] === undefined;
+  const binary = sharedOnly ? undefined : process.argv[2];
+  const selection = sharedOnly ? "--shared-only" : process.argv[3];
+  if (selection !== undefined && !(SELECTIONS as readonly string[]).includes(selection)) throw new Error(`Only ${SELECTIONS.join(", ")} are supported as a selection`);
+  if (!sharedOnly && (!binary || !isAbsolute(binary) || !existsSync(binary))) throw new Error("Pass an absolute Codex fixture executable");
+  const roots = mkdtempSync(join(tmpdir(), "n-"));
+  const bin = join(roots, "bin"); mkdirSync(bin); symlinkSync(process.execPath, join(bin, "bun"));
+  const env: NodeJS.ProcessEnv = {
+    PATH: [bin, dirname(process.execPath), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
+    LANG: "C.UTF-8", NODE_ENV: "test",
+    ...(selection === "--shared-only" ? {} : {
+      NATIVE_CODEX_QUEUE_TEST_BINARY: binary,
+      LLV_CODEX_HISTORY_CLI: binary,
+      LLV_CODEX_BINARY: binary,
+    }),
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+  };
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
+    env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);
+  }
+  const batches = nativeBatches(selection as Selection | undefined);
+  for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
+  for (const batch of batches) {
+    const result = spawnSync(process.execPath, ["test", ...batch], { env, stdio: "inherit" });
+    if (result.error) throw result.error;
+    if (result.status !== 0) process.exit(result.status ?? 1);
+  }
+  process.exit(0);
+}

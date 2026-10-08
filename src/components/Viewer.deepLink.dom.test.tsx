@@ -563,6 +563,45 @@ test("legacy #f= to an archived predecessor transcript opens it the same way", a
   await expectNavigationQuiescence();
 });
 
+/* After two account switches the payload can carry two archived generations
+   of one conversation and not yet its current one (2026-10-07). */
+const OLDER_ARCHIVED = "/sessions/old.jsonl";
+const NEWER_ARCHIVED = "/sessions/newer.jsonl";
+const ARRIVING_SUCCESSOR = "/sessions/successor.jsonl";
+const olderArchivedRow = fileEntry({ ...targetRow, path: OLDER_ARCHIVED, generation: 1, migratedTo: NEWER_ARCHIVED });
+const newerArchivedRow = fileEntry({ ...targetRow, path: NEWER_ARCHIVED, generation: 2, migratedTo: ARRIVING_SUCCESSOR });
+const arrivingSuccessorRow = fileEntry({ ...targetRow, path: ARRIVING_SUCCESSOR, generation: 3 });
+const conversationPaths = [OLDER_ARCHIVED, NEWER_ARCHIVED, ARRIVING_SUCCESSOR];
+
+for (const [order, archived] of [
+  ["older first", [olderArchivedRow, newerArchivedRow]],
+  ["newer first", [newerArchivedRow, olderArchivedRow]],
+] as const) {
+  for (const link of ["canonical", "legacy"] as const) {
+    test(`a ${link} link to a conversation switched twice opens it with its archived rows ${order}, then follows the successor`, async () => {
+      dom.location.hash = link === "canonical" ? `#c=${encodeURIComponent(CONVERSATION_ID)}` : `#f=${encodeURIComponent(OLDER_ARCHIVED)}`;
+      let successorArrived = false;
+      const rows = () => [otherRow, ...archived, ...(successorArrived ? [arrivingSuccessorRow] : [])];
+      stubFetch((pin) => (pin === CONVERSATION_ID || conversationPaths.includes(pin) ? rows() : [otherRow]));
+
+      const host = await mountViewer();
+
+      expect(await waitFor(() => conversationPaths.some((path) => openOnBoard(host, path) !== null))).toBe(true);
+      expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+      await expectNavigationQuiescence();
+
+      successorArrived = true;
+      await refreshFeed();
+
+      expect(await waitFor(() => openOnBoard(host, ARRIVING_SUCCESSOR) !== null)).toBe(true);
+      /* One card for the conversation: neither archived row is drawn beside it. */
+      expect(onBoard(host, OLDER_ARCHIVED)).toBeNull();
+      expect(onBoard(host, NEWER_ARCHIVED)).toBeNull();
+      expect(host.querySelector("[data-stale-focus-notice]")).toBeNull();
+    }, 20_000);
+  }
+}
+
 test("an id no payload can resolve gets a visible notice, never a silent landing", async () => {
   dom.location.hash = "#c=conversation_nowhere-to-be-found";
   stubFetch(() => [otherRow]);
