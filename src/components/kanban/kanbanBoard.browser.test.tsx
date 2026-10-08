@@ -10229,7 +10229,57 @@ describe("the agent window: a click on the board opens the agent in one window, 
     expect(failures).toEqual([]);
   }, 300_000);
 
-  const seedReaders = (ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+  /* A link (#c=) opens its agent in the window and gives the reader the
+     keyboard. Nobody has pressed a key, on a page just loaded or on one the
+     link changed later, so the reader shows no focus ring; a key pressed
+     before the link brings the ring back. */
+  browserTest("a link opens its agent in the window without a focus ring nobody asked for", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/agent-window-link"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const reader = `[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="${KEY.export}"]`;
+    const ring = (page: Page) => page.waitForFunction((selector) => {
+      const node = document.querySelector<HTMLElement>(selector);
+      return node && node.contains(document.activeElement) ? { focused: document.activeElement === node, ring: node.matches(":focus-visible") } : null;
+    }, reader, { timeout: 30_000 }).then((handle) => handle.jsonValue());
+    try {
+      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages#c=${KEY.export}`, viewport, scheme, lang);
+        try {
+          const onLoad = await ring(page);
+          if (!onLoad?.focused || onLoad.ring) failures.push(`${label}: a page loaded on the link ${JSON.stringify(onLoad)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); });
+          const fresh = await context.newPage();
+          await fresh.goto(`${server.base}?scenario=stages`);
+          await fresh.waitForSelector(`${card("t-export")} >> visible=true`, { timeout: 30_000 });
+          await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
+          const later = await ring(fresh);
+          if (!later?.focused || later.ring) failures.push(`${label}: the link followed later ${JSON.stringify(later)}`);
+          await fresh.keyboard.press("Escape");
+          await fresh.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          await fresh.evaluate(() => { location.hash = ""; });
+          await fresh.keyboard.press("Shift");
+          await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
+          const keyed = await ring(fresh);
+          if (!keyed?.focused || !keyed.ring) failures.push(`${label}: the link followed after a key ${JSON.stringify(keyed)}`);
+          console.log(`${label}: ${JSON.stringify({ onLoad, later, keyed })}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  const seedReaders =(ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
 
   /* The page's edges. The project's name, the folded Orchestrator row and
      the first column the board shows start on one left edge; the row stands

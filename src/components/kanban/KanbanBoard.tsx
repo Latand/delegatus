@@ -272,6 +272,16 @@ function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/* Whether the operator's last input on the page was a key. The reader given
+   the keyboard after a click, or by a link nobody pressed a key for, shows no
+   focus ring. Watched for the page, so a board that mounts again still knows;
+   an event a script dispatched is nobody's input. */
+let keyedLast = false;
+if (typeof document !== "undefined") {
+  document.addEventListener("keydown", (event) => { if (event.isTrusted) keyedLast = true; }, true);
+  document.addEventListener("pointerdown", (event) => { if (event.isTrusted) keyedLast = false; }, true);
+}
+
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
@@ -1899,7 +1909,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     focusOnShow.current = false;
     const reader = placement.slotOf(shown)?.querySelector<HTMLElement>("[data-kanban-reader]");
     /* A reader that came back with its own focus (its composer, its caret) keeps it. */
-    if (reader && !reader.contains(document.activeElement)) reader.focus({ preventScroll: true });
+    if (reader && !reader.contains(document.activeElement)) reader.focus({ preventScroll: true, ...(keyedLast ? {} : { focusVisible: false }) });
   }, [shown, placement]);
   const ownersRef = useRef(owners);
   ownersRef.current = owners;
