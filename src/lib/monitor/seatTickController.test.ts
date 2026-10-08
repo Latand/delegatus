@@ -8733,10 +8733,12 @@ describe("seat auto-rotation through production seams", () => {
     f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted", conversationId: "conversation_rotation_pending", launchId: "launch_rotation_pending" } });
     await f.check(); const key = f.active().intent.clientRequestId;
     expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
-    expect(abandonStillbornOrchestratorSeat({ project: PROJECT, clientRequestId: key, error: "fixture asynchronous launch failure" })?.restored?.conversationId).toBe(f.original.conversationId);
+    const privatePath = path.join(process.env.HOME!, "private", "launch-fixture.txt");
+    expect(abandonStillbornOrchestratorSeat({ project: PROJECT, clientRequestId: key, error: `fixture asynchronous launch failure ${privatePath}` })?.restored?.conversationId).toBe(f.original.conversationId);
     await f.check(); await f.check();
     expect(f.state().autoRotation?.lastAttempt?.state).toBe("failed"); expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("inbox");
     expect(f.reports().map(r => r.class)).toEqual(["status", "failed"]);
+    expect(f.reports()[1]!.body).not.toContain(privatePath);
     writeSeatTickSettings(PROJECT, { ...f.settings(), autoRotate: { ...f.settings().autoRotate!, enabled: false } });
     await f.check(); await f.check(); expect(f.cards()[0]!.status).toBe("done");
   }));

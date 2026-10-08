@@ -137,7 +137,7 @@ export async function runSeatAutoRotation(
   // bounded seat history no longer contains that launch's diagnostic.
   if ((attempt?.state === "pending" || attempt?.state === "rotated") && current?.conversationId === attempt.conversationId && current.seatEpoch !== attempt.seatEpoch) {
     attempt.state = "failed";
-    attempt.error = sources.seatFor(input.project).history?.find(row => row.seat.intent.clientRequestId === seatAutoRotationKey(attempt.id))?.seat.intent.error ?? "successor launch failed; the predecessor was restored";
+    attempt.error = redactMonitorText(sources.seatFor(input.project).history?.find(row => row.seat.intent.clientRequestId === seatAutoRotationKey(attempt.id))?.seat.intent.error ?? "successor launch failed; the predecessor was restored").slice(0, 500);
     attempt.told = { report: false, card: false }; persist();
   } else if (attempt?.state === "pending" && current?.intent.clientRequestId === seatAutoRotationKey(attempt.id) && current.seatEpoch !== attempt.seatEpoch) {
     // Recover a lost result write from the seat's accepted idempotency key.
