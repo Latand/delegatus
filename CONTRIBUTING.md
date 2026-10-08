@@ -273,6 +273,21 @@ comparison as touched tests, so a platform test `origin/main` already fails is
 stage, a branch that only trails `origin/main`) runs privacy with
 `--check-commits` and nothing else; a push that changes only `.md`, `.mdx` or
 `.txt` files skips types. Any other changed file keeps every scoped check.
+The native Codex phase runs the files that start the Codex executable once per
+supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
+once (`--shared-only`), all three at the same time. A caller that kills the
+push at a limit of its own hands the hook a Unix-millisecond deadline in
+`LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
+its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
+install (which waits for machine admission) and every step then end by it, and
+nothing starts once it has passed. A stopped step takes with it every process
+that inherited its environment and every scope `gate-slot.sh` gave it; one that
+survives fails the push with its PIDs. The shared native
+contracts, which the hosted `Bun runtime pin` workflow also runs, are stopped
+and named as left to that workflow; a decisive step still running is stopped
+with `no verdict within the push budget`, naming the check, which the
+publication retries as an interrupted push. Without a deadline nothing is
+stopped.
 Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
