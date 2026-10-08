@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { setLocale } from "@/lib/i18n";
-import type { ScopeView } from "@/lib/memory/roleTypes";
+import type { RuleView, ScopeView } from "@/lib/memory/roleTypes";
 
 import { RuleSection } from "./LearnedRules";
 
@@ -31,5 +31,17 @@ test("a section whose picker carries the counts shows none of its own", () => {
     <RuleSection kind="role" title="Role" subtitle="Only the chosen role in this project" scope={{ ...scope(0), kind: "role", roleId: "builder" }} picker={<div />} onDelete={() => {}} onRestore={() => {}} />,
   );
   expect(withPicker).not.toContain("data-rules-count");
-  expect(section(0)).toContain("data-rules-count");
+});
+
+test("an empty kind says it is empty once; a kind with rules shows its count once", () => {
+  setLocale("en");
+  const rule: RuleView = { id: "r1", rule: "Check the bound before writing.", why: "A write past it was lost.", state: "active", hints: [], roleId: null, fixRound: false, stageId: "s1", fresh: false, createdAt: "2026-10-08T00:00:00.000Z", changedAt: "2026-10-08T00:00:00.000Z" };
+  const bare = section(0);
+  expect(bare).not.toContain("data-rules-count");
+  expect(bare.split("No rules yet.").length - 1).toBe(1);
+  const filled = renderToStaticMarkup(
+    <RuleSection kind="project" title="Project" subtitle="Every role in this project" scope={{ ...scope(31), active: [rule] }} onDelete={() => {}} onRestore={() => {}} />,
+  );
+  expect(filled.match(/data-rules-count=""[^>]*>1</g)?.length).toBe(1);
+  expect(filled).not.toContain("No rules yet.");
 });

@@ -8623,6 +8623,11 @@ describe("role memory: rules window and the rule line", () => {
             });
             expect(long.top).toBeGreaterThanOrEqual(0); expect(long.bottom).toBeLessThanOrEqual(height);
             expect(long.height).toBe(640); expect(long.scrolls).toBe(true);
+            /* This project has no project rules: its column says so once, in its body, with no count beside the title. */
+            const emptyProject = page.locator('[data-rules-section="project"]');
+            expect(await emptyProject.locator("[data-rules-count]").count()).toBe(0);
+            expect(await emptyProject.getByText(translate(lang, "roleMemory.empty"), { exact: true }).count()).toBe(1);
+            cases.push({ lang, width, surface: "window-long-empty-project", file: await shot("window-long") });
           }
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }

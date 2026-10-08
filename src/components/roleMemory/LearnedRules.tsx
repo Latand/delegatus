@@ -227,7 +227,7 @@ function UndoRow({ onUndo }: { onUndo: () => void }) {
 /* A scope's size is news only near its bound; below this share of it the heading stays free of the counter. */
 const NEAR_BOUND = 0.8;
 
-/** One kind of rule: its heading in its colour, its rows, what left it behind one toggle, and its size once it nears 10 000. A picker carries the counts itself. */
+/** One kind of rule: its heading in its colour with its count when it has rules, its rows, what left it behind one toggle, and its size once it nears 10 000. A picker carries the counts itself; an empty kind says so once, in its body. */
 export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, removed, onDelete, onRestore }: {
   kind: ScopeKind; title: string; subtitle: string; scope: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
   onDelete: (rule: RuleView) => void; onRestore: (rule: RuleView) => void;
@@ -245,7 +245,7 @@ export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, r
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-2">
         <div className="flex items-baseline gap-2">
           <h3 className={`m-0 text-[13px] font-semibold ${KIND_TONE[kind].text}`}>{title}</h3>
-          {picker ? null : <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{scope?.active.length ?? 0}</span>}
+          {picker || !scope?.active.length ? null : <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{scope.active.length}</span>}
           {chars >= bound * NEAR_BOUND ? <span className="ml-auto text-[10.5px] tabular-nums text-warning" data-rules-size="">{t("roleMemory.size", { chars: number(chars, locale), bound: number(bound, locale) })}</span> : null}
         </div>
         <span className="text-[11px] leading-4 text-muted">{subtitle}</span>

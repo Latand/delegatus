@@ -96,6 +96,12 @@
     },
     {
       "lang": "en",
+      "width": 1440,
+      "surface": "window-long-empty-project",
+      "file": "desktop-1440-en-window-long.png"
+    },
+    {
+      "lang": "en",
       "width": 390,
       "surface": "card",
       "line": {
@@ -277,6 +283,12 @@
         900
       ],
       "file": "desktop-1440-uk-window.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "window-long-empty-project",
+      "file": "desktop-1440-uk-window-long.png"
     },
     {
       "lang": "uk",
