@@ -282,7 +282,7 @@ describe("automatic updates", () => {
       button(el, choice)!.click();
       await Bun.sleep(0);
       expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
-      expect(accepted).toMatchObject({ auto: { decision: null } });
+      expect(accepted).toMatchObject({ snapshot: { auto: { decision: null } }, ticket: expect.any(Number) });
     } finally {
       globalThis.fetch = savedFetch;
       window.removeEventListener("llv:auto-drain-decision", observe);
@@ -297,7 +297,7 @@ describe("automatic updates", () => {
     const observe = (event: Event) => {
       flushSync(() => root!.unmount());
       host?.remove();
-      render((event as CustomEvent<Snapshot>).detail);
+      render((event as CustomEvent<{ snapshot: Snapshot }>).detail.snapshot);
     };
     window.addEventListener("llv:auto-drain-decision", observe);
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: current }), { status: 409 })) as unknown as typeof fetch;
@@ -491,7 +491,7 @@ describe("update available and what changes", () => {
     expect(text(section(el, "header"))).toContain("Available1.2.3 · a1b2c3d");
     const update = section(el, "update")!;
     expect(text(update.querySelector("h2"))).toBe("Update to a1b2c3d (1.2.3)");
-    expect(text(update)).toContain("This builds the new version. Nothing restarts until you choose to.");
+    expect(text(update)).toContain("After you confirm, Delegatus builds and applies the update");
     expect([...update.querySelectorAll("[data-step]")].map(text)).toEqual(["Fetch a1b2c3d", "Check out a1b2c3d", "Install dependencies", "Build", "Ready"]);
     const changes = section(el, "changes")!;
     expect(text(changes.querySelector("[data-summary]"))).toBe("5 commits · 2 changelog entries (1 Added, 1 Fixed)");
@@ -500,6 +500,47 @@ describe("update available and what changes", () => {
     expect([...changes.querySelectorAll("[data-commit]")].map(text)).toEqual(["a1b2c3d", "b2c3d4e"]);
     click(button(el, "update"));
     expect(calls).toEqual(["update"]);
+  });
+});
+
+/* #2594: the installation answers before the work in progress is read. */
+describe("work in progress beside an available update", () => {
+  const work = (evidence: Partial<NonNullable<Snapshot["workEvidence"]>>, resumeWork?: Snapshot["resumeWork"]) => snapshot({ ...available(),
+    workEvidence: { state: "pending", since: AT, at: null, error: null, phases: null, ...evidence }, ...(resumeWork ? { resumeWork } : {}) });
+  const line = (el: HTMLElement) => el.querySelector<HTMLElement>("[data-work]");
+
+  test.each(["en", "uk"] as const)("pending, read and unreadable in %s, and the Update button stays usable", (locale) => {
+    setLocale(locale);
+    const pending = render(work({}));
+    expect(line(pending)?.dataset.work).toBe("pending");
+    expect(text(line(pending))).toBe(locale === "en" ? "Reading the work in progress…" : "Читаю роботу, що триває…");
+    expect(text(section(pending, "update"))).not.toMatch(/: 0/);
+    expect(button(pending, "update")?.disabled).toBe(false);
+    root?.unmount(); host?.remove();
+
+    const ready = render(work({ state: "ready", since: null, at: AT }, { turns: 2, stages: 1, turnList: [], stageList: [], unreadable: null }));
+    expect(line(ready)?.dataset.work).toBe("ready");
+    expect(text(line(ready))).toBe(locale === "en"
+      ? "Agent turns running: 2 · Pipeline stages running: 1 · read at 12:04"
+      : "Працюють ходи агентів: 2 · Працюють етапи пайплайна: 1 · прочитано о 12:04");
+    root?.unmount(); host?.remove();
+
+    const failed = render(work({ state: "unavailable", since: null, at: AT, error: "runtime host is unavailable" }));
+    expect(line(failed)?.dataset.work).toBe("unavailable");
+    expect(text(line(failed))).toBe(locale === "en" ? "Cannot read agent activity: runtime host is unavailable" : "Не вдалося прочитати активність агентів: runtime host is unavailable");
+  });
+
+  test("a reading that stopped at an unreadable journal shows no counts", () => {
+    setLocale("en");
+    const el = render(work({ state: "ready", since: null, at: AT }, { turns: 0, stages: 0, turnList: [], stageList: [], unreadable: "custody journal unreadable" }));
+    expect(line(el)?.dataset.work).toBe("unavailable");
+    expect(text(section(el, "update"))).toContain("Cannot read agent activity: custody journal unreadable");
+    expect(text(section(el, "update"))).not.toMatch(/running: 0/);
+  });
+
+  test("a snapshot read without the work says nothing about it", () => {
+    const el = render(snapshot(available()));
+    expect(line(el)).toBeNull();
   });
 });
 
@@ -701,26 +742,26 @@ describe("done: counted per process, only once healthy on the build", () => {
 
   test("built and not running yet: the header stays amber and each process says it serves the old release", () => {
     const el = render(done({}, {}));
-    expect(text(el.querySelector('[data-outcome="done"]'))).toBe("Built a1b2c3d in 4 m 12 s. The running processes still serve the previous release. Restart web, then the runtime host, to run it.");
-    expect(text(el.querySelector("[data-status]"))).toBe("a1b2c3d is built and not running yet · restart web and the runtime host to run it · checked 12:04");
+    expect(text(el.querySelector('[data-outcome="done"]'))).toBe("Built a1b2c3d in 4 m 12 s. The installation apply is pending verification of the launcher, web and runtime host.");
+    expect(text(el.querySelector("[data-status]"))).toBe("a1b2c3d is built · the installation apply is pending verification · checked 12:04");
     expect(text(section(el, "header"))).toContain("Built1.2.3 · a1b2c3d");
     expect([...el.querySelectorAll("[data-stale]")].map(text)).toEqual([
-      "Serves 7fb7345; a1b2c3d is built. Restart to run it.",
-      "Serves 7fb7345; a1b2c3d is built. Restart to run it.",
+      "Serves 7fb7345; a1b2c3d is built. Apply the whole installation together.",
+      "Serves 7fb7345; a1b2c3d is built. Apply the whole installation together.",
     ]);
   });
 
   test("web restarted onto it: web runs it, the runtime host is next", () => {
     const el = render(done({ revision: "a1b2c3d" }, {}));
-    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("Web runs it; restart the runtime host to run it there too.");
-    expect(text(el.querySelector("[data-status]"))).toBe("Web runs a1b2c3d; restart the runtime host to run it there too · checked 12:04");
+    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("The installation apply is pending verification of the launcher, web and runtime host.");
+    expect(text(el.querySelector("[data-status]"))).toBe("a1b2c3d is built · the installation apply is pending verification · checked 12:04");
     expect(text(section(el, "header"))).toContain("Web runs1.2.3 · a1b2c3d");
     expect(text(section(el, "header"))).toContain("Runtime host runs1.2.2 · 7fb7345");
   });
 
   test("a web process still starting on the build does not count yet", () => {
     const el = render(done({ revision: "a1b2c3d", state: "starting" }, {}, "restart-web"));
-    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("Web is restarting onto it.");
+    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("The installation apply is pending verification");
   });
 
   test("both on it: done, and the header is green", () => {
@@ -827,7 +868,7 @@ describe("managed install", () => {
 describe("the rest of the surface", () => {
   test("an install that cannot update itself says why and offers nothing", () => {
     const el = render(snapshot({ mode: "unsupported", unsupportedReason: "not-a-checkout" }));
-    expect(text(el)).toContain("This Delegatus install came from a package.");
+    expect(text(el)).toContain("This package needs launcher supervision.");
     expect(button(el, "check")).toBeNull();
   });
 
@@ -907,4 +948,156 @@ describe("the rest of the surface", () => {
     expect(text(section(el, "update")!.querySelector("h2"))).toBe("Оновити до a1b2c3d (1.2.3)");
     expect(text(button(el, "restart-web"))).toBe("Перезапустити веб");
   });
+});
+
+for (const locale of ["en", "uk"] as const) {
+  test(`install prerequisite renders a single service button in ${locale}`, () => {
+    setLocale(locale);
+    const container = render(snapshot({ action: { id: "restart-service", button: true, unit: "delegatus.service" } }));
+    expect(container.querySelector('[data-action="install-action"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Update it the way");
+    expect(container.textContent).not.toContain("Оновіть її так");
+  });
+}
+
+for (const locale of ["en", "uk"] as const) for (const id of ["restart-service", "start-service"] as const) test(`the ${id} card names the service it acts on in ${locale}`, () => {
+  setLocale(locale);
+  const el = render(snapshot({ action: { id, button: true, unit: "delegatus-fixture.service" } }));
+  expect(text(section(el, "install-action")!.querySelector("p"))).toContain("delegatus-fixture.service");
+  expect(text(section(el, "install-action"))).not.toContain("{unit}");
+});
+
+/* No published version names a revision yet, so a packaged install is told
+   what main told it: the version, and the package manager. */
+for (const locale of ["en", "uk"] as const) test(`a package update without a revision names the version and the package manager in ${locale}`, () => {
+  setLocale(locale);
+  const available = { version: "1.9.0", sha: "", short: "", date: "" };
+  const el = render(snapshot({ mode: "package", action: null, available, check: { ...idleCheck(), state: "update-available", relation: "behind", behind: 1 } }));
+  const card = section(el, "update")!;
+  expect(card.getAttribute("data-update")).toBe("package-manual");
+  expect(text(card.querySelector("h2"))).toContain("1.9.0");
+  expect(text(card.querySelector("h2"))).not.toContain("(");
+  expect(text(card)).toContain("bunx delegatus-cli@latest");
+  expect(button(el, "update")).toBeNull();
+  flushSync(() => root!.unmount()); root = null; host?.remove();
+  // A version that names its revision keeps the button, and the instruction beside it.
+  const verified = render(snapshot({ mode: "package", action: null, available: { ...available, sha: "a".repeat(40), short: "aaaaaaa" }, check: { ...idleCheck(), state: "update-available", relation: "behind", behind: 1 } }));
+  expect(section(verified, "update")!.getAttribute("data-update")).toBe("available");
+  expect(button(verified, "update")).not.toBeNull();
+  expect(text(verified.querySelector('[data-note="package-manual"]'))).toContain("bunx delegatus-cli@latest");
+  flushSync(() => root!.unmount()); root = null; host?.remove();
+  // A checkout is never told to use a package manager.
+  const checkout = render(snapshot({ available: { ...available, sha: "a".repeat(40), short: "aaaaaaa" }, check: { ...idleCheck(), state: "update-available", relation: "behind", behind: 1 } }));
+  expect(text(checkout)).not.toContain("bunx delegatus-cli@latest");
+});
+
+test.each(["en", "uk"] as const)("every install prerequisite is actionable and localized in %s", (language) => {
+  setLocale(language);
+  for (const id of ["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments", "secure-handoff"] as const) {
+    const hasButton = ["restart-service", "update-first", "start-service"].includes(id);
+    const el = render(snapshot({ mode: "unsupported", unsupportedReason: "no-launcher", action: { id, button: hasButton, command: "bun bin/cli.mjs --port 45123 --no-open" } }));
+    expect(Boolean(button(el, "install-action"))).toBe(hasButton);
+    expect(text(el)).not.toContain("Update it the way you installed it");
+    expect(text(el)).not.toContain("Оновіть її так, як її встановлювали");
+    flushSync(() => root!.unmount()); root = null; host?.remove();
+  }
+});
+
+for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
+  `confirmed update instructions describe immediate apply in ${mode}/${locale}, auto=%s`, enabled => {
+    setLocale(locale);
+    const s = snapshot({ mode, available: rev(NEW, "1.0.1"), check: { ...idleCheck(), state: "update-available" } });
+    s.auto = { ...s.auto!, enabled };
+    const copy = text(render(s).querySelector('[data-section="update"]'));
+    expect(copy).toContain(locale === "en" ? "After you confirm" : "Після підтвердження");
+    expect(copy).toContain(locale === "en" ? "launcher, web and runtime host" : "лаунчер, веб і runtime host");
+    expect(copy).not.toContain(locale === "en" ? "Nothing restarts" : "Нічого не перезапускається");
+    expect(copy).not.toContain(locale === "en" ? "next quiet moment" : "найближчої тихої миті");
+  },
+);
+
+for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
+  `apply failure copy preserves serving facts in ${mode}/${locale}, rollback=%s`, rolledBack => {
+    setLocale(locale);
+    const update = { ...idleUpdate(), state: "failed" as const, rolledBack, target: NEW, targetShort: NEW.slice(0, 7),
+      startedAt: new Date(NOW - 60_000).toISOString(), finishedAt: new Date(NOW).toISOString(),
+      steps: [...pendingSteps(CHECKOUT_STEPS).map(step => ({ ...step, state: "done" as const })),
+        { ...pendingSteps(["switch"])[0]!, state: "failed" as const, failure: { kind: "error" as const, text: "candidate health failed" } }] };
+    const el = render(snapshot({ mode, update }));
+    const copy = text(el.querySelector('[data-outcome="failed"]'));
+    expect(copy).not.toContain(locale === "en" ? "running processes were not touched" : "Запущені процеси не зачеплено");
+    expect(copy).toContain(locale === "en" ? "Update stopped" : "Оновлення зупинилося");
+    if (rolledBack) expect(copy).toContain(locale === "en" ? "The previous release serves again" : "знову працює попередній реліз");
+  },
+);
+
+for (const locale of ["en", "uk"] as const) test(`Windows terminal prerequisite describes every update in ${locale}`, async () => {
+  const { installAction } = await import("../../lib/selfUpdate/actions");
+  setLocale(locale);
+  const action = await installAction({ mode: "checkout", reason: null, record: {
+    launcher: { pid: 12, startIdentity: "synthetic-owner" }, checkout: "/srv/fixture", releasePointer: "/srv/fixture/pointer", port: 45123,
+  } } as never, { cgroup: () => "", ready: () => true, platform: "win32", env: {} });
+  const el = render(snapshot({ action }));
+  expect(text(el)).toContain(locale === "en" ? "For each update" : "Для кожного оновлення");
+  expect(text(el)).not.toContain(locale === "en" ? "once to enable one-click" : "один раз");
+});
+
+
+for (const locale of ["en", "uk"] as const) for (const actionId of ["restart-service", "restart-terminal", "windows-terminal", "full-apply"] as const)
+for (const state of ["ready", "done"] as const) test(`whole-installation ${actionId}/${state} has no partial update instruction in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ installed: NEW_REV, check: { ...idleCheck(), state: "up-to-date", at: AT },
+    action: actionId === "full-apply" ? null : { id: actionId === "windows-terminal" ? "restart-terminal" : actionId,
+      button: actionId === "restart-service", terminalEveryUpdate: actionId === "windows-terminal" },
+    update: { ...idleUpdate(CHECKOUT_STEPS), state: "done", target: NEW, targetShort: NEW.slice(0, 7), startedAt: AT, finishedAt: NEXT,
+      steps: [...pendingSteps(CHECKOUT_STEPS).map(step => ({ ...step, state: "done" as const })),
+        { ...pendingSteps(["switch"])[0]!, state: state === "done" ? "done" : "pending" }] } });
+  const el = render(s);
+  const copy = text(el.querySelector('[data-section="header"]')) + text(el.querySelector('[data-outcome="done"]'));
+  expect(copy).not.toMatch(/restart web|restart the runtime host|Restart web|перезапустіть веб|перезапустіть runtime host|Перезапустіть веб/);
+  for (const action of ["restart-web", "arm-host", "start-host", "confirm-host"]) expect(button(el, action)).toBeNull();
+});
+
+for (const locale of ["en", "uk"] as const) test(`coherent capable launcher retains per-role maintenance controls in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ action: null, installed: OLD_REV });
+  const el = render(s);
+  expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
+});
+
+
+for (const locale of ["en", "uk"] as const) for (const id of ["restart-service", "restart-terminal", "secure-handoff"] as const)
+test(`launcher prerequisite still owns apply when both children serve the build: ${id}/${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ installed: NEW_REV, serving: { web: NEW_REV, runtimeHost: NEW_REV },
+    processes: { web: proc("web", { revision: NEW_REV.short }), runtimeHost: proc("runtimeHost", { revision: NEW_REV.short }) },
+    action: { id, button: id === "restart-service" },
+    update: { ...idleUpdate(CHECKOUT_STEPS), state: "done", target: NEW, targetShort: NEW_REV.short, startedAt: AT, finishedAt: NEXT } });
+  const el = render(s);
+  expect(button(el, "restart-web")).toBeNull(); expect(button(el, "arm-host")).toBeNull();
+  expect(text(el.querySelector('[data-outcome="done"]'))).toContain(locale === "en" ? "installation action above" : "дією для встановлення вище");
+});
+
+
+for (const locale of ["en", "uk"] as const) test(`current Windows launcher keeps its legitimate maintenance controls in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ action: { id: "restart-terminal", button: false, terminalEveryUpdate: true } });
+  s.meta = { ...s.meta, launcherRevision: OLD, maintenanceRestart: true };
+  const el = render(s);
+  expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
+});
+for (const locale of ["en", "uk"] as const) test(`a backend maintenance refusal is not offered as a button in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot(); s.meta.maintenanceRestart = false;
+  const el = render(s);
+  expect(button(el, "restart-web")).toBeNull(); expect(button(el, "arm-host")).toBeNull();
+});
+
+
+for (const locale of ["en", "uk"] as const) test(`current package without a checkout SHA keeps maintenance in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ mode: "package", action: null });
+  s.meta = { ...s.meta, launcherRevision: null, maintenanceRestart: true };
+  const el = render(s);
+  expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
 });

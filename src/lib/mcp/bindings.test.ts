@@ -26,6 +26,8 @@ import { DeadlineExceededError } from "@/lib/deadline";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/corpus";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { statePath } from "@/lib/configDir";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
@@ -35,6 +37,7 @@ import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { claimInstall } from "@/lib/team/members";
+import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
@@ -440,6 +443,29 @@ test("Telegram spawn grants use the server-attributed seat, never a worker-suppl
   const worker = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
     kind: "agent", conversationId: "conversation_worker", role: "builder",
   }) } as never).spawn_agent;
+  /* Where Telegram is not set up there is no grant to guard: the request goes
+     on to admission, which leaves the server out. */
+  await worker({ ...args, clientRequestId: "worker-telegram-not-set-up" });
+  expect(dispatched).toHaveLength(1);
+  dispatched.length = 0;
+  const session = saveTelegramSession("placeholder-session-for-bindings-test");
+  writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+    identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
+  try {
+    await telegramGrantRefusals(worker, args, control, dispatched, seatId);
+  } finally {
+    deleteTelegramSession();
+    clearTelegramConnection();
+  }
+});
+
+async function telegramGrantRefusals(
+  worker: (args: Record<string, unknown>) => Promise<unknown>,
+  args: Record<string, unknown>,
+  control: { post(pathname: string, body: Record<string, unknown>): Promise<Record<string, unknown>> },
+  dispatched: Record<string, unknown>[],
+  seatId: string,
+): Promise<void> {
   await expect(worker(args)).rejects.toThrow("only by the operator or their orchestrator seat");
   expect(dispatched).toHaveLength(0);
 
@@ -465,7 +491,7 @@ test("Telegram spawn grants use the server-attributed seat, never a worker-suppl
   await expect(deputy({ ...args, clientRequestId: "deputy-telegram-child" }))
     .rejects.toThrow("seat's own spawn capability");
   expect(dispatched).toHaveLength(1);
-});
+}
 
 test("gateway spawn with no MCP selection sends the Viewer baseline explicitly", async () => {
   const dispatched: Record<string, unknown>[] = [];
@@ -494,6 +520,17 @@ test("automatic drain refuses autonomous spawns and permits operator launches", 
     await expect(as("manager")({ ...args, clientRequestId: "held-seat" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
     expect(spawns).toBe(0);
     await expect(as("agent")({ ...args, clientRequestId: "held-helper" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    // The refusal names what the update waits for, from the blockers its last probe recorded (#2515).
+    const autoFile = statePath("self-update", "auto.json");
+    const blockers = { turns: 2, stages: 1, operatorActiveAt: null, busy: false, unreadable: null, memoryMb: null };
+    writeAuto(autoFile, { ...initialAuto(), enabled: true, lastBlockers: blockers });
+    try {
+      await expect(as("agent")({ ...args, clientRequestId: "held-named" })).rejects.toMatchObject({
+        message: "new launches are held while the automatic update waits for 2 running turns and 1 pipeline stage to finish",
+        details: { code: "launch_held_for_update", target: "a".repeat(40), waitingFor: "2 running turns and 1 pipeline stage to finish", blockers },
+      });
+    } finally { fs.rmSync(autoFile, { force: true }); }
+    expect(spawns).toBe(0);
     await as("gateway")({ ...args, clientRequestId: "allowed-operator" });
     expect(spawns).toBe(1);
   } finally { releaseDrain(file, "mcp-test"); }
@@ -686,14 +723,18 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
     },
   }, designatedSeat);
 
+  /* `/repo` is no project of this seat's, so the launch quotes the operator's
+     request for it (#2518); the quote never reaches the spawn route. */
   await bindings.spawn_agent({
     clientRequestId: "spawn-http-control",
     cwd: "/repo",
     ["prompt"]: "implement",
     title: "Implement durable identity",
     mcpServers: ["viewer", "agent-browser"],
+    crossProjectRequest: "Start the builder in that repository yourself.",
   });
   expect(requests[0]?.body.title).toBe("Implement durable identity");
+  expect(requests[0]?.body).not.toHaveProperty("crossProjectRequest");
   const exactMessage = " \tcontinue\nПривіт 🌍\n ";
   await bindings.send_message({
     clientRequestId: "send-http-control",
@@ -4517,4 +4558,41 @@ test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries
   const spawn = viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_fixture_caller", role: "builder" }) } as never).spawn_agent;
   await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
   expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
+});
+
+test("MCP apply-now forwards the actor and returns the runtime switch acknowledgement", async () => {
+  let captured: unknown;
+  const runtimeSwitch = { id: "runtime-switch-1", phase: "requested", mode: "fork" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async (_id: string, body: unknown, _ports: unknown, actor: unknown) => { captured = { body, actor }; return { pipeline: { id: "pipeline_1", state: "running", taskIds: [] }, runtimeSwitch }; },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, { claim: async () => ({ kind: "fresh" }), complete: async () => {} } as never);
+  const answer = await service.callTool("pipeline_action", { clientRequestId: "runtime-apply", pipelineId: "pipeline_1", action: "override-stage", stageId: "build", model: "gpt-6.1-sol", applyNow: true });
+  expect(captured).toMatchObject({ body: { applyNow: true, model: "gpt-6.1-sol" }, actor: { kind: "agent", conversationId: "conversation_orchestrator" } });
+  expect(answer).toMatchObject({ ok: true, runtimeSwitch });
+});
+
+test.each([
+  { id: "restart-service", button: true, unit: "delegatus.service" },
+  { id: "start-service", button: true, unit: "delegatus.service" },
+  { id: "restart-terminal", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" },
+  { id: "restart-terminal", button: false, command: "& 'bun' 'bin/cli.mjs' --port 45123 --no-open", terminalEveryUpdate: true },
+  { id: "start-launcher", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" },
+  { id: "update-first", button: true },
+  { id: "docker-deployments", button: false, command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" },
+  { id: "secure-handoff", button: false },
+] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+  try {
+    const bindings = viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
+      callerProject: () => "proj-a", viewerProjects: () => ["proj-a"],
+      authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
+    } as never);
+    const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
+    expect(error).toBeInstanceOf(McpToolRefusal);
+    expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
+  } finally { globalThis.fetch = originalFetch; }
 });

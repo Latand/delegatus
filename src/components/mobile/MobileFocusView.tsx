@@ -129,6 +129,8 @@ interface Props {
   focus: string | null;
   onSelect: (file: FileEntry) => void;
   onClose: (path: string) => void;
+  /** Restore durable board membership by path from a Close card receipt. */
+  onReopen?: (path: string) => void;
   onDraftClose: (id: string) => void;
   onDraftSpawned: (id: string, file: FileEntry) => void;
   /** The operator opened this conversation full-pane, the same signal
@@ -186,7 +188,7 @@ interface Props {
  * not loaded — the same shell renders the board leaf, which lane 2 fills with
  * the board list.
  */
-export function MobileFocusView({ project, projectName, groups, manual, files, flows, reviewGroups = [], pipelines, surfacePipelines = [], tasks, sheetTasks, drafts, favorites, isolatedManualPaths = EMPTY_PATHS, loaded, focus, onSelect, onClose, onDraftClose, onDraftSpawned, onConversationOpened, shellHost = null, renderBoardSheet, onOpenSearch, hostTaskCount = 0, onHandoff, onOpenTask, alert }: Props) {
+export function MobileFocusView({ project, projectName, groups, manual, files, flows, reviewGroups = [], pipelines, surfacePipelines = [], tasks, sheetTasks, drafts, favorites, isolatedManualPaths = EMPTY_PATHS, loaded, focus, onSelect, onClose, onReopen, onDraftClose, onDraftSpawned, onConversationOpened, shellHost = null, renderBoardSheet, onOpenSearch, hostTaskCount = 0, onHandoff, onOpenTask, alert }: Props) {
   const { t } = useLocale();
   /* The screen is mounted INSIDE the project board's shell (lane 2 pushes it
      when a conversation reaches the top of the stack), so the badge, the
@@ -627,7 +629,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           onOpenProjectMenu={boardSheet ? () => setMenuFace("board") : undefined}
           projectName={displayName}
           onCloseCard={() => onClose(activeFile.path)}
-          onReopen={() => onSelect(activeFile)}
+          onReopen={onReopen ? () => onReopen(activeFile.path) : undefined}
           onClose={close}
         />
       );

@@ -1520,3 +1520,7 @@ Choose review rounds from risk = consequences × probability: low risk 1;
 normal risk 2; high risk (data loss, security, production, runtime host,
 migrations) 3. The default is 3. More than 3 only when the operator asks;
 state the reason in the brief. Stored limits remain unchanged.
+
+## Task prototype publication
+
+Design and UI stages publish variants through `publish_prototype_review`, using a directory of driver frames or the full frames, originals, captions and videos form; the pipeline binds publication to its task automatically, and agents read the saved choice through `read_prototype_review`.

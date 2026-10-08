@@ -13,6 +13,9 @@ import {
   MOBILE_COMPOSER_UNIT_CHROME_PX,
   mobileComposerCeiling,
   mobileComposerUnitMax,
+  SEAT_TRANSCRIPT_FLOOR_PX,
+  seatComposerBudget,
+  seatGrowth,
   shouldPin,
   visibleViewportHeight,
 } from "./composerScroll";
@@ -262,6 +265,105 @@ describe("cardComposerCeiling — the card field yields to the region it shares 
   test("an unmeasured or indefinite box falls back to the fixed cap, exactly as before", () => {
     expect(cardComposerCeiling(0, 4)).toBe(COMPOSER_MAX_PX);
     expect(cardComposerCeiling(-1, 1)).toBe(COMPOSER_MAX_PX);
+  });
+});
+
+describe("the orchestrator seat's own budget (#1734)", () => {
+  /* Measured on the rendered seat: a 270 px seat leaves its conversation 165 px,
+     of which the control strip takes 37; a 675 px one leaves 570. */
+  test("the card budget is what left a compact seat two rows: it is negative there", () => {
+    expect(cardComposerBudget(165)).toBeLessThan(0);
+    expect(cardComposerCeiling(165, 0)).toBe(44);
+  });
+
+  test("a compact seat that can grow gives the field its whole cap", () => {
+    const budget = seatComposerBudget({ boxHeight: 165, room: 675 - 270, rows: 37 });
+    expect(budget).toBe(165 + 405 - 37 - SEAT_TRANSCRIPT_FLOOR_PX);
+    expect(cardComposerCeiling(165, 0, budget)).toBe(COMPOSER_MAX_PX);
+  });
+
+  test("a seat already at its grip's stop borrows from the transcript, down to its minimum", () => {
+    /* 1280 x 600: the default seat is 450 px, its conversation 345. */
+    const budget = seatComposerBudget({ boxHeight: 345, room: 0, rows: 37 });
+    expect(budget).toBe(236);
+    expect(cardComposerCeiling(345, 0, budget)).toBe(COMPOSER_MAX_PX);
+    /* A window too short for the cap: the field takes what is left over the minimum. */
+    const short = seatComposerBudget({ boxHeight: 240, room: 0, rows: 37 });
+    expect(cardComposerCeiling(240, 0, short)).toBe(240 - 37 - SEAT_TRANSCRIPT_FLOOR_PX - 65);
+  });
+
+  test("the budget stands still while the seat grows: the box gains what the room loses", () => {
+    const before = seatComposerBudget({ boxHeight: 165, room: 405, rows: 37 });
+    const after = seatComposerBudget({ boxHeight: 165 + 132, room: 405 - 132, rows: 37 });
+    expect(after).toBe(before);
+  });
+
+  test("the accessory region's reserve comes off the seat's budget as it does a card's", () => {
+    const budget = seatComposerBudget({ boxHeight: 240, room: 0, rows: 37 });
+    expect(cardComposerCeiling(240, 1, budget)).toBe(Math.max(44, budget - 65 - accessoryReserve(1, budget)));
+  });
+
+  test("negative room and negative rows count as none", () => {
+    expect(seatComposerBudget({ boxHeight: 300, room: -20, rows: -3 })).toBe(300 - SEAT_TRANSCRIPT_FLOOR_PX);
+  });
+});
+
+describe("seatGrowth — how far past its set height the seat has to be (#1734)", () => {
+  test("a seat with transcript to spare does not grow", () => {
+    expect(seatGrowth({ grown: 0, transcriptHeight: 441.5, overflow: 0, room: 0 })).toBe(0);
+    expect(seatGrowth({ grown: 0, transcriptHeight: 300, overflow: 0, room: 400 })).toBe(0);
+  });
+
+  test("a form that cannot show its content is what the seat adds, in one step", () => {
+    expect(seatGrowth({ grown: 0, transcriptHeight: 72, overflow: 82, room: 405 })).toBe(82);
+    expect(seatGrowth({ grown: 82, transcriptHeight: 72, overflow: 0, room: 405 })).toBe(82);
+    expect(seatGrowth({ grown: 82, transcriptHeight: 72, overflow: 36, room: 405 })).toBe(118);
+  });
+
+  test("a transcript back above its minimum gives the growth back, and never more than was added", () => {
+    expect(seatGrowth({ grown: 118, transcriptHeight: 72 + 54, overflow: 0, room: 405 })).toBe(64);
+    expect(seatGrowth({ grown: 40, transcriptHeight: 72 + 200, overflow: 0, room: 405 })).toBe(0);
+  });
+
+  test("the grip's stop is the limit", () => {
+    expect(seatGrowth({ grown: 0, transcriptHeight: 72, overflow: 300, room: 180 })).toBe(180);
+    expect(seatGrowth({ grown: 50, transcriptHeight: 72, overflow: 10, room: 0 })).toBe(0);
+    expect(seatGrowth({ grown: 0, transcriptHeight: 72, overflow: 10, room: -5 })).toBe(0);
+  });
+
+  test("half a px of slack is not traded back and forth", () => {
+    /* 72.5 px of transcript: giving 0.5 back would cut the form by the same half px and add it again. */
+    expect(seatGrowth({ grown: 82, transcriptHeight: 72.5, overflow: 0, room: 405 })).toBe(82);
+    expect(seatGrowth({ grown: 82, transcriptHeight: 73, overflow: 0, room: 405 })).toBe(81);
+    expect(seatGrowth({ grown: 81, transcriptHeight: 72, overflow: 0, room: 405 })).toBe(81);
+  });
+
+  test("repeated on the layout it produced, the step settles where the form shows everything", () => {
+    /* The seat dragged to the grip's lower stop, in the numbers measured at
+       1440 × 900: 105.4 px of header above the conversation, a 37 px control
+       strip, a form that needs 90.6 px. The conversation is 54.6 px, less than
+       the transcript's minimum and the strip, so the form has no height and
+       reports only its own content as overflow. */
+    const above = 105.4, strip = 37, needs = 90.6, set = 160, room = 515;
+    const layout = (grown: number) => {
+      const box = set + grown - above;
+      const form = Math.max(0, Math.min(needs, box - SEAT_TRANSCRIPT_FLOOR_PX - strip));
+      return { transcriptHeight: Math.max(SEAT_TRANSCRIPT_FLOOR_PX, box - strip - form), overflow: needs - form };
+    };
+    const first = seatGrowth({ grown: 0, ...layout(0), room });
+    expect(first).toBe(91);
+    expect(layout(first).overflow).toBeGreaterThan(50);
+    let grown = first;
+    let steps = 1;
+    for (; steps < 8; steps += 1) {
+      const next = seatGrowth({ grown, ...layout(grown), room });
+      if (next === grown) break;
+      grown = next;
+    }
+    expect(steps).toBe(2);
+    expect(set + grown).toBe(305);
+    expect(layout(grown).overflow).toBeLessThanOrEqual(0);
+    expect(layout(grown).transcriptHeight).toBeGreaterThanOrEqual(SEAT_TRANSCRIPT_FLOOR_PX);
   });
 });
 

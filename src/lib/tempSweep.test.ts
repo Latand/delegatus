@@ -1,18 +1,21 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import {
+  isOwnedTempConsumerName,
   isOwnedTempName,
   recordTempSweep,
+  runTempSweep,
   scanProcesses,
   startTempSweep,
   stopTempSweep,
   sweepRoots,
   sweepStaleTempDirs,
   tempSweepMaxAgeMs,
+  tempSweepStatus,
   writableRoots,
   type ProcessScan,
 } from "./tempSweep";
@@ -63,9 +66,11 @@ async function started(child: ChildProcess): Promise<ChildProcess> {
 test("owned names are llv-* and three legacy test prefixes; shared roots and foreign names are not", () => {
   for (const name of ["llv-test-run-a1B2c3", "llv-registry-x", "llv-stage-abc", "llv-issue-1641-q", "pending-producer-a", "inflight-producer-b", "child-owner-c"]) {
     expect(isOwnedTempName(name)).toBeTrue();
+    expect(isOwnedTempConsumerName(name)).toBeTrue();
   }
   for (const name of ["llv-spawn-sandbox", "llv-tmux-cwd", "llv-", "rv2191-png", "rev-state", "pulse-PKdhtXMmr18n", "playwright_chromiumdev_profile-x", "claude-1000", "tmux-1000", "systemd-private-x"]) {
     expect(isOwnedTempName(name)).toBeFalse();
+    expect(isOwnedTempConsumerName(name)).toBe(["llv-spawn-sandbox", "llv-tmux-cwd"].includes(name));
   }
 });
 
@@ -75,6 +80,23 @@ test("the threshold defaults to 24 h, reads hours from the environment, and 0 tu
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "6" })).toBe(6 * HOUR);
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "0" })).toBeNull();
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "soon" })).toBe(DAY);
+});
+
+test.each(["checkout", "bare"])("an owned stale temp tree preserves a %s repository inside dependencies", async kind => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-private-dependencies", 2 * DAY);
+  const repository = path.join(directory, "node_modules/pkg");
+  if (kind === "checkout") {
+    fs.mkdirSync(path.join(repository, ".git"));
+    fs.writeFileSync(path.join(repository, ".git/HEAD"), "ref: refs/heads/private\n");
+  } else {
+    fs.mkdirSync(path.join(repository, "objects"));
+    fs.writeFileSync(path.join(repository, "HEAD"), "ref: refs/heads/private\n");
+  }
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY });
+  expect(report.removed).toHaveLength(0);
+  expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "git-checkout" })]);
+  expect(fs.readFileSync(path.join(repository, "index.js"), "utf8")).toBe("x".repeat(8192));
 });
 
 test("a sweep removes old owned directories and keeps young, foreign, shared, in-use and worktree ones", async () => {
@@ -128,6 +150,49 @@ test("a directory that is old but had a new entry written into it is still young
   const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] } });
   expect(report.removed).toEqual([]);
   expect(report.kept.young).toBe(1);
+});
+
+test.each(["young", "inUse", "deferred"] as const)("temp summaries measure %s holds once across root aliases", async reason => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-accounted-hold", reason === "young" ? 2 * HOUR : 2 * DAY);
+  const payload = path.join(directory, "file.txt");
+  fs.writeFileSync(payload, Buffer.alloc(256 * 1024, 1));
+  const when = new Date(Date.now() - (reason === "young" ? 2 * HOUR : 2 * DAY));
+  fs.utimesSync(payload, when, when);
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }, { path: root, via: "" }],
+    scan: { ownNamespace: null, processes: reason === "inUse" ? [{ pid: 1, namespace: null, stamped: true, paths: [directory] }] : [] },
+    maxRemovals: reason === "deferred" ? 0 : undefined });
+  expect(report.kept[reason]).toBe(1);
+  expect(report.removed).toEqual([]);
+  expect(tempSweepStatus(report)).toHaveProperty(`keptBytes.${reason}`, expect.any(Number));
+  expect(tempSweepStatus(report)?.keptBytes?.[reason]).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
+  const single = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
+    scan: { ownNamespace: null, processes: reason === "inUse" ? [{ pid: 1, namespace: null, stamped: true, paths: [directory] }] : [] },
+    maxRemovals: reason === "deferred" ? 0 : undefined });
+  expect(tempSweepStatus(report)).toHaveProperty("keptBytes", tempSweepStatus(single)?.keptBytes);
+  expect(fs.readFileSync(payload)).toEqual(Buffer.alloc(256 * 1024, 1));
+});
+
+test("young nested temp allocations belong to their retention reason", async () => {
+  const root = tempRoot();
+  const parent = aged(root, "llv-outer-export", 3 * DAY);
+  const jobs = path.join(parent, "jobs");
+  fs.mkdirSync(jobs);
+  const child = aged(jobs, "llv-inner-export", 2 * HOUR);
+  const payload = path.join(child, "file.txt");
+  fs.writeFileSync(payload, Buffer.alloc(256 * 1024, 1));
+  fs.writeFileSync(path.join(parent, ".git"), "gitdir: retained metadata");
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [jobs, path.join(parent, ".git"), parent]) fs.utimesSync(entry, old, old);
+  const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY };
+  const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: jobs, via: "" }, { path: root, via: "" }] });
+  expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0 });
+  expect(report.keptBytes?.young).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
+  expect(report.keptBytes?.worktree).toBeGreaterThan(0);
+  expect(Object.values(report.keptBytes!).reduce((sum, bytes) => sum + bytes, 0)).toBe(single.keptBytes!.worktree);
+  expect(report.held?.[0]?.bytes).toBe(report.keptBytes?.worktree);
+  expect(fs.readFileSync(payload)).toEqual(Buffer.alloc(256 * 1024, 1));
 });
 
 test("a sweep stops at its removal budget and a directory another user owns is never a candidate", async () => {
@@ -235,8 +300,38 @@ test("a sweep is recorded as its report and one journal line per removed directo
       errors: [],
     });
     expect(JSON.parse(fs.readFileSync(path.join(state, "temp-sweep-report.json"), "utf8")).removedBytes).toBe(4096);
+    expect(tempSweepStatus()).toMatchObject({ removed: 1, removedBytes: 4096, heldCounts: {}, heldBytes: {} });
     const journal = fs.readFileSync(path.join(state, "temp-sweep-journal.ndjson"), "utf8").trim().split("\n");
     expect(journal.map((line) => JSON.parse(line).path)).toEqual(["/var/tmp/llv-test-run-a"]);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("the resources temp summary names Git and inspection holds with bytes and no paths", () => {
+  const state = tempRoot();
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    expect(tempSweepStatus()).toBeNull();
+    recordTempSweep({
+      at: "2026-10-06T10:00:00Z", maxAgeHours: 24, roots: ["/var/tmp"], removed: [], removedBytes: 0,
+      kept: { young: 0, inUse: 0, worktree: 3, deferred: 0 }, errors: [],
+      held: [
+        { path: "/var/tmp/llv-repo", via: "", reason: "git-checkout", bytes: 4096 },
+        { path: "/var/tmp/llv-repo-other", via: "/proc/42/root", reason: "git-checkout", bytes: 8192 },
+        { path: "/var/tmp/llv-private", via: "", reason: "unreadable-tree", bytes: 1024 },
+      ],
+    });
+    const summary = tempSweepStatus();
+    expect(summary).toMatchObject({
+      heldCounts: { "git-checkout": 2, "unreadable-tree": 1 },
+      heldBytes: { "git-checkout": 12288, "unreadable-tree": 1024 },
+    });
+    expect(summary?.summary).toContain("held 3 for Git preservation or tree inspection");
+    expect(JSON.stringify(summary)).not.toContain("/var/tmp");
+    expect(JSON.stringify(summary)).not.toContain("/proc");
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -261,4 +356,273 @@ test("the sweep clock starts once, waits for boot, and re-arms only after a swee
   finish();
   await Bun.sleep(0);
   expect(scheduled.map((entry) => entry.delayMs)).toEqual([300_000, HOUR]);
+});
+
+test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside an owned temp root stays for Git preservation checks", async role => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-stage-role", 3 * DAY);
+  const checkout = path.join(directory, role, "checkout");
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.writeFileSync(path.join(checkout, ".git"), "gitdir: fixture repository metadata");
+  fs.writeFileSync(path.join(checkout, "local-work.txt"), "unpublished work");
+  const when = new Date(Date.now() - 3 * DAY);
+  fs.utimesSync(path.join(directory, role), when, when); fs.utimesSync(directory, when, when);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
+  expect(report.removed).toHaveLength(0);
+  expect(report.kept.worktree).toBe(1);
+  expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "git-checkout", bytes: expect.any(Number) })]);
+  expect(fs.readFileSync(path.join(checkout, "local-work.txt"), "utf8")).toBe("unpublished work");
+});
+
+test.each(["container", "inside-checkout", "aliased-container"])("a protected pipeline attributes %s temp allocations once", async layout => {
+  const root = tempRoot();
+  const container = aged(root, "llv-review-export", 3 * DAY);
+  const checkout = path.join(container, "checkout");
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, "source.txt"), Buffer.alloc(262144, 1));
+  const log = path.join(container, "role.log");
+  fs.writeFileSync(log, Buffer.alloc(262144, 2));
+  let temp = root;
+  if (layout === "inside-checkout") {
+    temp = path.join(checkout, "scratch");
+    fs.mkdirSync(temp);
+    aged(temp, "llv-review-export", 3 * DAY);
+  }
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [checkout, log, container]) fs.utimesSync(entry, old, old);
+  const owned = layout === "aliased-container" ? path.join(root, "checkout-alias") : checkout;
+  if (owned !== checkout) fs.symlinkSync(checkout, owned, "dir");
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: temp, via: "" }],
+    scan: { ownNamespace: null, processes: [] }, worktrees: [owned], accountedWorktrees: [owned] });
+  const status = tempSweepStatus(report)!;
+  expect(report.removed).toEqual([]);
+  expect(report.held).toHaveLength(1);
+  const bytes = Object.values(status.heldBytes).reduce((sum, value) => sum + value, 0);
+  if (layout !== "inside-checkout") {
+    expect(bytes).toBeGreaterThanOrEqual(fs.statSync(log).blocks * 512);
+    expect(bytes).toBeLessThan(fs.statSync(path.join(checkout, "source.txt")).blocks * 512 + fs.statSync(log).blocks * 512);
+  } else expect(bytes).toBe(0);
+  expect(fs.existsSync(log)).toBeTrue();
+  expect(fs.existsSync(path.join(checkout, "source.txt"))).toBeTrue();
+});
+
+test.each(["process", "process-alias", "pipeline", "activity", "parent-redirect", "replacement"])("temp cleanup retains %s acquired during measurement", async change => {
+  const root = tempRoot();
+  const external = tempRoot();
+  const directory = aged(root, "llv-late-owner", 3 * DAY);
+  const scan: ProcessScan = { ownNamespace: null, processes: [] };
+  let worktrees: string[] = [];
+  const original = fs.promises.readdir;
+  let injected = false;
+  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+    const entries = await original(...args);
+    if (String(args[0]) === directory && !injected) {
+      injected = true;
+      if (change === "process") scan.processes.push({ pid: 456789, namespace: null, stamped: true, paths: [path.join(directory, "file.txt")] });
+      else if (change === "process-alias") {
+        const alias = path.join(external, "active-alias");
+        fs.symlinkSync(directory, alias, "dir");
+        scan.processes.push({ pid: 456789, namespace: null, stamped: true, paths: [path.join(alias, "pending")] });
+      }
+      else if (change === "pipeline") worktrees = [directory];
+      else if (change === "activity") fs.writeFileSync(path.join(directory, "new.txt"), "new output");
+      else if (change === "parent-redirect") {
+        fs.renameSync(root, path.join(external, "original"));
+        const target = aged(external, "llv-late-owner", 3 * DAY);
+        fs.writeFileSync(path.join(target, "file.txt"), "external evidence");
+        const old = new Date(Date.now() - 3 * DAY);
+        fs.utimesSync(path.join(target, "file.txt"), old, old);
+        fs.symlinkSync(external, root, "dir");
+      } else {
+        fs.renameSync(directory, path.join(external, "original"));
+        aged(root, "llv-late-owner", 3 * DAY);
+      }
+    }
+    return entries;
+  }) as typeof fs.promises.readdir);
+  try {
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan, currentWorktrees: () => worktrees, maxAgeMs: DAY });
+    expect(injected).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
+    if (change === "process" || change === "process-alias") expect(report.kept.inUse).toBe(1);
+    if (change === "pipeline") expect(report.kept.worktree).toBe(1);
+    if (change === "activity") {
+      expect(report.kept.young).toBe(1);
+      expect(fs.readFileSync(path.join(directory, "new.txt"), "utf8")).toBe("new output");
+    }
+    if (change === "parent-redirect") expect(fs.readFileSync(path.join(directory, "file.txt"), "utf8")).toBe("external evidence");
+  } finally { read.mockRestore(); }
+});
+
+test.skipIf(process.platform !== "linux").each(["cwd", "file"])("production temp cleanup refreshes a real late %s holder", async holder => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-late-live", 3 * DAY);
+  const original = fs.promises.readdir;
+  let injected = false;
+  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+    const result = await original(...args);
+    if (String(args[0]) === directory && !injected) {
+      injected = true;
+      if (holder === "cwd") await started(spawn("sleep", ["60"], { cwd: directory }));
+      else await started(spawn("sh", ["-c", 'exec 3<"$1"; exec sleep 60', "fixture", path.join(directory, "file.txt")], { cwd: root }));
+    }
+    return result;
+  }) as typeof fs.promises.readdir);
+  try {
+    const report = (await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots: [{ path: root, via: "" }] }))!;
+    expect(injected).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(report.kept.inUse).toBe(1);
+    expect(fs.readFileSync(path.join(directory, "file.txt"), "utf8")).toBe("export");
+  } finally { read.mockRestore(); }
+});
+
+for (const recycled of [false, true]) test.skipIf(process.platform !== "linux")(`production temp cleanup discovers an idle host and holds a recycled view ${recycled}`, async () => {
+  const root = tempRoot(), canonical = path.join(root, "container"), host = path.join(root, "host");
+  fs.mkdirSync(canonical);
+  const actualRoot = host + canonical;
+  fs.mkdirSync(actualRoot, { recursive: true });
+  const stale = aged(actualRoot, "llv-idle-output", 3 * DAY);
+  const checkout = aged(actualRoot, "llv-idle-export", 3 * DAY);
+  fs.mkdirSync(path.join(checkout, ".git"));
+  fs.writeFileSync(path.join(checkout, ".git/HEAD"), "ref: refs/heads/main\n");
+  const shared = path.join(actualRoot, "llv-spawn-sandbox");
+  fs.mkdirSync(shared); fs.writeFileSync(path.join(shared, "config"), "shared state");
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [path.join(checkout, ".git/HEAD"), path.join(checkout, ".git"), checkout, path.join(shared, "config"), shared]) fs.utimesSync(entry, old, old);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  let namespace = "mnt:[12345]", changed = false;
+  const readlink = fs.readlinkSync;
+  const patches: { mockRestore(): void }[] = [spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink)];
+  const map = (file: fs.PathLike) => typeof file === "string" && (file === "/proc/1/root" || file.startsWith("/proc/1/root/"))
+    ? host + file.slice("/proc/1/root".length) : file;
+  for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync", "readFileSync", "existsSync", "rmSync"] as const) {
+    const original = fs[method];
+    patches.push(spyOn(fs, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+      Reflect.apply(original, fs, [map(file), ...args])) as typeof original));
+  }
+  for (const method of ["stat", "readdir", "lstat", "rm"] as const) {
+    const original = fs.promises[method];
+    patches.push(spyOn(fs.promises, method).mockImplementation((async (file: fs.PathLike, ...args: unknown[]) => {
+      const result = await Reflect.apply(original, fs.promises, [map(file), ...args]);
+      if (recycled && method === "readdir" && String(map(file)) === stale && !changed) { changed = true; namespace = "mnt:[67890]"; }
+      return result;
+    }) as typeof original));
+  }
+  try {
+    const report = (await runTempSweep({ NODE_ENV: "test", LLV_DOCKER_NSENTER_SHIMS: "1", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" },
+      { roots: [{ path: canonical, via: "" }], scan: { ownNamespace: "mnt:[container]", processes: [] } }))!;
+    expect(fs.existsSync(stale)).toBe(recycled);
+    if (recycled) { expect(changed).toBe(true); expect(report.removed).toEqual([]); }
+    else {
+      expect(report.removed).toHaveLength(1);
+      expect(report.held).toContainEqual(expect.objectContaining({ reason: "git-checkout" }));
+    }
+    expect(fs.readFileSync(path.join(checkout, "file.txt"), "utf8")).toBe("export");
+    expect(fs.readFileSync(path.join(shared, "config"), "utf8")).toBe("shared state");
+  } finally {
+    for (const patch of patches.reverse()) patch.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("an unreadable temp tree stays with an explicit inspection hold", async () => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-unreadable", 3 * DAY);
+  const original = fs.readdirSync;
+  const read = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]) === directory) throw new Error("fixture access denied");
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY });
+    expect(report.removed).toEqual([]);
+    expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "unreadable-tree" })]);
+    expect(fs.existsSync(directory)).toBe(true);
+  } finally { read.mockRestore(); }
+});
+
+test("an empty .git marker a cache writes is not a checkout, and its stale root goes", async () => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-stage-cache", 3 * DAY);
+  const cache = path.join(directory, "tmp/uvcache/sdists-v9");
+  fs.mkdirSync(cache, { recursive: true });
+  fs.writeFileSync(path.join(cache, ".git"), "");
+  const when = new Date(Date.now() - 3 * DAY);
+  for (const entry of [cache, path.join(directory, "tmp/uvcache"), path.join(directory, "tmp"), directory]) fs.utimesSync(entry, when, when);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
+  expect(report.removed.map((removal) => path.basename(removal.path))).toEqual(["llv-stage-cache"]);
+  expect(fs.existsSync(directory)).toBe(false);
+});
+
+test.each(["gitdir", "unrecognized metadata", ""])("damaged Git metadata %j keeps a role checkout and its source", async marker => {
+  const root = tempRoot();
+  const repo = path.join(root, "repo");
+  fs.mkdirSync(repo);
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: repo, stdio: "ignore" });
+  git(["init", "-q", "-b", "main"]);
+  fs.writeFileSync(path.join(repo, "input.txt"), "preserved input");
+  git(["add", "."]); git(["commit", "-qm", "initial"]);
+  const role = path.join(root, "llv-review-export");
+  const checkout = path.join(role, "checkout");
+  git(["worktree", "add", "-q", "-b", "topic/export", checkout]);
+  const source = path.join(checkout, "unique-source.ts");
+  fs.writeFileSync(source, "export const privateWork = 42;\n");
+  fs.writeFileSync(path.join(checkout, ".git"), marker);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toEqual([expect.objectContaining({ path: role, reason: "git-checkout" })]);
+  expect(fs.readFileSync(source, "utf8")).toBe("export const privateWork = 42;\n");
+});
+
+test("a bare repository missing HEAD retains its unpublished objects and ref", async () => {
+  const root = tempRoot();
+  const bare = path.join(root, "llv-bare-export");
+  fs.mkdirSync(bare);
+  const git = (args: string[], input?: string) => execFileSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", ...args], { cwd: bare, encoding: "utf8", input }).trim();
+  git(["init", "--bare", "-q"]);
+  const blob = git(["hash-object", "-w", "--stdin"], "unpublished source\n");
+  const tree = git(["mktree"], `100644 blob ${blob}\tunique-source.txt\n`);
+  const tip = git(["commit-tree", tree, "-m", "unpublished work"]);
+  git(["update-ref", "refs/heads/private", tip]);
+  fs.unlinkSync(path.join(bare, "HEAD"));
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toEqual([expect.objectContaining({ path: bare, reason: "git-checkout" })]);
+  expect(fs.existsSync(path.join(bare, "objects", blob.slice(0, 2), blob.slice(2)))).toBe(true);
+  expect(fs.readFileSync(path.join(bare, "refs/heads/private"), "utf8").trim()).toBe(tip);
+});
+
+test.skipIf(process.platform !== "linux")("temp holds count one physical checkout through namespace aliases once", async () => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-aliased-export", 3 * DAY);
+  fs.writeFileSync(path.join(directory, ".git"), "gitdir: retained repository metadata");
+  fs.writeFileSync(path.join(directory, "unique.log"), Buffer.alloc(256 * 1024, 1));
+  const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY };
+  const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: root, via: "/proc/self/root" }] });
+  expect(report.held).toHaveLength(1);
+  expect(report.kept.worktree).toBe(1);
+  expect(tempSweepStatus(report)?.heldBytes).toEqual(tempSweepStatus(single)?.heldBytes);
+  expect(fs.existsSync(directory)).toBe(true);
+});
+
+test("overlapping temp roots partition retained allocations", async () => {
+  const root = tempRoot();
+  const parent = aged(root, "llv-outer-export", 3 * DAY);
+  const jobs = path.join(parent, "jobs");
+  fs.mkdirSync(jobs);
+  const child = aged(jobs, "llv-inner-export", 3 * DAY);
+  for (const directory of [parent, child]) fs.writeFileSync(path.join(directory, ".git"), "gitdir: retained metadata");
+  fs.writeFileSync(path.join(child, "unique.log"), Buffer.alloc(256 * 1024, 1));
+  const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY };
+  const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: jobs, via: "" }] });
+  expect(report.held).toHaveLength(2);
+  expect(report.held?.find(row => row.path === child)?.bytes).toBeGreaterThanOrEqual(256 * 1024);
+  expect(tempSweepStatus(report)?.heldBytes).toEqual(tempSweepStatus(single)?.heldBytes);
+  expect(fs.existsSync(child)).toBe(true);
 });

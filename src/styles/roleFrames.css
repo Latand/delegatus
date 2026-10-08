@@ -71,11 +71,13 @@
 }
 
 [data-role="orchestrator"] { --role: var(--rf-orchestrator); --role-2: var(--rf-orchestrator-2); --role-ink: var(--rf-orchestrator-ink); --role-fill: var(--rf-orchestrator-fill); }
+[data-role="visual-critic"],
 [data-role="reviewer"] { --role: var(--rf-reviewer); --role-2: var(--rf-reviewer-2); --role-ink: var(--rf-reviewer-ink); --role-fill: var(--rf-reviewer-fill); }
 [data-role="architect"] { --role: var(--rf-architect); --role-2: var(--rf-architect-2); --role-ink: var(--rf-architect-ink); --role-fill: var(--rf-architect-fill); }
 [data-role="verifier"] { --role: var(--rf-verifier); --role-2: var(--rf-verifier-2); --role-ink: var(--rf-verifier-ink); --role-fill: var(--rf-verifier-fill); }
 [data-role="cleaner"] { --role: var(--rf-cleaner); --role-2: var(--rf-cleaner-2); --role-ink: var(--rf-cleaner-ink); --role-fill: var(--rf-cleaner-fill); }
 [data-role="builder"] { --role: var(--rf-builder); --role-2: var(--rf-builder-2); --role-ink: var(--rf-builder-ink); --role-fill: var(--rf-builder-fill); }
+[data-role="issue-reporter"],
 [data-role="prod-auditor"] { --role: var(--rf-prod-auditor); --role-2: var(--rf-prod-auditor-2); --role-ink: var(--rf-prod-auditor-ink); --role-fill: var(--rf-prod-auditor-fill); }
 [data-role="merger"],
 [data-role="deployer"] { --role: var(--rf-deployer); --role-2: var(--rf-deployer-2); --role-ink: var(--rf-deployer-ink); --role-fill: var(--rf-deployer-fill); }

@@ -348,6 +348,8 @@ async function dispatchRuntimeCommand(
         if (!admitted.ok) {
           return NextResponse.json({
             error: admitted.error,
+            ...(command.kind === "inject" && admitted.admission === "refused"
+              ? { delivery: "refused" satisfies AttachmentDeliveryOutcome } : {}),
             ...(admitted.code ? { code: admitted.code } : {}),
             ...(admitted.seatConversationId ? { seatConversationId: admitted.seatConversationId } : {}),
             ...(admitted.operationId ? { operationId: admitted.operationId } : {}),
@@ -361,7 +363,18 @@ async function dispatchRuntimeCommand(
            could never ask `message_receipt` about afterwards, which put
            `queued` back at the end of the story on the composer's own path. */
         if (admitted.outcome === "held") {
-          return NextResponse.json({ held: true, operationId: admitted.operationId }, { status: 202 });
+          /* The receipt says what the hold waits for, so the composer can
+             show it at once. The hold is already durable, so a failed read
+             leaves the answer without a receipt and never fails the send. */
+          let send: SendReceipt | null = null;
+          try {
+            send = sendReceiptFor((dependencies.registry ?? agentRegistry)().deliverySnapshotForOperation(admitted.operationId), admitted.operationId);
+          } catch {
+            send = null;
+          }
+          return NextResponse.json({ held: true, operationId: admitted.operationId,
+            ...(send ? { receipt: runtimeReceiptForSend(send) } : {}),
+          }, { status: 202 });
         }
         const status = admitted.receipt.status === "pending" || admitted.receipt.status === "queued" ? 202 : 200;
         return NextResponse.json({ operationId: admitted.operationId, receipt: admitted.receipt }, { status });

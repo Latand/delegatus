@@ -91,7 +91,9 @@ export type RuntimeEvent =
   | { kind: "native-queue-changed"; threadId: string; seq: number }
   | { kind: "turn-started"; turnId: string; seq: number }
   | { kind: "delta"; turnId: string; text: string; seq: number }
-  | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null; seq: number }
+  | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
+    /** Original native activity observation time; null for history whose time needs transcript evidence. */
+    activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
   | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { resolveBinary } from "@/lib/agent/cli";
+import { codexSubagentArgs } from "./codexSpawnPolicy";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import {
   claudeManagedEnvironment,
@@ -38,6 +39,8 @@ export type EphemeralAgentRequest = {
   schema: object;
   runDir: string;
   hardCapMs: number;
+  /** The engine's own native web search, the one tool a relay answer may use (relay.md §B.6). */
+  webSearch?: boolean;
   onEvent?: (event: EphemeralAgentEvent) => void;
   /** A test runtime may shorten the timer without weakening the configured cap. */
   runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
@@ -167,7 +170,8 @@ export function buildEphemeralCommand(
       "--restricted",
       "--safe-mode",
       "--tools",
-      "",
+      request.webSearch ? "WebSearch" : "",
+      ...(request.webSearch ? ["--allowedTools", "WebSearch"] : []),
       "--strict-mcp-config",
       "--settings",
       JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv) }),
@@ -196,9 +200,10 @@ export function buildEphemeralCommand(
     request.runDir,
   );
   const output = path.join(request.runDir, "answer.json");
+  const binary = resolveBinary("codex");
   const args = [
-    "--disable",
-    "multi_agent",
+    "exec",
+    ...codexSubagentArgs(binary, false, request.account.env),
     "--disable",
     "shell_tool",
     "--disable",
@@ -221,7 +226,6 @@ export function buildEphemeralCommand(
     "sleep_tool",
     "--disable",
     "view_image",
-    "exec",
     "-",
     "--ephemeral",
     "--ignore-user-config",
@@ -237,7 +241,7 @@ export function buildEphemeralCommand(
     "-c",
     "cli_auth_credentials_store=file",
     "-c",
-    "web_search=disabled",
+    `web_search=${request.webSearch ? "live" : "disabled"}`,
     "-c",
     "project_doc_max_bytes=0",
     "-c",
@@ -262,7 +266,7 @@ export function buildEphemeralCommand(
   ];
   args.push(...agentCodexPublicationArgs({}, request.account.env));
   return {
-    command: resolveBinary("codex"),
+    command: binary,
     args,
     env: answerEnvironment({ ...request.account.env, CODEX_HOME: home }),
     stdin: request.prompt,
@@ -331,7 +335,7 @@ export function runEphemeralAgent(
       } catch {
         /* mapper ignores malformed lines */
       }
-      for (const event of mapAgentLine(request.engine, line)) {
+      for (const event of mapAgentLine(request.engine, line, { webSearch: request.webSearch === true })) {
         request.onEvent?.(event);
         if (event.type === "violation") {
           violation = true;

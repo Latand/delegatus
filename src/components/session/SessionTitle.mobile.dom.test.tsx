@@ -161,10 +161,11 @@ async function mount(files: FileEntry[]): Promise<{ host: HTMLElement; root: Roo
 
 const renameSlot = (host: HTMLElement) => host.querySelector('[data-testid="mobile-rename-slot"]') as HTMLElement | null;
 const barTitle = (host: HTMLElement) => host.querySelector("[data-mobile2-title-text]")?.textContent ?? "";
-/** Rename is a labelled row in the `⋯` menu now, not an icon in a header. */
+/** Rename is a labelled row in the `⋯` menu now, not an icon in a header: behind «Conversation», which opens in place. */
 function openRename(host: HTMLElement): void {
   const more = host.querySelector('[data-mobile2-open="menu"]') as HTMLButtonElement;
   flushSync(() => more.click());
+  flushSync(() => (host.querySelector('[data-mobile2-menu-section="manage"]') as HTMLButtonElement).click());
   const row = host.querySelector('[data-testid="mobile-menu-rename"]') as HTMLButtonElement;
   expect(row).not.toBeNull();
   expect(row.className).toContain("min-h-11");

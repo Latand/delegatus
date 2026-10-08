@@ -244,3 +244,9 @@ test("pipeline close forwards the operator's host acknowledgement to the engine 
     pipeline: { body: { action: "close", acknowledgeHosts: true } },
   });
 });
+
+test("apply-now passes the admitted operator actor into the pipeline mutation", async () => {
+  const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", { method: "PATCH", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "override-stage", stageId: "build", model: "gpt-6.1-sol", applyNow: true }) }), { params: Promise.resolve({ id: "pipeline-1" }) });
+  expect(response.status).toBe(200);
+  expect(forwardedActor).toEqual({ kind: "operator" });
+});

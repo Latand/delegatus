@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { beforeEach, afterEach, afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,17 @@ import {
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { answerSchema } from "@/lib/externalRelay/protocol";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
+
+// Command/control tests use a fake interpreter and its explicit inventory.
+let restoreFeatureReader: () => void;
+beforeEach(() => {
+  restoreFeatureReader = setCodexFeatureReaderForTest(() => parseCodexFeatures(
+    "multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true",
+  ));
+});
+afterEach(() => restoreFeatureReader());
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ephemeral-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -87,6 +98,14 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
     fs.readFileSync(path.join(request.runDir, "catalog.json"), "utf8"),
   );
   expect(catalog).toEqual({ models: [{ slug: "gpt-6-sol", preserved: 1 }] });
+});
+test("the relay answer profile denies newly reported agent features", () => {
+  const restore = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true"));
+  try {
+    const args = buildEphemeralCommand(fixture("codex")).args;
+    for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) expect(args[args.indexOf(feature) - 1]).toBe("--disable");
+    expect(args).toContain("agents.enabled=false");
+  } finally { restore(); }
 });
 test.each(["claude", "codex"] as const)("%s answer profile pins publication identity in env and engine settings", (engine) => {
   const request = fixture(engine);
@@ -243,4 +262,21 @@ process.stdout.write(result.subarray(cut));
   expect(result.status).toBe("done");
   expect(result.answer).toMatchObject({ text: "Привіт" });
   expect(notes).toEqual(["Привіт"]);
+});
+test("the native web search is the one tool the relay profile can add", () => {
+  const codex = buildEphemeralCommand({ ...fixture("codex"), webSearch: true }).args;
+  expect(codex).toContain("web_search=live");
+  expect(codex).not.toContain("web_search=disabled");
+  for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "browser_use", "computer_use"])
+    expect(codex[codex.indexOf(feature) - 1]).toBe("--disable");
+  const claude = buildEphemeralCommand({ ...fixture("claude"), webSearch: true }).args;
+  expect(claude[claude.indexOf("--tools") + 1]).toBe("WebSearch");
+  expect(claude[claude.indexOf("--allowedTools") + 1]).toBe("WebSearch");
+  for (const flag of ["--restricted", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"])
+    expect(claude).toContain(flag);
+  expect(claude).not.toContain("--mcp-config");
+  // Off unless asked for.
+  const closed = buildEphemeralCommand(fixture("claude")).args;
+  expect(closed[closed.indexOf("--tools") + 1]).toBe("");
+  expect(closed).not.toContain("--allowedTools");
 });

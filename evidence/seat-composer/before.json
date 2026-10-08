@@ -1,0 +1,1211 @@
+{
+  "commit": "ee19907eb0dc9a9e39fc0fd23363d1869eb9b2e3",
+  "case": "seat-composer",
+  "note": "The same drafts on the base commit, before the change. Readings only: the requirements in geometry.json did not exist yet.",
+  "draftLines": [
+    1,
+    3,
+    8,
+    20
+  ],
+  "seat-composer-1440x900-en-default": {
+    "seat": 675,
+    "box": 570,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 441.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 411.5,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 321.5,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 315.5,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    }
+  },
+  "seat-composer-1440x900-en-compact": {
+    "seat": 270,
+    "box": 165,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 36.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 36.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 92.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 92.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 92.5,
+        "transcript": 35,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 36.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1440x900-en-minimum": {
+    "seat": 160,
+    "box": 55,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1440x900-uk-default": {
+    "seat": 675,
+    "box": 570,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 441.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 411.5,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 321.5,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 315.5,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    }
+  },
+  "seat-composer-1440x900-uk-compact": {
+    "seat": 270,
+    "box": 165,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 36.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 36.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 92.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 92.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 92.5,
+        "transcript": 35,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 36.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1440x900-uk-minimum": {
+    "seat": 160,
+    "box": 55,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1000x700-en-default": {
+    "seat": 525,
+    "box": 420,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 291.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 291.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 261.5,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 115,
+        "rows": 5.8,
+        "fits": false,
+        "form": 172,
+        "transcript": 210.5,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 115,
+        "rows": 5.8,
+        "fits": false,
+        "form": 172,
+        "transcript": 166.5,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 247.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 253,
+      "scrolledTop": 0,
+      "range": 253
+    }
+  },
+  "seat-composer-1000x700-en-compact": {
+    "seat": 210,
+    "box": 105,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 32.5,
+      "transcript": 35,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 32.5,
+      "transcript": 35,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1000x700-en-minimum": {
+    "seat": 160,
+    "box": 55,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1000x700-uk-default": {
+    "seat": 525,
+    "box": 420,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 291.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 291.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 261.5,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 115,
+        "rows": 5.8,
+        "fits": false,
+        "form": 172,
+        "transcript": 210.5,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 115,
+        "rows": 5.8,
+        "fits": false,
+        "form": 172,
+        "transcript": 166.5,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 247.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 253,
+      "scrolledTop": 0,
+      "range": 253
+    }
+  },
+  "seat-composer-1000x700-uk-compact": {
+    "seat": 210,
+    "box": 105,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 32.5,
+      "transcript": 35,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 32.5,
+        "transcript": 35,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 32.5,
+      "transcript": 35,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1000x700-uk-minimum": {
+    "seat": 160,
+    "box": 55,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1280x600-en-default": {
+    "seat": 450,
+    "box": 345,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 216.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 101,
+        "transcript": 206.5,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 101,
+        "transcript": 206.5,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 101,
+        "transcript": 206.5,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1280x600-en-compact": {
+    "seat": 180,
+    "box": 75,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 28.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 28.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1280x600-en-minimum": {
+    "seat": 160,
+    "box": 55,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1280x600-uk-default": {
+    "seat": 450,
+    "box": 345,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 216.5,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 101,
+        "transcript": 206.5,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 101,
+        "transcript": 206.5,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 101,
+        "transcript": 206.5,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1280x600-uk-compact": {
+    "seat": 180,
+    "box": 75,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 28.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 28.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 28.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-1280x600-uk-minimum": {
+    "seat": 160,
+    "box": 55,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "3": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "8": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      },
+      "20": {
+        "field": 44,
+        "rows": 1.9,
+        "fits": false,
+        "form": 9,
+        "transcript": 8.5,
+        "formScrolls": true
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 9,
+      "transcript": 8.5,
+      "formScrolls": true
+    },
+    "scroll": {
+      "pinnedBottom": 324,
+      "scrolledTop": 0,
+      "range": 324
+    }
+  },
+  "seat-composer-390x844-en": {
+    "seat": null,
+    "box": 790,
+    "lineHeight": 22,
+    "empty": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 32,
+        "rows": 1,
+        "fits": true,
+        "form": 97,
+        "transcript": 689,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 76,
+        "rows": 3,
+        "fits": true,
+        "form": 141,
+        "transcript": 645,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 186,
+        "rows": 8,
+        "fits": true,
+        "form": 251,
+        "transcript": 535,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 255,
+        "rows": 11.1,
+        "fits": false,
+        "form": 320,
+        "transcript": 466,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 193,
+      "scrolledTop": 0,
+      "range": 193
+    }
+  },
+  "seat-composer-390x844-uk": {
+    "seat": null,
+    "box": 790,
+    "lineHeight": 22,
+    "empty": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 32,
+        "rows": 1,
+        "fits": true,
+        "form": 97,
+        "transcript": 689,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 76,
+        "rows": 3,
+        "fits": true,
+        "form": 141,
+        "transcript": 645,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 186,
+        "rows": 8,
+        "fits": true,
+        "form": 251,
+        "transcript": 535,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 255,
+        "rows": 11.1,
+        "fits": false,
+        "form": 320,
+        "transcript": 466,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 193,
+      "scrolledTop": 0,
+      "range": 193
+    }
+  }
+}

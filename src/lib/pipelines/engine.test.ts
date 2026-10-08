@@ -20,13 +20,14 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "@/lib/self
 import { endRestartGate, restartGateFile } from "@/lib/selfUpdate/restartGate";
 import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
+import { worktreeDiskWait } from "@/lib/state/diskPressure";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -1296,6 +1297,81 @@ test("a stage branch is adopted onto an owned delivery branch when the lane ref 
   }
 });
 
+/** A successor lane created on an existing pull request branch: the branch is
+    the previous lane's own pipeline branch, the successor's delivery claim
+    (epoch 2) targets it, and the stage agent commits straight onto it. */
+async function successorOnPullRequestBranch(name: string, previousState: Pipeline["state"]) {
+  const fixture = await realWorktreeLane(name, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  const { git, repo, worktree } = fixture;
+  const lane = loadPipelines().find((item) => item.id === fixture.id)!;
+  const previous = structuredClone(lane);
+  previous.id = "previouslane";
+  previous.worktreeDir = path.join(path.dirname(repo), `${path.basename(repo)}-pipeline-${previous.id}`);
+  previous.branch = lane.branch.slice(0, -lane.id.length) + previous.id;
+  const prBranch = previous.branch;
+  (await git(worktree, "branch", "-m", prBranch));
+  lane.delivery!.target.branch = `refs/heads/${prBranch}`;
+  lane.delivery!.epoch = 2;
+  previous.state = previousState;
+  previous.cursor = previousState === "completed" || previousState === "closed" ? null : previous.cursor;
+  previous.closedAt = previousState === "closed" ? new Date().toISOString() : null;
+  previous.delivery = { ...structuredClone(lane.delivery!), ownerId: previous.id, epoch: 1,
+    active: false, publish: "disabled", releasedAt: new Date().toISOString() };
+  savePipelines([lane, previous]);
+  fs.writeFileSync(path.join(worktree, "build.txt"), "successor work\n");
+  (await git(worktree, "add", "build.txt"));
+  (await git(worktree, "commit", "-m", "successor stage work"));
+  return { ...fixture, lane, previous, prBranch, head: (await git(worktree, "rev-parse", "HEAD")) };
+}
+
+for (const previousState of ["completed", "closed"] as const) {
+  test(`a successor lane on a pull request branch settles its passed stage after a ${previousState} lane`, async () => {
+    const fixture = await successorOnPullRequestBranch(`stage-branch-successor-${previousState}`, previousState);
+    try {
+      const { git, h, id, origin, worktree, prBranch, head } = fixture;
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const settled = loadPipelines().find((item) => item.id === id)!;
+      expect(settled.stateDetail ?? null).toBeNull();
+      expect(settled).toMatchObject({ state: "running", lastPassedCommit: head, cursor: { stageId: "review" } });
+      expect((await git(worktree, "branch", "--show-current"))).toBe(prBranch);
+      expect((await git(origin, "rev-parse", `refs/heads/${prBranch}`))).toBe(head);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const previousState of ["running", "needs_decision"] as const) {
+  test(`a successor lane is refused the pull request branch while the previous lane is ${previousState}`, async () => {
+    const fixture = await successorOnPullRequestBranch(`stage-branch-successor-${previousState}`, previousState);
+    try {
+      const { git, h, worktree, lane, previous, prBranch, head } = fixture;
+      const { commitAndAdoptStageBranch } = await import("./stageBranch");
+      const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, previous], undefined, () => {}, null);
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+      expect((await git(worktree, "rev-parse", `refs/heads/${prBranch}`))).toBe(head);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a terminal lane whose delivery claim is still active keeps owning its branch", async () => {
+  const fixture = await successorOnPullRequestBranch("stage-branch-successor-terminal-active", "completed");
+  try {
+    const { h, lane, previous } = fixture;
+    previous.delivery = { ...previous.delivery!, active: true, publish: "enabled" };
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+    const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, previous], undefined, () => {}, null);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 for (const removeOwnerSeed of [false, true]) {
 test(`linked-worktree pipeline ownership refuses a foreign stage branch before committing (removed seed: ${removeOwnerSeed})`, async () => {
   const fixture = await realWorktreeLane(`stage-branch-linked-owner-${removeOwnerSeed}`, [
@@ -2279,6 +2355,57 @@ test("automatic-update hold keeps a pending attempt and releases exactly one lau
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
 });
 
+test("CPU pressure holds a fresh stage start with a visible reason and releases exactly one launch", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  let pressure: number | null = 45;
+  let clock = Date.parse("2026-10-06T12:00:00Z");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => pressure, now: () => clock });
+  const wakes: number[] = [];
+  h.ports.cpuPressureHold = () => gate.check();
+  h.ports.scheduleTick = (delayMs) => { wakes.push(delayMs); };
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const held = loadPipelines()[0]!;
+  expect(held.cursor?.state).toBe("pending");
+  expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(wakes).toContain(5_000);
+  clock += 120_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toStartWith("stage start deferred by CPU pressure: held since 2026-10-06T12:00:00.000Z");
+  // Below the release threshold the hold lasts ten seconds more.
+  pressure = 4;
+  await tickPipelines([], h.ports);
+  clock += 9_000;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  clock += 1_000;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const released = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(released.runs[0]!.attempts).toHaveLength(1);
+  expect(released.stateDetail ?? "").not.toContain("CPU pressure");
+  // A launched stage is never held again: pressure returns and nothing respawns.
+  pressure = 80;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("a failed CPU pressure sample admits the stage start", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("EACCES"); }, now: Date.now });
+  h.ports.cpuPressureHold = () => gate.check();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("CPU pressure");
+});
+
 test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
   const h = harness();
   let held = false;
@@ -2497,9 +2624,11 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
   const old = "b".repeat(40);
   let now = Date.parse("2026-01-01T00:00:00Z");
   const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
-  const record = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
+  const record: LauncherRecord = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
     releasePointer: path.join(dir, "release.json"), requestFile: path.join(dir, "request.json"), releasesDir: path.join(dir, "releases"),
-    web: { state: "healthy", revision: old.slice(0, 7), error: null }, runtimeHost: { state: "healthy", revision: old.slice(0, 7), error: null } } as LauncherRecord;
+    port: 45123, socket: path.join(dir, "runtime-host.sock"), updatedAt: new Date(now).toISOString(),
+    web: { state: "healthy", pid: 101, startIdentity: "web-test", startedAt: new Date(now).toISOString(), requestId: null, revision: old.slice(0, 7), error: null },
+    runtimeHost: { state: "healthy", pid: 102, startIdentity: "host-test", startedAt: new Date(now).toISOString(), requestId: null, revision: old.slice(0, 7), error: null } };
   writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [target]: { state: "green" } }, rollbackCaptured: true });
   fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
   const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,
@@ -3848,6 +3977,49 @@ test("a merger stage resolves through production role lookup during pipeline nor
       promptScaffold: expect.stringContaining("scripts/merge-batch.ts"),
     },
   });
+});
+
+/* Every UI lane ends with a visual-critic stage: create_pipeline takes it, and
+   its agent launches read-only on the role's own Claude Opus row. */
+test("a visual-critic stage is accepted and launches read-only on the role's runtime", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  await create(h.ports, [{ id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null }] as never);
+  const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: { ...expected, promptScaffold: expect.stringContaining("You are a Visual-critic.") } });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
+});
+
+/* Visual judgement runs on Claude and the critic never writes, whoever asks:
+   creation refuses a Codex runtime and read-write access, and an override that
+   turns a writable builder stage into the critic launches it read-only. */
+test("a visual-critic stage refuses Codex and read-write on create and override", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  const critic = { id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null };
+  const refusal = async (stage: Record<string, unknown>) => JSON.stringify(await createPipelineFromRequest(
+    { task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages: [{ ...critic, ...stage }] as never, src: "/codex/creator.jsonl", publication: "internal" }, h.ports));
+  expect(await refusal({ engine: "codex", model: "gpt-6.1-sol", effort: "high" })).toContain("visual-critic runs on claude only");
+  expect(await refusal({ access: "read-write" })).toContain("role visual-critic is read-only; a stage cannot give it read-write access");
+  expect(loadPipelines()).toEqual([]);
+
+  const pipeline = await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }] as never);
+  expect(pipeline.stages[0]!.effectiveRole.access).toBe("read-write");
+  const codex = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "visual-critic" }, engine: "codex", model: "gpt-6.1-sol" }, h.ports);
+  expect(codex).toMatchObject({ status: 400, error: "visual-critic runs on claude only" });
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "visual-critic" }, access: "read-write" }, h.ports);
+  expect(edited.error).toBeUndefined();
+  const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ access: "read-only", effectiveRole: expected });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
 });
 
 test("review-loop onFail edges are rejected during creation and graph editing", async () => {
@@ -5248,7 +5420,7 @@ test("a busy account mutation waits between ticks and claims one host on the sam
   expect(hostClaims).toBe(0);
   expect(pipeline).toMatchObject({
     state: "running",
-    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+    stateDetail: expect.stringMatching(/^stage spawn deferred: The account store is temporarily busy; try again shortly\.; retry at /),
     cursor: { stageId: "plan", state: "pending" },
   });
   const waitingAttempt = pipeline.runs[0]!.attempts.at(-1)!;
@@ -5493,7 +5665,7 @@ test("a busy-looking failure after reservation stays in unknown receipt recovery
 
   const parked = loadPipelines()[0]!;
   expect(spawnCalls).toBe(1);
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: "account mutation is busy in this process; retry shortly" });
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: ACCOUNT_STORE_BUSY_MESSAGE });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
     launchId: "launch-unknown-busy",
@@ -9622,6 +9794,8 @@ test("retry and skip recover a completed pane-hosted semantic contradiction", as
       state: "pending",
       input: action === "retry-stage" ? null : "Skipped by operator.",
       activatedBy: action === "retry-stage" ? null : { stageId: "plan", attempt: 1, edge: "pass" },
+      /* The hand that put the cursor there, for the attempt it launches. */
+      launchedBy: { actor: { kind: "operator" }, at: expect.any(String) },
     });
   }
 });
@@ -11075,7 +11249,6 @@ test("a failed Claude migration retries its original operation and held continua
     }, {
       enabled: () => true, client: () => null, registry: () => registry,
       requestMigrationTick: () => {}, kick: async () => {},
-      executeSwitch: async () => registry.conversation(conversation.id)!,
     }))?.ok === true;
 
     await tickPipelines([], h.ports);
@@ -15469,7 +15642,7 @@ test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute 
   expect(spawnCalls).toBe(8);
   expect(pipeline).toMatchObject({
     state: "running",
-    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+    stateDetail: expect.stringMatching(/^stage spawn deferred: The account store is temporarily busy; try again shortly\.; retry at /),
   });
   expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 8, budgetMs: 600_000, retryMaxMs: 60_000 });
   expect(scheduled.at(-1)).toBe(60_000);
@@ -16165,7 +16338,10 @@ test("a COMMENT review flow routes only on findings the review itself reported (
 });
 
 
-async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout") {
+async function stagedRecoveryHarness(
+  mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout",
+  options: { hostProcess?: { pid: number; startIdentity: string | null }; nativeTranscript?: boolean } = {},
+) {
   const h = harness();
   let clock = Date.now();
   h.ports.now = () => new Date(clock).toISOString();
@@ -16179,8 +16355,8 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "staged-recovery-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"));
-  const artifactPath = path.join(root, "session.jsonl");
   const sessionId = crypto.randomUUID();
+  const artifactPath = path.join(root, options.nativeTranscript ? `rollout-2026-10-07T11-22-37-${sessionId}.jsonl` : "session.jsonl");
   let starts = 0;
   let messages = 0;
   let failures = ["timeout", "reset", "busy", "503", "held"].includes(mode) ? 2 : 0;
@@ -16238,7 +16414,7 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
       now: () => clock,
       bindHost: async (store, key, _host, owner, epoch) => {
         const entry = store.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
-        store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: { pid: process.pid, startIdentity: "fixture" } }, "live", owner, epoch);
+        store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: options.hostProcess ?? { pid: process.pid, startIdentity: "fixture" } }, "live", owner, epoch);
         return () => {};
       },
       publishHost: async () => { await client.producerCursor("codex-app-server", "test:"); return async () => {}; },
@@ -16257,8 +16433,8 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
     const receipt = registry.readOnlySnapshot().receipts[id];
     return receipt ? { launchId: id, conversationId: receipt.conversationId, state: receipt.state,
       sessionId: receipt.state === "completed" ? receipt.key?.sessionId ?? null : null,
-      ["transcript"]: receipt.state === "completed" ? receipt.artifactPath : null, paneId: null,
-      staged: !!receipt.key, error: receipt.error } : null;
+      ["transcript"]: receipt.state === "completed" ? receipt.artifactPath : null, stagedTranscript: receipt.artifactPath ?? null,
+      paneId: null, staged: !!receipt.key, error: receipt.error } : null;
   };
   const recover = async (id: string, eligible: () => boolean) => {
     await recoverStagedStructuredLaunch(id, registry, client, { now: () => clock, eligible });
@@ -16322,6 +16498,191 @@ test("an uncertain send missing from lookup exhausts its budget without another 
   expect(f.attempt().launchId).toBe(f.launchId());
   expect(f.messages()).toBe(1);
   expect(f.starts()).toBe(1);
+});
+
+/* 2026-10-07: a fix attempt's host took its first message 110 s after launch,
+   while every recovery probe the loaded controller ran still read it queued.
+   No probe ran again, the ten-minute budget ran out on the wall clock, and the
+   lane parked on "runtime host recovery exhausted" while its agent was
+   committing the fix; its stage_report then answered STAGE_REPORT_SETTLED. */
+async function aliveStagedLaunch(options: Parameters<typeof stagedRecoveryHarness>[1] = {}) {
+  const f = await stagedRecoveryHarness("absent", options);
+  await tickPipelines([], f.h.ports);
+  await f.wake();
+  expect(f.attempt().state).toBe("spawning");
+  // The probe stops advancing: a controller pass that overran its deadline.
+  f.h.ports.recoverStagedLaunch = async () => {};
+  const transcript = f.registry.readOnlySnapshot().receipts[f.launchId()]!.artifactPath!;
+  f.h.ports.sourcePathAllowed = (pathname) => pathname === transcript;
+  f.h.ports.durableTurnEvidence = durableStageTurnEvidence;
+  const working = () => {
+    const at = Date.parse(f.h.ports.now());
+    fs.writeFileSync(transcript, [
+      { timestamp: new Date(at - 2_000).toISOString(), type: "session_meta", payload: { id: "stage" } },
+      { timestamp: new Date(at - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: new Date(at).toISOString(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Fixing the findings" }] } },
+    ].map((record) => JSON.stringify(record)).join("\n") + "\n");
+  };
+  return { ...f, transcript, working };
+}
+
+test("a staged launch whose agent is working is adopted when spawn recovery spends its budget, never parked", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  f.working();
+  await f.wake();
+  const pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "build", state: "running" } });
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), agentPath: f.transcript, error: null });
+  expect(f.attempt().controllerWait).toBeUndefined();
+  expect(f.messages()).toBe(1);
+  expect(f.starts()).toBe(1);
+});
+
+/** A host process this test started, with the start identity the kernel
+    reports for it; `end` stops it by that pid and waits for it to be reaped. */
+async function stageHostChild() {
+  const { procBackend } = await import("@/lib/proc");
+  const child = spawn("sleep", ["300"], { stdio: "ignore" });
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const pid = child.pid!;
+  const identity = { pid, startIdentity: procBackend.processIdentity(pid) };
+  expect(identity.startIdentity).not.toBeNull();
+  return { process: identity, end: async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited; } };
+}
+
+/** The registry seams production reads, over the harness's own registry: the
+    launch receipt, its failure write and the host's process evidence. A fresh
+    port set per call, so no snapshot outlives the write it should see. */
+function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>>) {
+  setAgentRegistryForTests(f.registry);
+  const ports = () => defaultPipelinePorts();
+  Object.assign(f.h.ports, {
+    spawnReceipt: (launchId: string) => ports().spawnReceipt(launchId),
+    failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
+    conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
+    conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),
+  } satisfies Partial<PipelinePorts>);
+}
+
+test("a live stage host whose first message is still queued keeps the attempt watched, and a lost host parks as before", async () => {
+  const host = await stageHostChild();
+  try {
+    const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    const scheduled: number[] = [];
+    f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
+    f.advance(10 * 60_000);
+    await f.wake();
+    let pipeline = loadPipelines()[0]!;
+    expect(pipeline.state).toBe("running");
+    expect(f.attempt()).toMatchObject({ state: "spawning", error: null, completedAt: null });
+    expect(pipeline.stateDetail).toMatch(new RegExp(`^the stage host \\(pid ${host.process.pid}\\) is alive and has not answered its first message yet; spawn recovery spent its 10-minute budget after \\d+ checks and keeps watching, next check at \\S+$`));
+    expect(scheduled.at(-1)).toBe(30_000);
+    // Still alive on later ticks: the detail stays one bounded line.
+    await f.wake();
+    expect(loadPipelines()[0]!.stateDetail!.length).toBeLessThan(200);
+
+    await host.end();
+    await f.wake();
+    pipeline = loadPipelines()[0]!;
+    expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
+    expect(f.attempt().state).toBe("needs_decision");
+    expect(f.messages()).toBe(1);
+    expect(f.starts()).toBe(1);
+  } finally {
+    setAgentRegistryForTests(null);
+    await host.end();
+  }
+});
+
+test("a launch whose recorded host process has exited and whose transcript holds no turn settles as before, however long it waits", async () => {
+  const host = await stageHostChild();
+  await host.end();
+  try {
+    const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    f.advance(24 * 60 * 60_000);
+    for (let tick = 0; tick < 3; tick++) await f.wake();
+    const pipeline = loadPipelines()[0]!;
+    expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
+    expect(f.attempt().state).toBe("needs_decision");
+    expect(f.messages()).toBe(1);
+    expect(f.starts()).toBe(1);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("an unpublished launch whose host is verified alive survives the tick that spends its recovery budget", async () => {
+  const host = await stageHostChild();
+  try {
+    const f = await stagedRecoveryHarness("timeout", { hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    const scheduled: number[] = [];
+    f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
+    await tickPipelines([], f.h.ports);
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+    f.advance(10 * 60_000);
+    await f.wake();
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+    const pipeline = loadPipelines()[0]!;
+    expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "build", state: "spawning" } });
+    expect(pipeline.stateDetail).toStartWith(`the stage host (pid ${host.process.pid}) is alive`);
+    expect(f.attempt()).toMatchObject({ n: 1, state: "spawning", error: null, completedAt: null, launchId: f.launchId() });
+    expect(scheduled.at(-1)).toBe(30_000);
+    await f.wake();
+    expect(f.attempt()).toMatchObject({ state: "spawning", completedAt: null });
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(0);
+
+    // The same launch once its host is gone terminalizes as before.
+    await host.end();
+    await f.wake();
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("failed");
+    expect(f.attempt()).toMatchObject({ state: "failed", error: expect.stringMatching(/^stage launch never started: runtime host recovery exhausted/) });
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("use retry-stage") });
+    expect(f.starts()).toBe(1);
+  } finally {
+    setAgentRegistryForTests(null);
+    await host.end();
+  }
+});
+
+test("a spawn-recovery park whose own agent then reports is reopened on that attempt and the report is accepted", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("stage spawn recovery stopped:") });
+  const conversationId = f.attempt().conversationId!;
+  const actor = { kind: "agent" as const, role: "builder", conversationId };
+
+  // Nothing of this attempt in its transcript yet: the park stands.
+  expect(await engineModule.reportStageCompletion({ verdict: "pass", summary: "done" }, actor, f.h.ports))
+    .toMatchObject({ status: 409, code: "STAGE_REPORT_SETTLED" });
+
+  f.working();
+  const accepted = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Fixed both findings" }, actor, f.h.ports);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted).toMatchObject({ attempt: 1, report: { verdict: { status: "pass" } } });
+  const reopened = loadPipelines()[0]!;
+  expect(reopened).toMatchObject({ state: "running", stateDetail: null });
+  expect(reopened.runs[0]!.attempts).toHaveLength(1);
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), agentPath: f.transcript, error: null });
+  expect(f.attempt().report?.verdict.status).toBe("pass");
+});
+
+test("a spawn-recovery park left by an earlier controller reopens once its agent's turn is in the transcript", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  f.working();
+  await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", agentPath: f.transcript });
+  expect(f.messages()).toBe(1);
 });
 
 test("a permanent staged publication refusal parks with its cause", async () => {
@@ -20740,4 +21101,82 @@ test("transport traversals before a terminal park cannot shorten a later grant",
   const continued = (await driveWithController(h)).pipeline;
   expect(continued.state).toBe("needs_decision");
   expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
+});
+
+test("Codex quota pressure reseats the same attempt onto the next permitted account", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(f.sends).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("a persisted Codex migration retry stays fenced after its target account is revoked", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  let allowed = [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  f.h.ports.allowedAccountIds = () => allowed;
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  allowed = [LIMITED_ACCOUNT];
+  f.h.ports.conversationMigration = () => ({ phase: "failed-recoverable", targetId: SPARE_ACCOUNT, retry: true, sourceFailure: false, error: "retry pending" }) as never;
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(loadPipelines()[0]!.stateDetail).toContain("target is no longer allowed");
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("critical disk pressure defers new provisioning without parking and automatically resumes", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { scheduled, advance } = provisionRetryClock(h);
+  let low = true;
+  h.ports.worktreeDiskWait = () => low ? "waiting for disk space: worktrees has 0.50 GiB free; retries automatically" : null;
+  await createPipelineFromRequest({ task: "Disk admission", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("waiting for disk space:") });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(false);
+  expect(scheduled).toContain(60_000);
+  // The wait has no exhausted retry budget, even after days of pressure.
+  advance(7 * 24 * 60 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("provisioning");
+  low = false;
+  advance(60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(true);
+});
+
+test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandbox => [engine, sandbox] as const)))("provisioning selects actual %s/%s stage temp destinations at both admission boundaries", async (engine, sandbox) => {
+  const h = harness();
+  savePipelines([]);
+  const stages = RUN_STAGES.map(stage => ({ ...stage, engine, sandbox, model: engine === "codex" ? "gpt-6.1-sol" : "fable" }));
+  const source = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  const observed: boolean[] = [];
+  h.ports.worktreeDiskWait = (repo, worktree, usesClaude) => {
+    observed.push(usesClaude);
+    return worktreeDiskWait(repo, worktree, directory => ({ volume: directory === source.CLAUDE_CODE_TMPDIR ? "claude" : "writer",
+      freeBytes: directory === source.CLAUDE_CODE_TMPDIR ? 1024 ** 3 : 500 * 1024 ** 3, totalBytes: 1000 * 1024 ** 3 }), source, [], usesClaude);
+  };
+  const created = await createPipelineFromRequest({ task: "Stage volume admission", repoDir: "/repo", stages: stages as never }, h.ports);
+  expect(created.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(observed.every(value => value === (engine === "claude"))).toBeTrue();
+  if (engine === "codex") {
+    expect(observed.length).toBeGreaterThanOrEqual(2);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeTrue();
+    expect(loadPipelines()[0]!.state).toBe("running");
+  } else {
+    expect(observed).toHaveLength(1);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
+    expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
+  }
 });

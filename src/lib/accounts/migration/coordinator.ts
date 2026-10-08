@@ -51,7 +51,7 @@ import {
   type ViewerConversationId,
 } from "./contracts";
 import { CodexForkOutcomeUnknownError, RegisteredSuccessorProvider, SuccessorPendingError } from "./provider";
-import { safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
+import { MigrationTargetUnavailableError, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
 import { AUTO_BALANCE_COOLDOWN_MS } from "./quotaPolicy";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "./intentLiveness";
 
@@ -228,6 +228,31 @@ function structuredHostTurnReleased(
     && host.process.startIdentity !== null
     && procBackend.processIdentity(host.process.pid) === host.process.startIdentity
     && host.activeTurnRef === null;
+}
+
+/** The other half of the same statement (issue #1810): a live structured host
+    that records an active turn is inside one, whatever the transcript's last
+    record says. Between a host taking a turn and the CLI journaling its prompt
+    the file still ends on the previous turn's terminal record. The evidence
+    bar is the one above: a verified live process, never a bare row, so a host
+    that is gone holds nothing open and the transcript governs again. A host
+    that has exited and waits for its parent's reap is gone in that sense: it
+    keeps its pid and start identity for as long as the reap is outstanding,
+    and it will never end the turn its row still names. */
+function structuredHostTurnActive(
+  registry: AgentRegistry,
+  engine: AgentEngine,
+  generation: { id: string; path: string },
+): boolean {
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId({ engine, sessionId: generation.id })];
+  const host = entry?.structuredHost;
+  if (!host || entry!.artifactPath !== generation.path) return false;
+  if (entry!.status !== "live" && entry!.status !== "idle") return false;
+  return host.activeTurnRef !== null
+    && host.process !== null
+    && host.process.startIdentity !== null
+    && procBackend.processIdentity(host.process.pid) === host.process.startIdentity
+    && !procBackend.processExited(host.process.pid);
 }
 
 /** The generation an in-flight migration is moving off, matching the source
@@ -407,7 +432,8 @@ async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<C
         ? existing.turn.observedAt
         : observationUnchanged(existing, turn, mtimeMs, deliveredAt)
           ? existing.turn.observedAt
-          : new Date(Math.max(mtimeMs, inventoryStartedAt)).toISOString(),
+          // ISO stamps must still cover the file's fractional millisecond mtime.
+          : new Date(Math.max(Math.ceil(mtimeMs), inventoryStartedAt)).toISOString(),
     });
   });
   return observations;
@@ -662,6 +688,13 @@ function completeProviderTurnObservation(
     return false;
   }
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return false;
+  /* A verified live host inside a turn speaks before any reading of the file
+     (#1810). It has not journaled its prompt yet, so the tail is the turn
+     before, and so is a composer release cached against these same bytes: a
+     dead stalled turn released while no host existed stays cached until the
+     file changes, and the host that has since taken a turn has not changed
+     it. A host whose process is gone fails the check and fences nothing. */
+  if (structuredHostTurnActive(registry, conversation.engine, source)) return false;
   /* An explicit composer release is the operator's own signal and outranks
      the recovery-tail host fence: a live-but-idle host at the composer must
      not hold the reseat hostage. */
@@ -701,6 +734,12 @@ export interface MigrationCoordinatorOptions {
   /** The inventory worker reads the result without changing it. */
   readOnlySnapshot?: boolean;
   ownsOperation?: () => Promise<boolean>;
+  /** Asked right before the successor is created and at every ownership
+      check of its publication, the controller's registration included; a
+      throw fails the switch like any provider failure, and a successor
+      already created is discarded. A pipeline's runtime switch passes its
+      project's allowed accounts through here. */
+  authorizeTarget?: () => void | Promise<void>;
 }
 
 interface BoardRepairPlan {
@@ -800,6 +839,15 @@ async function repairCommittedBoardSuccessions(
     }
   });
   registry.markMigrationBoardProjects(converged);
+}
+
+/** The caller's account fence, as a target the switch can no longer use. */
+async function authorizeMigrationTarget(options: MigrationCoordinatorOptions): Promise<void> {
+  try {
+    await options.authorizeTarget?.();
+  } catch {
+    throw new MigrationTargetUnavailableError("not-allowed", "target account is no longer allowed for this conversation");
+  }
 }
 
 async function cleanupDiscardedSuccessor(
@@ -954,6 +1002,7 @@ export async function advanceConversationMigration(
         ...source,
         launchProfile: migration.successorLaunchProfile!,
       };
+      await authorizeMigrationTarget(options);
       receipt = await successorProvider.create({
         engine,
         operationId: creationOwner.operationId,
@@ -980,19 +1029,38 @@ export async function advanceConversationMigration(
     const publicationReceipt = receipt;
     const publicationRevision = migration.revision;
     const publicationOperationId = migration.operationId;
+    /* The provider hands this question to the native publisher and to the
+       delivery controller's registration, which await the host and the
+       journal between their own checks. So the target account is asked here
+       too, at every one of those boundaries: a refusal stays, and is raised
+       below into the recoverable failure, which discards the successor. */
+    let publicationRefusal: { error: unknown } | null = null;
     const ownsPublication = async (): Promise<boolean> => {
+      if (publicationRefusal) return false;
       if (options.ownsOperation && !await options.ownsOperation()) return false;
       const owner = registry.conversation(publicationConversationId);
       const ownerMigration = owner?.migration;
-      return Boolean(owner
+      if (!(owner
         && ownerMigration?.phase === "verifying"
         && ownerMigration.revision === publicationRevision
         && ownerMigration.operationId === publicationOperationId
         && ownerMigration.providerReceipt !== null
-        && sameProviderReceiptOutcome(ownerMigration.providerReceipt, publicationReceipt));
+        && sameProviderReceiptOutcome(ownerMigration.providerReceipt, publicationReceipt))) return false;
+      try {
+        await authorizeMigrationTarget(options);
+      } catch (error) {
+        publicationRefusal = { error };
+        return false;
+      }
+      return true;
+    };
+    const raisePublicationRefusal = (): void => {
+      const refused = publicationRefusal as { error: unknown } | null;
+      if (refused) throw refused.error;
     };
     let publishOwner = registry.conversation(publicationConversationId);
     if (!publishOwner || !await ownsPublication()) {
+      raisePublicationRefusal();
       if (publishOwner) {
         if (!sameTargetReconfigureCanReuseSuccessor(publishOwner, publicationReceipt)) {
           await cleanupDiscardedSuccessor(successorProvider, publicationReceipt, publishOwner, registry);
@@ -1013,8 +1081,10 @@ export async function advanceConversationMigration(
       launchProfile: successorProfile,
       ownsOperation: ownsPublication,
     });
+    raisePublicationRefusal();
     publishOwner = registry.conversation(publicationConversationId);
     if (!publishOwner || !await ownsPublication()) {
+      raisePublicationRefusal();
       if (publishOwner) {
         if (!sameTargetReconfigureCanReuseSuccessor(publishOwner, publicationReceipt)) {
           await cleanupDiscardedSuccessor(successorProvider, publicationReceipt, publishOwner, registry);

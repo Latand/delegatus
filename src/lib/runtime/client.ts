@@ -7,6 +7,7 @@ import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDepl
 
 
 import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+import { RUNTIME_RPC_DEADLINE_MS, RUNTIME_SNAPSHOT_DEADLINE_MS, VIEWER_DEPLOYMENT_DEADLINE_MS } from "./deadlines";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -17,8 +18,6 @@ import { runtimeHostSocket } from "./flags";
 // failed (#1145). The bound stays a last-resort guard against a runaway host;
 // the durable fix is a bounded snapshot on the journal side.
 const MAX_RESPONSE_FRAME_BYTES = 64 * 1024 * 1024;
-export const RUNTIME_SNAPSHOT_REQUEST_TIMEOUT_MS = 10_000;
-export const VIEWER_DEPLOYMENT_REQUEST_TIMEOUT_MS = 120_000;
 const RUNTIME_HOST_REQUEST_SAMPLE_LIMIT = 256;
 
 export interface RuntimeHostRequestHealth {
@@ -99,9 +98,15 @@ export interface RuntimeHostClient {
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
   readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
+  /** The same snapshot as the UTF-8 JSON the host encoded, for a caller that
+      only forwards it. Optional: a client without it answers `snapshot`. */
+  snapshotBytes?(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<Uint8Array>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   append(event: RuntimeEventInput): Promise<unknown>;
+  /** The RPC itself requires the host's transactional session revision fence.
+      An incumbent without that method refuses it; callers never retry append. */
+  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
@@ -146,9 +151,9 @@ const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
     private readonly socketPath: string,
-    private readonly timeoutMs = 3_000,
-    private readonly deploymentTimeoutMs = VIEWER_DEPLOYMENT_REQUEST_TIMEOUT_MS,
-    private readonly snapshotTimeoutMs = RUNTIME_SNAPSHOT_REQUEST_TIMEOUT_MS,
+    private readonly timeoutMs = RUNTIME_RPC_DEADLINE_MS,
+    private readonly deploymentTimeoutMs = VIEWER_DEPLOYMENT_DEADLINE_MS,
+    private readonly snapshotTimeoutMs = RUNTIME_SNAPSHOT_DEADLINE_MS,
   ) {}
 
   nativeQueueRead(conversationId: string): Promise<NativeQueueRecord[]> {
@@ -170,9 +175,16 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
     return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>;
   }
+  snapshotBytes(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<Uint8Array> {
+    const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
+    return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal, true) as Promise<Uint8Array>;
+  }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
   append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
+  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown> {
+    return this.call("append-session-fenced", { event });
+  }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> { return this.call("command", { command }) as Promise<RuntimeOperationResult>; }
   operationStatus(operationId: string, options: { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
@@ -284,13 +296,19 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
 
   admitMcpHealthProbe(capability: string): Promise<boolean> { return this.call("mcp-health-probe-admission", { capability }) as Promise<boolean>; }
 
-  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal): Promise<unknown> {
+  /** `encoded` resolves the result as the bytes of its JSON inside the frame,
+      never decoded. The host splices its cached snapshot into the frame
+      verbatim, megabytes of it. Decoding that to a string, parsing it, and
+      having a route stringify and encode it again was five passes over the
+      frame on the request thread, per request. */
+  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
       const socket = net.createConnection(this.socketPath);
       // Decode across chunk boundaries; a split multibyte character belongs
       // to the same session response and must survive a large frame intact.
-      socket.setEncoding("utf8");
+      if (!encoded) socket.setEncoding("utf8");
+      const chunks: Buffer[] = [];
       const startedAt = performance.now();
       let frame = "";
       let frameBytes = 0;
@@ -315,6 +333,33 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       signal?.addEventListener("abort", onAbort, { once: true });
       socket.once("error", () => finish(new RuntimeHostUnavailableError("runtime host is unavailable")));
       socket.on("data", (chunk: Buffer | string) => {
+        if (encoded) {
+          const bytes = chunk as Buffer;
+          chunks.push(bytes);
+          frameBytes += bytes.length;
+          if (frameBytes > MAX_RESPONSE_FRAME_BYTES) return finish(new RuntimeHostUnavailableError("runtime host response exceeds limit"));
+          // 0x0A never occurs inside a JSON frame or inside a UTF-8 sequence.
+          const newlineInBytes = bytes.indexOf(10);
+          if (newlineInBytes < 0) return;
+          const whole = chunks.length === 1 ? bytes : Buffer.concat(chunks, frameBytes);
+          const end = frameBytes - bytes.length + newlineInBytes;
+          /* A success frame is exactly this envelope around the result
+             (`serveRuntimeHost`). Anything else, a refusal included, is
+             parsed like every other answer. */
+          const envelope = Buffer.from(`{"id":${JSON.stringify(request.id)},"ok":true,"result":`);
+          if (end >= envelope.length + 3 && whole.subarray(0, envelope.length).equals(envelope)
+            && whole[envelope.length] === 123 && whole[end - 2] === 125 && whole[end - 1] === 125) {
+            return finish(undefined, whole.subarray(envelope.length, end - 1));
+          }
+          try {
+            const response = JSON.parse(whole.toString("utf8", 0, end)) as RuntimeSocketResponse;
+            if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));
+            return finish(response.ok ? undefined : new RuntimeHostUnavailableError(response.error ?? "runtime host rejected request", response.code),
+              Buffer.from(JSON.stringify(response.result) ?? "null"));
+          } catch {
+            return finish(new RuntimeHostUnavailableError("runtime host returned invalid JSON"));
+          }
+        }
         /* Measure and search only the chunk that arrived. Re-measuring and
            re-scanning the whole frame on every chunk made a snapshot-sized
            answer quadratic, hundreds of milliseconds on the event loop (#1987). */

@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel, stickySnap } from "./ResourcesFooter";
+import { CleanupPanel, DiskPressureNotice, ResourcesFooter, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -341,3 +341,145 @@ test("the rail keeps the table's stamp and the Viewer section between polls", ()
   const first = stickySnap(null, { system: null, sessions: [], sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER }, NOW);
   expect(first.data).toMatchObject({ sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER });
 });
+
+test("the System panel names the low volume, the largest consumers first, and the waiting checkouts", () => {
+  const GiB = 1024 ** 3;
+  const element = document.createElement("div");
+  document.body.append(element);
+  const root: Root = createRoot(element);
+  mounted.push(() => {
+    flushSync(() => { root.unmount(); });
+    element.remove();
+  });
+  const pressure = {
+    at: "2026-10-06T10:05:00.000Z", episode: "2026-10-06T10:00:00.000Z", warningBytes: 10 * GiB, criticalBytes: 2 * GiB,
+    volumes: [
+      { roles: ["state", "worktrees"], freeBytes: 1.5 * GiB, level: "critical" as const },
+      { roles: ["temp"], freeBytes: 40 * GiB, level: "ok" as const },
+    ],
+    consumers: [
+      { kind: "state" as const, bytes: 2 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+      { kind: "worktrees" as const, bytes: 90 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+    ],
+  };
+  flushSync(() => { root.render(<DiskPressureNotice pressure={pressure} />); });
+  const notice = element.querySelector("[data-disk-pressure]")!;
+  expect(notice.getAttribute("role")).toBe("status");
+  expect(notice.textContent).toContain("Disk space low");
+  expect(notice.textContent).toContain("State / Worktrees: 1.5 GiB free");
+  expect(notice.textContent).not.toContain("Temp:");
+  expect(notice.textContent).toContain("Most space: Worktrees 90 GiB, State 2.0 GiB");
+  expect(notice.textContent).not.toContain("lower bound");
+  expect(notice.textContent).toContain("New checkouts wait for space");
+  flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical" }] }} />); });
+  expect(element.textContent).toContain("Temp: 512 MiB free");
+  expect(element.textContent).not.toContain("New checkouts wait");
+  flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical", provisioning: true }] }} />); });
+  expect(element.textContent).toContain("New checkouts wait for space");
+  /* Back above the warning threshold, still inside the episode: nothing shown. */
+  flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ ...pressure.volumes[0]!, freeBytes: 11 * GiB, level: "ok" as const }] }} />); });
+  expect(element.querySelector("[data-disk-pressure]")).toBeNull();
+});
+
+/* The sidebar draws the same warning on the system block's grid (docs/design/sidebar-redesign.md):
+   a line per low volume, one line of what takes the space, and a short line while new checkouts wait.
+   Behind "All windows" only the lines fit, and their tooltips say the rest. */
+for (const density of ["line", "detail"] as const) {
+  test(`the ${density} System block draws low disk space as grid lines, coloured by level`, () => {
+    const GiB = 1024 ** 3;
+    const element = document.createElement("div");
+    document.body.append(element);
+    const root: Root = createRoot(element);
+    mounted.push(() => {
+      flushSync(() => { root.unmount(); });
+      element.remove();
+    });
+    const errors: unknown[][] = [];
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args); };
+    mounted.push(() => { console.error = consoleError; });
+    const pressure = {
+      at: "2026-10-06T10:05:00.000Z", episode: "2026-10-06T10:00:00.000Z", warningBytes: 10 * GiB, criticalBytes: 2 * GiB,
+      /* Two low volumes with the same roles, as two host temp views are: each keeps its own line. */
+      volumes: [
+        { roles: ["state", "worktrees"], freeBytes: 1.5 * GiB, totalBytes: 100 * GiB, level: "critical" as const },
+        { roles: ["temp"], freeBytes: 8 * GiB, totalBytes: 64 * GiB, level: "warning" as const },
+        { roles: ["temp"], freeBytes: 6 * GiB, level: "warning" as const },
+        { roles: ["repository"], freeBytes: 40 * GiB, level: "ok" as const },
+      ],
+      consumers: [
+        { kind: "state" as const, bytes: 2 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+        { kind: "worktrees" as const, bytes: 90 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+      ],
+    };
+    flushSync(() => { root.render(<DiskPressureNotice pressure={pressure} density={density} />); });
+    const notice = element.querySelector("[data-disk-pressure]")!;
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.getAttribute("aria-label")).toBe("Disk space low · State / Worktrees: 1.5 GiB free · Temp: 8.0 GiB free · Temp: 6.0 GiB free · Most space: Worktrees 90 GiB, State 2.0 GiB · New checkouts wait for space and retry automatically.");
+    const lines = [...notice.querySelectorAll<HTMLElement>("[data-disk-level]")];
+    expect(lines.map((line) => line.dataset.diskLevel)).toEqual(["critical", "warning", "warning"]);
+    expect(lines.map((line) => line.querySelector("[data-meter-label]")!.textContent)).toEqual(["Disk", "Disk", "Disk"]);
+    expect(lines.map((line) => line.querySelector("[data-meter-value]")!.textContent)).toEqual(["1.5 GiB free", "8.0 GiB free", "6.0 GiB free"]);
+    const rest = density === "line" ? "" : " · Most space: Worktrees 90 GiB, State 2.0 GiB · New checkouts wait for space and retry automatically.";
+    expect(lines.map((line) => line.title)).toEqual(["Disk space low · State / Worktrees: 1.5 GiB free", "Disk space low · Temp: 8.0 GiB free", "Disk space low · Temp: 6.0 GiB free"].map((title) => title + rest));
+    /* The bar is the free share of a volume whose size is known; a critical volume is red and a warning amber, the reading and the bar alike. */
+    expect(lines.map((line) => line.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null)).toEqual(["2", "13", null]);
+    expect(lines.map((line) => line.querySelector("[data-meter-value] span")!.className)).toEqual(["text-danger", "text-warning", "text-warning"]);
+    expect(lines.slice(0, 2).map((line) => (line.querySelector("[data-meter-bar] span") as HTMLElement).style.backgroundColor)).toEqual(["var(--color-danger)", "var(--color-warning)"]);
+    const notes = [...notice.querySelectorAll<HTMLElement>("[data-meter-note]")];
+    expect(notes.map((note) => note.textContent)).toEqual(density === "line" ? ["Most space: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space"] : []);
+    expect(notes.map((note) => note.title)).toEqual(density === "line" ? ["Delegatus files, at least: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space and retry automatically."] : []);
+    /* Two volumes with the same roles are two keyed lines. */
+    expect(errors.filter((args) => String(args[0]).includes("same key"))).toEqual([]);
+    /* A warning admits new checkouts, so nothing waits; unmeasured consumers say so in the same line. */
+    flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [pressure.volumes[1]!], consumers: [] }} density={density} />); });
+    expect([...element.querySelectorAll("[data-meter-note]")].map((note) => note.textContent)).toEqual(density === "line" ? ["Measuring Delegatus disk use…"] : []);
+    expect(element.querySelector<HTMLElement>("[data-disk-level]")!.title).toBe("Disk space low · Temp: 8.0 GiB free" + (density === "line" ? "" : " · Measuring Delegatus disk use…"));
+    flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [pressure.volumes[3]!] }} density={density} />); });
+    expect(element.querySelector("[data-disk-pressure]")).toBeNull();
+  });
+}
+
+/* The desktop sidebar's drawings (docs/design/sidebar-redesign.md): the amber dot of an aged reading says why,
+   on the one-line block and behind "All windows", as the phone's full block does. */
+for (const density of ["line", "detail"] as const) {
+  test(`a ${density} footer names why its memory reading is stale`, async () => {
+    const realTimeout = globalThis.setTimeout;
+    const realFetch = globalThis.fetch;
+    /* The footer's first probe waits 1.5 s and the next 30 s; the test keeps the order and drops the wait. */
+    globalThis.setTimeout = ((handler: () => void, delay?: number) => realTimeout(handler, Math.min(delay ?? 0, 10))) as typeof setTimeout;
+    let polls = 0;
+    globalThis.fetch = (async () => {
+      polls += 1;
+      if (polls > 1) return new Response("{}", { status: 503 });
+      return Response.json({
+        system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: new Date().toISOString() },
+        sessions: [],
+      });
+    }) as unknown as typeof fetch;
+    const element = document.createElement("div");
+    document.body.append(element);
+    const root: Root = createRoot(element);
+    try {
+      flushSync(() => { root.render(<ResourcesFooter density={density} />); });
+      for (let waited = 0; waited < 100 && !element.querySelector('[data-testid="resources-stale-dot"]'); waited += 1) await new Promise((resolve) => realTimeout(resolve, 20));
+
+      const dot = element.querySelector<HTMLElement>('[data-testid="resources-stale-dot"]')!;
+      expect(dot.title).toContain("resource data is stale");
+      expect(element.querySelector("button")!.title).toContain("resource data is stale");
+      /* What is left, in words: the bar beside it draws the same share. */
+      expect(element.querySelector("button")!.title).toContain("RAM 9.0 GiB free");
+      expect(element.querySelector("button")!.title).toContain("Swap 7.0 GiB free");
+      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
+      expect(element.textContent).toContain("9.0 GiB free");
+      /* How old the reading is stands on the screen only behind "All windows". */
+      expect(element.querySelector("[data-meter-note]")?.textContent ?? "").toContain(density === "detail" ? "captured" : "");
+      expect(Boolean(element.querySelector("[data-meter-note]"))).toBe(density === "detail");
+    } finally {
+      flushSync(() => { root.unmount(); });
+      element.remove();
+      globalThis.setTimeout = realTimeout;
+      globalThis.fetch = realFetch;
+    }
+  });
+}

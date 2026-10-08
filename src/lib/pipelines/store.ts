@@ -35,7 +35,7 @@ const stateDatabaseFile = () => statePath("state.sqlite");
 const artifactsRoot = () => statePath("pipelines");
 
 type PipelineFile = { schemaVersion: number; pipelines: Pipeline[] };
-const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger"] as const;
+const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger", "visual-critic"] as const;
 
 export class PipelineStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -189,6 +189,34 @@ function isProviderRecoveries(value: unknown): boolean {
   });
 }
 
+function isRuntimeSwitches(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > 8) return false;
+  const textOrNull = (item: unknown) => item === null || typeof item === "string";
+  const seat = (item: Record<string, unknown> | undefined) => !!item && ["claude", "codex"].includes(String(item.engine))
+    && textOrNull(item.model) && textOrNull(item.effort) && textOrNull(item.serviceTier) && textOrNull(item.accountId);
+  let open = 0;
+  return value.every((item, index) => item && typeof item.id === "string" && item.id.length > 0 && Number.isSafeInteger(item.seq) && item.seq > 0
+    && (!index || item.seq > value[index - 1].seq)
+    && typeof item.requestedAt === "string" && Number.isFinite(Date.parse(item.requestedAt)) && isActor(item.actor)
+    && ["fork", "handoff"].includes(item.mode)
+    && ["requested", "cutting", "switching", "continuing", "committed", "rolled-back", "failed", "superseded"].includes(item.phase)
+    && (!["requested", "cutting", "switching", "continuing"].includes(item.phase) || ++open <= 1)
+    && seat(item.from) && seat(item.to)
+    && typeof item.from.conversationId === "string" && textOrNull(item.from.launchId) && textOrNull(item.from.sessionId) && textOrNull(item.from.agentPath)
+    && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
+    && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
+    && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
+    && (item.rollback === undefined || typeof item.rollback === "boolean")
+    && (item.continuationKey === undefined || typeof item.continuationKey === "string")
+    && (item.continuationDispatch === undefined || typeof item.continuationDispatch.key === "string"
+      && typeof item.continuationDispatch.at === "string" && Number.isFinite(Date.parse(item.continuationDispatch.at)))
+    && (item.outcome === undefined || typeof item.outcome === "string")
+    && (item.launch === undefined || typeof item.launch.clientAttemptId === "string" && textOrNull(item.launch.launchId) && textOrNull(item.launch.conversationId))
+    && (item.handoff === undefined || typeof item.handoff.prompt === "string" && /^[a-f0-9]{64}$/.test(item.handoff.digest)
+      && item.handoff.bytes === Buffer.byteLength(item.handoff.prompt) && item.handoff.bytes <= 32000));
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -259,6 +287,9 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.budgetSpent === undefined || typeof attempt.budgetSpent === "boolean") &&
     (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
+    isRuntimeSwitches(attempt.runtimeSwitches) &&
+    (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
+    (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
@@ -847,10 +878,11 @@ function isPipelineShape(value: unknown): value is Pipeline {
   const runs = pipeline.runs as Pipeline["runs"];
   /* A draft is a scratchpad the operator assembles on the canvas (#136), so it
      may hold 0–8 stages (v2 legacy shells are seeded on migration, but a raw
-     empty draft still loads and stays off the board projection). Every
-     non-draft state keeps the 1–8 invariant (#353: the minimum graph is one
-     implement conversation). */
-  const minStages = pipeline.state === "draft" ? 0 : 1;
+     empty draft still loads and stays off the board projection). Closing or
+     deleting that draft preserves its empty graph in the closed record
+     (#1789). Every other state keeps the 1–8 invariant (#353: the minimum
+     started graph is one implement conversation). */
+  const minStages = pipeline.state === "draft" || pipeline.state === "closed" ? 0 : 1;
   if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES || runs.length !== stages.length) return false;
   const ids = stages.map((stage) => stage.id);
   if (new Set(ids).size !== ids.length) return false;
@@ -1095,6 +1127,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
             sessionId: attempt.sessionId ?? null,

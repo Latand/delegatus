@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
-import { ACCOUNT_MUTATION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE, AccountAdmissionChangedError, AccountMutationBusyError, isAccountAdmissionRetryable, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -30,17 +30,9 @@ import { mappingRowRefusal, type LaunchRuntime } from "@/lib/roles/sizing";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
-import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { activeDrain } from "@/lib/selfUpdate/drain";
-
-function operatorTelegramConnected(): boolean {
-  try {
-    const connection = readTelegramConnection();
-    return connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
-  } catch {
-    return false;
-  }
-}
+import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 
 import {
   boundHistoryBody,
@@ -440,10 +432,7 @@ export interface SeatCommandResult {
 
 function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null): SeatCommandResult | null {
   const hold = triggeredBy?.kind === "agent" ? activeDrain() : null;
-  return hold ? { status: 409, body: {
-    error: "new launches are held while the automatic update drains running work",
-    code: "launch_held_for_update", target: hold.target, since: hold.since,
-  } } : null;
+  return hold ? { status: 409, body: { ...launchHoldRefusal(hold) } } : null;
 }
 
 function text(value: unknown): string {
@@ -827,7 +816,7 @@ async function seatStoreReleased(deadline: number, attempt: number): Promise<boo
  * EVERY WAY OUT OF A SEAT TRANSITION IS A RECORD (issue #1757).
  *
  * The seat store is guarded by the account mutation lock, and its synchronous
- * form throws `AccountMutationBusyError` at once rather than waiting. Any throw
+ * form waits at most 25 ms for a foreign holder. Any throw
  * past the durable begin — that one, a registry read that blew up, a bug — used
  * to leave the route answering an unhandled 500 with no body, the burnt epoch
  * sitting in `pending` with `error: null`, and every later designation refused
@@ -864,9 +853,10 @@ async function guardedSeatTransition(
     try {
       return await run();
     } catch (thrown) {
-      const storeBusy = thrown instanceof AccountMutationBusyError;
+      const storeBusy = isAccountAdmissionRetryable(thrown);
       if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
-      const reason = storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
+      const admissionChanged = thrown instanceof AccountAdmissionChangedError;
+      const reason = admissionChanged ? thrown.message : storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
       const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       const clientRequestId = text(rawBody.clientRequestId);
       let terminalized: OrchestratorSeatTerminalization | null = null;
@@ -887,7 +877,7 @@ async function guardedSeatTransition(
         status: storeBusy ? 503 : 500,
         body: {
           error: reason,
-          code: storeBusy ? "seat_store_busy" : code,
+          code: admissionChanged ? "account_admission_changed" : storeBusy ? "seat_store_busy" : code,
           retryable: storeBusy,
           seat: terminalized?.seat ?? null,
         },
@@ -1122,7 +1112,10 @@ async function runOrchestratorSeatRequest(
   // fresh agent spawn still needs admission after any awaited handoff work.
   const hold = agentSeatLaunchHold(triggeredBy);
   if (hold) return hold;
-  const telegramGrant = operatorTelegramConnected();
+  /* A seat holds the grant wherever Telegram is set up, whatever its
+     connection reads this minute: the launch repairs a connection that is down
+     or starts without the tool, and the grant brings the tool back later. */
+  const telegramGrant = telegramSetUp();
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
@@ -1232,7 +1225,8 @@ async function runOrchestratorSeatRequest(
     /* The spawn route answers its own busy store as a plain failure. It is the
        same wait as ours: nothing was launched, and the replay asks again under
        the same attempt id. */
-    if (text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError(text(spawned.body.error));
+    if (spawned.body.code === "account_admission_changed" || text(spawned.body.error) === "spawn account changed during admission") throw new AccountAdmissionChangedError();
+    if (spawned.body.code === "account_store_busy" || text(spawned.body.error) === ACCOUNT_STORE_BUSY_MESSAGE || text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError();
     const error = text(spawned.body.error)
       || (!admitted
         ? `spawn was rejected with HTTP status ${spawned.status}`
@@ -1407,7 +1401,11 @@ export function executeOrchestratorRotation(
      unknown provenance; the operator is never credited by default. */
   actor: ViewerActor | null = null,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor));
+  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor), {
+    replay: true,
+    waitMs: dependencies.seatStoreWaitMs,
+    launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+  });
 }
 
 async function runOrchestratorRotation(

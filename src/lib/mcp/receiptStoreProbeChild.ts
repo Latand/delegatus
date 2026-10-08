@@ -3,6 +3,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import fs from "node:fs";
 import path from "node:path";
 import { awaitFixtureFile, waitForFixtureFile, waitUntilFixtureTime } from "./fixtureBarrier";
+import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtures";
 
 import {
   MCP_TOOL_NAMES,
@@ -87,6 +88,8 @@ interface HttpHostControl {
 }
 
 async function runHttpHost(configPath: string): Promise<void> {
+  // The controlled Viewer runs fake engine hosts in its own test process.
+  beginCodexFeatureFixture();
   const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as HttpHostConfig;
   const { NextRequest } = await import("next/server");
   const { conversationHostPOST } = await import("@/app/api/conversation-host/handlers");

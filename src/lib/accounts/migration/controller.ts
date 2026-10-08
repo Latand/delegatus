@@ -2,7 +2,7 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, conversationLookupFromSnapshot, readOnlyConversationLookupFromSnapshot, type AgentRegistry } from "@/lib/agent/registry";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
@@ -60,7 +60,7 @@ export async function reconcileAccountMigrationCycle(
 
 // Compatibility routing reads persisted membership only. Neither getter nor
 // setter may resolve a provider catalog or credentials inside this lease.
-export function syncCompatibilityRouting(registry: AgentRegistry): void {
+export async function syncCompatibilityRouting(registry: AgentRegistry): Promise<void> {
   const current = registry.readOnlySnapshot().engineRouting;
   const claudeNeedsSync = (() => {
     try { return Boolean(current.claude.activeAccountId && current.claude.activeAccountId !== activeClaudeAccountId()); }
@@ -71,13 +71,13 @@ export function syncCompatibilityRouting(registry: AgentRegistry): void {
     catch { return true; }
   })();
   if (!claudeNeedsSync && !codexNeedsSync) return;
-  withAccountMutationLock(() => {
+  await withAccountMutationLockAsync(() => {
     const snapshot = registry.readOnlySnapshot();
     const claude = snapshot.engineRouting.claude.activeAccountId;
     const codex = snapshot.engineRouting.codex.activeAccountId;
     try { if (claude && claude !== activeClaudeAccountId()) setActiveClaudeAccount(claude); } catch { /* registry routing stays authoritative */ }
     try { if (codex && codex !== activeCodexAccountId()) setActiveCodexAccount(codex); } catch { /* registry routing stays authoritative */ }
-  });
+  }, { caller: "compatibility routing" });
 }
 
 /** Settles the device logins that still have a transition ahead of them. A

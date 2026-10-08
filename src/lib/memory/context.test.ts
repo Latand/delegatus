@@ -64,7 +64,7 @@ for (const length of [100, 4200]) test(`citation accounting retains the tail of 
     const source = path.join(root, "cross.md");
     fs.writeFileSync(source, "---\nname: Widget cache\ndescription: Widget cache requires invalidation.\nmetadata:\n  type: project\n---\nInvalidate the widget cache.\n");
     await index.refresh([{ path: source, engine: "claude", sourceKind: "claude_memory", project: "project-fixture" }]);
-    const entries = index.injectionCandidates("widget", "project-fixture", "codex", "conversation-fixture");
+    const entries = (await index.injectionCandidates("widget", "project-fixture", "codex", "conversation-fixture"));
     index.recordInjection(entries.map(c => ({ ...c, score: .8 })), "turn-fixture", "conversation-fixture");
     const filename = path.join(root, "reply.jsonl");
     for (const suffix of ["Ordinary text", "<oai-mem-citation>\ncross.md:90-91|note=[unrelated]\n</oai-mem-citation>", "<oai-mem-citation>\ncross.md:7-8|note=[cache]\n</oai-mem-citation>"]) {

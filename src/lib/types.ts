@@ -447,6 +447,8 @@ export interface ProjectCatalogEntry {
 }
 
 export interface FilesResponse {
+  /** One waiting prototype review per task, for the orchestrator notice and needs-you count. */
+  prototypeReviewNotices?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
   /** Board-only read: execution bodies remain on targeted full endpoints. */
   readProjection?: "board-summary";
   files: FileEntry[];
@@ -877,6 +879,12 @@ export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed"
 
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
+  /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
+  diskPressure?: import("./state/diskPressure").DiskPressure;
+  /** The last worktree sweep, counts and bytes per reason. */
+  worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
+  /** Temp cleanup's Git and inspection holds, with counts and bytes. */
+  tempSweep?: ReturnType<typeof import("./tempSweep").tempSweepStatus>;
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
   /** When the session table was captured. The system block carries its own

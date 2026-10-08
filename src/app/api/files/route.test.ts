@@ -34,6 +34,7 @@ import {
   setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
 import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -103,7 +104,9 @@ beforeEach(() => {
     loadFlows: () => flowsStore() as never,
     loadPipelinesForProjection: () => pipelinesStore() as never,
     filterPipelinesForFileScan: (pipelines: readonly Pipeline[]) => pipelineVisibility([...pipelines]) as Pipeline[],
-    loadTasks: () => boardTasksStore() as never,
+    /* Frozen as production hands it out: the shared task list. A files read
+       that wrote into one of these would throw in every case below. */
+    loadTasks: () => deepFreeze(boardTasksStore()) as never,
     loadWorkflows: () => [],
     filterWorkflowsForFileScan: () => [],
     tmuxEndpointHealth: () => tmuxHealth as never,
@@ -1076,6 +1079,30 @@ test("an ordinary resource snapshot reuses the completed scanner generation", as
   expect(scansBeforeRelease).toBe(1);
   expect(settledBeforeRelease).toBeTrue();
   expect(files.map((entry) => entry.path)).toEqual([before.path]);
+});
+
+test("an ordinary resource snapshot with no completed generation takes the scan scope and does not wait for enrichment", async () => {
+  const only = file("/sessions/cold-resource.jsonl");
+  let release!: () => void;
+  scanGates.push(new Promise<void>((resolve) => { release = resolve; }));
+  scannedFiles = [only];
+  let settled = false;
+  const handoff = readResourceFileSnapshot(false).then((files) => {
+    settled = true;
+    return files;
+  });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const settledBeforeFullScan = settled;
+  release();
+  const files = await handoff;
+
+  expect(settledBeforeFullScan).toBeTrue();
+  expect(files.map((entry) => entry.path)).toEqual([only.path]);
+  expect(scans).toBe(1);
+  /* The one scan still completes as the process's generation. */
+  expect((await cachedFileScan()).snapshot.files.map((entry) => entry.path)).toEqual([only.path]);
+  expect(scans).toBe(1);
 });
 
 test("a fresh resource handoff publishes the exact scan scope before full file enrichment settles", async () => {
@@ -3598,6 +3625,49 @@ test("full and summary files representations never share ETags or cached bodies"
   expect((await fullAgain.json()).readProjection).toBeUndefined();
 });
 
+/* A task's prototype review belongs to its project, and this read has no
+   project fence: a caller that presents a capability gets the board without
+   the choice, the comment and the notices, whichever representation it asks
+   for and whatever the operator's poll left in the cache. */
+test("a capability caller's files read carries no prototype review: full, summary, cached or delta", async () => {
+  const media = { id: "a".repeat(64), mime: "image/png", bytes: 8 };
+  const round = (id: string, decided: boolean) => ({
+    id: `pr_${id.repeat(32)}`, title: "Private layout round", taskId: "task-a", project: "project-a", createdAt: "2026-10-06T10:00:00.000Z",
+    source: { conversationId: null }, publicationKey: `operator:${id}`, inputDigest: "d".repeat(64),
+    variants: [{ number: 1, name: "Private variant name", description: "Private.", frames: [{ image: media, caption: "Private caption" }], videos: [] }],
+    ...(decided ? { decision: { chosen: [1], comment: "Private project A decision", at: "2026-10-06T11:00:00.000Z",
+      delivery: { state: "sent", clientMessageId: `prototype-decision:${id}`, conversationId: "conversation_seat", text: "Private project A decision" } } } : {}),
+  });
+  const boardTask = (id: string, rounds: unknown[]) => ({ id, project: "project-a", status: "inbox", placement: "unplaced", text: `Task ${id}`, assignments: [], sources: [],
+    createdAt: "2026-10-06T09:00:00.000Z", updatedAt: "2026-10-06T09:00:00.000Z", prototypeReviews: rounds });
+  boardTasksStore = () => [boardTask("task-a", [round("1", true)]), boardTask("task-b", [round("2", false)])];
+  scannedFiles = [];
+  const agent = { "x-llv-spawn-capability": "b".repeat(43) };
+  const PRIVATE = /Private project A decision|Private variant name|Private layout round|prototypeReview/;
+  for (const view of ["", "?view=summary"]) {
+    const operator = await GET(new Request(`http://127.0.0.1/api/files${view}`));
+    const operatorTag = operator.headers.get("etag")!;
+    const seen = await operator.json();
+    expect(seen.tasks[0].prototypeReview.decision.comment).toBe("Private project A decision");
+    expect(seen.prototypeReviewNotices).toHaveLength(1);
+    /* The operator's body is cached under its scope by now. */
+    const cached = await GET(new Request(`http://127.0.0.1/api/files${view}`, { headers: agent }));
+    const body = await cached.text();
+    expect(cached.status).toBe(200);
+    expect(cached.headers.get("etag")).not.toBe(operatorTag);
+    expect(body).not.toMatch(PRIVATE);
+    expect(JSON.parse(body).tasks.map((task: { id: string }) => task.id)).toEqual(["task-a", "task-b"]);
+    /* Certifying the operator's representation earns no 304 and no delta from it. */
+    const conditional = await GET(new Request(`http://127.0.0.1/api/files${view}`, { headers: { ...agent, "if-none-match": operatorTag, "x-llv-files-delta": "1" } }));
+    expect(conditional.status).toBe(200);
+    expect(conditional.headers.get("x-llv-files-delta-base")).toBeNull();
+    expect(await conditional.text()).not.toMatch(PRIVATE);
+    const again = await GET(new Request(`http://127.0.0.1/api/files${view}`));
+    expect((await again.json()).tasks[0].prototypeReview.decision.comment).toBe("Private project A decision");
+  }
+  boardTasksStore = () => [];
+});
+
 /* #1814: every projection build costs a worker process of about a gigabyte on
    production, so a burst of polls over a corpus nobody has touched has to be
    answered by one build. `loadFlows` runs exactly once per built
@@ -3808,6 +3878,28 @@ test("the board carries each record's resolved PR and issue links, and leaves ou
   } finally {
     pipelinesStore = () => [];
     pipelineVisibility = () => [];
+    boardTasksStore = () => [];
+  }
+});
+
+test("files reconciles the frozen shared task list by copying the task it changes", async () => {
+  const deadPanePid = 2_147_483_646;
+  const stored = [
+    { id: "task-dead-pane", project: "repo", text: "Spawn that died", status: "assigned", placement: "unplaced",
+      assignments: [{ path: null, panePid: deadPanePid, state: "spawning", error: null, at: "2026-10-07T00:00:00Z" }],
+      createdAt: "2026-10-07T00:00:00Z", updatedAt: "2026-10-07T00:00:00Z" },
+    { id: "task-untouched", project: "repo", text: "Nothing to reconcile", status: "inbox", placement: "unplaced",
+      assignments: [], createdAt: "2026-10-07T00:00:00Z", updatedAt: "2026-10-07T00:00:00Z" },
+  ];
+  boardTasksStore = () => stored;
+  try {
+    const response = await GET(new Request("http://127.0.0.1/api/files"));
+    const body = await response.json() as { tasks: Array<{ id: string; assignments: Array<{ state: string }> }> };
+    expect(body.tasks.find((task) => task.id === "task-dead-pane")?.assignments[0]?.state).toBe("failed");
+    expect(body.tasks.find((task) => task.id === "task-untouched")).toBeDefined();
+    expect(Object.isFrozen(stored[0])).toBe(true);
+    expect(stored[0]!.assignments[0]!.state).toBe("spawning");
+  } finally {
     boardTasksStore = () => [];
   }
 });

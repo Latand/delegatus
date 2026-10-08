@@ -58,17 +58,26 @@ export function contextView(c: Case): string {
 }
 
 
-const nativeTerms = new WeakMap<Candidate, [Set<string>, Set<string>]>();
+const nativeContent = new WeakMap<Candidate, { terms: [Set<string>, Set<string>]; summary: string; body: string }>();
 export function nativeMatch(a: Candidate, b: Candidate): boolean {
   const terms = (s: string) => new Set((s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
-  const cached = (c: Candidate): [Set<string>, Set<string>] => {
-    let value = nativeTerms.get(c);
-    if (!value) { value = [terms(c.title + " " + c.summary), terms(c.body)]; nativeTerms.set(c, value); }
+  const cached = (c: Candidate) => {
+    let value = nativeContent.get(c);
+    if (!value) {
+      const normalize = (text: string) => text.normalize("NFC").trim().replace(/\s+/gu, " ");
+      value = { terms: [terms(c.title + " " + c.summary), terms(c.body)], summary: normalize(c.summary), body: normalize(c.body) };
+      nativeContent.set(c, value);
+    }
     return value;
   };
   const aa = cached(a), bb = cached(b);
-  return aa.some((x, i) => {
-    const y = bb[i];
+  // Exact copies need no minimum word count. Short bodies can be generic,
+  // with fewer than three distinct words still need matching summaries.
+  // Specific exact facts share identity across descriptions. Preserve case,
+  // punctuation and word order.
+  if (aa.body && aa.body === bb.body && (aa.summary === bb.summary || aa.terms[1].size >= 3)) return true;
+  return aa.terms.some((x, i) => {
+    const y = bb.terms[i];
     if (Math.min(x.size, y.size) < 5 || Math.min(x.size, y.size) / Math.max(x.size, y.size) < 0.8) return false;
     const overlap = [...x].filter(t => y.has(t)).length;
     return overlap / (x.size + y.size - overlap) >= 0.8;

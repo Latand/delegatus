@@ -28,7 +28,8 @@
 import type { MessageKey, TFunction } from "@/lib/i18n";
 
 import { deliveryWaitFor, deliveryWaitText, type DeliveryWaitPhase } from "@/components/runtime/deliveryWait";
-import { humanReceiptReasonKey, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
+import { sentenceCauseKey } from "@/components/runtime/deliveryNotice";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
 
 import { outboxStateForReceiptStatus, receiptHasUnknownFate, type OutboxEntry } from "./outbox";
 
@@ -79,7 +80,14 @@ export interface MessageRowModel {
   /** The wait phase, published on the row for the drivers that read it. */
   wait: DeliveryWaitPhase | "transmitting" | null;
   /** A proven failure's human reason, and the raw sentence behind it. */
-  failure: { reason: string; detail: string | null; action: MessageRowAction } | null;
+  failure: {
+    reason: string;
+    detail: string | null;
+    /** The reason is the whole story in the operator's language, action
+        included: the disclosure prints no raw sentence beside it. */
+    selfExplaining: boolean;
+    action: MessageRowAction;
+  } | null;
   /** Nothing can confirm this delivery yet: the disclosure offers Check status. */
   uncertain: boolean;
   /**
@@ -136,6 +144,27 @@ const FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/\bunsupported[- ]injection\b|\bdoes not support history injection\b/i, "receipt.human.injectUnsupported"],
 ];
 
+/** A cause the sentence itself names, as the row words it. */
+const SENTENCE_CAUSE_REASONS: Partial<Record<MessageKey, MessageKey>> = {
+  "receipt.cause.telegramOff": "outbox.failure.telegramOff",
+  "receipt.cause.telegramWithdrawn": "outbox.failure.telegramWithdrawn",
+  "receipt.cause.telegramNameTaken": "outbox.failure.telegramNameTaken",
+};
+
+/** The row's reason for a failure whose sentence names a cause that needs no
+    raw sentence beside it, or null. */
+function selfExplainingReasonKey(raw: string | null | undefined): MessageKey | null {
+  const cause = sentenceCauseKey(raw);
+  return cause ? SENTENCE_CAUSE_REASONS[cause] ?? null : null;
+}
+
+/** Whether one evidence line already says everything another does. */
+export function evidenceRepeats(line: string | null | undefined, other: string | null | undefined): boolean {
+  const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!line || !other) return false;
+  return normalize(other).includes(normalize(line));
+}
+
 /**
  * A receipt the COMPOSER minted for itself when a reconciliation window closed
  * with nothing durable in it. Its "operation id" is the local key with this
@@ -165,6 +194,8 @@ export function failureReasonKey(raw: string | null | undefined): MessageKey | n
   if (!trimmed) return null;
   const known = humanReceiptReasonKey(trimmed);
   if (known) return known;
+  const selfExplaining = selfExplainingReasonKey(trimmed);
+  if (selfExplaining) return selfExplaining;
   for (const [pattern, key] of FAILURE_PATTERNS) {
     if (pattern.test(trimmed)) return key;
   }
@@ -196,6 +227,18 @@ export function transportLine(
   if (entry.deliveryReceipt?.reason && BUSY_RETRY_REASONS.has(entry.deliveryReceipt.reason)
     && (entry.state === "delivering" || entry.state === "queued")) {
     return { label: t("runtime.receipt.busyRetry"), wait: "transmitting" };
+  }
+  /* The server held this send while the conversation switches accounts and
+     said so on its receipt. The card's own switch annotation can name the
+     target; the receipt's code is what is known when it cannot. */
+  if (entry.deliveryReceipt?.reason && SWITCH_WAIT_REASONS.has(entry.deliveryReceipt.reason)
+    && (entry.state === "delivering" || entry.state === "queued")) {
+    return {
+      label: switchHold?.label && entry.deliveryReceipt.reason !== "switch-failed"
+        ? t("outbox.heldForSwitch", { label: switchHold.label })
+        : t(humanReceiptReasonKey(entry.deliveryReceipt.reason)!),
+      wait: null,
+    };
   }
   /* A server-held admission with no receipt yet says only "held". That is the
      honest answer while nothing else is known — but when the conversation's own
@@ -300,7 +343,8 @@ function contextRowModel(t: TFunction, entry: OutboxEntry): MessageRowModel {
   const failure = phase === "failed"
     ? {
       reason: reasonKey ? t(reasonKey) : t("outbox.failure.generic"),
-      detail: raw && (!reasonKey || t(reasonKey) !== raw.trim()) ? raw.trim() : null,
+      detail: raw && !selfExplainingReasonKey(raw) && (!reasonKey || t(reasonKey) !== raw.trim()) ? raw.trim() : null,
+      selfExplaining: selfExplainingReasonKey(raw) !== null,
       action: "edit" as MessageRowAction,
     }
     : null;
@@ -354,12 +398,14 @@ export function messageRowModel(
     ? entry.deliveryReceipt?.reason ?? entry.error ?? null
     : null;
   const reasonKey = entry.needsReattach ? "outbox.failure.attachmentsLost" : failureReasonKey(raw);
+  const selfExplaining = !entry.needsReattach && selfExplainingReasonKey(raw) !== null;
   const failure = phase === "failed"
     ? {
       reason: reasonKey ? t(reasonKey) : t("outbox.failure.generic"),
       /* The raw sentence is never thrown away — it names attempt counts and
          provider wording a report needs — it is one tap behind the reason. */
-      detail: raw && (!reasonKey || t(reasonKey) !== raw.trim()) ? raw.trim() : null,
+      detail: raw && !selfExplaining && (!reasonKey || t(reasonKey) !== raw.trim()) ? raw.trim() : null,
+      selfExplaining,
       /* The journal is asked first whenever it CAN answer: an operation the
          server admitted is continued from its own recorded request, which is
          the same message under the same identity and cannot become a second

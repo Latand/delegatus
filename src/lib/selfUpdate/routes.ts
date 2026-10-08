@@ -14,7 +14,7 @@ import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 import { DIALOG_WRITER, type AutoWriter } from "./auto";
-import { selfUpdateService, snapshotStream } from "./instance";
+import { selfUpdateService, snapshotFailure, snapshotStream } from "./instance";
 import { refuse, type ActionResult } from "./service";
 import { CHECKOUT_STEPS, type CheckoutStepName } from "./types";
 
@@ -31,7 +31,7 @@ const noStore = { "cache-control": "no-store" };
    language), `error` (the same in English, for API readers) and `detail`
    (machine output), with the snapshot. */
 async function answer(result: ActionResult): Promise<NextResponse> {
-  const snapshot = result.ok && result.replaySnapshot ? result.replaySnapshot : await selfUpdateService().snapshot();
+  const snapshot = result.ok && result.replaySnapshot ? result.replaySnapshot : await selfUpdateService().observe();
   return result.ok
     ? NextResponse.json(snapshot, { status: 202, headers: noStore })
     : NextResponse.json({ error: result.error, code: result.code, ...(result.detail ? { detail: result.detail } : {}), snapshot }, { status: result.status, headers: noStore });
@@ -59,16 +59,26 @@ function mayStartCheck(request: Request): boolean {
   return rejectCrossOrigin(request as NextRequest) === null && requireOperatorAuthority(request).ok;
 }
 
+/* The work in progress is read only for a reader that shows it; the Viewer's
+   background feed asks with `work=0` and never starts that reading (#2594). */
+function wantsWork(request: Request): boolean {
+  return new URL(request.url).searchParams.get("work") !== "0";
+}
+
 export async function getSnapshot(request: Request): Promise<NextResponse> {
   const service = selfUpdateService();
   if (mayStartCheck(request)) service.ensureChecked();
-  return NextResponse.json(await service.snapshot(), { headers: noStore });
+  try {
+    return NextResponse.json(wantsWork(request) ? await service.observe() : await service.snapshot(), { headers: noStore });
+  } catch (error) {
+    return NextResponse.json(snapshotFailure(error), { status: 503, headers: noStore });
+  }
 }
 
 export function getEvents(request: Request): Response {
   const service = selfUpdateService();
   if (mayStartCheck(request)) service.ensureChecked();
-  return new Response(snapshotStream(service, request.signal), {
+  return new Response(snapshotStream(service, request.signal, { work: wantsWork(request) }), {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
@@ -151,4 +161,10 @@ export function getStepLog(step: string): Response {
   if (!(CHECKOUT_STEPS as readonly string[]).includes(step)) return new Response("Unknown step\n", { status: 404 });
   const text = selfUpdateService().stepLog(step as CheckoutStepName);
   return new Response(text ?? "", { headers: { "content-type": "text/plain; charset=utf-8", ...noStore } });
+}
+
+export async function postInstallAction(request: NextRequest): Promise<NextResponse> {
+  const refused = operatorGate(request);
+  if (refused) return refused;
+  return answer(await selfUpdateService().performInstallAction());
 }

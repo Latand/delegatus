@@ -65,6 +65,8 @@ export const LIFECYCLE_EVENT_TYPES = [
       (#2215): an unattended stage or spawn at once, an attended conversation
       after its wait ran out. The turn carries on with the denial. */
   "permission_denied",
+  /** Native delegation observed on a launch whose permission denied it. */
+  "subagent_policy_violation",
 ] as const;
 
 export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
@@ -95,6 +97,7 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
   pipeline_merged: "completed",
   task_finished: "completed",
   permission_denied: "running",
+  subagent_policy_violation: "running",
 };
 
 /**
@@ -114,6 +117,7 @@ export const TERMINAL_HIGH_SIGNAL_EVENT_TYPES: ReadonlySet<LifecycleEventType> =
   "delivery_expired",
   "pipeline_merged",
   "task_finished",
+  "subagent_policy_violation",
 ]);
 
 export function isTerminalHighSignalEvent(type: LifecycleEventType): boolean {

@@ -11,7 +11,7 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
 import { actionError, type ActionError } from "./selfUpdateCopy";
 import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
-import { useSelfUpdateFeed } from "./useSelfUpdateFeed";
+import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
 /**
  * The Update surface (#2007): how this install updates itself, reached from
@@ -29,13 +29,15 @@ function newKey(): string {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function useClock(offset: number): number {
+function useClock(serverTime?: string): number {
   const [now, setNow] = useState(() => Date.now());
+  const [calibration, setCalibration] = useState({ serverTime, offset: 0 });
+  if (serverTime !== calibration.serverTime) setCalibration({ serverTime, offset: serverTime ? Date.parse(serverTime) - now : 0 });
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
-  return now + offset;
+  return now + calibration.offset;
 }
 
 export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
@@ -48,24 +50,25 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<ActionError | null>(null);
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
-  const firstWebPid = useRef<number | null | undefined>(undefined);
+  const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
-  const offset = s ? Date.parse(s.meta.serverTime) - Date.now() : 0;
-  const now = useClock(Number.isFinite(offset) ? offset : 0);
+  const now = useClock(s?.meta.serverTime);
 
-  if (s && firstWebPid.current === undefined) firstWebPid.current = s.processes.web.pid;
+  if (s && firstWebPid === undefined) setFirstWebPid(s.processes.web.pid);
   if (s?.busy === "restart-runtime-host" && armed) setArmed(false);
 
   /* A web restart is over once a different web process answers healthy. */
   const web = s?.processes.web;
-  const replaced = Boolean(web && web.pid !== null && web.state === "healthy" && firstWebPid.current !== undefined && web.pid !== firstWebPid.current);
-  useEffect(() => {
-    if (webRestart && web && web.pid !== webRestart.pid && web.state === "healthy") setWebRestart(null);
-  }, [webRestart, web]);
+  const replaced = Boolean(web && web.pid !== null && web.state === "healthy" && firstWebPid !== undefined && web.pid !== firstWebPid);
+
 
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
     setPending((value) => new Set(value).add(key));
     setError(null);
+    /* The snapshot this action answers with is ordered from now: a stream
+       state that arrives while it runs is newer and stays. Its outcome (the
+       error, the restart it began) is the action's own and always shown. */
+    const ticket = selfUpdateTicket();
     try {
       const response = await fetch(path, {
         method: "POST",
@@ -75,7 +78,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
       const payload = await response.json().catch(() => null) as ({ error?: string; code?: string; detail?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
       if (!response.ok) setError(actionError(response.status, payload));
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
-      if (next && next.meta) feed.accept(next);
+      if (next && next.meta) feed.accept(next, ticket);
       return response.ok;
     } catch {
       setError({ code: "offline" });
@@ -89,11 +92,27 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     }
   }, [feed]);
 
+  const confirmApply = () => {
+    const work = s?.resumeWork;
+    const lines = [t("selfUpdate.applyConfirm")];
+    /* Work not read yet is not "no work": it is said so, never counted as 0. */
+    if (s?.workEvidence?.state === "pending") lines.push(t("selfUpdate.work.pendingConfirm"));
+    else if (s?.workEvidence?.state === "unavailable") lines.push(t("selfUpdate.auto.block.unreadable", { detail: s.workEvidence.error ?? "" }));
+    if (work?.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
+    else if (work) {
+      lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
+      lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
+      lines.push(...(work.turnList ?? []).filter(turn => !turn.stage).map(turn => `${turn.engine} · ${turn.project ?? turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`));
+    }
+    return window.confirm(lines.join("\n"));
+  };
+
   const actions: ViewActions = {
+    installAction: () => { if (confirmApply()) void act("install-action", "/api/self-update/action"); },
     toggleAuto: () => { if (s?.auto) void act("auto", "/api/self-update/auto", { enabled: !s.auto.enabled }); },
     check: () => { void act("check", "/api/self-update/check"); },
-    update: () => { void act("update", "/api/self-update/update", { key: newKey() }); },
-    retry: () => { void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
+    update: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey() }); },
+    retry: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
     restartWeb: () => {
       const pid = s?.processes.web.pid ?? null;
       void act("restart-web", "/api/self-update/restart", { role: "web" }).then((ok) => { if (ok) setWebRestart({ pid }); });
@@ -173,7 +192,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const title = t("selfUpdate.title");
   const body = s
     ? <SelfUpdateView snapshot={s} live={feed.live} state={state} actions={actions} />
-    : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
+    : feed.failure !== null
+      ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed")}</p>
+      : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
 
   if (isMobile) {
     return (

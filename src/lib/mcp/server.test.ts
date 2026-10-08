@@ -1064,6 +1064,172 @@ describe("MCP tool service", () => {
     }
   }, 30_000);
 
+  /* The recovery namespace is named by the lock's inode, and the filesystem
+     hands a freed inode number to the next lock. Two generations of the lock
+     then meet in one namespace; each case below is one side of that meeting. */
+  test.each([
+    { name: "a stale-lock claimant waits out another generation's live retirement at the same inode", phase: "observe", ownerAlive: true },
+    { name: "a stale-lock claimant retires another generation's dead retirement at the same inode", phase: "observe", ownerAlive: false },
+    { name: "a holder retires its lock after another generation's owner took the first epoch", phase: "retire", ownerAlive: true },
+    { name: "a holder retires its lock after another generation's dead owner took the first epoch", phase: "retire", ownerAlive: false },
+  ] as const)("$name", async ({ phase, ownerAlive }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-foreign-generation-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const countPath = path.join(directory, "binding-count");
+    const resultPath = path.join(directory, "result.json");
+    const readyPath = path.join(directory, "foreign-owner-ready");
+    const child = path.join(import.meta.dir, "server.lockChild.ts");
+    if (phase === "observe") {
+      fs.writeFileSync(`${receiptPath}.lock`, JSON.stringify({
+        pid: 999_999_999,
+        startIdentity: "dead",
+        token: "foreign-generation-stale-owner",
+      }));
+    }
+
+    const claimant = ownFixtureChild(Bun.spawn({
+      cmd: [
+        process.execPath,
+        child,
+        "foreign-owner-claim",
+        receiptPath,
+        countPath,
+        resultPath,
+        String(ownerAlive ? process.pid : 999_999_999),
+        readyPath,
+        phase,
+      ],
+      env: { ...process.env },
+      stdout: "ignore",
+      stderr: "pipe",
+    }));
+    expect(await waitForFile(readyPath, 10_000)).toBeTrue();
+    let settledWhileOwned = false;
+    if (ownerAlive) {
+      /* The other generation's owner is this process, so its entry stays until
+         it is removed here, as that owner's own retirement would remove it. */
+      await Bun.sleep(150);
+      settledWhileOwned = fs.existsSync(resultPath) || claimant.exitCode !== null;
+      const foreign = recoveryArtifacts(directory).filter((entry) => entry.endsWith(".recovery-owner-0"));
+      expect(foreign).toHaveLength(1);
+      fs.unlinkSync(path.join(directory, foreign[0]!));
+    }
+
+    expect(await childResult(claimant)).toEqual({ exit: 0, error: "" });
+    expect(settledWhileOwned).toBeFalse();
+    expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({ ok: true, replayed: false });
+    expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(recoveryArtifacts(directory)).toEqual([]);
+  }, 20_000);
+
+  test("two generations at one inode that publish different epochs both settle", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-mixed-epochs-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const lockPath = `${receiptPath}.lock`;
+    const countPath = path.join(directory, "binding-count");
+    const pinPath = path.join(directory, "retired-inode-pin");
+    const child = path.join(import.meta.dir, "server.lockChild.ts");
+    /* What a creator that died at "recovery-link-cleanup" leaves: the stale
+       lock and its recovery link are gone, the inode is free, and the dead
+       creator's epoch 0 still names the retired generation. */
+    fs.writeFileSync(pinPath, "");
+    const pin = fs.statSync(pinPath);
+    const namespace = `${lockPath}.${pin.dev}-${pin.ino}.recovering`;
+    fs.writeFileSync(`${namespace}.recovery-owner-0`, JSON.stringify({
+      version: 1,
+      epoch: 0,
+      pid: 999_999_999,
+      startIdentity: "dead",
+      token: crypto.randomUUID(),
+      targetDev: pin.dev,
+      targetIno: pin.ino,
+      targetToken: "retired-generation",
+    }));
+    const claim = (role: "stale" | "holder" | "later") => ownFixtureChild(Bun.spawn({
+      cmd: role === "later"
+        ? [process.execPath, child, "claim", receiptPath, countPath, path.join(directory, "later-result.json")]
+        : [
+            process.execPath,
+            child,
+            "mixed-epoch-claim",
+            receiptPath,
+            countPath,
+            path.join(directory, `${role}-result.json`),
+            role,
+            pinPath,
+            path.join(directory, `${role}-ready`),
+            path.join(directory, `${role}-release`),
+          ],
+      env: { ...process.env },
+      stdout: "ignore",
+      stderr: "pipe",
+    }));
+
+    const stale = claim("stale");
+    expect(await waitForFile(path.join(directory, "stale-ready"), 10_000)).toBeTrue();
+    const holder = claim("holder");
+    expect(await waitForFile(path.join(directory, "holder-ready"), 10_000)).toBeTrue();
+    expect(fs.statSync(lockPath).ino).toBe(pin.ino);
+    fs.writeFileSync(path.join(directory, "stale-release"), "release");
+    /* The retired generation's epoch 1 has now been published beside the new
+       generation's epoch 0, with both owners alive. */
+    expect(await waitForFile(path.join(directory, "stale-ready-published"), 10_000)).toBeTrue();
+    fs.writeFileSync(path.join(directory, "holder-release"), "release");
+
+    expect(await Promise.all([childResult(stale), childResult(holder)])).toEqual([
+      { exit: 0, error: "" },
+      { exit: 0, error: "" },
+    ]);
+    const results = ["stale", "holder"]
+      .map((role) => JSON.parse(fs.readFileSync(path.join(directory, `${role}-result.json`), "utf8")) as { ok: boolean; replayed: boolean });
+    expect(results.filter((result) => result.ok && !result.replayed)).toHaveLength(1);
+    expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(recoveryArtifacts(directory)).toEqual([]);
+    expect(fs.existsSync(lockPath)).toBeFalse();
+
+    expect(await childResult(claim("later"))).toEqual({ exit: 0, error: "" });
+    expect(JSON.parse(fs.readFileSync(path.join(directory, "later-result.json"), "utf8"))).toMatchObject({ ok: true, replayed: true });
+    expect(recoveryArtifacts(directory)).toEqual([]);
+  }, 40_000);
+
+  test("dead owners of two generations left in one namespace are both retired", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-mixed-residue-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const countPath = path.join(directory, "binding-count");
+    const resultPath = path.join(directory, "result.json");
+    const pinPath = path.join(directory, "retired-inode-pin");
+    fs.writeFileSync(pinPath, "");
+    const pin = fs.statSync(pinPath);
+    /* The newer generation's epoch 0 holds the name the older generation's
+       successor epoch needs, so the order of retirement matters. */
+    for (const [epoch, targetToken] of [[0, "newer-generation"], [1, "older-generation"], [2, "older-generation"]] as const) {
+      fs.writeFileSync(`${receiptPath}.lock.${pin.dev}-${pin.ino}.recovering.recovery-owner-${epoch}`, JSON.stringify({
+        version: 1,
+        epoch,
+        pid: 999_999_999,
+        startIdentity: "dead",
+        token: crypto.randomUUID(),
+        targetDev: pin.dev,
+        targetIno: pin.ino,
+        targetToken,
+      }));
+    }
+
+    const claimant = ownFixtureChild(Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "server.lockChild.ts"), "claim", receiptPath, countPath, resultPath],
+      env: { ...process.env },
+      stdout: "ignore",
+      stderr: "pipe",
+    }));
+
+    expect(await childResult(claimant)).toEqual({ exit: 0, error: "" });
+    expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({ ok: true, replayed: false });
+    expect(recoveryArtifacts(directory)).toEqual([]);
+  }, 20_000);
+
   test("same-inode replacement survives a paused stale reaper", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-inode-reuse-"));
     scratch.push(directory);
@@ -1756,6 +1922,8 @@ describe("MCP tool service", () => {
         "lifecycle_events",
         "request_attention",
         "suggest_replies",
+        "publish_prototype_review",
+        "read_prototype_review",
         "dismiss_attention",
         "bridge_report",
         "bridge_directive",
@@ -1774,8 +1942,9 @@ describe("MCP tool service", () => {
         "telegram_bot_send_media",
         "telegram_bot_send_document",
         "telegram_bot_messages",
+        "issue_report",
       ]);
-      const optionalReadKeys = new Set(["message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits"]);
+      const optionalReadKeys = new Set(["message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -1816,6 +1985,34 @@ describe("MCP tool service", () => {
       await server.close();
     }
   });
+});
+
+test("create_task and update_task tell a writer which hold kind a worker slot wait takes and pass both kinds through", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((name) => [name, async () => ({})])) as unknown as McpToolBindings;
+  bindings.create_task = async (args) => { seen.push(args); return { task: { id: "task_fixture" } }; };
+  bindings.update_task = async (args) => { seen.push(args); return { task: { id: "task_fixture" } }; };
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "hold-kind-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const tools = (await client.listTools()).tools;
+    for (const name of ["create_task", "update_task"]) {
+      const tool = tools.find((entry) => entry.name === name)!;
+      expect(tool.description).toContain("A wait for a free worker slot is kind worker");
+      const kind = JSON.stringify((tool.inputSchema.properties as Record<string, unknown>).hold);
+      expect(kind).toContain("worker is a wait for a free worker slot");
+      expect(kind).toContain("resource is a shortage on the machine such as memory or disk");
+      expect(kind).toContain("Unknown kinds normalize to unstated.");
+    }
+    await client.callTool({ name: "create_task", arguments: { clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } } });
+    await client.callTool({ name: "update_task", arguments: { clientRequestId: "hold-resource", id: "task_fixture", hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed" } } });
+    expect(seen.map((args) => (args.hold as { kind: string }).kind)).toEqual(["worker", "resource"]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 test("a real MCP client sees typed graph edits and forwards their JSON values", async () => {

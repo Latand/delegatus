@@ -17,6 +17,8 @@ import { createRoot } from "react-dom/client";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
+import { ReceiptChip } from "@/components/runtime/ReceiptChip";
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { Viewer } from "@/components/Viewer";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
@@ -367,6 +369,10 @@ let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
 } as unknown as BoardProjectStateV1;
+/* Close-card receipt coverage can begin with an explicitly placed manual card. */
+if (new URLSearchParams(location.search).get("reopen") === "manual") {
+  board = { ...board, explicitManual: ["/repo/done-0.jsonl"], prefs: { ...board.prefs, manual: ["/repo/done-0.jsonl"] } };
+}
 
 const evidence = {
   presenceReplies: 0,
@@ -391,6 +397,10 @@ const evidence = {
   closesAnswered: [] as string[],
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
+  boardReads: 0,
+  boardSnapshot: () => board,
+  /* Make the next ordinary board poll adopt a newer authoritative snapshot. */
+  advanceBoardRevision() { board = { ...board, revision: board.revision + 1 }; },
   /* Case iv: the Codex seat's operator-chosen profile is stored, then the seat rotates to a Claude seat launched opus/high.
      The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session. */
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
@@ -1460,6 +1470,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    evidence.boardReads++;
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/conversations") {
@@ -1695,5 +1706,19 @@ function ScrollHistoryFixture() {
       onStatus={() => {}} paused={false} follow={follow} setFollow={setFollow} />
   </>;
 }
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("scroll-history")
+/** Receipt-only seat panels and messages without a feed row share this chip. */
+function SwitchReceiptFixture() {
+  return <main className="flex min-w-0 flex-col gap-4 p-2">
+    {["switching-accounts", "switch-after-turn", "switch-failed"].map(reason =>
+      [374, 280].map(width => <section key={reason + width} data-switch-receipt-row={reason} data-panel-width={width}
+        style={{ width, maxWidth: "100%" }} className="flex min-w-0 flex-col gap-2 rounded-control border border-border p-2">
+        <ReceiptChip receipt={{ operationId: reason + width, idempotencyKey: reason + width,
+          conversationId: "conversation_receipt_geometry", kind: "send", status: "queued",
+          reason, at: new Date().toISOString(), revision: 1 } as RuntimeReceipt}
+          wait={{ phase: width === 280 ? "uncertain" : "awaiting-handover", waitedMs: 120000, cause: "unknown" }} onRetry={() => {}} />
+      </section>))}
+  </main>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("switch-receipts")
+  ? <SwitchReceiptFixture /> : new URLSearchParams(location.search).has("scroll-history")
   ? <ScrollHistoryFixture /> : <Viewer />);

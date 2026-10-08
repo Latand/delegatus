@@ -18,6 +18,8 @@ import {
   ORCHESTRATOR_BOARD_REPORT_HEADING,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
+  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
+  ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING,
   ORCHESTRATOR_ROLE_TABLE_HEADING,
   ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SPAWN_CONFIG,
@@ -77,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 39, and a v38 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(39);
+test("the default mandate is at version 41, and a v40 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(41);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -105,7 +107,10 @@ test("the default mandate is at version 39, and a v38 seat reads as stale", () =
      vocabulary, names no stack, and gives the seat its personality. v31
      (docs/design/board-maintenance-report.md §8) tells the seat how to read
      the board maintenance report it is sent when it is seated. v32 adds
-     risk-based review budgets and the default of three rounds. */
+     risk-based review budgets and the default of three rounds. v40 (#2518)
+     adds the ask-first bug report and the seat-to-seat rule for another
+     project's work. v41 points the operator to a task's prototype review
+     instead of describing variants in prose. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -115,7 +120,9 @@ test("the default mandate is at version 39, and a v38 seat reads as stale", () =
   expect(orchestratorMandateStale(36)).toBe(true);
   expect(orchestratorMandateStale(37)).toBe(true);
   expect(orchestratorMandateStale(38)).toBe(true);
-  expect(orchestratorMandateStale(39)).toBe(false);
+  expect(orchestratorMandateStale(39)).toBe(true);
+  expect(orchestratorMandateStale(40)).toBe(true);
+  expect(orchestratorMandateStale(41)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -161,6 +168,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
   38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
+  40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
+  41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -563,9 +572,42 @@ test("the delivered default carries each directive exactly once, and delivery ad
     ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE,
     ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
     ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
+    ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
     ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ]) {
     expect(ORCHESTRATOR_SYSTEM_PROMPT.split(directive)).toHaveLength(2);
+  }
+});
+
+/* #2518: both rules, in the default and in whatever mandate a seat holds. */
+test("the mandate asks before a bug report is filed, publishes only an approved preview, and sends another project's work to its seat", () => {
+  const section = ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE;
+  /* Rule 1: the question comes first, with replies the operator can tap. */
+  expect(section).toContain("When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue.");
+  /* The reporter writes, the seat shows the stored text, and nothing but an
+     explicit yes to that text in this conversation publishes it. */
+  expect(section).toContain("spawn_agent role issue-reporter");
+  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies");
+  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation");
+  expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
+  expect(section).toContain("Never file one another way.");
+  /* Rule 2: seat to seat by default, and what lifts it. */
+  expect(section).toContain("Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context.");
+  expect(section).toContain("Never create tasks or pipelines on its board, spawn agents there or message its workers");
+  expect(section).toContain("only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them");
+
+  /* A bespoke mandate receives both required rules once. A retained heading
+     cannot suppress them when its body was edited or removed. */
+  const delivered = orchestratorMandateForDelivery("Run this project.");
+  expect(delivered.split(section)).toHaveLength(2);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  for (const body of ["", "My own wording.", "Ask before filing issues.", "Route another project's work to its orchestrator."]) {
+    const reworded = `Run this project.\n\n${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}\n${body}`;
+    const deliveredEdit = orchestratorMandateForDelivery(reworded);
+    expect(deliveredEdit).toStartWith(reworded);
+    expect(deliveredEdit.split(section)).toHaveLength(2);
+    expect(orchestratorMandateForDelivery(deliveredEdit)).toBe(deliveredEdit);
+    expect(orchestratorMandateWithRoleTable(reworded, null)).toContain(section);
   }
 });
 
@@ -714,8 +756,9 @@ test("the role table keeps the delivered default inside the structured envelope"
   const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
   const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
   /* The sizing rule (docs/design/model-sizing-tiers.md §4) and the variant
-     runtimes took the table past its first 3 000-byte bound. */
-  expect(Buffer.byteLength(section)).toBeLessThan(3_300);
+     runtimes took the table past its first 3 000-byte bound, and the
+     visual-critic row with its UI-lane step past 3 300. */
+  expect(Buffer.byteLength(section)).toBeLessThan(3_500);
   /* Leave the orchestrator scaffold and a rotation's history room beside it.
      The sizing rule (docs/design/model-sizing-tiers.md §4) takes 200 bytes of
      that room, and keeping the review-loop read-only rule beside it another
@@ -728,8 +771,15 @@ test("the role table keeps the delivered default inside the structured envelope"
      board maintenance report section, paid for by the open-task list the
      rotation handoff no longer carries (docs/design/board-maintenance-report.md
      §5.5); handoffDigest.test.ts pins what that leaves a rotation's history.
-     The scheduled maintainer row uses another 200 bytes of that room. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_900);
+     The scheduled maintainer row uses another 200 bytes of that room. v40
+     (#2518) takes 1 100 more: the bug report and other-project section and
+     the issue-reporter row. The visual-critic row and the UI-lane step that
+     ends on it take 150 more. The prototype-review pointer adds 47 bytes;
+     the merged delivered default measures 29 363 bytes. The applyNow
+     pointer on the override-stage line adds 16 more, 29 379 in all.
+     The scaffold is 750 bytes, and
+     handoffDigest.test.ts still finds a full history section beside it. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -755,7 +805,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7). */
   expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
   expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
-  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
+  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop, then a visual-critic stage last.");
   /* §3 (a): the fix stage's params select its row. */
   expect(table).toContain("- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks.");
   expect(table).toContain("Never self-grade; fix discoveries and note out-of-spec");
@@ -764,7 +814,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.");
+  expect(table).toContain("- override-stage sets the runtime on the stage from the NEXT attempt, or now with applyNow:true.");
   expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
@@ -880,4 +930,12 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
 test("the versioned mandate asks for a current status note in the operator's language", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("update_task note");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("waiting on whom/what");
+});
+
+
+test("the mandate directs prototype review to the task", () => {
+  for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
+    expect(mandate).toContain("Prototype review: point to the task's review.");
+    expect(mandate.split("Prototype review:")).toHaveLength(2);
+  }
 });
