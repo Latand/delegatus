@@ -7,6 +7,21 @@ other three variants are not built; their descriptions stay below as the record
 of what was offered. What the build adds to this design is under
 [The build](#the-build).
 
+## Main integration on 2026-10-08
+
+The switch carries main through `5e512c7d`, including authentication recovery
+(#2617), the retained-message notice (#2611) and the maintenance panel. Batch B's
+eight SeatTick failures came from #2609's reviewed test copies, which still
+expected the previous chip's wording and the phone's single row button. Running
+main's copies against the merged switch reproduces those eight failures.
+
+The thumb shows `30 min` or `1 h`; its accessible value retains the full
+schedule and actual state. The phone row has an opener button and a slider.
+The eight adapted cases keep their original names and assert those surfaces,
+including save read-back, restore defaults and an independently refused agent
+write. Main's maintenance and authentication behavior remains covered by the
+existing component and monitor tests.
+
 ## Originating requirement
 
 Operator, 2026-10-07 about 11:10 Kyiv, in Russian, pinned to the task with a

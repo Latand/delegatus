@@ -248,13 +248,15 @@ async function openTick(root: Root): Promise<void> {
   expect(tickSheet()).not.toBeNull();
 }
 
-test("the live seat sheet carries the tick as a row, above Edit the mandate, with the switch, the same summary and dot", async () => {
+test("the live seat sheet carries the tick as a row, above Edit the mandate, with the same summary and dot", async () => {
   getAnswer = record();
   await mount();
   const entry = row();
   expect(entry).not.toBeNull();
   expect(entry!.className).toContain("min-h-11");
   expect(rowOpen().textContent).toBe("Seat tick");
+  expect(rowOpen().getAttribute("aria-label")).toBe("Seat tick settings. Tick: every 60 min · last check 3m ago");
+  expect(rowSwitch().getAttribute("data-seat-tick-surface")).toBe("mobile");
   expect(entry!.getAttribute("data-seat-tick-row")).toBe("healthy");
   /* The thumb names the stop; the desktop's closed summary, without its
      «Tick:» prefix, is the rest of the value text. */
@@ -276,6 +278,8 @@ test("a paused tick reads as off on the row, with a muted dot, and the row never
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
   expect(rowSwitch().textContent).toBe("off");
   expect(rowSwitch().getAttribute("aria-valuetext")).toContain("off since 2h ago");
+  expect(rowSwitch().getAttribute("aria-valuenow")).toBe("0");
+  expect(rowOpen().getAttribute("aria-label")).toContain("off since 2h ago");
   expect(row()!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("muted");
 });
 
@@ -287,6 +291,8 @@ test("an enabled tick with no recent check reads as stale on the row while its f
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("stale");
   expect(rowSwitch().textContent).toBe("1 h");
   expect(rowSwitch().getAttribute("aria-valuetext")).toContain("every 60 min · stale: last check 40m ago");
+  expect(rowSwitch().getAttribute("aria-valuenow")).toBe("2");
+  expect(row()!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("warn");
   await openTick(root);
   expect(body().querySelector("[data-seat-tick-status-detail]")?.textContent).toContain("Checks run every 5 min");
   expect(body().querySelector("[data-seat-tick-enabled]")?.getAttribute("aria-checked")).toBe("true");

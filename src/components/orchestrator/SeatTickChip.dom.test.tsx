@@ -237,6 +237,7 @@ test("the closed chip is one face and one dot: the configured schedule, and the 
   const { root } = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("healthy");
   expect(chip().textContent).toContain("30 min");
+  expect(chip().getAttribute("aria-valuetext")).toBe("30 min, not a preset. every 30 min · last check 3m ago");
   expect(chip().querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("ok");
   /* One line, and it carries both halves. */
   expect(chip().getAttribute("title")).toBe("Tick: every 30 min · last check 3m ago\nDrag to change how often the seat wakes · click for settings");
@@ -304,6 +305,7 @@ test("an enabled tick with no recent check renders as enabled AND stale, never a
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("stale");
   /* The face still reports the schedule the tick is configured on. */
   expect(chip().textContent).toContain("1 h");
+  expect(chip().getAttribute("aria-valuetext")).toBe("every hour, the default. every 60 min · stale: last check 30m ago");
   expect(chip().querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("warn");
   await open(root);
   expect(field<HTMLButtonElement>("[data-seat-tick-enabled]").getAttribute("aria-checked")).toBe("true");
@@ -339,6 +341,7 @@ test("a save displays what was sent and then adopts what the route read back", a
   expect(puts()).toHaveLength(1);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, wakeIntervalMinutes: 30, reason: "a release afternoon" });
   expect(chip().textContent).toContain("30 min");
+  expect(chip().getAttribute("aria-valuetext")).toBe("30 min, not a preset. every 30 min · last check 3m ago");
   expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon (recorded)");
   expect(save()).toBeNull();
   expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
@@ -399,6 +402,7 @@ test("Restore default sends the default with no reason, and only while there is 
   await settle(root);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null });
   expect(chip().textContent).toContain("1 h");
+  expect(chip().getAttribute("aria-valuetext")).toBe("every hour, the default. every 60 min · last check 3m ago");
   expect(restore()).toBeNull();
 });
 
@@ -963,6 +967,7 @@ test("a refused agent write keeps the choice, names the refusal beside the picke
   expect(body().querySelector("[data-seat-tick-agent-error]")?.textContent).toBe("invalid codex effort");
   expect(effortSelect().value).toBe("high");
   expect(chip().textContent).toContain("30 min");
+  expect(chip().getAttribute("aria-valuetext")).toBe("30 min, not a preset. every 30 min · last check 3m ago");
   /* Only the agent change is still waiting. */
   expect(save()).not.toBeNull();
 });
