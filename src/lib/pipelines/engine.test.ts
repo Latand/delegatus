@@ -22542,3 +22542,553 @@ for (const engine of ["claude", "codex"] as const) {
     expect(f.h.spawnInputs).toHaveLength(1);
   });
 }
+
+// A cut after agent output opens a new chain: activity before it cancels nothing.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each(["operator", "orchestrator", "harness-control", "busy-operator", "same-tick", "reply-after", "control-after", "operator-refused"] as const)(`${engine} a provider cut after agent output owes its own recovery (pool=${pool}, %s)`, async activity => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      const firstReset = Date.parse("2026-10-05T19:00:00Z") / 1000;
+      const secondReset = Date.parse("2026-10-05T23:00:00Z") / 1000;
+      let reset = firstReset;
+      if (pool) {
+        f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+        f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
+          ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+          : { kind: "exhausted", resetsAt: reset, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] };
+      }
+      const notice = (at: number, label: string) => engine === "claude"
+        ? { ...providerQuotaRecord(engine, at), message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: `You've hit your session limit · resets ${label} (Europe/Kyiv)` }] } }
+        : providerQuotaRecord(engine, at);
+      const quota = (at: number, r: number) => ({ type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "token_count", rate_limits: { primary: { used_percent: 100, resets_at: r } } } });
+      const records: Record<string, unknown>[] = engine === "claude" ? [notice(f.now(), "10pm")] : [quota(f.now(), firstReset), notice(f.now(), "10pm")];
+      const file = stageTranscript(`chain-r12-${engine}-${pool}-${activity}`, records);
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      const write = () => fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.turnTs).toBe(Date.parse("2026-10-05T17:22:09Z"));
+      f.advance(Date.parse("2026-10-05T19:00:20Z") - f.now());
+      const at = () => f.h.ports.now();
+      const external = async (text: string, role?: string) => {
+        if (engine === "claude") {
+          const uuid = `chain-${role ?? "operator"}-${f.now()}`;
+          records.push({ type: "user", uuid, timestamp: at(), promptSource: "sdk", turnOrigin: "sdk", message: { role: "user", content: text } });
+          if (role) {
+            write();
+            const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+            const ledger = new FileClaudeDeliveryLedger();
+            const session = path.basename(file, ".jsonl");
+            ledger.recordQueued(session, { id: `send-${uuid}`, text, origin: { kind: "agent", role } as never }, "turn-started");
+            ledger.confirmDelivered(session, `send-${uuid}`, uuid);
+          }
+        } else {
+          const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+          records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: role ? encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role } as never) : text } },
+            { type: "event_msg", timestamp: at(), payload: { type: "task_started" } });
+        }
+      };
+      const harnessWake = async () => {
+        if (engine === "claude") records.push({ type: "user", timestamp: at(), origin: { kind: "task-notification" }, turnOrigin: "task_notification", promptSource: "system", message: { content: "<task-notification>done</task-notification>" } });
+        else await external("Continue the interrupted turn from the transcript.", "startup-recovery");
+      };
+      const reply = (end: boolean) => {
+        if (engine === "claude") records.push(end
+          ? { type: "assistant", timestamp: at(), message: { model: "claude-opus", stop_reason: "end_turn", content: [{ type: "text", text: "Reviewed; continuing the stage." }] } }
+          : { type: "assistant", timestamp: at(), message: { model: "claude-opus", stop_reason: "tool_use", content: [{ type: "tool_use", id: "chain-tool", name: "Read", input: {} }] } });
+        else records.push(...(end
+          ? [{ type: "event_msg", timestamp: at(), payload: { type: "agent_message", message: "Reviewed; continuing the stage." } },
+            { type: "event_msg", timestamp: at(), payload: { type: "task_complete", last_agent_message: "Reviewed; continuing the stage." } }]
+          : [{ type: "event_msg", timestamp: at(), payload: { type: "agent_message", message: "Reading the file" } },
+            { type: "response_item", timestamp: at(), payload: { type: "function_call", call_id: "chain-call", name: "shell", arguments: "{}" } }]));
+      };
+      if (activity === "harness-control") await harnessWake();
+      else if (activity === "orchestrator") await external("Continue reviewing", "orchestrator");
+      else await external("Continue reviewing");
+      if (activity !== "operator-refused") { f.advance(5_000); reply(activity !== "busy-operator"); }
+      write();
+      if (activity !== "same-tick" && activity !== "operator-refused") { f.h.setConversationActive(true); f.advance(10_000); await tickPipelines([], { ...f.h.ports }); }
+      if (activity === "harness-control") {
+        f.advance(Date.parse("2026-10-05T20:00:00Z") - f.now());
+        await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+        await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+      }
+      if (activity === "busy-operator" && engine === "codex") records.push({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: "chain-call", output: "ok" } });
+      if (activity !== "operator-refused") f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now()); else f.advance(500);
+      reset = secondReset;
+      if (engine === "codex") records.push(quota(f.now(), secondReset));
+      records.push(notice(f.now(), "2am"));
+      write();
+      f.h.setConversationActive(false);
+      await tickPipelines([], { ...f.h.ports });
+      f.advance(1_000);
+      if (activity === "reply-after") { await external("Wait for my review"); write(); }
+      if (activity === "control-after") {
+        await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+        await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+      }
+      while (f.now() < Date.parse("2026-10-05T23:05:00Z")) { f.advance(30_000); await tickPipelines([], { ...f.h.ports }); }
+      const owed = !["reply-after", "control-after", "operator-refused"].includes(activity);
+      expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, detail: loadPipelines()[0]!.stateDetail?.split("\n")[0] ?? null })
+        .toMatchObject(owed ? { sends: 1, state: "running" } : activity === "reply-after" ? { sends: 0 } : { sends: 0, state: "needs_decision" });
+      expect(f.h.spawnInputs).toHaveLength(1);
+    });
+  }
+}
+
+// Transcript records for the cut-chain cases below.
+function cutChainKit(f: Awaited<ReturnType<typeof providerRecoveryHarness>>, engine: "claude" | "codex", file: () => string, records: Record<string, unknown>[]) {
+  const at = () => f.h.ports.now();
+  const write = () => fs.writeFileSync(file(), records.map(record => JSON.stringify(record)).join("\n") + "\n");
+  const notice = (label: string, reset: number) => {
+    if (engine === "codex") records.push({ type: "event_msg", timestamp: at(), payload: { type: "token_count", rate_limits: { primary: { used_percent: 100, resets_at: reset } } } });
+    records.push(engine === "claude"
+      ? { ...providerQuotaRecord(engine, f.now()), message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: `You've hit your session limit · resets ${label} (Europe/Kyiv)` }] } }
+      : providerQuotaRecord(engine, f.now()));
+  };
+  const operator = (text: string) => records.push(engine === "claude"
+    ? { type: "user", uuid: `chain-operator-${f.now()}`, timestamp: at(), promptSource: "sdk", turnOrigin: "sdk", message: { role: "user", content: text } }
+    : { type: "event_msg", timestamp: at(), payload: { type: "user_message", message: text } });
+  const harnessWake = async () => {
+    if (engine === "claude") records.push({ type: "user", timestamp: at(), origin: { kind: "task-notification" }, turnOrigin: "task_notification", promptSource: "system", message: { content: "<task-notification>done</task-notification>" } });
+    else {
+      const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+      records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: encodeCodexStructuredUserText("Continue the interrupted turn from the transcript.", undefined, null, { kind: "agent", role: "startup-recovery" } as never) } });
+    }
+  };
+  const output = (busy = false) => records.push(engine === "claude"
+    ? busy ? { type: "assistant", timestamp: at(), message: { model: "claude-opus", stop_reason: "tool_use", content: [{ type: "tool_use", id: `chain-tool-${f.now()}`, name: "Read", input: {} }] } }
+      : { type: "assistant", timestamp: at(), message: { model: "claude-opus", stop_reason: null, content: [{ type: "text", text: "Working on the stage" }] } }
+    : busy ? { type: "response_item", timestamp: at(), payload: { type: "function_call", call_id: `chain-call-${f.now()}`, name: "shell", arguments: "{}" } }
+      : { type: "event_msg", timestamp: at(), payload: { type: "agent_message", message: "Working on the stage" } });
+  const finishTool = () => { if (engine === "codex") records.push(...records.filter(record => (record.payload as { type?: string } | undefined)?.type === "function_call")
+    .map(record => ({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: (record.payload as { call_id: string }).call_id, output: "ok" } }))); };
+  return { at, write, notice, operator, harnessWake, output, finishTool };
+}
+
+const CHAIN_RESET = { "10pm": Date.parse("2026-10-05T19:00:00Z") / 1000, "2am": Date.parse("2026-10-05T23:00:00Z") / 1000, "3am": Date.parse("2026-10-06T00:00:00Z") / 1000 };
+
+// A parked retry holds while its stage works and follows the chain the turn ends in.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each(["harness", "harness-three", "harness-busy", "operator-busy", "reply-after", "control-after", "harness-no-output", "operator-refused"] as const)(`${engine} a parked retry follows the open cut chain (pool=${pool}, %s)`, async activity => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      let reset = CHAIN_RESET["10pm"];
+      const allowed = pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+      f.h.ports.allowedAccountIds = () => allowed;
+      f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
+        ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: reset, allowedAccountIds: allowed };
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now(), ...(pool ? { triedAccounts: allowed } : {}) };
+      savePipelines([lane]);
+      const records: Record<string, unknown>[] = [];
+      const file = stageTranscript(`chain-parked-${engine}-${pool}-${activity}`, []);
+      const k = cutChainKit(f, engine, () => file, records);
+      k.notice("10pm", reset);
+      k.write();
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeDefined();
+      const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+      let due = reset;
+      if (activity === "harness-no-output" || activity === "operator-refused") {
+        // Before the reset the provider refuses the wake or the reply at once.
+        f.advance(Date.parse("2026-10-05T17:24:05Z") - f.now());
+        if (activity === "harness-no-output") await k.harnessWake(); else k.operator("Wait for my review");
+        f.advance(500);
+        k.notice("10pm", reset);
+        k.write();
+        await tick();
+      } else {
+        // After the reset the stage's host wakes and the provider accepts the turn.
+        f.h.setConversationActive(true);
+        f.advance(Date.parse("2026-10-05T19:00:20Z") - f.now());
+        if (activity === "operator-busy") k.operator("Continue reviewing"); else await k.harnessWake();
+        f.advance(5_000);
+        k.output(activity.endsWith("busy"));
+        k.write();
+        if (activity.endsWith("busy")) {
+          // The turn stays busy across the first chain's retry time.
+          while (f.now() < Date.parse("2026-10-05T21:29:00Z")) { f.advance(f.now() < Date.parse("2026-10-05T19:05:00Z") ? 30_000 : 10 * 60_000); await tick(); }
+          expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+          f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now());
+          k.finishTool();
+        } else f.advance(15_000);
+        reset = CHAIN_RESET["2am"];
+        k.notice("2am", reset);
+        if (activity === "harness-three") {
+          f.advance(5_000);
+          await k.harnessWake();
+          f.advance(5_000);
+          k.output();
+          f.advance(5_000);
+          reset = CHAIN_RESET["3am"];
+          k.notice("3am", reset);
+        }
+        k.write();
+        f.h.setConversationActive(false);
+        f.advance(3_000);
+        await tick();
+        due = reset;
+        f.advance(1_000);
+        if (activity === "reply-after") {
+          k.operator("Wait for my review");
+          f.advance(500);
+          k.notice("2am", reset);
+          k.write();
+        }
+        if (activity === "control-after") {
+          await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+          await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+        }
+        await tick();
+      }
+      while (f.now() < due * 1000 + 30_000) { f.advance(due * 1000 - f.now() > 10 * 60_000 ? 10 * 60_000 : 30_000); await tick(); }
+      expect(f.h.spawnInputs).toHaveLength(1);
+      while (f.now() < due * 1000 + 5 * 60_000) { f.advance(30_000); await tick(); }
+      const owed = !["reply-after", "control-after", "operator-refused"].includes(activity);
+      // An owed chain retries the stage at its own reset, never at the parked cut's.
+      expect({ spawns: f.h.spawnInputs.length, sends: f.sends.length })
+        .toEqual(owed ? { spawns: 2, sends: 0 } : { spawns: 1, sends: 0 });
+      if (!owed) expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    });
+  }
+}
+
+// A zero-time successor inherits a chain that its own first output closes.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each((pool ? ["harness", "operator", "pause-harness", "pause-operator", "three"] : ["harness", "operator", "pause-harness", "pause-operator", "three", "three-ticked", "reply-after", "control-after"]) as Array<"harness" | "operator" | "pause-harness" | "pause-operator" | "three" | "three-ticked" | "reply-after" | "control-after">)(`${engine} a zero-time successor owes the chain its own output opened (pool=${pool}, %s)`, async activity => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      const third = "fixture-account-c";
+      let reset = CHAIN_RESET["10pm"];
+      if (pool) {
+        f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT, third];
+        f.h.ports.accountForTranscript = (_engine, pathname) => ({ accountId: pathname.includes("stage-1") ? LIMITED_ACCOUNT : pathname.includes("stage-2") ? SPARE_ACCOUNT : third, label: "selected account" });
+        f.h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: { engine,
+          accountId: request.unavailableIds?.includes(SPARE_ACCOUNT) ? third : SPARE_ACCOUNT,
+          kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+      } else {
+        // A pane-less host relaunches on its pinned account at the reset.
+        f.h.ports.resumeSeveredTurn = undefined;
+        f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+        f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
+          ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+          : { kind: "exhausted", resetsAt: reset, allowedAccountIds: [LIMITED_ACCOUNT] };
+      }
+      const first: Record<string, unknown>[] = [];
+      const firstFile = stageTranscript(`chain-zero-first-${engine}-${pool}-${activity}`, []);
+      const k1 = cutChainKit(f, engine, () => firstFile, first);
+      k1.notice("10pm", reset);
+      k1.write();
+      const records: Record<string, unknown>[] = [];
+      const file = path.join(process.env.LLV_STATE_DIR!, `chain-zero-successor-${engine}-${pool}-${activity}.jsonl`);
+      readFixtures(f.h, { "/codex/stage-1.jsonl": firstFile, "/codex/stage-2.jsonl": file });
+      const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+      await tick();
+      if (!pool) f.advance(Date.parse("2026-10-05T19:01:05Z") - f.now());
+      for (let n = 0; n < 3 && f.h.spawnInputs.length < 2; n++) await tick();
+      expect(f.h.spawnInputs).toHaveLength(2);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait?.turnTs).toBe(0);
+      // The successor's own transcript, all of it before its first recovery tick.
+      const k = cutChainKit(f, engine, () => file, records);
+      f.advance(60_000);
+      reset = CHAIN_RESET["2am"];
+      k.notice("2am", reset);
+      if (activity.startsWith("pause") || activity === "three" || activity === "three-ticked") {
+        f.advance(300);
+        await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+        f.advance(300);
+        await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+      }
+      f.advance(400);
+      if (activity.endsWith("operator") || activity === "three-ticked") k.operator("Continue reviewing"); else await k.harnessWake();
+      f.advance(1_000);
+      k.output();
+      f.advance(pool ? 1_000 : Date.parse("2026-10-05T21:30:00Z") - f.now());
+      reset = CHAIN_RESET[pool ? "2am" : "3am"];
+      k.notice(pool ? "2am" : "3am", reset);
+      if (activity === "three" || activity === "three-ticked") {
+        if (activity === "three-ticked") { k.write(); await tick(); }
+        f.advance(1_000);
+        await k.harnessWake();
+        f.advance(1_000);
+        k.output();
+        f.advance(pool ? 1_000 : 10 * 60_000);
+        if (!pool) reset = CHAIN_RESET["3am"] + 3600;
+        k.notice(pool ? "2am" : "4am", reset);
+      }
+      k.write();
+      await tick();
+      if (pool) for (let n = 0; n < 3 && f.h.spawnInputs.length < 3; n++) { f.advance(1_000); await tick(); }
+      if (!pool) {
+        f.advance(1_000);
+        if (activity === "reply-after") { k.operator("Wait for my review"); f.advance(500); k.notice("3am", reset); k.write(); }
+        if (activity === "control-after") {
+          await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+          await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+        }
+        while (f.now() < reset * 1000 + 30_000) { f.advance(reset * 1000 - f.now() > 10 * 60_000 ? 10 * 60_000 : 30_000); await tick(); }
+        expect(f.h.spawnInputs).toHaveLength(2);
+        // Stop at the relaunch: the fixture gives the third attempt no transcript.
+        while (f.now() < reset * 1000 + 5 * 60_000 && f.h.spawnInputs.length < 3) { f.advance(30_000); await tick(); }
+      }
+      const owed = !["reply-after", "control-after"].includes(activity);
+      const lane = loadPipelines()[0]!;
+      expect({ spawns: f.h.spawnInputs.length, sends: f.sends.length, state: lane.state,
+        tries: owed ? lane.runs[0]!.attempts.at(-1)!.providerRecoveryBudget?.tries : null })
+        .toEqual(owed ? { spawns: 3, sends: 0, state: "running", tries: 1 } : { spawns: 2, sends: 0, state: "needs_decision", tries: null });
+    });
+  }
+}
+
+// Capacity and authentication cut records.
+function otherKindCut(f: Awaited<ReturnType<typeof providerRecoveryHarness>>, engine: "claude" | "codex", records: Record<string, unknown>[], kind: "capacity" | "auth") {
+  const at = f.h.ports.now();
+  const text = kind === "auth" ? "OAuth session expired and could not be refreshed"
+    : engine === "claude" ? "API Error: Repeated 529 Overloaded errors" : "Selected model is at capacity. Please try a different model.";
+  records.push(engine === "claude"
+    ? { type: "assistant", timestamp: at, isApiErrorMessage: true, error: kind === "auth" ? "authentication_failed" : "overloaded",
+      message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text }] } }
+    : { type: "event_msg", timestamp: at, payload: { type: "task_complete", error: { message: text, codex_error_info: kind === "auth" ? "unauthorized" : "server_overloaded" } } });
+}
+
+// A moved retry takes the new chain's kind, reset and budget.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each((pool ? ["capacity-then-quota", "auth-then-quota", "quota-then-capacity", "quota-quota-capacity", "capacity-reply-after", "capacity-control-after", "same-chain-capacity", "same-chain-capacity-reply"]
+      : ["quota-then-capacity", "quota-quota-capacity", "capacity-reply-after", "capacity-control-after", "same-chain-capacity", "same-chain-capacity-reply"]) as Array<"capacity-then-quota" | "auth-then-quota" | "quota-then-capacity" | "quota-quota-capacity" | "capacity-reply-after" | "capacity-control-after" | "same-chain-capacity" | "same-chain-capacity-reply">)(`${engine} a parked retry moves to a newer chain of another kind (pool=${pool}, %s)`, async activity => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      const reset = CHAIN_RESET["10pm"];
+      const allowed = pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+      const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+      const records: Record<string, unknown>[] = [];
+      f.h.ports.allowedAccountIds = () => allowed;
+      let k: ReturnType<typeof cutChainKit>;
+      const sourceCut = activity === "capacity-then-quota" || activity === "auth-then-quota";
+      if (sourceCut) {
+        // A successor on the spare, cut by capacity or authentication, parks
+        // until the source account's reset.
+        const limitedReset = reset;
+        f.h.ports.accountForTranscript = (_engine, pathname) => ({ accountId: pathname.includes("stage-1") ? LIMITED_ACCOUNT : SPARE_ACCOUNT, label: "selected account" });
+        f.h.ports.resolveProjectSpawn = (_engine, request) => {
+          const id = [SPARE_ACCOUNT, LIMITED_ACCOUNT].find(candidate => !request.unavailableIds?.includes(candidate)
+            && (candidate !== LIMITED_ACCOUNT || f.now() >= limitedReset * 1000 + 60_000));
+          return id ? { kind: "available", account: { engine, accountId: id, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+            : { kind: "exhausted", resetsAt: limitedReset, allowedAccountIds: allowed };
+        };
+        const first: Record<string, unknown>[] = [];
+        const firstFile = stageTranscript(`chain-kind-first-${engine}-${pool}-${activity}`, []);
+        const k1 = cutChainKit(f, engine, () => firstFile, first);
+        k1.notice("10pm", reset);
+        k1.write();
+        const file = path.join(process.env.LLV_STATE_DIR!, `chain-kind-successor-${engine}-${pool}-${activity}.jsonl`);
+        readFixtures(f.h, { "/codex/stage-1.jsonl": firstFile, "/codex/stage-2.jsonl": file });
+        for (let n = 0; n < 3 && f.h.spawnInputs.length < 2; n++) await tick();
+        expect(f.h.spawnInputs).toHaveLength(2);
+        const lane = loadPipelines()[0]!;
+        // Exhaust the successor's bounded continuations.
+        lane.runs[0]!.attempts.at(-1)!.providerRecoveryBudget!.tries = 3;
+        savePipelines([lane]);
+        k = cutChainKit(f, engine, () => file, records);
+        f.advance(50_000);
+        otherKindCut(f, engine, records, activity === "auth-then-quota" ? "auth" : "capacity");
+        k.write();
+        await tick();
+        const parked = loadPipelines()[0]!;
+        expect(parked.state).toBe("needs_decision");
+        expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
+          resumeAt: new Date(limitedReset * 1000 + 60_000).toISOString(), stageRetry: { fallback: false } });
+        // Before the source's reset the spare's host wakes, works, and hits its own quota.
+        f.h.setConversationActive(true);
+        f.advance(Date.parse("2026-10-05T17:30:00Z") - f.now());
+        await k.harnessWake();
+        f.advance(5_000);
+        k.output();
+        f.advance(Date.parse("2026-10-05T17:40:00Z") - f.now());
+        k.notice("2am", CHAIN_RESET["2am"]);
+        k.write();
+        f.h.setConversationActive(false);
+        f.advance(3_000);
+        await tick();
+        const moved = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait;
+        expect(moved).toMatchObject({ condition: { kind: "usage_limit" }, accountId: SPARE_ACCOUNT,
+          resumeAt: new Date(limitedReset * 1000 + 60_000).toISOString(), stageRetry: { fallback: false } });
+        while (f.now() < limitedReset * 1000 + 5 * 60_000 && f.h.spawnInputs.length < 3) { f.advance(f.now() < limitedReset * 1000 - 10 * 60_000 ? 10 * 60_000 : 30_000); await tick(); }
+        expect(f.h.spawnInputs).toHaveLength(3);
+        expect(f.h.spawnInputs[2]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
+        expect(loadPipelines()[0]!.state).toBe("running");
+        return;
+      }
+      f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
+        ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: reset, allowedAccountIds: allowed };
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now(), ...(pool ? { triedAccounts: allowed } : {}) };
+      savePipelines([lane]);
+      const file = stageTranscript(`chain-kind-parked-${engine}-${pool}-${activity}`, []);
+      k = cutChainKit(f, engine, () => file, records);
+      k.notice("10pm", reset);
+      k.write();
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      await tick();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeDefined();
+      if (activity.startsWith("same-chain")) {
+        // After the reset the provider refuses the wake or the reply by capacity, with no output.
+        f.h.setConversationActive(true);
+        f.advance(Date.parse("2026-10-05T19:00:20Z") - f.now());
+        if (activity === "same-chain-capacity") await k.harnessWake(); else k.operator("Wait for my review");
+        f.advance(500);
+        otherKindCut(f, engine, records, "capacity");
+        k.write();
+        f.h.setConversationActive(false);
+        f.advance(3_000);
+        await tick();
+        const kept = activity === "same-chain-capacity";
+        const witness = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait;
+        if (kept) expect(witness).toMatchObject({ condition: { kind: "usage_limit" }, turnTs: Date.parse("2026-10-05T19:00:20.500Z"),
+          resumeAt: new Date(reset * 1000 + 60_000).toISOString(), stageRetry: {} });
+        else expect(witness?.stageRetry).toBeUndefined();
+        while (f.now() < reset * 1000 + 5 * 60_000 && f.h.spawnInputs.length < 2) { f.advance(30_000); await tick(); }
+        expect(f.h.spawnInputs).toHaveLength(kept ? 2 : 1);
+        expect(loadPipelines()[0]!.state).toBe(kept ? "running" : "needs_decision");
+        return;
+      }
+      // After the reset the host wakes and works; the turn ends on capacity.
+      f.h.setConversationActive(true);
+      f.advance(Date.parse("2026-10-05T19:00:20Z") - f.now());
+      await k.harnessWake();
+      f.advance(5_000);
+      k.output();
+      f.advance(15_000);
+      if (activity === "quota-quota-capacity") {
+        k.notice("2am", CHAIN_RESET["2am"]);
+        f.advance(5_000);
+        await k.harnessWake();
+        f.advance(5_000);
+        k.output();
+        f.advance(5_000);
+      }
+      otherKindCut(f, engine, records, "capacity");
+      k.write();
+      f.h.setConversationActive(false);
+      f.advance(3_000);
+      await tick();
+      const tickedAt = f.now();
+      const owed = !activity.endsWith("-after");
+      const moved = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait;
+      // Capacity takes the running path's first backoff, a minute.
+      expect(moved).toMatchObject({ condition: { kind: "transient" }, resumeAt: new Date(tickedAt + 60_000).toISOString(), stageRetry: { fallback: false } });
+      f.advance(1_000);
+      if (activity === "capacity-reply-after") { k.operator("Wait for my review"); f.advance(500); otherKindCut(f, engine, records, "capacity"); k.write(); }
+      if (activity === "capacity-control-after") {
+        await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+        await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+      }
+      while (f.now() < tickedAt + 5 * 60_000 && f.h.spawnInputs.length < 2) { f.advance(30_000); await tick(); }
+      expect({ spawns: f.h.spawnInputs.length, sends: f.sends.length })
+        .toEqual(owed ? { spawns: 2, sends: 0 } : { spawns: 1, sends: 0 });
+      expect(loadPipelines()[0]!.state).toBe(owed ? "running" : "needs_decision");
+    });
+  }
+}
+
+// The closed chain's confirmation wait goes with it.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each(["held-fails", "held-lasting", "held-reply", "three-held-fails"] as const)(`${engine} a moved retry starts its own confirmation wait (pool=${pool}, %s)`, async activity => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      let reset = CHAIN_RESET["10pm"];
+      const allowed = pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+      f.h.ports.allowedAccountIds = () => allowed;
+      f.h.ports.resolveProjectSpawn = () => f.now() >= reset * 1000 + 60_000
+        ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: reset, allowedAccountIds: allowed };
+      let held = false;
+      f.h.ports.conversationDeliveryOutstanding = () => held;
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now(), ...(pool ? { triedAccounts: allowed } : {}) };
+      savePipelines([lane]);
+      const records: Record<string, unknown>[] = [];
+      const file = stageTranscript(`chain-confirm-${engine}-${pool}-${activity}`, []);
+      const k = cutChainKit(f, engine, () => file, records);
+      k.notice("10pm", reset);
+      k.write();
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+      await tick();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeDefined();
+      // A harness wake is written just before the retry time; its answer is not yet.
+      f.h.setConversationActive(true);
+      f.advance(Date.parse("2026-10-05T19:00:58Z") - f.now());
+      await k.harnessWake();
+      k.write();
+      f.advance(2_000);
+      await tick();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait?.startedAt).toBe("2026-10-05T19:01:00.000Z");
+      // The agent answers and works for hours.
+      f.advance(30_000);
+      k.output(true);
+      k.write();
+      while (f.now() < Date.parse("2026-10-05T21:29:00Z")) { f.advance(f.now() < Date.parse("2026-10-05T19:05:00Z") ? 30_000 : 10 * 60_000); await tick(); }
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now());
+      k.finishTool();
+      reset = CHAIN_RESET["2am"];
+      k.notice("2am", reset);
+      if (activity === "three-held-fails") {
+        f.advance(5_000);
+        await k.harnessWake();
+        f.advance(5_000);
+        k.output();
+        f.advance(5_000);
+        reset = CHAIN_RESET["3am"];
+        k.notice("3am", reset);
+      }
+      k.write();
+      f.h.setConversationActive(false);
+      f.advance(3_000);
+      await tick();
+      const due = reset * 1000 + 60_000;
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toMatchObject({ resumeAt: new Date(due).toISOString(), stageRetry: {} });
+      while (f.now() < due - 30_000) { f.advance(due - f.now() > 10 * 60_000 ? 10 * 60_000 : 30_000); await tick(); }
+      // A held delivery is outstanding at the retry time.
+      f.advance(due - f.now());
+      held = true;
+      await tick();
+      if (activity === "held-reply") {
+        f.advance(15_000);
+        k.operator("Wait for my review");
+        f.advance(500);
+        k.notice(reset === CHAIN_RESET["3am"] ? "3am" : "2am", reset);
+        k.write();
+        held = false;
+      }
+      const lasting = activity === "held-lasting";
+      for (let n = 0; n < 10 && f.h.spawnInputs.length < 2; n++) {
+        f.advance(30_000);
+        if (!lasting && activity !== "held-reply") held = false;
+        await tick();
+      }
+      if (lasting) {
+        // Five minutes of real uncertainty spend the new chain's own budget only.
+        expect(f.h.spawnInputs).toHaveLength(1);
+        expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeDefined();
+        while (f.now() < due + 12 * 60_000) { f.advance(30_000); await tick(); }
+        expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeUndefined();
+        expect(loadPipelines()[0]!.stateDetail).toMatch(/could not confirm unchanged cut evidence/);
+        expect(f.h.spawnInputs).toHaveLength(1);
+        return;
+      }
+      const owed = activity !== "held-reply";
+      expect({ spawns: f.h.spawnInputs.length, state: loadPipelines()[0]!.state })
+        .toEqual(owed ? { spawns: 2, state: "running" } : { spawns: 1, state: "needs_decision" });
+    });
+  }
+}
