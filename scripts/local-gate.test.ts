@@ -250,22 +250,27 @@ const userManager = process.platform === "linux" && Bun.which("systemd-run") !==
   && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status === 0;
 test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers that left the tree included, and no other scope is touched", async () => {
   // A neighbour scope this run must leave alone.
-  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "sleep", "60"], stdio: ["ignore", "ignore", "ignore"] });
+  const neighbourDir = mkdtempSync(path.join(tmpdir(), "gate-neighbour-")); roots.push(neighbourDir);
+  const neighbourFile = path.join(neighbourDir, "pid");
+  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", `echo $$ > '${neighbourFile}'; exec sleep 60`], stdio: ["ignore", "ignore", "ignore"] });
   try {
-    // gate-slot as the step's own command, and gate-slot under a process that
-    // stays in this hook's cgroup while the work runs in a run-*.scope.
+    const [neighbourIdentity] = await recordFixtureIdentities([neighbourFile]);
+    // Exercise actual transient scopes directly and below an intermediate.
+    // gate-slot now owns a service; its lifetime is verified by owned-runner.
     for (const wrapped of [false, true]) {
       const dir = mkdtempSync(path.join(tmpdir(), "gate-scope-")); roots.push(dir);
-      writeFileSync(path.join(dir, "pressure"), "some avg10=0.00 avg60=0.00 avg300=0.00 total=1\n");
-      const env = { ...process.env, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir };
+      const env = { ...process.env };
       // One helper keeps the step's environment and one starts from an empty
       // one; both are reparented away from the step's process tree.
-      const script = `cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
-      const slot = ["bash", path.join(root, "scripts/gate-slot.sh"), "bash", "-c", script];
-      const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...slot] : slot;
+      const script = `echo $$ > '${dir}/root.pid'; cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
+      const scoped = ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", script];
+      const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...scoped] : scoped;
       const started = performance.now();
-      const error = await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},
+      const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},
         prepare: () => ({ command, env }) }).then(() => null, (caught: unknown) => caught);
+      try { await recordFixtureIdentities(["root", "kept", "bare"].map(name => path.join(dir, `${name}.pid`))); }
+      finally { await pending; }
+      const error = await pending;
       expect(performance.now() - started).toBeLessThan(10_000);
       expect(existsSync(path.join(dir, "ready")), "the work started before the deadline").toBeTrue();
       expect(error).toBeInstanceOf(NoVerdict);
@@ -276,6 +281,7 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
       for (const helper of ["kept", "bare"]) expect(alive(Number(readFileSync(path.join(dir, `${helper}.pid`), "utf8"))), `${helper}, wrapped: ${wrapped}`).toBeFalse();
       expect(scopeProcesses(scope)).toEqual([]);
       expect(alive(neighbour.pid)).toBeTrue();
+      expect(processIdentityStatus(neighbourIdentity!)).toBe("alive");
     }
   } finally {
     neighbour.kill("SIGKILL");
