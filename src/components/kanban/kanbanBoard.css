@@ -333,7 +333,9 @@
 
 /* Its line sits halfway between the cards above and below: the column's gap
    on both sides and no padding of its own on either. */
-.kb .divider { display: flex; align-items: center; gap: 10px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding: 0 2px; }
+/* The pixel above centres the label's ink between the cards, which its line
+   box alone leaves a pixel low in the system fonts of Linux. */
+.kb .divider { display: flex; align-items: center; gap: 10px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding: 0 2px; margin-top: 1px; }
 .kb .divider::before, .kb .divider::after { content: ""; flex: 1; height: 1px; background: var(--border-default); }
 
 .kb .tabs-nav { display: flex; gap: 4px; padding: 10px 12px; }
@@ -506,8 +508,11 @@
 .kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
 .kb .card .undo:hover { background: var(--surface-well); }
 /* A card no task holds: the chip is a line of its own between the conversation
-   above it and the counts that wrap below it, with the same 12 px on both sides. */
-.kb .card .foot:has(> .origin-chip) { margin-top: 0; row-gap: var(--space-3); }
+   above it and the counts that wrap below it, with the same 12 px on both sides.
+   The extra pixel below, and the one the foot gives back to the card's bottom
+   inset, hold that balance in the system fonts of Linux as well as the
+   designer's: the counts' smaller label sits lower in its line box. */
+.kb .card .foot:has(> .origin-chip) { margin-top: 0; margin-bottom: -1px; row-gap: calc(var(--space-3) + 1px); }
 .kb .card .origin-chip { height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 999px; border: 1px dashed var(--border-strong); font-size: var(--text-caption); font-weight: 600; color: var(--color-muted); }
 
 /* The project a card belongs to (#1820). Only the cross-project Overview
@@ -1261,6 +1266,14 @@
    board then scrolls sideways inside itself, never the page. */
 .kb .board.reading { overflow-x: auto; }
 .kb .board.scroll .column.reading { --kb-column-width: 460px; }
+/* The other cards of a shelf widened for a reader or a draft keep the foot
+   they have at the shelf's own width: when the column narrows back (a launch
+   from that draft, docs/design/launch-render-polish.md §5) their counts and
+   buttons do not rewrap and push every card below them down. The shelf's
+   280 px beside the scroller, 220 px in the narrow grid, less the column's
+   and the card's insets. */
+.kb .board.scroll .column.reading .card.shelf:not(.has-reader) > .foot { max-width: calc(280px - 26px - 2 * (var(--inset-card) + 1px)); }
+.kb .board.narrow .column.reading .card.shelf:not(.has-reader) > .foot { max-width: calc(220px - 26px - 2 * (var(--inset-card) + 1px)); }
 
 /* Written as specific as the Assigned shelf's 280 px basis above, and after
    it, so an Assigned column that gave the wide share away keeps the agent's

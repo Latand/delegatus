@@ -1,0 +1,140 @@
+--- before/src/components/kanban/orchestratorWires.ts	2026-10-07 10:33:25.000000000 +0300
++++ after/src/components/kanban/orchestratorWires.ts	2026-10-07 11:34:31.410753055 +0300
+@@ -242,6 +242,8 @@
+     const clip: Box = { left: columnRect.left, right: columnRect.right, width: columnRect.width, top, bottom, height: bottom - top };
+     /* A port the column has scrolled out of view would be painted over the column's header or past its foot. */
+     const port = portY(card);
++    /* A scroller with no room for a count shows nothing of the column but its header: the column is out of view. */
++    if (bottom - top < 38) return { wire, hidden: "away", status };
+     if (port > bottom - PORT_CLEARANCE) return { wire, hidden: "below", column: columnRect, view: clip, status };
+     if (port < top + PORT_CLEARANCE) return { wire, hidden: "above", column: columnRect, view: clip, status };
+     return { wire, card, column: columnRect, node, view: clip };
+@@ -254,30 +256,72 @@
+     return { x: seat.left, y: seat.bottom - Math.min(14, seat.height / 2) };
+   }
+
+-  /** Out of the seat, along the bus above the columns, down the gutter left of the column, into the card. */
+-  function gutter(seat: Box, side: boolean, column: Box, y: number, into: number, leftGutter: number): string {
++  /** A box a wire may not run through: the row of column links or tabs between a seat on top and the columns. */
++  const crosses = (blocks: readonly Box[], a: Point, b: Point) => blocks.some((box) =>
++    Math.max(a.x, b.x) >= box.left - 2 && Math.min(a.x, b.x) <= box.right + 2 && Math.max(a.y, b.y) >= box.top - 2 && Math.min(a.y, b.y) <= box.bottom + 2);
++
++  /** The route with the fewest bends that the board leaves clear, then the shortest: straight out of
++      the side seat into a card of the column beside it; one elbow down the column's gutter from the
++      bottom of a seat on top that spans it; two out of the seat's facing side; three along the bus; and
++      the old margin route only when nothing else is clear. Every route ends down the column's gutter
++      into the card's port. */
++  function route(seat: Box, side: boolean, column: Box, y: number, into: number, leftGutter: number, blocks: readonly Box[]): { d: string; exit: Point } {
+     const r = 6;
+     const trunk = phone ? column.left + 5 : column.left - 9;
+-    const turn = `V${y - r} Q${trunk},${y} ${trunk + r},${y} H${into}`;
++    /* The last corner never overshoots the port: on the phone the port is 3.5 px from the gutter. */
++    const last = Math.max(1, Math.min(r, into - trunk));
++    const turn = `V${y - last} Q${trunk},${y} ${trunk + last},${y} H${into}`;
+     const bus = column.top - 9;
+-    const port = seatPort(seat, side, column.top);
+     if (side) {
+-      if (Math.abs(bus - port.y) <= r) return `M${port.x},${port.y} H${trunk - r} Q${trunk},${port.y} ${trunk},${port.y + r} ${turn}`;
++      /* The column beside the seat: nothing stands between them, so the wire goes straight across. */
++      if (column.left - seat.right <= 24 && y >= seat.top + r && y <= seat.bottom - r) return { d: `M${seat.right},${y} H${into}`, exit: { x: seat.right, y } };
++      const port = seatPort(seat, side, column.top);
++      /* Columns flush with the seat's top: the bus runs just inside the seat's top, above the columns. */
++      const flush = Math.max(bus, seat.top + r);
++      if (flush < column.top - 2) { port.y = flush; }
++      if (Math.abs(bus - port.y) <= r) return { d: `M${port.x},${port.y} H${trunk - r} Q${trunk},${port.y} ${trunk},${port.y + r} ${turn}`, exit: port };
+       const out = port.x + 10;
+       const down = bus > port.y ? 1 : -1;
+-      return `M${port.x},${port.y} H${out - r} Q${out},${port.y} ${out},${port.y + r * down} V${bus - r * down} Q${out},${bus} ${out + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`;
++      return { d: `M${port.x},${port.y} H${out - r} Q${out},${port.y} ${out},${port.y + r * down} V${bus - r * down} Q${out},${bus} ${out + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: port };
++    }
++    const foot = seat.bottom;
++    if (!phone) {
++      /* One elbow: the seat spans the gutter, so the wire drops from its bottom edge. */
++      if (trunk >= seat.left + r && trunk <= seat.right - r && y - r > foot && !crosses(blocks, { x: trunk, y: foot }, { x: trunk, y })) {
++        return { d: `M${trunk},${foot} ${turn}`, exit: { x: trunk, y: foot } };
++      }
++      /* Two: out of the side of the seat that faces the gutter, at its foot. */
++      const low = seat.bottom - Math.min(14, seat.height / 2);
++      const facing = trunk < seat.left - r ? seat.left : trunk > seat.right + r ? seat.right : null;
++      if (facing !== null && y - r > low + r && !crosses(blocks, { x: facing, y: low }, { x: trunk, y: low }) && !crosses(blocks, { x: trunk, y: low }, { x: trunk, y })) {
++        const sign = trunk < facing ? -1 : 1;
++        return { d: `M${facing},${low} H${trunk - sign * r} Q${trunk},${low} ${trunk},${low + r} ${turn}`, exit: { x: facing, y: low } };
++      }
++      /* Three: down from the nearest clear point of the seat's bottom to the bus, along it, down the gutter. */
++      if (bus - foot >= 2 * r && y - r > bus + r) {
++        const span = (x: number) => Math.min(seat.right - r, Math.max(seat.left + r, x));
++        const options = [span(trunk), ...blocks.flatMap((box) => [span(box.right + 2 * r), span(box.left - 2 * r)])]
++          .filter((x) => !crosses(blocks, { x, y: foot }, { x, y: bus }) && !crosses(blocks, { x, y: bus }, { x: trunk, y: bus }))
++          .sort((a, b) => Math.abs(a - trunk) - Math.abs(b - trunk));
++        const x = options[0];
++        if (x !== undefined && Math.abs(x - trunk) >= 2 * r) {
++          const sign = trunk < x ? -1 : 1;
++          return { d: `M${x},${foot} V${bus - r} Q${x},${bus} ${x + sign * r},${bus} H${trunk - sign * r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: { x, y: foot } };
++        }
++      }
+     }
+     /* The seat on top, and the phone's seat card: out of the seat's left edge
+        and down the board's left margin, clear of the row of column links under
+        the seat; on the desktop then along the bus to the column's own gutter.
+        The phone's left margin is the gutter of its one open column. */
++    const port = seatPort(seat, side, column.top);
+     const spine = phone ? trunk : Math.min(leftGutter, seat.left - 9);
+-    const drop = `M${trunk},${Math.min(seat.bottom, y - r)} ${turn}`;
++    const drop = { d: `M${trunk},${Math.min(seat.bottom, y - r)} ${turn}`, exit: { x: trunk, y: Math.min(seat.bottom, y - r) } };
+     if (port.x - spine < r) return drop;
+     const start = `M${port.x},${port.y} H${spine + r} Q${spine},${port.y} ${spine},${port.y + r}`;
+-    if (Math.abs(trunk - spine) < 1) return `${start} ${turn}`;
++    if (Math.abs(trunk - spine) < 1) return { d: `${start} ${turn}`, exit: port };
+     if (trunk - spine < 2 * r || bus - port.y < 2 * r) return drop;
+-    return `${start} V${bus - r} Q${spine},${bus} ${spine + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`;
++    return { d: `${start} V${bus - r} Q${spine},${bus} ${spine + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: port };
+   }
+
+   function update() {
+@@ -296,6 +340,9 @@
+     const seat = seatElement ? rect(seatElement) : null;
+     const side = !phone && seatElement?.dataset.placement === "side";
+     let columnTop: number | null = null;
++    /* The rows of column links or tabs a seat on top stands above, read once a pass. */
++    const blocks: Box[] = side || phone ? [] : [...root.querySelectorAll<HTMLElement>(".tabs-nav button")].map(rect).filter((box) => box.width > 0);
++    const exits = new Map<string, Point>();
+     /* The board's left margin, read once a pass and only for a seat that is not at the side. */
+     let margin: number | null = null;
+     const leftGutter = (column: Box) => {
+@@ -335,7 +382,9 @@
+       columnTop ??= spot.column.top;
+       const tone = tones.get(wire.taskId) ?? "idle";
+       const port = { x: spot.card.left, y: portY(spot.card) };
+-      const d = gutter(seat!, side, spot.column, port.y, port.x - 3.5, leftGutter(spot.column));
++      const routed = route(seat!, side, spot.column, port.y, port.x - 3.5, leftGutter(spot.column), blocks);
++      const d = routed.d;
++      exits.set(`${routed.exit.x},${routed.exit.y}`, routed.exit);
+       let group = wire.group;
+       if (!group) {
+         group = wire.group = svg("g", { "data-wire": wire.taskId });
+@@ -388,17 +437,23 @@
+         const fading = hidden.every((wire) => wire.fading);
+         if (fading && !stub.fade && !still) stub.fade = [fadeOut(stub.chip, fadedFor(hidden, clock)), fadeOut(stub.wire, fadedFor(hidden, clock))];
+         else if (!fading && stub.fade) { for (const fade of stub.fade) fade.cancel(); stub.fade = null; }
+-        stub.wire.setAttribute("d", gutter(seat, side, entry.column, y + 10, x, leftGutter(entry.column)));
++        const routed = route(seat, side, entry.column, y + 10, x, leftGutter(entry.column), blocks);
++        exits.set(`${routed.exit.x},${routed.exit.y}`, routed.exit);
++        stub.wire.setAttribute("d", routed.d);
+         drawn += 1;
+       }
+     }
+     for (const [key, stub] of stubs) if (!seenStubs.has(key)) { stub.chip.remove(); stub.wire.remove(); stubs.delete(key); }
+
+-    const port = seat && drawn && columnTop !== null && !phone ? seatPort(seat, side, columnTop) : null;
++    /* A seat port where each route leaves the seat (the prototype draws them all, unfaded). */
++    for (const old of shared.querySelectorAll(".oa-port[data-seat-extra]")) old.remove();
++    const ports = seat && drawn && !phone ? [...exits.values()] : [];
++    const port = ports[0] ?? null;
+     if (port) {
+       if (!seatDot) { seatDot = svg("circle", { r: 4.5, class: "oa-port", "data-seat": "" }); shared.append(seatDot); }
+       seatDot.setAttribute("cx", String(port.x));
+       seatDot.setAttribute("cy", String(port.y));
++      for (const extra of ports.slice(1)) shared.append(svg("circle", { r: 4.5, class: "oa-port", "data-seat": "", "data-seat-extra": "", cx: extra.x, cy: extra.y }));
+     } else { seatDot?.remove(); seatDot = null; }
+
+     /* The seat's port fades with the last wire. */

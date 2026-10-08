@@ -2309,3 +2309,28 @@ test("a runtime fault inside a startup migration rolls the whole block back and 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a delivery commit keeps the shared reader view warm and current", () => {
+  /* 2026-10-07: each delivery commit dropped the cached view, so the next
+     whole-registry reader reloaded it, 0.28 to 0.40 s on a copy of the
+     production registry, many times over as an account switch started. */
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-delivery-view-"));
+  const filename = path.join(directory, "agent-registry.json");
+  let snapshotLoads = 0;
+  const registry = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "sqlite",
+    onSqliteSnapshotLoad: () => { snapshotLoads += 1; },
+  });
+  const conversation = registry.ensureConversation("claude", "/sessions/delivery-view.jsonl", "account-a");
+  registry.readOnlySnapshot();
+  const loadsBefore = snapshotLoads;
+
+  const held = registry.holdDelivery(conversation.id, "Reply with the single word OK", "delivery-view", "text", [], null,
+    { operationId: "delivery-view" });
+  const view = registry.readOnlySnapshot();
+
+  expect(snapshotLoads).toBe(loadsBefore);
+  expect(view.heldDeliveries[held.id]).toMatchObject({ clientMessageId: "delivery-view", state: held.state });
+  registry.close();
+  fs.rmSync(directory, { recursive: true, force: true });
+});
