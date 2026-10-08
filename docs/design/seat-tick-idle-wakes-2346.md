@@ -290,6 +290,48 @@ to #2537. The timer/rotation lifecycle and settings schema are shared with the
 design untouched. The eventual PR body should list these seams. Publication
 and the #2346 findings comment belong to later authorized stages.
 
+## Implementation outcome
+
+The product fixes retain the investigation's classifications. Regression cases
+in `src/lib/monitor/seatTickController.test.ts` first failed on the old behavior
+for each reproduced defect, then passed with the corresponding fix:
+
+| Claim | Fixed behavior | Controller regression |
+| --- | --- | --- |
+| C1 latency | A newly owed child outcome is eligible at the first check even after a recent wake. Landed delivery still acknowledges it once. | First-check probe at five- and one-minute check intervals; independent timer with an explicitly idle seat and no operator turn. |
+| C2 cadence | Readable running seat children and open lanes remain a periodic agenda beyond the retry threshold. Previously delivered task obligations cannot suppress that agenda. | Six successive checks for unchanged children and lanes; five later checks after a task obligation was delivered. |
+| C2 eligibility | Unparented workers retain their ownership boundary. Settings, board text and the quiet journal explain eligibility and inbox-only silence. | Unparented-only and cold-inbox controller controls; rendered English and Ukrainian board descriptions on desktop and phone. |
+| C3 wording | The wake names an outcome announcement owed and explains that a delivered seat-tick wake acknowledges it. Reading the transcript alone leaves that acknowledgement unchanged. | Actual final-message read, follow-up reservation, explanatory delivered wake and a later check with no duplicate outcome. |
+| C4 attribution | Authorized seat, exact revision and original request key persist before dispatch. Read-only key lookup attaches acceptance after a lost reply or on a later check. | Lost reply, unavailable lookup, unknown key, mismatched key/revision, fresh controller, foreign seat, busy/refused reply and exactly one settle announcement. |
+
+The periodic reminder offers current work after other obligations drain; their
+completed outcomes remain governed by their existing acknowledgement. Cropped
+outcome bullets still owe delivery. The large-fleet test counts complete
+announcement bullets, while retaining its bounds on registry reads and bytes.
+Report-only reminder tests end their running work before asserting silence;
+the day replay now includes five interval digests, within its existing bound
+of six.
+
+Implementation seams are `seatTick.ts`, settings answer/card wording,
+`mcp/bindings.ts`, `orchestrator/seatDeployments.ts` and the deployment source.
+The existing synchronous seat-deployment read port remains compatible; its
+new optional key-lookup port permits recovery at the controller seam. The
+eligibility explanation is an additive answer field, optional for older
+responses. The pipeline engine, timer lifecycle and rotation design are
+unchanged.
+
+Rendered evidence is recorded in `evidence/seat-idle-wakes/board.json` by the
+existing kanban browser driver. Captures stay under
+`.artifacts/seat-idle-wakes/browser/`. The descriptions were visually inspected
+in their existing editors, where the complete eligibility explanation is
+available; the collapsed card keeps its existing preview limit.
+
+All tests run by explicit file path with isolated state, home, config and temp
+roots and a closed loopback Viewer-control port. Final verification comprises
+all `seatTick*.test.ts` files, the card, deploy authority and seat-deployment
+tests, the scoped browser case, TypeScript, ESLint and the local publication
+privacy gate. The implementation uses no live deployment or operator state.
+
 ## Executable reproductions
 
 Run the Python block from the repository root. It extracts the TypeScript
