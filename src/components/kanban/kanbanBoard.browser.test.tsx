@@ -22747,12 +22747,15 @@ describe("prototype review: a decided round retires the earlier undecided rounds
    * round the operator decided (`?proto=1&retired=1`): the shape of the task
    * that kept its prototype in the operator's menu after the answer. The
    * fixture answers through the Viewer's own selectors, so these frames draw
-   * what the server projects. At 1440 and 390, in English and Ukrainian: the
+   * what the server projects. At 1440 and 390, in English and Ukrainian, light
+   * and dark: the
    * needs-you menu lists the three waiting tasks and not export, the
    * orchestrator's notice counts three and never names export, export's card
    * button says decided, and its review marks the first round superseded by
    * the second and nothing as waiting. Opened, the first round says round 2
-   * replaced it and offers no choice until asked.
+   * replaced it and offers no choice until asked; when its sentence fills the
+   * row, the link wraps under the sentence (never under the mark) and the
+   * button that decides it anyway takes a row of its own.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "retires the earlier"
    *
@@ -22775,10 +22778,10 @@ describe("prototype review: a decided round retires the earlier undecided rounds
     const failures: string[] = [];
     const readings: Record<string, unknown> = {};
     try {
-      for (const size of SIZES) for (const lang of ["en", "uk"] as const) {
-        const label = `${size.name}-${lang}`;
+      for (const size of SIZES) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `${size.name}-${lang}-${theme}`;
         const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1&retired=1`, size.viewport, "light", lang, "reduce", size.phone);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1&retired=1`, size.viewport, theme, lang, "reduce", size.phone);
         const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `retired-${label}-${name}.png`) });
         const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
         try {
@@ -22873,6 +22876,16 @@ describe("prototype review: a decided round retires the earlier undecided rounds
               choose: [...document.querySelectorAll<HTMLButtonElement>("[data-prototype-choose]")].filter((button) => !button.disabled).length,
               marks: { superseded: box('[data-prototype-round="r-export-0"] [data-prototype-superseded]'), decided: box('[data-prototype-round="r-export"] svg') },
               title: document.querySelector<HTMLElement>('[data-prototype-round="r-export-0"]')?.title ?? null,
+              /* Left, top and bottom of the mark, the sentence, its link and the decide-anyway button. */
+              layout: Object.fromEntries(([
+                ["mark", "[data-prototype-superseded-said] svg"],
+                ["sentence", "[data-prototype-superseded-said] > span:last-child > span"],
+                ["link", "[data-prototype-superseded-line] [data-prototype-open-round]"],
+                ["anyway", "[data-prototype-superseded-line] [data-prototype-decide-anyway]"],
+              ] as const).map(([name, selector]) => {
+                const rect = document.querySelector(selector)?.getBoundingClientRect();
+                return [name, rect ? { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom) } : null];
+              })),
             };
           });
           record("superseded", opened);
@@ -22882,6 +22895,14 @@ describe("prototype review: a decided round retires the earlier undecided rounds
           if (opened.save || opened.choose || opened.footer?.includes(tr("proto.chooseFirst")) || opened.footer?.includes(tr("proto.chooseFirstPhone"))) failures.push(`${label}: the superseded round still asks for a choice: ${JSON.stringify(opened)}`);
           if (JSON.stringify(opened.marks.superseded) !== JSON.stringify(opened.marks.decided)) failures.push(`${label}: the tab marks differ in size: ${JSON.stringify(opened.marks)}`);
           if (!opened.title?.endsWith(tr("proto.round.superseded", { n: 2 }))) failures.push(`${label}: the superseded tab's hover text reads ${JSON.stringify(opened.title)}`);
+          const { mark, sentence, link, anyway } = opened.layout;
+          if (!mark || !sentence || !link || !anyway) failures.push(`${label}: the superseded footer misses a part: ${JSON.stringify(opened.layout)}`);
+          else {
+            const wrapped = link.top >= sentence.bottom - 2;
+            if (wrapped && Math.abs(link.left - sentence.left) > 1) failures.push(`${label}: the wrapped link starts at x=${link.left}, the sentence at x=${sentence.left}`);
+            if (mark.left >= sentence.left) failures.push(`${label}: the mark does not lead the sentence: ${JSON.stringify(opened.layout)}`);
+            if (wrapped && anyway.top < link.bottom - 2) failures.push(`${label}: the decide-anyway button shares the wrapped link's row: ${JSON.stringify(opened.layout)}`);
+          }
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
           failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);

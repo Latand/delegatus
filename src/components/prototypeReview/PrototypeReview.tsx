@@ -656,13 +656,20 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      until the operator opts to decide this round anyway. */
   const supersededLine = successor ? (
     <div data-prototype-superseded-line={successor.id} className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
-      <CornerDownRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-      <span className="text-label font-semibold text-secondary">
-        {t("proto.supersededLine", { n: roundNumber(successor.id), date: successor.decision ? whenDate(successor.decision.at, locale) : "" })}
+      {/* The mark stays on the first line; a wrapped link starts under the sentence, and only the button moves to a line of its own. */}
+      <span data-prototype-superseded-said="" className="flex min-w-0 items-start gap-2 text-label font-semibold">
+        <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
+          <CornerDownRight className="h-3.5 w-3.5 text-muted" />
+        </span>
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-secondary">
+            {t("proto.supersededLine", { n: roundNumber(successor.id), date: successor.decision ? whenDate(successor.decision.at, locale) : "" })}
+          </span>
+          <button type="button" data-prototype-open-round={successor.id} disabled={speaking} className="rounded-sm text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50" onClick={() => setPicked(successor.id)}>
+            {t("proto.openRound", { n: roundNumber(successor.id) })}
+          </button>
+        </span>
       </span>
-      <button type="button" data-prototype-open-round={successor.id} disabled={speaking} className="rounded-sm text-label font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50" onClick={() => setPicked(successor.id)}>
-        {t("proto.openRound", { n: roundNumber(successor.id) })}
-      </button>
       {open || elsewhere ? null : (
         <button type="button" data-prototype-decide-anyway="" className={`${SECONDARY} ml-auto`} onClick={() => setReopened((held) => new Set([...held, round!.id]))}>
           {t("proto.decideAnyway")}
