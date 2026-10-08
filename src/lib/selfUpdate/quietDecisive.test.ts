@@ -26,7 +26,7 @@ let child: ReturnType<typeof Bun.spawn>;
 
 function ports(journal: RuntimeJournal): QuietPorts {
   return { ...productionDeps().quiet!, runtimeSnapshot: async () => journal.snapshot(),
-    owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query) }),
+    owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
     registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 };
 }

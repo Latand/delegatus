@@ -94,7 +94,7 @@ test("instrumentation names the dominant phase of one observational probe on lon
     registryHealth: () => [],
     seats: () => [],
     controllerBusyReason: async () => null,
-    owners: ownerCensusReader(sources, { readSession: async () => null, heldHosts: () => new Map() }),
+    owners: ownerCensusReader(sources, { readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null, heldHosts: () => new Map() }),
   };
   const observed = new ObservedWork(ports, () => Date.now(), () => {});
   expect(observed.observe(snapshot).evidence.state).toBe("pending");

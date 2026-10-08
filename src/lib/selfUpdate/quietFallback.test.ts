@@ -27,7 +27,7 @@ let child: ReturnType<typeof Bun.spawn>;
 
 function ports(journal: RuntimeJournal): QuietPorts {
   return { ...productionDeps().quiet!, runtimeSnapshot: async () => journal.snapshot(),
-    owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query) }),
+    owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
     registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 };
 }
@@ -429,6 +429,9 @@ test("an active registry turn retains custody over a previous settled transcript
   const idleHealth = await idle.health();
   idle.health = async () => ({ ...idleHealth, pid: child.pid });
   await bindStructuredDeliveryQueue([{ key: f.key, host: idle }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+  expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!,
+    structuredHost: { ...entry.structuredHost!, activeTurnRef: null } });
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
 

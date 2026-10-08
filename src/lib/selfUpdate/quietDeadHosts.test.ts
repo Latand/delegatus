@@ -103,7 +103,7 @@ function ended(turn: "open" | "settled") {
  * covered over the real journal in quietFallback and quietOwners.
  */
 function read(sources: () => AgentLivenessSources = productionLivenessSources): NonNullable<QuietPorts["owners"]> {
-  const reader = ownerCensusReader(sources, { readSession: async () => null });
+  const reader = ownerCensusReader(sources, { readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null });
   return async (sessions, probe) => {
     const census = await reader(sessions, probe);
     const named = new Set(sessions.flatMap((session) => census.bound({ conversationId: session.conversationId,

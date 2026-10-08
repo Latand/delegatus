@@ -20,7 +20,7 @@ import { seatTickIdle } from "@/lib/monitor/seatTickController";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { readRuntimeSession, runtimeHostClient } from "@/lib/runtime/client";
 import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
-import type { RuntimeSession, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
+import type { RuntimeEvent, RuntimeReplay, RuntimeSession, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { loadFlows } from "@/lib/flows/store";
 import { listPresence } from "@/lib/view/presenceStore";
@@ -124,6 +124,105 @@ export function journalStatement(
   return claimed ? "claimed" : idle ? "idle" : unattributed ? "unattributed" : null;
 }
 
+/** Resolve each own statement in journal order. Engine events name a session
+    key, while publications supply its writer epoch. A turn already attributed
+    to an earlier writer stays that writer's. An unfamiliar turn under the
+    current key can be current work, so it holds until a later own idle/end.
+    Missing history supplies no release proof for an answering process. */
+function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[]): OwnerReading["journal"] {
+  const statement = journalStatement(rows, owner);
+  const turns = new Map<string, number>();
+  const turnOwners = new Map<string, { key: string; epoch: number }>();
+  const rowKeys = new Map<string, string>();
+  const statements = new Map<string, Map<string | null, number | null>>();
+  const turnKey = (key: string, turn: string) => `${key}\0${turn}`;
+  const prefix = `engine-host:${owner.entryKey}:`;
+  for (const event of events) {
+    if (event.scope.type !== "session") continue;
+    const payload = event.payload;
+    const turn = typeof payload.turnId === "string" ? payload.turnId : null;
+    if (event.kind === "session-status") {
+      const key = payload.sessionKey as RuntimeSession["sessionKey"] | undefined;
+      if (key?.engine && key.sessionId) rowKeys.set(event.scope.id, rowKeyId(key));
+      const epoch = fenceEpoch(typeof payload.writerClaim === "string" ? payload.writerClaim : null);
+      if (!key?.engine || !key.sessionId || epoch === null || !("host" in payload && "turn" in payload && "activeTurnId" in payload)) continue;
+      const id = rowKeyId(key);
+      const active = typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
+      const busy = sessionClaimsOpenTurn(payload as unknown as RuntimeSession);
+      if (busy && active) {
+        turns.set(turnKey(id, active), epoch);
+        turnOwners.set(turnKey(event.scope.id, active), { key: id, epoch });
+      }
+      if (id === owner.entryKey && epoch === owner.writerEpoch && (busy || payload.turn === "idle")) {
+        const producer = event.producer.eventKey ?? "";
+        const statusPrefix = `structured-host:${id}:${epoch}:`;
+        const match = producer.startsWith(statusPrefix) ? /^(\d+):/.exec(producer.slice(statusPrefix.length)) : null;
+        const cursor = match ? Number(match[1]) : null;
+        const claims = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
+        if (busy) {
+          const previous = claims.get(active);
+          claims.set(active, previous === undefined || previous === null ? cursor : cursor === null ? null : Math.max(previous, cursor));
+        } else {
+          // Append order cannot make a queued, older health sample newer than
+          // an engine event. A missing source cursor cannot settle a claim.
+          for (const [turn, started] of claims) if (cursor !== null && started !== null && cursor > started) claims.delete(turn);
+        }
+        statements.set(event.scope.id, claims);
+      }
+      continue;
+    }
+    if (event.kind !== "turn-started" && event.kind !== "turn-ended") continue;
+    const producer = event.producer.eventKey;
+    if (event.kind === "turn-started" && producer?.startsWith("operation:") && producer.endsWith(":native-turn-started") && turn) {
+      const recorded = turnOwners.get(turnKey(event.scope.id, turn));
+      if (recorded && (recorded.key !== owner.entryKey || recorded.epoch !== owner.writerEpoch)) continue;
+      // A native settlement carries no engine cursor. It may precede the
+      // event pump and the running publication, so an earlier own idle cannot
+      // authorize a restart. Own keyed evidence can subsequently resolve it.
+      if (recorded || statements.has(event.scope.id) || rowKeys.get(event.scope.id) === owner.entryKey) {
+        const claims = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
+        if (!claims.has(turn)) claims.set(turn, null);
+        statements.set(event.scope.id, claims);
+      }
+      continue;
+    }
+    if (!producer?.startsWith(prefix) || !/^\d+$/.test(producer.slice(prefix.length)) || !turn) continue;
+    const prior = turns.get(turnKey(owner.entryKey!, turn));
+    // Known foreign work cannot grant or withdraw this owner's claim. When
+    // the epoch is absent from retained history, ambiguity holds the owner.
+    if (prior !== undefined && prior !== owner.writerEpoch) continue;
+    if (event.kind === "turn-started") {
+      turns.set(turnKey(owner.entryKey!, turn), owner.writerEpoch!);
+      turnOwners.set(turnKey(event.scope.id, turn), { key: owner.entryKey!, epoch: owner.writerEpoch! });
+      const active = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
+      const cursor = Number(producer.slice(prefix.length));
+      const previous = active.get(turn);
+      active.set(turn, previous === undefined || previous === null ? cursor : Math.max(previous, cursor));
+      statements.set(event.scope.id, active);
+    } else {
+      const claims = statements.get(event.scope.id);
+      const started = claims?.get(turn);
+      if (started !== undefined && started !== null && Number(producer.slice(prefix.length)) > started) claims!.delete(turn);
+    }
+  }
+  let unread = false;
+  let idle = false;
+  for (const ordered of statements.values()) {
+    if (ordered.size) return "claimed";
+    idle = true;
+  }
+  for (const row of rows) {
+    const own = row.writerStatus && rowKeyId(row.writerStatus.sessionKey) === owner.entryKey
+      && fenceEpoch(row.writerStatus.writerClaim) === owner.writerEpoch;
+    const ordered = statements.get(row.conversationId);
+    if (ordered?.size) return "claimed";
+    if (ordered) idle = true;
+    else if (own && sessionClaimsOpenTurn(row.writerStatus!)) return "claimed";
+    else if (own) unread = true;
+  }
+  return unread || statement === "unattributed" ? "unattributed" : idle ? "idle" : statement;
+}
+
 /** What a handle's health says about its host's turn; null when it reports
     no host. */
 function handleTurn(health: Pick<HostState, "status" | "activeTurnRef"> | null | undefined): "busy" | "idle" | null {
@@ -135,6 +234,8 @@ export interface OwnerCensusReaderOptions {
   /** One keyed journal read, for a live owner with a writer whose
       conversation the snapshot omits. */
   readSession?: (query: { conversationId?: string; artifactPath?: string }) => Promise<RuntimeSession | null>;
+  /** Existing journal replay, for ordered start/completion evidence. */
+  readEvents?: (after: number) => Promise<RuntimeReplay>;
   /** The hosts this Viewer holds, by session key. */
   heldHosts?: () => ReadonlyMap<string, EngineHost>;
   /** This Viewer's own process, the claimant of the claims it makes (R6b). */
@@ -162,6 +263,11 @@ export function ownerCensusReader(
     if (!client) throw new Error("runtime host is unavailable for registered turn evidence");
     return readRuntimeSession(client, query);
   });
+  const readEvents = options.readEvents ?? (async (after) => {
+    const client = runtimeHostClient();
+    if (!client) throw new Error("runtime host is unavailable for ordered turn evidence");
+    return client.events(after);
+  });
   const heldHosts = options.heldHosts ?? structuredDeliveryHeldHosts;
   const viewer = options.viewerIdentity ?? (() => viewerIdentity === undefined ? (viewerIdentity = captureProcessIdentity(process.pid)) : viewerIdentity);
   return async (sessions, _probe, read = (_reference, reading) => reading()) => {
@@ -171,6 +277,24 @@ export function ownerCensusReader(
     const flows = liveness.flows?.() ?? [];
     const probe = liveness.probe;
     const held = heldHosts();
+    // One replay per probe, only when an own journal statement needs ordering.
+    // Keep only deciding events; payloads from live output are never retained.
+    let history: Promise<RuntimeEvent[]> | null = null;
+    const events = () => (history ??= (async () => {
+      const result: RuntimeEvent[] = [];
+      let cursor = 0;
+      let page = await readEvents(cursor);
+      if (page.reset) { cursor = page.floorSeq; page = await readEvents(cursor); }
+      while (true) {
+        if (page.reset) throw new Error("runtime turn history changed during drain probe");
+        for (const event of page.events) if (["session-status", "turn-started", "turn-ended"].includes(event.kind)) result.push(event);
+        if (!page.events.length) return result;
+        const next = page.events.at(-1)!.seq;
+        if (next <= cursor) throw new Error("runtime turn history did not advance");
+        cursor = next;
+        page = await readEvents(cursor);
+      }
+    })());
     const census = registryOwners(registry, flows, probe, { identity: viewer(), heldKeys: held });
     const index = censusIndex(registry);
     const tails = new Map<string, Promise<TailReading | null>>();
@@ -178,8 +302,8 @@ export function ownerCensusReader(
     for (const conversation of Object.values(registry.conversations)) {
       for (const generation of conversation.generations) engines.set(generation.path, conversation.engine);
     }
-    /* A missing file or a torn tail reads as null: R8 holds a confirmed
-       owner and bounds an unconfirmed launch. A read
+    /* A missing file or a torn tail reads as null: R8 holds an answering
+       owner and bounds an ownerless launch that never proved work. A read
        that fails on anything else (a denied open, an I/O error) is no
        verdict: the strict read throws it, it reaches the probe as
        `unreadable`, and the next probe reads again (R7). The description
@@ -269,12 +393,11 @@ export function ownerCensusReader(
             }
           }
           reading.handle = handle;
-          // Recording the host's pid and start identity confirms its launch.
-          // The evidence survives a Viewer restart and an unreadable transcript;
-          // only the owner's own idle/settlement or proven death can release it.
-          reading.confirmed = owner.identities.some((identity) => identity.startIdentity !== null && identityAlive(identity, probe));
           reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
-          reading.journal = owner.writerEpoch === null ? null : journalStatement(await rowsFor(owner), owner);
+          if (owner.writerEpoch !== null) {
+            const rows = await rowsFor(owner);
+            reading.journal = orderedJournalStatement(rows, owner, await events());
+          }
           reading.tail = await tail(owner.artifactPath, owner.engine);
         }
         owners.push(reading);

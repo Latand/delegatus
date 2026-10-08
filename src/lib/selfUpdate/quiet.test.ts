@@ -223,6 +223,8 @@ test("a previous terminal transcript cannot hide a newly admitted turn", async (
   p.owners = census(() => SETTLED_LIVE);
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
   p.owners = census(() => withHandle(SETTLED_LIVE, "idle"));
+  expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
+  p.owners = census(() => ({ owners: [{ process: "alive", handle: "idle", journal: "idle", tail: idle }], tail: idle }));
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(0);
 });
 
@@ -256,6 +258,8 @@ test.each(["unhosted", "dead", "conflict"])("a %s running journal row needs curr
     p.owners = census(() => DEAD_OPEN);
     expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(true);
     p.owners = census(() => withHandle(SETTLED_LIVE, "idle"));
+    expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(false);
+    p.owners = census(() => ({ owners: [{ process: "alive", handle: "idle", journal: "idle", tail: idle }], tail: idle }));
     expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(true);
   }
 });
@@ -350,7 +354,7 @@ test("production fallback projection keeps a live registry process without an at
     const p = ports();
     p.runtimeSnapshot = async () => ({ sessions });
     const production = ownerCensusReader(() => ({ ...productionLivenessSources(),
-      registrySnapshot: () => registry.readOnlySnapshot(), pipelines: () => [], flows: () => [] }), { readSession: async () => null });
+      registrySnapshot: () => registry.readOnlySnapshot(), pipelines: () => [], flows: () => [] }), { readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null });
     p.owners = async (rows, probe) => {
       reads++;
       expect(structuredDeliveryHeldHosts().size).toBe(0);

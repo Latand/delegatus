@@ -81,12 +81,125 @@ afterEach(async () => {
 
 function ports(overrides: Partial<QuietPorts> = {}): QuietPorts {
   return { ...productionDeps().quiet!, runtimeSnapshot: async () => f.journal.snapshot(),
-    owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query) }),
+    owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
     registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192, ...overrides };
 }
 
 const probe = (p: QuietPorts = ports(), at = Date.now()) => probeQuiet(snapshot, p, at, true);
+
+test.each(["known identity", "missing identity"])("proved standalone turn remains protected after fresh ports lose its transcript: %s", async (shape) => {
+  const now = Date.now(), path = transcript("open"), c = conversation(path), worker = spawn();
+  const identity = shape === "known identity" ? worker.identity : { ...worker.identity, startIdentity: null };
+  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(identity),
+    claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+  await fallback();
+  expect((await probe(ports(), now)).quiet).toBe(false);
+  rmSync(path);
+  setAgentRegistryForTests(new AgentRegistry(join(f.dir, "registry.json"), undefined, undefined, { sqliteMode: "off" }));
+  const fresh = ports();
+  expect((await probe(fresh, now + 1)).quiet).toBe(false);
+  expect((await probe(fresh, now + FIVE_MINUTES + 2)).quiet).toBe(false);
+  expect((await probe(ports(), now + TWELVE_HOURS)).quiet).toBe(false);
+  writeFileSync(path, transcriptText("settled", new Date(now + TWELVE_HOURS + 1).toISOString()));
+  expect((await probe(ports(), now + TWELVE_HOURS + 2)).quiet).toBe(true);
+  rmSync(path);
+  await exit(worker);
+  expect((await probe(ports(), now + TWELVE_HOURS + 3)).quiet).toBe(true);
+});
+
+test("independent controller ordering: own event reaches the journal before its queued running publication during reconnect", async () => {
+  const path = transcript("settled"), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "idle");
+  const held = heldHost(worker.child.pid, { status: "idle", activeTurnRef: null, sessionKey: c.key.sessionId });
+  let pushEvent: (value: Parameters<typeof projectEngineHostEvent>[2]) => void = () => {};
+  const pendingEvent = new Promise<Parameters<typeof projectEngineHostEvent>[2]>((resolve) => { pushEvent = resolve; });
+  held.host.attach = async function* () { yield await pendingEvent; };
+  let releasePublication: () => void = () => {}, finishedPublication: () => void = () => {};
+  const publicationGate = new Promise<void>((resolve) => { releasePublication = resolve; });
+  const publicationDone = new Promise<void>((resolve) => { finishedPublication = resolve; });
+  let block = false, publicationEntered = false;
+  const client = { ...f.client, append: async (input: RuntimeEventInput) => {
+    if (block && input.kind === "session-status" && input.payload.activeTurnId === "own-new-turn") {
+      publicationEntered = true;
+      await publicationGate;
+      try { return await f.client.append(input); } finally { finishedPublication(); }
+    }
+    return f.client.append(input);
+  } } as RuntimeHostClient;
+  const stop = await bindCodexHostPersistence(f.registry, c.key, held.host as unknown as CodexAppServerHost,
+    claim.fence.slice(0, claim.fence.lastIndexOf(":")), claim.epoch, "unhosted", { cursorDebounceMs: 60_000 });
+  try {
+    await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client, hostlessSettleIntervalMs: 0 });
+    expect(f.registry.captureStructuredTerminationSurvivors(c.key, worker.identity, [worker.identity])).not.toBeNull();
+    block = true;
+    const before = held.host.health;
+    held.host.health = async () => ({ ...await before(), status: "active", activeTurnRef: "own-new-turn" });
+    await held.fire({ status: "active", activeTurnRef: "own-new-turn" });
+    expect(publicationEntered).toBe(true);
+    pushEvent({ kind: "turn-started", turnId: "own-new-turn", seq: 1 });
+    for (let n = 0; n < 100 && row(c.id).activeTurnId !== "own-new-turn"; n++) await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(row(c.id).activeTurnId).toBe("own-new-turn");
+    expect(row(c.id).writerStatus).toMatchObject({ turn: "idle", activeTurnId: null });
+    expect(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!.structuredHost!.activeTurnRef).toBeNull();
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    for (const at of [Date.now(), Date.now() + TWELVE_HOURS]) {
+      expect(productionLivenessSources().probe.pidAlive(worker.child.pid)).toBe(true);
+      expect((await probe(ports(), at)).quiet).toBe(false);
+    }
+    releasePublication();
+    await publicationDone;
+    expect((await probe()).quiet).toBe(false);
+    held.host.health = before;
+    await held.fire({ status: "idle", activeTurnRef: null });
+    await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    expect((await probe()).quiet).toBe(true);
+  } finally {
+    releasePublication();
+    if (publicationEntered) await publicationDone;
+    stop();
+  }
+});
+
+test("an older own idle sample appended after a newer engine start cannot release the answering owner", async () => {
+  const path = transcript("settled"), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "idle");
+  publish(c.id, c.key, path, claim.fence, null);
+  const idleCursor = seq;
+  event(c.id, c.key, "turn-started", "new-turn");
+  publish(c.id, c.key, path, claim.fence, null, idleCursor);
+  expect(row(c.id).turn).toBe("idle");
+  expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+  publish(c.id, c.key, path, claim.fence, null);
+  expect((await probe()).quiet).toBe(true);
+});
+
+test("each own start holds until its own newer end; another turn ending supplies no settlement", async () => {
+  const path = transcript("settled"), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "idle");
+  publish(c.id, c.key, path, claim.fence, null);
+  event(c.id, c.key, "turn-started", "first-turn");
+  event(c.id, c.key, "turn-started", "newest-turn");
+  event(c.id, c.key, "turn-ended", "first-turn");
+  expect(row(c.id).turn).toBe("idle");
+  expect((await probe()).quiet).toBe(false);
+  event(c.id, c.key, "turn-ended", "newest-turn");
+  expect((await probe()).quiet).toBe(true);
+});
+
+test("a newly admitted native turn holds before its engine event and running publication arrive", async () => {
+  const path = transcript("settled"), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "idle");
+  publish(c.id, c.key, path, claim.fence, null);
+  f.journal.executeOperation({ kind: "send", operationId: "op-own-send", idempotencyKey: "own-send", conversationId: c.id,
+    text: "continue", policy: "queue" });
+  f.journal.completeOperation("op-own-send", "turn-started", { turnId: "own-native-turn" });
+  expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+  publish(c.id, c.key, path, claim.fence, "own-native-turn");
+  event(c.id, c.key, "turn-ended", "own-native-turn");
+  expect((await probe()).quiet).toBe(true);
+});
 
 function spawn(): { child: ReturnType<typeof Bun.spawn>; identity: ProcessIdentity } {
   const child = Bun.spawn(["sleep", "60"]);
@@ -137,9 +250,9 @@ function release(key: Key, claim: { fence: string; epoch: number }) {
 }
 
 /** A host's own publication, in the shape `publishHostState` writes. */
-function publish(id: string, key: Key, path: string, fence: string | null, activeTurnRef: string | null) {
+function publish(id: string, key: Key, path: string, fence: string | null, activeTurnRef: string | null, cursor = ++seq) {
   f.journal.append({ scope: { type: "session", id }, kind: "session-status",
-    producer: { kind: "codex-app-server", eventKey: randomUUID() },
+    producer: { kind: "codex-app-server", eventKey: `structured-host:${sessionKeyId(key)}:${fenceEpoch(fence) ?? 0}:${cursor}:${activeTurnRef ? "active" : "idle"}:${activeTurnRef ?? "idle"}:${randomUUID()}` },
     payload: { conversationId: id, sessionKey: key, hostKind: "codex-app-server", host: "hosted",
       turn: activeTurnRef ? "running" : "idle", provenance: "structured", accountId: "fixture", writerClaim: fence,
       parentConversationId: null, cwd: f.dir, artifactPath: path,
@@ -236,7 +349,15 @@ describe("the successor-epoch case", () => {
 
   test("A's turn id written by a later turn event releases B at once", async () => {
     const s = await sameKeySuccessor();
-    event(s.id, s.key, "turn-started", "a-late");
+    event(s.id, s.key, "turn-started", "a-turn");
+    expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("an unfamiliar turn under a reused key holds the answering successor until its own newer idle", async () => {
+    const s = await sameKeySuccessor();
+    event(s.id, s.key, "turn-started", "unfenced-turn");
+    expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+    publish(s.id, s.key, s.path, s.claimB.fence, null);
     expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   });
 
@@ -464,7 +585,7 @@ describe("the tmux successor", () => {
     const t = await tmuxSuccessor("own key", "idle");
     await fallback();
     const held = heldHost(t.b.child.pid, { status: "active", activeTurnRef: "b-turn" });
-    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query),
+    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query),
       heldHosts: () => new Map([[sessionKeyId(t.bKey), held.host]]) }) });
     expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "host-turn" }] } });
   });
@@ -485,6 +606,7 @@ describe("the delayed predecessor write", () => {
     // A's row is hosted when the send is admitted; the outcome lands after B's publication.
     f.journal.executeOperation({ kind: "send", operationId: "op-a-send", idempotencyKey: "a-send", conversationId: s.id,
       text: "continue", policy: "queue" });
+    publish(s.id, s.key, s.path, s.claimA.fence, "a-sent-turn");
     publish(s.id, s.key, s.path, s.claimB.fence, null);
     f.journal.completeOperation("op-a-send", "turn-started", { turnId: "a-sent-turn" });
     expect(row(s.id)).toMatchObject({ turn: "running", activeTurnId: "a-sent-turn", writerClaim: s.claimB.fence });
@@ -603,8 +725,7 @@ describe("the delayed predecessor write", () => {
       publish(s.id, s.key, s.path, s.claimB.fence, "b-turn");
       const p = unmarked();
       for (const at of [now, now + FIVE_MINUTES, now + TWELVE_HOURS]) {
-        expect(await probe(p, at)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0,
-          turnList: [{ reason: "turn-unattributed" }] } });
+      expect(await probe(p, at)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0 } });
       }
     });
 
@@ -615,7 +736,7 @@ describe("the delayed predecessor write", () => {
       expect(await probe(unmarked())).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0 } });
     });
 
-    test("an unconfirmed launch's unattributed claim still expires at the grace", async () => {
+    test("an answering host with a null start identity holds its unattributed claim without a grace", async () => {
       const now = Date.now();
       const s = await sameKeySuccessor();
       writeFileSync(s.path, transcriptText("settled", new Date(now).toISOString()));
@@ -624,19 +745,19 @@ describe("the delayed predecessor write", () => {
         process: { ...s.b.identity, startIdentity: null } } });
       publish(s.id, s.key, s.path, s.claimB.fence, "b-turn");
       const p = unmarked();
-      expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1 } });
-      expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1 } });
+      expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0 } });
+      expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0 } });
     });
 
-    test("is released at once by a handle that says idle, and held as turn-open by an open tail", async () => {
+    test("an unordered idle handle cannot release a claim whose journal author is missing", async () => {
       const s = await sameKeySuccessor();
       publish(s.id, s.key, s.path, s.claimB.fence, "b-turn");
       const idle = heldHost(s.b.child.pid, { status: "idle", activeTurnRef: null });
-      const withHandle = unmarked({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query),
+      const withHandle = unmarked({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query),
         heldHosts: () => new Map([[sessionKeyId(s.key), idle.host]]) }) });
-      expect(await probe(withHandle)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+      expect(await probe(withHandle)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
       writeFileSync(s.path, transcriptText("open"));
-      expect(await probe(unmarked())).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-open" }] } });
+      expect(await probe(unmarked())).toMatchObject({ quiet: false, blockers: { turns: 1 } });
     });
   });
 });
@@ -670,19 +791,19 @@ describe("reconnect with a registry checkpoint held by termination", () => {
         expect(await probe(old, now)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
         await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
         await fallback();
-        event(c.id, c.key, "turn-started", "a-late");
+        event(c.id, { engine: "codex", sessionId: "prior-session" }, "turn-started", "a-late");
         expect(row(c.id)).toMatchObject({ writerClaim: null, activeTurnId: "a-late" });
         for (const p of [old, ports()]) {
           expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0 } });
         }
-        event(c.id, c.key, "turn-ended", "a-late");
+        event(c.id, { engine: "codex", sessionId: "prior-session" }, "turn-ended", "a-late");
         expect(await probe(ports(), now + TWELVE_HOURS + 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
         if (ending === "idle") {
           await held.fire({ status: "idle", activeTurnRef: null });
           await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
           await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
           await fallback();
-          event(c.id, c.key, "turn-started", "a-later");
+          event(c.id, { engine: "codex", sessionId: "prior-session" }, "turn-started", "a-later");
         } else if (ending === "death") {
           release(c.key, claim);
           await exit(b);
@@ -715,27 +836,27 @@ describe("R6b and the unknown bounds", () => {
     expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "host-turn" }] } });
   });
 
-  test("an unconfirmed launch whose transcript carries no turn marker holds for five minutes from its newest record and stays counted", async () => {
+  test("an answering host with a null start identity holds when its transcript carries no turn marker", async () => {
     const now = Date.now();
     const path = transcript("unmarked", new Date(now).toISOString());
     const c = conversation(path);
     const b = spawn();
     claimHost(c.key, path, { ...b.identity, startIdentity: null }, "starting");
-    expect(await probe(ports(), now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1, turnList: [{ reason: "turn-unread" }] } });
+    expect(await probe(ports(), now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0, turnList: [{ reason: "turn-unread" }] } });
     expect(await probe(ports(), now + FIVE_MINUTES - 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-    expect(await probe(ports(), now + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });
+    expect(await probe(ports(), now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0, unresolvedBlocking: 0 } });
   });
 
-  test("an unconfirmed launch with no readable transcript runs five minutes from the first probe", async () => {
+  test("an answering host with a null start identity holds without a readable transcript", async () => {
     const path = transcript("settled");
     const c = conversation(path);
     const b = spawn();
     claimHost(c.key, path, { ...b.identity, startIdentity: null }, "starting");
     rmSync(path);
     const p = ports(), now = Date.now();
-    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1, turnList: [{ reason: "turn-unread" }] } });
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0, turnList: [{ reason: "turn-unread" }] } });
     expect(await probe(p, now + FIVE_MINUTES - 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1 } });
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0 } });
   });
 });
 
@@ -814,7 +935,7 @@ describe("a proven turn whose evidence is lost", () => {
     expect(await probe(s.p, now + 2)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   });
 
-  test("control: a launch without a durable start identity is released five minutes after its evidence is lost", async () => {
+  test("control: an answering launch with no saved start identity holds after its evidence is lost", async () => {
     const now = Date.now();
     const path = transcript("unmarked", at(now));
     const c = conversation(path);
@@ -823,10 +944,10 @@ describe("a proven turn whose evidence is lost", () => {
       claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
     await fallback();
     const p = ports();
-    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1, turnList: [{ reason: "turn-unread" }] } });
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0, turnList: [{ reason: "turn-unread" }] } });
     rmSync(path);
-    expect(await probe(p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1 } });
-    expect(await probe(p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0, unresolvedBlocking: 0 } });
   });
 });
 
@@ -929,6 +1050,7 @@ describe("independence (R12)", () => {
     ...(["turn-started", "send outcome", "interrupt"] as const).map((write) => ({
       name: `the owner's own idle publication, then a foreign ${write}`, writer: true as const,
       base: (t: Target) => {
+        if (write === "send outcome") publish(t.id, other(), t.path, "structured-host:{}:1", "foreign-sent-turn");
         publish(t.id, t.key, t.path, t.fence, null);
         if (write === "send outcome") f.journal.executeOperation({ kind: "send", operationId: "op-late", idempotencyKey: "late", conversationId: t.id, text: "go", policy: "queue" });
       },
@@ -937,6 +1059,7 @@ describe("independence (R12)", () => {
     ...(["turn-ended", "turn-started", "send outcome", "interrupt"] as const).map((write) => ({
       name: `the owner's own running publication, then a foreign ${write}`, writer: true as const,
       base: (t: Target) => {
+        if (write === "send outcome") publish(t.id, other(), t.path, "structured-host:{}:1", "foreign-sent-turn");
         publish(t.id, t.key, t.path, t.fence, "own-turn");
         if (write === "send outcome") f.journal.executeOperation({ kind: "send", operationId: "op-late", idempotencyKey: "late", conversationId: t.id, text: "go", policy: "queue" });
       },
@@ -1012,11 +1135,11 @@ describe("the reader's reading of a row (R5, source 3)", () => {
     expect(ownerVerdict({ ...live, handle: "busy", tail: idleTail })).toEqual({ verdict: "holds", reason: "host-turn" });
     expect(ownerVerdict({ ...live, rowReference: true, tail: idleTail })).toEqual({ verdict: "holds", reason: "turn-claimed" });
     expect(ownerVerdict({ ...live, journal: "claimed", tail: idleTail })).toEqual({ verdict: "holds", reason: "turn-claimed" });
-    expect(ownerVerdict({ ...live, handle: "idle", journal: "claimed", rowReference: true, tail: idleTail })).toEqual({ verdict: "released", reason: "turn-settled" });
+    expect(ownerVerdict({ ...live, handle: "idle", journal: "claimed", rowReference: true, tail: idleTail })).toEqual({ verdict: "holds", reason: "turn-claimed" });
     expect(ownerVerdict({ ...live, handle: "idle", tail: { turn: "busy", lastRecordAt: 0 } })).toEqual({ verdict: "holds", reason: "turn-open" });
-    expect(ownerVerdict({ ...live, journal: "unattributed", tail: idleTail })).toEqual({ verdict: "unknown", reason: "turn-unattributed" });
-    expect(ownerVerdict({ ...live, handle: "idle", journal: "unattributed", tail: idleTail })).toEqual({ verdict: "released", reason: "turn-settled" });
-    expect(ownerVerdict({ ...live, tail: { turn: "unknown", lastRecordAt: 0 } })).toEqual({ verdict: "unknown", reason: "turn-unread" });
+    expect(ownerVerdict({ ...live, journal: "unattributed", tail: idleTail })).toEqual({ verdict: "holds", reason: "turn-unattributed" });
+    expect(ownerVerdict({ ...live, handle: "idle", journal: "unattributed", tail: idleTail })).toEqual({ verdict: "holds", reason: "turn-unattributed" });
+    expect(ownerVerdict({ ...live, tail: { turn: "unknown", lastRecordAt: 0 } })).toEqual({ verdict: "holds", reason: "turn-unread" });
     expect(ownerVerdict({ ...live, handle: "idle", tail: null })).toEqual({ verdict: "released", reason: "turn-settled" });
   });
 });
@@ -1026,7 +1149,7 @@ describe("the reader's reading of a row (R5, source 3)", () => {
    statement is found by its mark's key and writer, and a read that fails is
    no verdict. */
 describe("each owner on its own records", () => {
-  test("an owner's unknown runs its own bound: an earlier owner of the same conversation neither starts nor ends it (R8, R12)", async () => {
+  test("each answering owner holds independently when both saved start identities are null (R8, R12)", async () => {
     const path = transcript("settled");
     const c = conversation(path);
     const a = spawn();
@@ -1035,16 +1158,20 @@ describe("each owner on its own records", () => {
     const p = ports(), now = Date.now();
     expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "turn-unread" }] } });
     const b = spawn();
-    claimHost({ engine: "codex", sessionId: randomUUID() }, path, { ...b.identity, startIdentity: null }, "starting");
-    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1,
-      turnList: [{ conversationId: c.id, reason: "turn-unread", unresolved: true }] } });
+    const keyB = { engine: "codex" as const, sessionId: randomUUID() };
+    const claimB = claimHost(keyB, path, { ...b.identity, startIdentity: null }, "starting");
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0,
+      turnList: [{ conversationId: c.id, reason: "turn-unread" }] } });
     release(c.key, claimA);
     await exit(a);
-    expect(await probe(p, now + 2 * FIVE_MINUTES - 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1 } });
-    expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + 2 * FIVE_MINUTES - 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0 } });
+    release(keyB, claimB);
+    await exit(b);
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   });
 
-  test("an unconfirmed launch whose record moves to another transcript starts a new bound for that transcript (R1, R8)", async () => {
+  test("an answering owner whose record moves to a missing transcript keeps holding (R1, R8)", async () => {
     const pathA = transcript("settled");
     const c = conversation(pathA);
     const host = spawn();
@@ -1054,8 +1181,8 @@ describe("each owner on its own records", () => {
     expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-unread" }] } });
     const pathB = join(f.dir, "moved.jsonl");
     f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!, artifactPath: pathB });
-    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1 } });
-    expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0 } });
+    expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0 } });
   });
 
   test("a finished headless round at an earlier artifact leaves a fresh successor's ownerless row its own launch hold (R1, R2, R8)", async () => {
@@ -1075,7 +1202,7 @@ describe("each owner on its own records", () => {
       reviewerPath: path, reviewerConversationId: c.id, verdict: "APPROVE" });
     const withRound = (path: string | null) => ports({ owners: ownerCensusReader(() => ({ ...productionLivenessSources(),
       flows: () => path ? [{ id: "flow_prior", reviewerMode: "headless", state: "completed", rounds: [round(path)] }] as unknown as Flow[] : [] }),
-    { readSession: (query) => f.client.readSession!(query) }) });
+    { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }) });
     const held = { quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "launch-unproven", unresolved: true }] } };
     expect(await probe(withRound(null), now)).toMatchObject(held);
     const p = withRound(pathA);
@@ -1100,7 +1227,7 @@ describe("each owner on its own records", () => {
     const active = heldHost(host.child.pid, { status: "active", activeTurnRef: "own-turn" });
     await bindStructuredDeliveryQueue([{ key: a.key, host: active.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
     expect(row(b.id).writerStatus).toMatchObject({ sessionKey: a.key, writerClaim: claim.fence, turn: "running" });
-    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
+    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
     expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-claimed" }] } });
     expect(await probe(p, Date.now() + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-claimed" }] } });
     release(a.key, claim);
@@ -1139,7 +1266,7 @@ describe("each owner on its own records", () => {
         if (failing) throw new Error("independent transcript read failure");
         return sources.transcriptEvidence(...args);
       }) as typeof sources.transcriptEvidence };
-    }, { readSession: (query) => f.client.readSession!(query) }) });
+    }, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }) });
     const now = Date.now();
     for (const at of [now, now + FIVE_MINUTES, now + TWELVE_HOURS]) {
       expect(await probe(p, at)).toMatchObject({ quiet: false, blockers: { unreadable: "independent transcript read failure" } });
@@ -1181,7 +1308,7 @@ describe("each owner's evidence, whole", () => {
     expect(row(own.id).writerStatus).toMatchObject({ sessionKey: own.key, writerClaim: claim.fence, turn: "idle" });
     expect(row(own.id).writerClaim).toBe(claim.fence);
     expect(row(other.id).writerStatus).toMatchObject({ sessionKey: own.key, writerClaim: claim.fence, turn: "running" });
-    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
+    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
     const held = { quiet: false, blockers: { turns: 1, discounted: 0, turnList: [{ reason: "turn-claimed" }] } };
     expect(await probe(p)).toMatchObject(held);
     // Foreign writes alter both rows' status and leave the marks as published.
@@ -1263,7 +1390,7 @@ describe("each owner's evidence, whole", () => {
       reviewerPath: path, sessionId: keyB.sessionId, verdict: "APPROVE", ...(engine ? { reviewerRole: { engine } } : {}) });
     const withRound = (r: ReturnType<typeof round> | null, flowEngine = "claude") => ports({ owners: ownerCensusReader(() => ({ ...productionLivenessSources(),
       flows: () => r ? [{ id: "flow_review", reviewerMode: "headless", state: "completed", roles: { reviewer: { engine: flowEngine } }, rounds: [r] }] as unknown as Flow[] : [] }),
-    { readSession: (query) => f.client.readSession!(query) }) });
+    { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }) });
     const held = { quiet: false, blockers: { turns: 1, unresolved: 1, turnList: [{ reason: "launch-unproven", unresolved: true }] } };
     expect(await probe(withRound(null), now)).toMatchObject(held);
     const p = withRound(round("claude", claudePath));
@@ -1303,7 +1430,7 @@ describe("each owner's evidence, whole", () => {
    entry that records the process a receipt launched. */
 describe("each owner's evidence beside another record", () => {
   const noHandles = (overrides: Partial<QuietPorts> = {}) => ports({ owners: ownerCensusReader(productionLivenessSources,
-    { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }), ...overrides });
+    { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }), ...overrides });
 
   test.each(["claude row first", "codex row first"])("each owner's engine reads its own tail, whichever row the registry lists first: %s (R3, R12)", async (order) => {
     const now = Date.now();
@@ -1457,7 +1584,7 @@ describe("each owner's evidence beside another record", () => {
     const pipelines = () => [{ id: "lane_round", task: "Review the work", state: "running", cursor: { stageId: "stage", state: "running" },
       runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: reviewerConversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
     const p = ports({ pipelines, owners: ownerCensusReader(() => ({ ...productionLivenessSources(), flows: () => flows }),
-      { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
+      { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
     const now = Date.now();
     const held = { quiet: false, blockers: { stages: 1 } };
     expect(await probe(p, now)).toMatchObject(held);
@@ -1482,7 +1609,7 @@ describe("each owner's evidence beside another record", () => {
         reviewerIdentity: null, reviewerPath: c.path, reviewerConversationId: c.id, verdict: "APPROVE" }] }] as unknown as Flow[];
       if (open) publish(c.id, c.key, c.path, null, "active-review");
       const owners = ownerCensusReader(() => ({ ...productionLivenessSources(), flows: () => flows }),
-        { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() });
+        { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() });
       const p = ports({ flows: () => flows, owners });
       const read = await owners([], {});
       expect(read.owners.map((owner) => [owner.role, owner.process])).toEqual([["host", "gone"], ["reviewer", "alive"]]);
@@ -1503,7 +1630,7 @@ describe("each owner's evidence beside another record", () => {
       reviewerIdentity: reviewer.identity.startIdentity, reviewerPath: launchPath, reviewerConversationId: roundConversationId,
       verdict: "APPROVE" }] }] as unknown as Flow[];
     const owners = ownerCensusReader(() => ({ ...productionLivenessSources(), flows: () => flows }),
-      { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() });
+      { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() });
     const read = await owners([], {});
     expect(read.owners).toHaveLength(1);
     expect(read.owners[0]).toMatchObject({ role: "host", custody: [roundConversationId] });
@@ -1523,7 +1650,7 @@ describe("each owner's evidence beside another record", () => {
   describe("a handle's health is judged on the process it names (R4)", () => {
     const withHandle = (key: Key, state: Partial<HostState> & { pid: number }) => {
       const handle = heldHost(state.pid, state);
-      return ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query),
+      return ports({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query),
         heldHosts: () => new Map([[sessionKeyId(key), handle.host]]) }) });
     };
 
