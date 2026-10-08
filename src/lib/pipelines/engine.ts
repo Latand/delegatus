@@ -5985,17 +5985,18 @@ async function tickRunStage(
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))
     ? providerCutNotice(attempt.effectiveRole.engine, terminalProviderMessage) : null;
   if (!oomDeath && !heldForDeployCut && (notice || attempt.providerWait)) {
-    if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
-      waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist);
-      return;
-    }
     // Agent output closed the saved wait's chain, or the chain a zero-time
-    // successor inherited, and its budget and confirmation wait go with it.
-    // An open chain owes its own recovery, budget and cancellation test.
+    // successor inherited, and its budget and confirmation wait go with it,
+    // also when the open chain after it runs past the read bound. An open
+    // chain owes its own recovery, budget and cancellation test.
     if (attempt.providerWait && durable?.requestedCutOpen === false) {
       delete attempt.providerRecoveryBudget;
       delete attempt.controllerWait;
       if (durable.firstProviderCutAt) delete attempt.providerWait;
+    }
+    if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
+      waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist);
+      return;
     }
     if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
       && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) > durable.firstProviderCutAt) {
@@ -7376,14 +7377,18 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
     if (!wait) return "unknown";
     const durable = attempt.agentPath
       ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attemptEvidenceFloor(attempt), undefined, wait.turnTs) : null;
-    if (durable?.promptHistoryComplete === false && wait.turnTs > 0) return "unknown";
     // Agent output closed the saved chain and no newer cut is open: the stage
     // is working. Its turn decides, ending in a newer chain or settling it.
-    if (durable?.requestedCutOpen === false && !attempt.report && !attempt.verdict) {
-      // The closed chain's confirmation wait goes with it.
+    const closed = durable?.requestedCutOpen === false && !attempt.report && !attempt.verdict;
+    if (closed) {
+      // The closed chain's confirmation wait goes with it, also when the newer
+      // chain runs past the read bound.
       if (wait.stageRetry && attempt.controllerWait) { delete attempt.controllerWait; persist(); }
       if (!durable.firstProviderCutAt) return durable.turn === "busy" ? "working" : durable.turn === "terminal" ? "newer" : "unknown";
     }
+    // A newer chain over the read bound still takes the retry below; the moved
+    // wait then reads its own incomplete history here.
+    if (durable?.promptHistoryComplete === false && wait.turnTs > 0 && !closed) return "unknown";
     if (newerExternalProviderPrompt(attempt, durable)) return "newer";
     const stage = currentStage(pipeline);
     if (stage && moveParkedProviderRetry(pipeline, stage, attempt, durable, ports)) persist();

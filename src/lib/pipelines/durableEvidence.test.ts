@@ -879,6 +879,16 @@ for (const engine of ["claude", "codex"] as const) {
     expect((await durableStageTurnEvidence(engine, open, undefined, startedAt, undefined, cut))?.promptHistoryComplete).toBe(false);
   });
 
+  test(`${engine} an open chain over the bound keeps its prompts unknown and still places the closed request`, async () => {
+    const filler = { type: "queue-operation", timestamp: new Date(later + 500).toISOString(), padding: "x".repeat(1100) };
+    const file = writeTranscript(`chain-open-over-bound-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
+      notice(later), ...Array.from({ length: 8500 }, () => filler), notice(later + 1000)]);
+    expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))
+      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: false, promptHistoryComplete: false });
+    expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, later))
+      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: true, promptHistoryComplete: false });
+  });
+
   test(`${engine} a torn historical record keeps the recovery window unverified`, async () => {
     const filler = JSON.stringify({ type: "queue-operation", timestamp: new Date(cut + 3000).toISOString(), padding: "x".repeat(1100) }) + "\n";
     const file = writeTranscript(`chain-torn-history-${engine}.jsonl`, [notice(cut)]);

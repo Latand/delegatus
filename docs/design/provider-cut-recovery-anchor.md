@@ -360,10 +360,12 @@ moving out of `recoverProviderCut` unchanged.
 2. `readRecoveryWindow(pathname, codex, attemptStartedAt, requestedAt,
    fallbackTs, snapshot)`: agent output clears the retained records and the
    byte count; the first cut after it starts retention. A chain over 8 MiB
-   keeps scanning (later agent output can still close it) and returns `null` at
-   the end of the file only if that chain is still open. No open chain at the
-   end returns an empty, complete window. The window returns the tracker's
-   answer for the requested position.
+   keeps scanning (later agent output can still close it); if that chain is
+   still open at the end of the file the window returns no records, and the
+   read keeps prompt history incomplete. No open chain at the end returns an
+   empty, complete window. Either way the window returns the tracker's first
+   cut and its answer for the requested position, which the stable scan of
+   the whole artifact established.
 3. Keep the coverage trigger as it is (a saved cut, or a terminal provider
    failure with a known attempt start) and pass the attempt start to the window
    for membership only.
@@ -386,7 +388,7 @@ moving out of `recoverProviderCut` unchanged.
 1. Delete `evidenceStartedAt`; pass `attempt.startedAt` (`:5411-5416`). The
    call already passes `providerWait.turnTs`, which is 0 for a zero-time
    successor.
-2. After the incomplete-history check (`:5438-5441`), discharge a saved wait
+2. Before the incomplete-history check (`:5438-5441`), discharge a saved wait
    outside the open chain, zero-time waits included:
    `providerWait && durable.requestedCutOpen === false && durable.firstProviderCutAt`
    deletes `providerWait` and `providerRecoveryBudget`, as the newer-output
@@ -659,6 +661,7 @@ Rounds and critiques:
 | Critique 2: parked capacity or authentication cut, output, quota cut (and the reverse, and a third cut of another kind) | R2, R9 | the move opens the new chain's own wait; quota retries at the earliest allowed reset, capacity after one minute |
 | Critique 2: unknown confirmation at 19:01, hours of work, cut 2, a held delivery at 23:01 | R9, R10 | the 19:01 wait went with chain 1; 23:01 starts its own ten minutes; a short hold resumes, a lasting one still withdraws, a delivered reply cancels |
 | Build review 2: running lane, continuation refused at 19:01, output, cut 2 over the read bound at 21:30 | R10 | the 19:01 wait went with chain 1; chain 2 starts its own ten minutes at its own cut |
+| Build review 3: the same with no tick between the output and cut 2, at 21:30 or at 19:01:50; and a parked retry in the same shape | R6, R10 | the stable scan proves chain 1 closed past the bound; its wait goes before chain 2's incomplete history books its own ten minutes; a parked retry moves to chain 2 |
 
 `engine.test.ts` (line numbers at `52d7f9bd3`). Every case stays with its
 assertions unchanged.
@@ -867,3 +870,34 @@ agent message follows the saved cut. The parked path already did so in
 the next cut" (both engines, pinned and pool) failed in all four cases before
 the fix: the new chain now starts its own ten minutes at its own cut, and
 output followed by a later cut recovers after that cut's reset.
+
+## Review of the build (one P2, 2026-10-09, second pass)
+
+**A closed chain's wait behind an open chain over the read bound.** The fix
+above cleared the confirmation wait only on a tick that saw chain 1's output
+with complete history. With no tick between that output and a chain 2 whose
+history after its first cut ran past 8 MiB, the window returned `null` at the
+end of its scan and dropped the one fact that scan had established: agent
+output closed the requested cut. The tick then met incomplete history first
+and booked chain 2's first transport round against the 19:01 clock. It parked
+at once when chain 2 opened at 21:30, and at 19:11:10 when chain 2 opened at
+19:01:50, forty seconds before chain 2's own ten minutes would end.
+
+The window now returns, for an open chain over the bound, no records plus the
+tracker's first cut and its answer for the requested position. Prompt history
+stays incomplete, so nothing that tests cancellation reads a partial window.
+`firstProviderCutAt` and `requestedCutOpen` come from the whole-artifact scan.
+The running tick discharges a closed chain's wait, budget and confirmation
+wait before it books incomplete history, so chain 2's ten minutes start at its
+first confirmation tick. On a parked lane `providerCutActivity` clears the
+confirmation wait the same way and lets the retry move to chain 2; the moved
+wait then reads its own incomplete history as unknown, so it cannot deliver
+until that history is complete or its own ten minutes withdraw it.
+
+"an unticked closed chain's confirmation wait never binds a new chain over the
+read bound" (both engines, pinned and pool, hours later and within the same
+ten minutes) failed in all eight cases before the fix, and "an unticked closed
+parked chain's confirmation wait never binds a new chain over the read bound"
+in all four. In `durableEvidence.test.ts`, "an open chain over the bound keeps
+its prompts unknown and still places the closed request" failed on both
+engines before the fix.

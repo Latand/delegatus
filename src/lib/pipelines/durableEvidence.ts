@@ -490,9 +490,12 @@ function transcriptSnapshot(pathname: string): string | null {
 /** Verify history in physical order while retaining only the open cut chain.
     Older rows are validated too: backdated context cannot hide a cut or the
     output that closed it. The byte bound counts from the chain's first cut, so
-    a record of any size before it is parsed and dropped. */
+    a record of any size before it is parsed and dropped. An open chain over
+    the bound returns no records; the stable scan still places its first cut
+    and the requested position. */
 async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: number, requestedAt: number | undefined,
-  fallbackTs: number, snapshot: string | null): Promise<{ records: RecordLike[]; requestedCutOpen?: boolean } | null> {
+  fallbackTs: number, snapshot: string | null,
+): Promise<{ records: RecordLike[] | null; firstCutAt: number | null; requestedCutOpen?: boolean } | null> {
   if (!snapshot) return null;
   let handle: fs.promises.FileHandle | undefined;
   try {
@@ -541,10 +544,11 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     }
     if (pending.length && !consume(Buffer.concat(pending))) return null;
     const after = await handle.stat({ bigint: true });
-    if (retainedBytes > MAX_REPORT_EVIDENCE_BYTES || [after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
+    if ([after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
       || transcriptSnapshot(pathname) !== snapshot) return null;
     const requestedCutOpen = chain.requestedOpen();
-    return { records, ...(requestedCutOpen === undefined ? {} : { requestedCutOpen }) };
+    return { records: retainedBytes > MAX_REPORT_EVIDENCE_BYTES ? null : records, firstCutAt: chain.firstCutAt(),
+      ...(requestedCutOpen === undefined ? {} : { requestedCutOpen }) };
   } catch { return null; }
   finally { await handle?.close().catch(() => undefined); }
 }
@@ -627,15 +631,16 @@ export async function durableStageTurnEvidence(
   if (turnStartedAt === null && evidenceRead.prefixTruncated && Number.isFinite(startedTime)
     && reportTime === startedTime && artifactBefore) turnStartedAt = await recoverNativeTurnStart(transcriptPath, codex, startedTime, artifactBefore);
   let windowRequestedCutOpen: boolean | undefined;
+  let overflow: { firstCutAt: number | null; requestedCutOpen?: boolean } | null = null;
   if (evidenceRead.prefixTruncated && Number.isFinite(promptBoundary) && readTail === readStableTailRecords) {
     const window = await readRecoveryWindow(transcriptPath, codex, startedTime, afterCutAt, fallbackTs, snapshot);
-    if (window) {
+    if (window?.records) {
       evidenceRead = { integrity: "complete", prefixTruncated: true, records: window.records };
       recoveryWindowVerified = true;
       windowRequestedCutOpen = window.requestedCutOpen;
       // Terminal and reset evidence stays with the verified tail, which also
       // contains quota observations immediately before the physical cut.
-    }
+    } else if (window) overflow = window;
   }
   const terminalNotice = terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs);
   const nativeCut = terminalNotice?.errorClass === "turn_aborted";
@@ -649,11 +654,15 @@ export async function durableStageTurnEvidence(
     if (step === "output") cutIndex = -1;
     else if (step === "first-cut") cutIndex = recordIndex;
   });
-  const firstProviderCutAt = chain.firstCutAt();
+  // An open chain over the read bound keeps its prompts unknown. Its first cut
+  // and whether agent output closed the requested cut are known from the
+  // stable scan of the whole artifact.
+  const firstProviderCutAt = overflow ? overflow.firstCutAt : chain.firstCutAt();
   const historyComplete = !evidenceRead.prefixTruncated || recoveryWindowVerified;
   // A partial tail proves a requested position closed, never still open.
   const requestedCutOpen = recoveryWindowVerified ? windowRequestedCutOpen
-    : afterCutAt === 0 && !historyComplete && chain.requestedOpen() ? undefined : chain.requestedOpen();
+    : overflow ? overflow.requestedCutOpen
+      : afterCutAt === 0 && !historyComplete && chain.requestedOpen() ? undefined : chain.requestedOpen();
   const prompts = stagePrompts(evidenceRead.records, codex, transcriptPath);
   // Native prompt rows and their authorship join must describe one snapshot
   // whenever recovery reads them. A raced append cannot turn a confirmed
