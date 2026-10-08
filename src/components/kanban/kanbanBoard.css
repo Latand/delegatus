@@ -948,19 +948,13 @@
 /* The header's pill: the open agents with the window closed. It stands in a
    slot of one width and height whether or not anything is open, so nothing in
    the header moves when the first agent opens or the last one closes, on one
-   row or wrapped. */
-.kb .bar .open-agents-slot { flex: 0 0 auto; width: 104px; height: 28px; display: flex; align-items: center; }
-.kb .bar .open-agents-pill { max-width: 100%; height: 28px; padding: 0 8px 0 10px; gap: 6px; }
+   row or wrapped. It keeps one form at every width: it names the agents it
+   counts and stands as tall as the header's other buttons. */
+.kb .bar .open-agents-slot { flex: 0 0 auto; width: 104px; height: 32px; display: flex; align-items: center; }
+.kb .bar .open-agents-pill { max-width: 100%; padding: 0 8px 0 10px; }
 .kb .bar .open-agents-pill .num { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kb .bar .open-agents-pill .pill-count { display: none; }
 .kb .bar .open-agents-pill svg { flex-shrink: 0; width: 13px; height: 13px; color: var(--color-secondary); }
-/* A crowded header (the bar's own compaction) keeps the slot to the count; a
-   wrapped one keeps it to its first row's height. */
-.kb .bar[data-bar="project"][data-bar-compact] .open-agents-slot { width: 52px; }
-.kb .bar[data-bar="project"][data-bar-compact] .open-agents-pill { padding: 0 7px; gap: 5px; }
-.kb .bar[data-bar="project"][data-bar-compact] .open-agents-pill .pill-words { display: none; }
-.kb .bar[data-bar="project"][data-bar-compact] .open-agents-pill .pill-count { display: inline; }
-.kb .bar[data-bar="project"][data-bar-wrap] .open-agents-slot, .kb .bar[data-bar="project"][data-bar-wrap] .open-agents-pill { height: 20px; }
+/* Where even the crowded row runs into the attention chip, the slot is not drawn. */
 .kb .bar[data-bar="project"][data-bar-tight] .open-agents-slot { display: none; }
 .kb .or-list { list-style: none; margin: 0; padding: 0; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .kb .or-seg { position: relative; display: flex; align-items: center; }

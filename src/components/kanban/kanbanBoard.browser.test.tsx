@@ -9847,7 +9847,7 @@ describe("the agent window: a click on the board opens the agent in one window, 
   const EXPORT_TILE = `${card("t-export")} .tile[data-member="/repo/export-impl.jsonl"]`;
   const KEY = { build: "conversation_rounds-build", review: "conversation_rounds-review", export: "conversation_export-impl" } as const;
 
-  interface Sample { phase: string; window: boolean; shown: string | null; feed: string | null; skeleton: boolean; tools: string | null; search: string; slot: string; cards: string; pill: string | null }
+  interface Sample { phase: string; window: boolean; shown: string | null; feed: string | null; skeleton: boolean; tools: string | null; composer: string | null; search: string; slot: string; cards: string; pill: string | null }
   const installTrace = (page: Page) => page.evaluate(() => {
     const state = { phase: "idle", samples: [] as unknown[], stopped: false };
     const box = (element: Element | null) => {
@@ -9867,6 +9867,8 @@ describe("the agent window: a click on the board opens the agent in one window, 
         feed: reader?.querySelector<HTMLElement>("[data-feed-state]")?.dataset.feedState ?? null,
         skeleton: slot?.querySelector('[role="status"][aria-busy="true"]') != null,
         tools: reader ? [...reader.querySelectorAll<HTMLElement>("form button")].filter((button) => button.getBoundingClientRect().width > 0).map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "").join("|") : null,
+        /* The composer as drawn: its box and its selected-context line. */
+        composer: reader ? `${box(reader.querySelector("form"))} ${reader.querySelector("form [data-selected-context]")?.textContent ?? "-"}` : null,
         search: box(document.querySelector("[data-kanban-search]")),
         slot: box(document.querySelector("[data-open-agents-slot]")),
         cards: ["t-rounds", "t-export"].map((id) => box(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))).join(" "),
@@ -9896,6 +9898,7 @@ describe("the agent window: a click on the board opens the agent in one window, 
     const reader = frame?.querySelector<HTMLElement>(".reader-slot:not([data-incoming]) [data-kanban-reader]") ?? null;
     const pill = document.querySelector<HTMLElement>("[data-open-agents-pill]");
     const active = document.activeElement as HTMLElement | null;
+    const form = reader?.querySelector("form") ?? null;
     return {
       window: rect(frame),
       list: rect(document.querySelector(".aw-list")),
@@ -9905,6 +9908,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
       head: head?.querySelector("[data-open-agents-count]")?.textContent ?? null,
       steps: head ? [...head.querySelectorAll<HTMLElement>("[data-agent-window-step]")].map((step) => ({ step: step.dataset.agentWindowStep!, fromRight: Math.round(head.getBoundingClientRect().right - step.getBoundingClientRect().right), fromTop: Math.round(step.getBoundingClientRect().top - head.getBoundingClientRect().top) })) : [],
       pill: pill ? { text: pill.textContent, box: rect(pill), focused: active === pill, ring: pill.matches(":focus-visible"), outline: getComputedStyle(pill).outlineStyle } : null,
+      /* The header's buttons beside the pill: the needs-you chip and the new-agent button. */
+      headerButtons: [rect(document.querySelector("[data-attention-count]"))?.height ?? null, rect(document.querySelector("[data-kanban-board] [data-new-agent], .kb .bar [data-new-agent]"))?.height ?? null],
+      composer: form ? { box: rect(form), context: form.querySelector("[data-selected-context]")?.textContent ?? null } : null,
       readerRing: reader ? reader.matches(":focus-visible") : null,
       focus: active?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? active?.getAttribute("data-open-agent-jump") ?? active?.tagName ?? null,
       search: rect(document.querySelector("[data-kanban-search]")),
@@ -10036,6 +10042,11 @@ describe("the agent window: a click on the board opens the agent in one window, 
               await shot("03-closed-by-mouse");
               if (!byMouse.pill?.focused) fail("closing the window did not hand the keyboard to the pill");
               if (byMouse.pill?.ring || byMouse.pill?.outline !== "none") fail(`a mouse close left a focus ring on the pill (${JSON.stringify(byMouse.pill)})`);
+              /* The pill names what it counts and stands as tall as the header's buttons, at every width. */
+              for (const closed of [behind, byMouse]) {
+                if (!/agent|агент/.test(closed.pill?.text ?? "")) fail(`the pill reads «${closed.pill?.text ?? ""}» and names no agents`);
+                for (const height of closed.headerButtons) if (height !== null && closed.pill?.box?.height !== height) fail(`the pill stands ${closed.pill?.box?.height} px beside ${height} px header buttons`);
+              }
 
               await phase(page, "open-review");
               await page.locator(chip("review")).click();
@@ -10085,6 +10096,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
               steps["07-closed-one"] = closedOne;
               await shot("07-closed-one");
               if (closedOne.rows.map((entry) => entry.key).join(",") !== [KEY.export, KEY.review].join(",")) fail(`after closing Build the list is ${closedOne.rows.map((entry) => entry.key).join(",")}`);
+              /* The same agent comes back from a close with the composer it had after the row switch. */
+              if (JSON.stringify(closedOne.composer) !== JSON.stringify(row.composer)) fail(`the export agent's composer after the close ${JSON.stringify(closedOne.composer)} is not the one after the row ${JSON.stringify(row.composer)}`);
+              if (!row.composer?.context) fail("the agent in the reader carries no selected-context line after a row switch");
               await phase(page, "tab-two");
               const trapTwo = { forward: await tabRound(page, "Tab"), backward: await tabRound(page, "Shift+Tab") };
               (steps["07-closed-one"] as Record<string, unknown>).tabRound = trapTwo;
@@ -10126,6 +10140,13 @@ describe("the agent window: a click on the board opens the agent in one window, 
                 const layouts = new Set(within.filter((sample) => sample.shown && sample.shown === incoming).map((sample) => sample.tools)).size;
                 transitions[name] = { frames: within.length, incoming, layouts, bareFrames: within.filter((sample) => !sample.window).length, emptyFrames: within.filter((sample) => sample.window && (sample.skeleton || !sample.shown)).length };
                 if (layouts > 1) fail(`${name}: the incoming agent showed ${layouts} toolbar layouts`);
+              }
+              /* Once in the reader, an agent's composer holds still through a close and the Tab rounds after it. */
+              for (const name of ["close-one", "tab-two"]) {
+                const within = trace.filter((sample) => sample.phase === name && sample.shown === KEY.export);
+                const jumps = within.filter((sample, index) => index > 0 && sample.composer !== within[index - 1]!.composer);
+                (transitions as Record<string, unknown>)[`${name}-composer`] = { frames: within.length, jumps: jumps.length, layouts: [...new Set(within.map((sample) => sample.composer))] };
+                if (jumps.length) fail(`${name}: ${jumps.length} frames moved the incoming agent's composer (${within[0]!.composer} → ${jumps[0]!.composer})`);
               }
               if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
               readings[label] = { steps, transitions, frames: trace.length, pageErrors };

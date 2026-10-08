@@ -313,9 +313,11 @@ The operator chose Variant 1, «Список ліворуч у вікні», on 
 above where the critique of the prototypes (lane 23485fd0, attempt 2) asked:
 
 - **The header's pill has a slot of its own.** The slot keeps one width and
-  height (104 × 28 px) whether or not anything is open, so the first open and
+  height (104 × 32 px) whether or not anything is open, so the first open and
   the last close move nothing in the header, on one row or wrapped at 1000 px.
-  The search field does not give up width. The pill never reads «0»: it is
+  The search field does not give up width. The pill has one form at every
+  width: it names what it counts («2 агенти ⤢», «2 agents ⤢») and is as tall
+  as the header's other buttons. The pill never reads «0»: it is
   drawn only with an agent open. While the window is open the pill stays in
   its slot under the dimmed header, pressed (`aria-expanded`).
 - **A first open waits for the conversation.** The agent coming in reads in
@@ -332,6 +334,11 @@ above where the critique of the prototypes (lane 23485fd0, attempt 2) asked:
   board. One that has not (never shown, or its saved tail gone) reads first,
   the way a switch does: the agent closed stays in the reader until then, so
   no frame shows a reader still loading either.
+- **An agent's composer is the same whatever brought it in.** With the
+  window open, the board's selected conversation is the one in the reader, on
+  an open, a row, ‹ ›, Alt+J and a close alike and wherever focus stands, so
+  the composer's selected-context line («👁 …») neither drops after a close
+  nor pops back when focus enters the reader.
 - **A link followed again opens its agent again.** The Viewer holds a
   conversation it opened as its focus for a moment afterwards; each request
   carries a count of its own, and the board opens the agent on every one.

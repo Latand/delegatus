@@ -2286,7 +2286,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       root.removeEventListener("focusout", later);
     };
   }, []);
-  const focusedView = focusedReader ? readerViews.find((view) => view.readerKey === focusedReader) : undefined;
+  /* With the window open the conversation the operator is in is the one in its
+     reader, whatever path brought it there and wherever focus stands, so a
+     composer's selected-context line is the same for an agent after an open,
+     a switch or a close. */
+  const inReader = windowOpen ? shown : focusedReader;
+  const focusedView = inReader ? readerViews.find((view) => view.readerKey === inReader) : undefined;
 
   /* ── The agent window's list ─────────────────────────────────────────── */
   /* A row, ‹ › and Alt+J / Alt+K bring their agent into the window's reader. */
@@ -2354,7 +2359,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [cardsById, selection, focusedPath]);
   reportPresenceRef.current = reportPresence;
-  useEffect(() => { reportPresence(); }, [reportPresence]);
+  /* Before paint: a composer's selected-context line reads this report, so the
+     agent coming into the window is drawn with its line on its first frame. */
+  useLayoutEffect(() => { reportPresence(); }, [reportPresence]);
 
   /* ── Focus handoff: the board half, without a camera (#688, C6) ──────── */
   /* Conversations no card holds resolve too: a handoff opens them in the agent window. */

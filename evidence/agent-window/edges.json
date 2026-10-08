@@ -217,19 +217,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 135,
-        "bottom": 177
+        "top": 175,
+        "bottom": 217
       },
-      "bar": 88,
-      "above": 123,
+      "bar": 128,
+      "above": 163,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 189,
-        "bottom": 225
+        "top": 229,
+        "bottom": 265
       },
-      "columns": 237,
+      "columns": 277,
       "titles": {
         "assigned": {
           "left": 13,
@@ -243,19 +243,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 135,
-        "bottom": 177
+        "top": 175,
+        "bottom": 217
       },
-      "bar": 88,
-      "above": 123,
+      "bar": 128,
+      "above": 163,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 189,
-        "bottom": 225
+        "top": 229,
+        "bottom": 265
       },
-      "columns": 237,
+      "columns": 277,
       "titles": {
         "assigned": {
           "left": 13,
@@ -269,19 +269,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 203,
-        "bottom": 245
+        "top": 242.5625,
+        "bottom": 284.5625
       },
-      "bar": 156,
-      "above": 191,
+      "bar": 195.5625,
+      "above": 230.5625,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 257,
-        "bottom": 293
+        "top": 296.5625,
+        "bottom": 332.5625
       },
-      "columns": 305,
+      "columns": 344.5625,
       "titles": {
         "assigned": {
           "left": 13,
@@ -295,19 +295,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 203,
-        "bottom": 245
+        "top": 242.5625,
+        "bottom": 284.5625
       },
-      "bar": 156,
-      "above": 191,
+      "bar": 195.5625,
+      "above": 230.5625,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 257,
-        "bottom": 293
+        "top": 296.5625,
+        "bottom": 332.5625
       },
-      "columns": 305,
+      "columns": 344.5625,
       "titles": {
         "assigned": {
           "left": 13,
@@ -533,19 +533,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 135,
-        "bottom": 177
+        "top": 175,
+        "bottom": 217
       },
-      "bar": 88,
-      "above": 123,
+      "bar": 128,
+      "above": 163,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 189,
-        "bottom": 225
+        "top": 229,
+        "bottom": 265
       },
-      "columns": 237,
+      "columns": 277,
       "titles": {
         "assigned": {
           "left": 13,
@@ -559,19 +559,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 135,
-        "bottom": 177
+        "top": 175,
+        "bottom": 217
       },
-      "bar": 88,
-      "above": 123,
+      "bar": 128,
+      "above": 163,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 189,
-        "bottom": 225
+        "top": 229,
+        "bottom": 265
       },
-      "columns": 237,
+      "columns": 277,
       "titles": {
         "assigned": {
           "left": 13,
@@ -585,19 +585,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 230.5625,
-        "bottom": 272.5625
+        "top": 242.5625,
+        "bottom": 284.5625
       },
-      "bar": 183.5625,
-      "above": 218.5625,
+      "bar": 195.5625,
+      "above": 230.5625,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 284.5625,
-        "bottom": 320.5625
+        "top": 296.5625,
+        "bottom": 332.5625
       },
-      "columns": 332.5625,
+      "columns": 344.5625,
       "titles": {
         "assigned": {
           "left": 13,
@@ -611,19 +611,19 @@
       "name": 260,
       "seat": {
         "left": 260,
-        "top": 230.5625,
-        "bottom": 272.5625
+        "top": 242.5625,
+        "bottom": 284.5625
       },
-      "bar": 183.5625,
-      "above": 218.5625,
+      "bar": 195.5625,
+      "above": 230.5625,
       "edge": 12,
       "column": 260,
       "strip": {
         "left": 260,
-        "top": 284.5625,
-        "bottom": 320.5625
+        "top": 296.5625,
+        "bottom": 332.5625
       },
-      "columns": 332.5625,
+      "columns": 344.5625,
       "titles": {
         "assigned": {
           "left": 13,

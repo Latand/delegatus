@@ -33,8 +33,8 @@ function tabStops(frame: HTMLElement): HTMLElement[] {
 }
 
 /** The header's pill. It stands in a slot of its own size whether or not
-    anything is open, so its arrival moves nothing in the header. The slot is
-    narrower in a crowded header, where the pill is its count. */
+    anything is open, so its arrival moves nothing in the header, and it names
+    the agents it counts at every width. */
 export function OpenAgentsPill({ count, open, onOpen }: { count: number; open: boolean; onOpen: () => void }) {
   const { t } = useLocale();
   return (
@@ -51,9 +51,7 @@ export function OpenAgentsPill({ count, open, onOpen }: { count: number; open: b
           title={`${t("kanban.openAgents.show", { count })} · ${t("kanban.openAgents.shortcut")}`}
           onClick={onOpen}
         >
-          {/* A crowded header draws the count alone; the label says it whole. */}
           <span className="num pill-words">{t("kanban.agentWindow.pill", { count })}</span>
-          <span className="num pill-count" aria-hidden="true">{count}</span>
           <MaximizeGlyph />
         </button>
       ) : null}
