@@ -22271,6 +22271,185 @@ describe("orchestrator wires after a seat action", () => {
   }, 300_000);
 });
 
+describe("prototype review: a decided round retires the earlier undecided rounds of its task", () => {
+  /*
+   * Export carries a design round nobody answered and, after it, a revise
+   * round the operator decided (`?proto=1&retired=1`): the shape of the task
+   * that kept its prototype in the operator's menu after the answer. The
+   * fixture answers through the Viewer's own selectors, so these frames draw
+   * what the server projects. At 1440 and 390, in English and Ukrainian, light
+   * and dark: the
+   * needs-you menu lists the three waiting tasks and not export, the
+   * orchestrator's notice counts three and never names export, export's card
+   * button says decided, and its review marks the first round superseded by
+   * the second and nothing as waiting. Opened, the first round says round 2
+   * replaced it and offers no choice until asked; when its sentence fills the
+   * row, the link wraps under the sentence (never under the mark) and the
+   * button that decides it anyway takes a row of its own.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "retires the earlier"
+   *
+   * Frames go to PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`);
+   * readings to `evidence/prototype-review/retired-rounds.json`.
+   */
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+  const WAITING = ["t-links", "t-search", "t-upload"];
+
+  browserTest("prototype review: the retired round leaves the menu, the notice and the card, and reads as superseded", async () => {
+    const out = path.resolve(".artifacts/prototype-review");
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/prototype-review", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const size of SIZES) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `${size.name}-${lang}-${theme}`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1&retired=1`, size.viewport, theme, lang, "reduce", size.phone);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `retired-${label}-${name}.png`) });
+        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
+        try {
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* The menu: everything that waits on the operator, the prototypes among it. */
+          const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+          await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
+          await page.waitForSelector(`${LIST} [data-attention-prototype]`, { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const menu = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-attention-prototype]`)]
+            .map((row) => row.dataset.attentionPrototype ?? null).sort(), LIST);
+          record("menu", menu);
+          await shot("menu");
+          if (JSON.stringify(menu) !== JSON.stringify(WAITING)) failures.push(`${label}: the menu lists the prototypes of ${JSON.stringify(menu)}, expected ${JSON.stringify(WAITING)}`);
+          await page.keyboard.press("Escape");
+          await page.reload();
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* The plaque: the orchestrator's notice above its message field, or the phone seat card's chip. */
+          if (size.phone) {
+            const chip = page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]");
+            await chip.waitFor({ timeout: 15_000 });
+            const plaque = { count: await chip.getAttribute("data-prototype-notice-chip"), label: await chip.getAttribute("aria-label") };
+            record("plaque", plaque);
+            await page.locator("[data-mobile2-seat-card]").screenshot({ path: path.join(pngDir, `retired-${label}-plaque.png`) });
+            if (plaque.count !== "3" || plaque.label?.includes("Export")) failures.push(`${label}: the seat card's notice reads ${JSON.stringify(plaque)}, expected three waiting tasks and no export`);
+          } else {
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+            const list = page.locator("[data-orchestrator-conversation] [data-prototype-notices]");
+            await list.waitFor({ timeout: 15_000 });
+            const more = page.locator("[data-orchestrator-conversation] [data-prototype-notice-more]");
+            if (await more.count()) await more.click();
+            await page.waitForTimeout(250);
+            await list.scrollIntoViewIfNeeded();
+            const plaque = await page.evaluate(() => ({
+              count: document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notices]")?.dataset.prototypeNotices ?? null,
+              tasks: [...document.querySelectorAll<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notice]")].map((row) => row.dataset.prototypeNotice ?? null).sort(),
+            }));
+            record("plaque", plaque);
+            await shot("plaque");
+            if (plaque.count !== "3" || JSON.stringify(plaque.tasks) !== JSON.stringify(WAITING)) failures.push(`${label}: the orchestrator's notice reads ${JSON.stringify(plaque)}, expected ${JSON.stringify(WAITING)}`);
+          }
+
+          /* The card: export's review button says decided. */
+          if (size.phone) {
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(300);
+          }
+          const button = page.locator(size.phone ? '[data-phone-card-prototype-button="t-export"]' : '[data-prototype-button="t-export"]');
+          await button.scrollIntoViewIfNeeded();
+          const card = { state: await button.getAttribute("data-prototype-state"), text: (await button.textContent())?.trim() ?? null };
+          record("card", card);
+          await page.locator(size.phone ? '[data-phone-card-frame="task:t-export"]' : '[data-kanban-board] .card[data-id="task:t-export"]').screenshot({ path: path.join(pngDir, `retired-${label}-card.png`) });
+          if (card.state !== "decided") failures.push(`${label}: export's review button reads ${JSON.stringify(card)}, expected decided`);
+
+          /* The review: the decided round opens, the first round reads as superseded by it and nothing waits. */
+          await button.click();
+          await page.waitForSelector("[data-prototype-review] [data-prototype-rounds]", { timeout: 10_000 });
+          await page.waitForTimeout(400);
+          const rounds = await page.evaluate(() => ({
+            shown: document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
+            tabs: [...document.querySelectorAll<HTMLElement>("[data-prototype-review] [data-prototype-round]")].map((tab) => ({
+              round: tab.dataset.prototypeRound ?? null,
+              superseded: tab.querySelector<HTMLElement>("[data-prototype-superseded]")?.dataset.prototypeSuperseded ?? null,
+              marks: [...tab.querySelectorAll("[aria-label]")].map((mark) => mark.getAttribute("aria-label")),
+            })),
+          }));
+          record("rounds", rounds);
+          await shot("rounds");
+          const first = rounds.tabs.find((tab) => tab.round === "r-export-0");
+          if (rounds.shown !== "r-export") failures.push(`${label}: export's review opened on ${rounds.shown}, expected its decided round`);
+          if (first?.superseded !== "r-export" || JSON.stringify(first.marks) !== JSON.stringify([tr("proto.round.superseded", { n: 2 })])) failures.push(`${label}: the first round's tab reads ${JSON.stringify(first)}, expected superseded by round 2`);
+          if (rounds.tabs.some((tab) => tab.marks.includes(tr("proto.round.waiting")))) failures.push(`${label}: a round of export still says it waits: ${JSON.stringify(rounds.tabs)}`);
+
+          /* The superseded round opened from history: its footer names the round that replaced it, asks for nothing,
+             and its tab mark weighs what the decided check weighs, with its words on hover. */
+          await page.locator('[data-prototype-round="r-export-0"]').click();
+          /* On the phone the footer sits in the sheet's own slot, outside the review's body. */
+          await page.waitForSelector('[data-prototype-round-shown="r-export-0"]', { state: "attached", timeout: 10_000 });
+          await page.waitForSelector("[data-prototype-superseded-line]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const opened = await page.evaluate(() => {
+            const box = (selector: string) => { const rect = document.querySelector(selector)?.getBoundingClientRect(); return rect ? [Math.round(rect.width), Math.round(rect.height)] : null; };
+            return {
+              line: document.querySelector("[data-prototype-superseded-line]")?.textContent ?? null,
+              footer: (document.querySelector("[data-prototype-superseded-line]")?.closest("footer") ?? document.querySelector("[data-prototype-superseded-line]")?.parentElement)?.textContent ?? null,
+              save: Boolean(document.querySelector("[data-prototype-save]")),
+              choose: [...document.querySelectorAll<HTMLButtonElement>("[data-prototype-choose]")].filter((button) => !button.disabled).length,
+              marks: { superseded: box('[data-prototype-round="r-export-0"] [data-prototype-superseded]'), decided: box('[data-prototype-round="r-export"] svg') },
+              title: document.querySelector<HTMLElement>('[data-prototype-round="r-export-0"]')?.title ?? null,
+              /* Left, top and bottom of the mark, the sentence, its link and the decide-anyway button. */
+              layout: Object.fromEntries(([
+                ["mark", "[data-prototype-superseded-said] svg"],
+                ["sentence", "[data-prototype-superseded-said] > span:last-child > span"],
+                ["link", "[data-prototype-superseded-line] [data-prototype-open-round]"],
+                ["anyway", "[data-prototype-superseded-line] [data-prototype-decide-anyway]"],
+              ] as const).map(([name, selector]) => {
+                const rect = document.querySelector(selector)?.getBoundingClientRect();
+                return [name, rect ? { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom) } : null];
+              })),
+            };
+          });
+          record("superseded", opened);
+          await shot("superseded");
+          const said = tr("proto.supersededLine", { n: 2, date: "" }).split(",")[0]!;
+          if (!opened.line?.includes(said) || !opened.line.includes(tr("proto.openRound", { n: 2 }))) failures.push(`${label}: the superseded round's footer reads ${JSON.stringify(opened.line)}, expected «${said}…» with a link to round 2`);
+          if (opened.save || opened.choose || opened.footer?.includes(tr("proto.chooseFirst")) || opened.footer?.includes(tr("proto.chooseFirstPhone"))) failures.push(`${label}: the superseded round still asks for a choice: ${JSON.stringify(opened)}`);
+          if (JSON.stringify(opened.marks.superseded) !== JSON.stringify(opened.marks.decided)) failures.push(`${label}: the tab marks differ in size: ${JSON.stringify(opened.marks)}`);
+          if (!opened.title?.endsWith(tr("proto.round.superseded", { n: 2 }))) failures.push(`${label}: the superseded tab's hover text reads ${JSON.stringify(opened.title)}`);
+          const { mark, sentence, link, anyway } = opened.layout;
+          if (!mark || !sentence || !link || !anyway) failures.push(`${label}: the superseded footer misses a part: ${JSON.stringify(opened.layout)}`);
+          else {
+            const wrapped = link.top >= sentence.bottom - 2;
+            if (wrapped && Math.abs(link.left - sentence.left) > 1) failures.push(`${label}: the wrapped link starts at x=${link.left}, the sentence at x=${sentence.left}`);
+            if (mark.left >= sentence.left) failures.push(`${label}: the mark does not lead the sentence: ${JSON.stringify(opened.layout)}`);
+            if (wrapped && anyway.top < link.bottom - 2) failures.push(`${label}: the decide-anyway button shares the wrapped link's row: ${JSON.stringify(opened.layout)}`);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/prototype-review/retired-rounds.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("orchestrator wire routing across the board's layouts", () => {
   /* docs/design/orchestrator-wire-routing.md: every seat/card layout the board
      produces, one seat action each, and the route the layer draws for it —
