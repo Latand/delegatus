@@ -2,10 +2,11 @@ import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS, type LinkTone, ty
 
 /*
  * The orchestrator's wires on the kanban board (docs/design/orchestrator-arrows.md,
- * Variant 2): the seat is the source node, a wire runs along the bus above the
- * columns, down the gutter left of a column and into a port on the card, with
- * rounded corners, and never crosses a card. On the phone the gutter is the
- * left margin of the open tab.
+ * Variant 2): the seat is the source node, a wire runs down the gutter left of a
+ * column and into a port on the card, with rounded corners, and never crosses a
+ * card. Its route is the one with the fewest bends, then the shortest, that the
+ * board leaves clear (docs/design/orchestrator-wire-routing.md §5). On the phone
+ * the gutter is the left margin of the open tab.
  *
  * A wire exists only for a while after the seat acted on its card
  * (`ORCHESTRATOR_WIRE_HOLD_MS`), then fades. With no wire there is no layer:
@@ -16,6 +17,12 @@ import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS, type LinkTone, ty
 const CARD_FLIGHT_MS = 450;
 /** A port closer than this to the column's visible edge is clipped: its card is counted at the edge. */
 const PORT_CLEARANCE = 6;
+/** A scroller shorter than this has no room for a count (26 px and its margins): the column is out of view. */
+const MIN_VIEW = 38;
+/** A port beside a folded strip's title stands this far past its last letter, so the dot covers none of it. */
+const PORT_GAP = 8;
+/** The rounded corner of every bend. */
+const CORNER = 6;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -106,11 +113,11 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   let marks: HTMLDivElement | null = null;
   let resized: ResizeObserver | null = null;
   let motionQuery: MediaQueryList | null = null;
-  let seatFade: Animation | null = null;
   const stubs = new Map<string, { chip: HTMLElement; wire: SVGPathElement; fade: Animation[] | null }>();
   /* The phone's tab pulses, one a tab. */
   const tabPulses = new Map<string, Animation>();
-  let seatDot: SVGCircleElement | null = null;
+  /* The seat's ports, one where each route leaves it, and the fade each has once every wire fades. */
+  const seatDots: { node: SVGCircleElement; fade: Animation | null }[] = [];
   let frame = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let offset = 0;
@@ -164,7 +171,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       for (const wire of wires.values()) { wire.fade = null; endPulse(wire); }
       for (const stub of stubs.values()) stub.fade = null;
       tabPulses.clear();
-      seatFade = null;
+      for (const dot of seatDots) dot.fade = null;
     }
     expire();
     schedule();
@@ -219,8 +226,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     tabPulses.clear();
     layer.remove();
     layer = canvas = lines = shared = marks = null;
-    seatDot = null;
-    seatFade = null;
+    seatDots.length = 0;
     stubs.clear();
     counters.wires = counters.stubs = 0;
   }
@@ -242,42 +248,120 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     const clip: Box = { left: columnRect.left, right: columnRect.right, width: columnRect.width, top, bottom, height: bottom - top };
     /* A port the column has scrolled out of view would be painted over the column's header or past its foot. */
     const port = portY(card);
+    /* A scroller with no room for a count shows nothing of the column but its header. */
+    if (bottom - top < MIN_VIEW) return { wire, hidden: "away", status };
     if (port > bottom - PORT_CLEARANCE) return { wire, hidden: "below", column: columnRect, view: clip, status };
     if (port < top + PORT_CLEARANCE) return { wire, hidden: "above", column: columnRect, view: clip, status };
     return { wire, card, column: columnRect, node, view: clip };
   }
 
-  /** Where a wire leaves the seat: its right edge at the bus when the seat is at
-      the side, the foot of its left edge when it is on top and on the phone. */
+  /** Where a wire leaves the seat for the bus or the margin: its right edge at the bus when the seat
+      is at the side, never higher than a corner under its top; the foot of its left edge when it is on
+      top and on the phone. */
   function seatPort(seat: Box, side: boolean, columnTop: number): Point {
-    if (side) return { x: seat.right, y: Math.max(seat.top + 12, Math.min(columnTop - 9, seat.bottom - 12)) };
+    if (side) return { x: seat.right, y: Math.max(seat.top + CORNER, Math.min(columnTop - 9, seat.bottom - 12)) };
     return { x: seat.left, y: seat.bottom - Math.min(14, seat.height / 2) };
   }
 
-  /** Out of the seat, along the bus above the columns, down the gutter left of the column, into the card. */
-  function gutter(seat: Box, side: boolean, column: Box, y: number, into: number, leftGutter: number): string {
-    const r = 6;
+  /** The seat folded on top and at rest, as the operator sees it: the strip has no fill and no frame
+      (kanbanBoard.css, #2148), so the seat is its avatar and title, the port clear of the title's last
+      letter, and the strip's other controls stand in a route's way as the column links do. A strip that
+      needs the operator, failed or holds an unread reply has its frame back, and its box is the seat. */
+  function quietStrip(node: HTMLElement): { seat: Box; blocks: Box[] } | null {
+    if (node.dataset.collapsed !== "1" || node.querySelector(".seat-title .state.needs, .seat-title .state.failed, .seat-unread")) return null;
+    const head = node.querySelector<HTMLElement>(".seat-head");
+    const avatar = head?.querySelector(".av")?.parentElement;
+    const title = head?.querySelector<HTMLElement>(".seat-title");
+    if (!head || !avatar || !title) return null;
+    const [a, t] = [rect(avatar), rect(title)];
+    const left = Math.min(a.left, t.left), top = Math.min(a.top, t.top), right = Math.max(a.right, t.right) + PORT_GAP, bottom = Math.max(a.bottom, t.bottom);
+    const blocks = [...head.children].filter((child) => child !== avatar && child !== title && !child.classList.contains("grow")).map(rect).filter((box) => box.width > 0 && box.height > 0);
+    return { seat: { left, top, right, bottom, width: right - left, height: bottom - top }, blocks };
+  }
+
+  /** Whether the straight run from `a` to `b` touches one of `blocks`: the row of column links or tabs
+      between a seat on top and the columns. */
+  const crosses = (blocks: readonly Box[], a: Point, b: Point) => blocks.some((box) =>
+    Math.max(a.x, b.x) >= box.left - 2 && Math.min(a.x, b.x) <= box.right + 2 && Math.max(a.y, b.y) >= box.top - 2 && Math.min(a.y, b.y) <= box.bottom + 2);
+
+  /** The route with the fewest bends that the board leaves clear, then the shortest
+      (docs/design/orchestrator-wire-routing.md §5): straight out of a side seat into a card of the
+      column beside it; one elbow down the gutter from the bottom of a seat on top that spans it; two out
+      of the seat's side that faces the gutter, or along the bus from a side seat; three round the row of
+      column links along the bus; four out of the side and round the row's end, or the margin route,
+      whichever is shorter, when nothing else is clear. Every route but the
+      straight one ends down the column's gutter into the card's port. */
+  function route(seat: Box, side: boolean, column: Box, y: number, into: number, leftGutter: number, blocks: readonly Box[]): { d: string; exit: Point } {
+    const r = CORNER;
     const trunk = phone ? column.left + 5 : column.left - 9;
-    const turn = `V${y - r} Q${trunk},${y} ${trunk + r},${y} H${into}`;
+    /* The last corner never runs past the port: on the phone the port is 3.5 px from the gutter. */
+    const last = Math.max(1, Math.min(r, into - trunk));
+    const turn = `V${y - last} Q${trunk},${y} ${trunk + last},${y} H${into}`;
     const bus = column.top - 9;
-    const port = seatPort(seat, side, column.top);
     if (side) {
-      if (Math.abs(bus - port.y) <= r) return `M${port.x},${port.y} H${trunk - r} Q${trunk},${port.y} ${trunk},${port.y + r} ${turn}`;
+      /* The column beside the seat: nothing stands between them. */
+      if (column.left - seat.right <= 24 && y >= seat.top + r && y <= seat.bottom - r) return { d: `M${seat.right},${y} H${into}`, exit: { x: seat.right, y } };
+      const port = seatPort(seat, side, column.top);
+      if (Math.abs(bus - port.y) <= r) return { d: `M${port.x},${port.y} H${trunk - r} Q${trunk},${port.y} ${trunk},${port.y + r} ${turn}`, exit: port };
       const out = port.x + 10;
       const down = bus > port.y ? 1 : -1;
-      return `M${port.x},${port.y} H${out - r} Q${out},${port.y} ${out},${port.y + r * down} V${bus - r * down} Q${out},${bus} ${out + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`;
+      return { d: `M${port.x},${port.y} H${out - r} Q${out},${port.y} ${out},${port.y + r * down} V${bus - r * down} Q${out},${bus} ${out + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: port };
     }
-    /* The seat on top, and the phone's seat card: out of the seat's left edge
-       and down the board's left margin, clear of the row of column links under
-       the seat; on the desktop then along the bus to the column's own gutter.
-       The phone's left margin is the gutter of its one open column. */
+    const foot = seat.bottom;
+    if (!phone) {
+      /* One elbow: the seat spans the gutter, so the wire drops from its bottom edge. */
+      if (trunk >= seat.left + r && trunk <= seat.right - r && y - r > foot && !crosses(blocks, { x: trunk, y: foot }, { x: trunk, y })) {
+        return { d: `M${trunk},${foot} ${turn}`, exit: { x: trunk, y: foot } };
+      }
+      /* Two: out of the seat's side that faces the gutter, at its foot. */
+      const low = seat.bottom - Math.min(14, seat.height / 2);
+      const facing = trunk < seat.left - r ? seat.left : trunk > seat.right + r ? seat.right : null;
+      if (facing !== null && y - r > low + r && !crosses(blocks, { x: facing, y: low }, { x: trunk, y: low }) && !crosses(blocks, { x: trunk, y: low }, { x: trunk, y })) {
+        const sign = trunk < facing ? -1 : 1;
+        return { d: `M${facing},${low} H${trunk - sign * r} Q${trunk},${low} ${trunk},${low + r} ${turn}`, exit: { x: facing, y: low } };
+      }
+      /* Three: down from the point of the seat's bottom nearest the gutter that clears the links, along the bus under them, down the gutter. */
+      if (bus - foot >= 2 * r && y - r > bus + r) {
+        const span = (x: number) => Math.min(seat.right - r, Math.max(seat.left + r, x));
+        const x = [span(trunk), ...blocks.flatMap((box) => [span(box.right + 2 * r), span(box.left - 2 * r)])]
+          .filter((x) => !crosses(blocks, { x, y: foot }, { x, y: bus }) && !crosses(blocks, { x, y: bus }, { x: trunk, y: bus }))
+          .sort((a, b) => Math.abs(a - trunk) - Math.abs(b - trunk))[0];
+        if (x !== undefined && Math.abs(x - trunk) >= 2 * r) {
+          const sign = trunk < x ? -1 : 1;
+          return { d: `M${x},${foot} V${bus - r} Q${x},${bus} ${x + sign * r},${bus} H${trunk - sign * r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: { x, y: foot } };
+        }
+      }
+    }
+    /* The margin route, when a row of tabs spans the board under the seat, and the phone's seat card:
+       out of the seat's left edge and down the board's left margin, clear of the row; on the desktop
+       then along the bus to the column's own gutter. The phone's left margin is the gutter of its one
+       open column. */
+    const port = seatPort(seat, side, column.top);
     const spine = phone ? trunk : Math.min(leftGutter, seat.left - 9);
-    const drop = `M${trunk},${Math.min(seat.bottom, y - r)} ${turn}`;
+    const dropAt = { x: trunk, y: Math.min(seat.bottom, y - r) };
+    const drop = { d: `M${dropAt.x},${dropAt.y} ${turn}`, exit: dropAt };
     if (port.x - spine < r) return drop;
     const start = `M${port.x},${port.y} H${spine + r} Q${spine},${port.y} ${spine},${port.y + r}`;
-    if (Math.abs(trunk - spine) < 1) return `${start} ${turn}`;
+    if (Math.abs(trunk - spine) < 1) return { d: `${start} ${turn}`, exit: port };
     if (trunk - spine < 2 * r || bus - port.y < 2 * r) return drop;
-    return `${start} V${bus - r} Q${spine},${bus} ${spine + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`;
+    /* Four: out of the seat's side, past the end of the row of links, down to the bus under them and
+       back along it to the gutter. A folded strip takes it when the row starts under its avatar; it has
+       the margin route's bends, so it is drawn only where it is the shorter. */
+    if (!phone && y - r > bus + r) {
+      const low = seat.bottom - Math.min(14, seat.height / 2);
+      const around = blocks.flatMap((box) => [box.right + 2 * r, box.left - 2 * r])
+        .filter((x) => (x >= seat.right + r || x <= seat.left - r) && Math.abs(x - trunk) >= 2 * r)
+        .map((x) => ({ x, facing: x > seat.right ? seat.right : seat.left }))
+        .filter(({ x, facing }) => !crosses(blocks, { x: facing, y: low }, { x, y: low }) && !crosses(blocks, { x, y: low }, { x, y: bus }) && !crosses(blocks, { x, y: bus }, { x: trunk, y: bus }))
+        .sort((a, b) => Math.abs(a.x - a.facing) + Math.abs(a.x - trunk) - Math.abs(b.x - b.facing) - Math.abs(b.x - trunk))[0];
+      if (around && Math.abs(around.x - around.facing) + Math.abs(around.x - trunk) < port.x - spine + trunk - spine) {
+        const { x, facing } = around;
+        const out = x > facing ? 1 : -1;
+        const back = trunk > x ? 1 : -1;
+        return { d: `M${facing},${low} H${x - out * r} Q${x},${low} ${x},${low + r} V${bus - r} Q${x},${bus} ${x + back * r},${bus} H${trunk - back * r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: { x: facing, y: low } };
+      }
+    }
+    return { d: `${start} V${bus - r} Q${spine},${bus} ${spine + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: port };
   }
 
   function update() {
@@ -293,9 +377,18 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     let drawn = 0;
     const seenStubs = new Set<string>();
     const counts = new Map<string, { column: Box; view: Box; above: Wire[]; below: Wire[] }>();
-    const seat = seatElement ? rect(seatElement) : null;
     const side = !phone && seatElement?.dataset.placement === "side";
-    let columnTop: number | null = null;
+    const strip = seatElement && !side && !phone ? quietStrip(seatElement) : null;
+    const seat = strip?.seat ?? (seatElement ? rect(seatElement) : null);
+    /* The row of column links or tabs a seat on top stands above, read once a pass, and a quiet strip's controls. */
+    const blocks: Box[] = side || phone ? [] : [...[...root.querySelectorAll<HTMLElement>(".tabs-nav button")].map(rect).filter((box) => box.width > 0), ...(strip?.blocks ?? [])];
+    /* Where the routes leave the seat: wires to one column leave at one point. */
+    const exits = new Map<string, Point>();
+    const routeTo = (column: Box, y: number, into: number) => {
+      const routed = route(seat!, side, column, y, into, leftGutter(column), blocks);
+      exits.set(`${routed.exit.x},${routed.exit.y}`, routed.exit);
+      return routed.d;
+    };
     /* The board's left margin, read once a pass and only for a seat that is not at the side. */
     let margin: number | null = null;
     const leftGutter = (column: Box) => {
@@ -322,7 +415,6 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
           const entry = counts.get(spot.status) ?? { column: spot.column, view: spot.view, above: [], below: [] };
           entry[spot.hidden].push(wire);
           counts.set(spot.status, entry);
-          columnTop ??= spot.column.top;
         }
         if (spot && wire.pending) {
           /* On the phone an action in another tab goes to that tab. */
@@ -332,10 +424,9 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         continue;
       }
       drawn += 1;
-      columnTop ??= spot.column.top;
       const tone = tones.get(wire.taskId) ?? "idle";
       const port = { x: spot.card.left, y: portY(spot.card) };
-      const d = gutter(seat!, side, spot.column, port.y, port.x - 3.5, leftGutter(spot.column));
+      const d = routeTo(spot.column, port.y, port.x - 3.5);
       let group = wire.group;
       if (!group) {
         group = wire.group = svg("g", { "data-wire": wire.taskId });
@@ -388,23 +479,27 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         const fading = hidden.every((wire) => wire.fading);
         if (fading && !stub.fade && !still) stub.fade = [fadeOut(stub.chip, fadedFor(hidden, clock)), fadeOut(stub.wire, fadedFor(hidden, clock))];
         else if (!fading && stub.fade) { for (const fade of stub.fade) fade.cancel(); stub.fade = null; }
-        stub.wire.setAttribute("d", gutter(seat, side, entry.column, y + 10, x, leftGutter(entry.column)));
+        stub.wire.setAttribute("d", routeTo(entry.column, y + 10, x));
         drawn += 1;
       }
     }
     for (const [key, stub] of stubs) if (!seenStubs.has(key)) { stub.chip.remove(); stub.wire.remove(); stubs.delete(key); }
 
-    const port = seat && drawn && columnTop !== null && !phone ? seatPort(seat, side, columnTop) : null;
-    if (port) {
-      if (!seatDot) { seatDot = svg("circle", { r: 4.5, class: "oa-port", "data-seat": "" }); shared.append(seatDot); }
-      seatDot.setAttribute("cx", String(port.x));
-      seatDot.setAttribute("cy", String(port.y));
-    } else { seatDot?.remove(); seatDot = null; }
+    /* A port on the seat where each route leaves it; the phone's seat card has none. */
+    const ports = seat && drawn && !phone ? [...exits.values()] : [];
+    for (const dot of seatDots.splice(ports.length)) { dot.fade?.cancel(); dot.node.remove(); }
+    ports.forEach((port, index) => {
+      const dot = seatDots[index] ??= { node: shared!.appendChild(svg("circle", { r: 4.5, class: "oa-port", "data-seat": "" })), fade: null };
+      dot.node.setAttribute("cx", String(port.x));
+      dot.node.setAttribute("cy", String(port.y));
+    });
 
-    /* The seat's port fades with the last wire. */
+    /* The seat's ports fade with the last wire. */
     const allFading = wires.size > 0 && [...wires.values()].every((wire) => wire.fading);
-    if (seatDot && allFading && !seatFade && !still) seatFade = fadeOut(seatDot, fadedFor(wires.values(), clock));
-    else if (seatFade && (!allFading || !seatDot)) { seatFade.cancel(); seatFade = null; }
+    for (const dot of seatDots) {
+      if (allFading && !dot.fade && !still) dot.fade = fadeOut(dot.node, fadedFor(wires.values(), clock));
+      else if (dot.fade && !allFading) { dot.fade.cancel(); dot.fade = null; }
+    }
 
     counters.wires = drawn;
     counters.stubs = seenStubs.size;
