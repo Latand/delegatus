@@ -898,3 +898,18 @@ existing peer info API, so B requires no new protocol for recovery. Both install
 still need this branch's seat relay and export/admission fixes for both directions
 as described in §16; one updated install interoperates with an older board-only
 peer and refuses unsupported seat messaging.
+
+## 18. Authorization after asynchronous registry admission
+
+The delivery progress changes on main make reservation placement wait for the
+registry writer off the event loop. A linked message's authorization check runs
+inside the acquired write, immediately before creating a fresh reservation.
+The callback stays in process and is never stored with a durable command.
+An operation already admitted keeps its receipt and recovery binding.
+
+Two private SQLite regressions change authorization while another process holds
+the writer. Before this integration fix, the live path commanded the message
+and the synchronization path reserved it. Both paths now refuse without a new
+reservation, operation owner or runtime command. Structured live delivery,
+synchronization holds and legacy delivery all pass the guard into the same
+fresh reservation boundary. Each install needs this fix for its local admission.

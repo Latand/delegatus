@@ -5,7 +5,8 @@ import {
   settleInboxFiles, stageInboxFiles, withInboxBatch, type InboxFileUpload, type StagedInboxFiles,
 } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, DeliveryReservationConflictError, type AgentRegistry, type DeliveryOperationOwner, type DirectAdmissionIdentity } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, refuseAnonymous, settleMessageAuthor, teamActor } from "@/lib/team";
 import type { TeamActor } from "@/lib/team/contract";
@@ -16,7 +17,10 @@ import type { RuntimeOperationResult } from "./contracts";
 import { nativeQueueDeliveryKey } from "./deliveryDedup";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { agentMessageOrigin } from "./agentMessageAuthor";
-import { runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
+import { admissionRecordStanding, recordDirectWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { structuredHostsEnabled } from "./flags";
 import { admitRuntimeImagePayload, type RuntimeImageAdmissionResult } from "./runtimeImageAdmission";
 import { runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
@@ -30,6 +34,26 @@ interface Dependencies {
   admitImages(images: unknown): RuntimeImageAdmissionResult;
   storeImages(uploads: readonly RuntimeImageUpload[]): StructuredImageRef[];
   nativeSnapshot?(conversationId: string): Promise<NativeQueueSnapshot | null>;
+  /** Where a hand-off's owner row is written (A8); the Viewer's registry by default. */
+  registry?(): AgentRegistry;
+  /** Where a hand-off's waits are recorded; the Viewer's own store by default. */
+  progress?: DeliveryProgressPort | null;
+}
+
+/** What the journal's request hash covers for a native add: the command
+    without its operation id and authorship, in a stable order. */
+function handOffRequestText(command: Record<string, unknown>): string {
+  const sorted = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sorted);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => key !== "operationId" && key !== "origin")
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, sorted(item)]));
+    }
+    return value;
+  };
+  return JSON.stringify(sorted(command));
 }
 const defaults: Dependencies = {
   client: runtimeHostClient, enabled: structuredHostsEnabled, kick: kickStructuredDeliveryQueue,
@@ -121,15 +145,102 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
   }
   try { command = parseRuntimeCommand("native-queue", body); }
   catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "invalid native queue command" }, { status: 400 }); }
+  /* A8: the composer's Queue-for-Codex hand-off is an accepted message the
+     moment the journal commits it. Its owner row and record exist before the
+     command leaves this process, under an operation id the row mints and every
+     replay of the key reuses, so a lost reply leaves an owned, bounded,
+     explained entry. Panel controls on an existing entry are unchanged. */
+  const handOff = command.kind === "native-queue" && command.action === "add";
+  const registry = handOff ? (dependencies.registry ?? agentRegistry)() : null;
+  const progress = dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress;
+  const identity: DirectAdmissionIdentity | null = handOff && command.kind === "native-queue" ? {
+    conversationId: command.conversationId as ViewerConversationId,
+    clientMessageId: command.idempotencyKey,
+    command: { operationId: command.operationId ?? "", kind: "send", policy: "queue", ...(command.origin ? { origin: command.origin } : {}) },
+    text: handOffRequestText(command as unknown as Record<string, unknown>),
+    contentDigest: null,
+    evidenceText: typeof command.text === "string" ? command.text : null,
+    evidenceImageCount: Array.isArray(command.images) ? command.images.length : 0,
+  } : null;
+  const writeRow = async (adoptOperationId?: string): Promise<DeliveryOperationOwner | NextResponse> => {
+    try {
+      const row = await registry!.deliveryWrite({ label: "delivery.direct-admission", operationId: adoptOperationId ?? command.operationId ?? null },
+        () => registry!.recordDirectAdmission({ handOff: identity!, ...(adoptOperationId ? { adoptOperationId } : {}) }));
+      if (!row.acquired || !row.value) {
+        return NextResponse.json({ error: "the delivery record's write lock is busy; nothing was sent", retryable: true }, { status: 503 });
+      }
+      return row.value;
+    } catch (error) {
+      if (error instanceof DeliveryReservationConflictError) {
+        return NextResponse.json({ error: error.message, recovery: "query or replay the original Viewer idempotency key" }, { status: 409 });
+      }
+      throw error;
+    }
+  };
+  const endRow = async (operationId: string, reason: string) => {
+    await registry!.deliveryWrite({ label: "delivery.direct-admission", operationId },
+      () => registry!.settleDirectAdmission(operationId, "failed", reason, "lost"));
+    try { progress?.settle?.(operationId, "failed", reason); } catch { /* never fails the answer */ }
+  };
   const admit = async (staged: StagedInboxFiles | null): Promise<NextResponse> => {
     /* The same rule as an ordinary send (#1224): bytes go on a TERMINAL refusal
        and on nothing else. A 409 is the journal refusing this request; a thrown
        transport leaves the operation's fate unknown, and a receipt of any other
        status names an operation whose message holds these paths. */
     let outcome: AttachmentDeliveryOutcome = "uncertain";
+    let owner: DeliveryOperationOwner | null = null;
+    let written: ReturnType<typeof recordDirectWait> = null;
     try {
+      if (handOff) {
+        const row = await writeRow();
+        if (row instanceof NextResponse) {
+          outcome = row.status === 409 ? "refused" : "uncertain";
+          return row;
+        }
+        owner = row;
+        if (owner.terminalState !== null) {
+          /* A row the settlement already ended sends nothing again: the answer
+             is what the journal holds under its operation, if anything. */
+          let current;
+          try { current = await client.operationStatus(owner.command.operationId); }
+          catch { return NextResponse.json({ error: "native queue admission status is unavailable", retryable: true }, { status: 503 }); }
+          if (!current) {
+            outcome = "refused";
+            return NextResponse.json({ error: "this message never reached Codex's queue; queue it again with a new message" }, { status: 409 });
+          }
+          outcome = current.receipt.status === "rejected" ? "refused" : "accepted";
+          return NextResponse.json({ ...current, replayed: true }, { status: current.receipt.status === "rejected" ? 409 : 202 });
+        }
+        command = { ...command, operationId: owner.command.operationId };
+        /* A replay of the key finds the record its first request started. One
+           that request wrote is carried on as it stands; one the queue or the
+           native executor moved is theirs, and the replay's command answers
+           without touching its phase, clocks or stall. */
+        const standing = admissionRecordStanding(progress, owner.command.operationId, handOffWrote);
+        written = standing.standing === "fresh"
+          ? recordDirectWait(progress, registry!, owner, { reason: "checking", detail: HANDING_OFF, nextWakeMs: null })
+          : standing.standing === "continue" ? standing.record : null;
+      }
       const result = await client.command(command);
       outcome = result.receipt.status === "rejected" ? "refused" : "accepted";
+      if (owner && result.operationId !== owner.command.operationId) {
+        /* A key first admitted before this build: the journal answered the
+           operation it already holds. That operation gets the row, the record
+           and the deadline from this answer on. */
+        const adopted = await writeRow(result.operationId);
+        if (!(adopted instanceof NextResponse)) {
+          owner = adopted;
+          /* The journal's operation may already be listed and led. */
+          written = admissionRecordStanding(progress, owner.command.operationId, handOffWrote).standing === "leave"
+            ? null
+            : recordDirectWait(progress, registry!, owner, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
+        }
+      } else if (owner && result.receipt.status === "rejected") {
+        await endRow(owner.command.operationId, result.receipt.reason || "native queue admission was refused");
+      } else if (owner && written && (result.receipt.status === "queued" || result.receipt.status === "pending")
+        && progress && stillAtStep(progress.get(owner.command.operationId), written)) {
+        recordDirectWait(progress, registry!, owner, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
+      }
       stampQueuedAuthor(person, command, result);
       if (result.receipt.status === "queued" || result.receipt.status === "pending") dependencies.kick();
       return NextResponse.json(result, { status: result.receipt.status === "rejected" ? 409 : 202 });
@@ -137,6 +248,25 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
       const message = error instanceof Error ? error.message : "native queue admission is unavailable";
       const conflict = /idempotency|revision changed|frozen or unresolved|ownership changed/.test(message);
       if (conflict) outcome = "refused";
+      if (owner) {
+        const answered = error instanceof RuntimeHostUnavailableError && !isRuntimeHostTransportFailure(error)
+          && message !== "runtime host request cancelled";
+        if (conflict || answered) {
+          await endRow(owner.command.operationId, message);
+        } else {
+          /* It may have reached the journal: the record says why it waits,
+             the attempt is counted and the queue is woken to list it. Written
+             only over the record this request wrote: once the queue or the
+             native executor moved it, they own it. */
+          if (stillOwnsRecord(progress, owner.command.operationId, written)) recordDirectWait(progress, registry!, owner, {
+            reason: "evidence-unreadable",
+            detail: `${HAND_OFF_UNACKNOWLEDGED}: ${message}`,
+            attempted: true,
+            nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+          });
+          dependencies.kick();
+        }
+      }
       return NextResponse.json({ error: message, recovery: "query or replay the original Viewer idempotency key" }, { status: conflict ? 409 : 503 });
     } finally {
       if (staged) settleInboxFiles(staged, outcome);
@@ -159,6 +289,15 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
     }
     return admit(staged);
   });
+}
+
+const HANDING_OFF = "handing the message to Codex's queue";
+const HAND_OFF_UNACKNOWLEDGED = "the runtime journal did not acknowledge the hand-off";
+
+/** A record the hand-off route itself wrote, before the queue listed the entry. */
+function handOffWrote(record: DeliveryProgressRecord): boolean {
+  return (record.waitReason === "checking" && record.detail === HANDING_OFF)
+    || (record.waitReason === "evidence-unreadable" && Boolean(record.detail?.startsWith(HAND_OFF_UNACKNOWLEDGED)));
 }
 
 /**
