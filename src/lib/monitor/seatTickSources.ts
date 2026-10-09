@@ -2,7 +2,6 @@ import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { ruleReports } from "./ruleReports";
-import { appendBridgeReports } from "@/lib/bridge/store";
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
@@ -29,7 +28,7 @@ import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
-import { readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
+import { appendBridgeReports, readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { BridgeReportV1, BridgeResolvedAskV1 } from "@/lib/bridge/types";
 import { operatorLocale } from "@/lib/operator/settings";
@@ -648,11 +647,15 @@ export function defaultSeatTickSources(): SeatTickSources {
       const seat = orchestratorSeatFor(project).active;
       if (!seat?.conversationId) return;
       const registry = agentRegistry().readOnlySnapshot();
+      const log = readBridgeReportLog();
       appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
         tasks: loadTasks(), pipelines: loadPipelinesForList(), deliveries: Object.values(registry.heldDeliveries),
-        maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: readBridgeReportLog(),
+        maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
         deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
-        deliveryProject: delivery => delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project ?? null }));
+        deliveryProject: delivery => {
+          const held = delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project;
+          return held ? canonicalOrchestratorProject(held) : null;
+        } }));
     },
     seatTurnOutcome: async (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as never);
