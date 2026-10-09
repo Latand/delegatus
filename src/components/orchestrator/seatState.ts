@@ -1,4 +1,4 @@
-import { contextWindowPolicyFor, ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
+import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
 
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { currentConversationFile } from "@/lib/accounts/identity";
@@ -898,11 +898,14 @@ function rotationHintOf(file: FileEntry | null, liveness: SeatLiveness, incumben
   const reasons: RotationHint["reasons"] = [];
   const percent = typeof file?.ctx?.pct === "number" ? file.ctx.pct : null;
   const capacity = file?.ctx?.windowTokens;
-  const policy = typeof capacity === "number" && capacity > 0
-    ? contextWindowPolicyFor(file?.engine ?? null, file?.launchModel ?? file?.model ?? null, { runtimeWindow: capacity })
+  /* ctx already resolved runtime metadata, launch mode and registry capacity
+     together. Apply the shared Claude threshold without relabelling a registry
+     capacity as runtime evidence or losing a transcript's beta mode. */
+  const threshold = file?.engine === "claude" && typeof capacity === "number" && capacity > 0
+    ? Math.round(capacity * ROTATION_THRESHOLD_FRACTION)
     : null;
   const tokens = file?.ctx?.usedTokens;
-  if (policy && typeof tokens === "number" && tokens >= policy.rotationThresholdTokens) reasons.push("context");
+  if (threshold !== null && typeof tokens === "number" && tokens >= threshold) reasons.push("context");
   if (deadHere) reasons.push("dead");
   if (!reasons.length) return null;
   return {
