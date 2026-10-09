@@ -66,6 +66,8 @@ export interface RuntimeHostRehearsalPorts {
    * purpose rather than waited for.
    */
   probeListener(options: { abandon: boolean }): Promise<boolean>;
+  /** Runtime health for the generation being started, independent of entry availability. */
+  probeReady?(): Promise<boolean>;
   /** The same question of the runtime socket, whose answers are the large ones. */
   probeSocket(options: { abandon: boolean }): Promise<boolean>;
   now(): number;
@@ -108,7 +110,7 @@ function evidence(
   };
 }
 
-/** Wait until the stable listener answers, or give up at the budget. */
+/** Wait for the stable entry and the started generation's runtime readiness. */
 async function awaitListener(
   ports: RuntimeHostRehearsalPorts,
   budgetMs: number,
@@ -116,7 +118,7 @@ async function awaitListener(
 ): Promise<number | null> {
   const started = ports.now();
   for (;;) {
-    if (await ports.probeListener({ abandon: false })) return ports.now() - started;
+    if (await ports.probeListener({ abandon: false }) && (!ports.probeReady || await ports.probeReady())) return ports.now() - started;
     if (ports.now() - started >= budgetMs) return null;
     await ports.sleep(pollMs);
   }
