@@ -1,6 +1,7 @@
 import { canonicalProject } from "@/lib/projects/aliases";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CompanionAdmission } from "./admission";
+import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
 import { liveEndRefusal } from "./liveGate";
 
 export interface CompanionToolContext {
@@ -21,6 +22,7 @@ type ToolProperty = { type: "string" | readonly ["string", "null"]; description?
 interface ToolEntry {
   name: string;
   description: string;
+  capability: string;
   class: "board-read" | "delegation" | "session-control";
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
@@ -29,32 +31,46 @@ const handle = { type: "string" as const, minLength: 1, maxLength: 128 };
 const schema = (properties: ToolEntry["parameters"]["properties"] = {}): ToolEntry["parameters"] =>
   ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
 const SENT = { delivered: "Sent to the orchestrator.", queued: "Sent. It is queued for the orchestrator.",
-  unknown: "The request was sent, and its delivery is not confirmed yet. Say exactly that.", failed: "The delivery failed. Nothing reached the orchestrator." };
-const NOT_SENT: Record<string, string> = { no_orchestrator: "This project has no designated orchestrator. Nothing was sent.",
-  operator_cancelled: "The operator declined. Nothing was sent.", source_changed: "The operator took the request back. Nothing was sent.",
-  retracted: "The operator took the request back. Nothing was sent.", confirmation_expired: "The confirmation was not answered in time. Nothing was sent.",
-  already_requested: "That request was already raised. Nothing new was sent." };
-const spoken = (outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) => outcome.state === "sent" ? { status: "sent", delivery: outcome.status, speech: SENT[outcome.status] }
-  : outcome.state === "awaiting" ? { status: "awaiting_confirmation", reason: outcome.proposal.confirmation?.reason ?? "",
-    speech: "Nothing has been sent. Tell the operator in one sentence what would be sent and why you ask, and ask whether to send it. Their spoken yes or no comes back through resolve_orchestrator_confirmation; the card's buttons answer it too." }
-  : { status: "refused", code: outcome.code, speech: NOT_SENT[outcome.code] ?? "This request was refused. Nothing was sent." };
+  unknown: "The request was sent, and its delivery is not confirmed yet. Say exactly that." };
+function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
+  if (outcome.state === "sent") {
+    if (outcome.status === "failed") {
+      const reason = deliveryFailureReason(outcome.failureCode);
+      return { status: "failed", delivery: outcome.status, code: outcome.failureCode, reason, speech: reason };
+    }
+    return { status: "sent", delivery: outcome.status, speech: SENT[outcome.status] };
+  }
+  if (outcome.state === "awaiting") return { status: "awaiting_confirmation", reason: outcome.proposal.confirmation?.reason ?? "",
+    speech: "Nothing has been sent. Tell the operator in one sentence what would be sent and why you ask, and ask whether to send it. Their spoken yes or no comes back through resolve_orchestrator_confirmation; the card's buttons answer it too." };
+  const reason = DELEGATION_REASONS[outcome.code];
+  return { status: "refused", code: outcome.code, reason, speech: `Nothing was sent. Tell the operator this reason in plain words and add none: ${reason}` };
+}
+
+const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: string; description: string }> = {
+  list_tasks: { capability: "Board tasks: the project's tasks and their states.", description: "Read the project's tasks and their states." },
+  get_task: { capability: "One task: its note, hold and steps.", description: "Read one project's task with its note, hold and steps. taskId is a handle returned by list_tasks." },
+  list_pipelines: { capability: "Pipelines: the project's pipelines and their states.", description: "Read the project's pipelines and their states." },
+  get_pipeline: { capability: "One pipeline: its stages and where each stands.", description: "Read one project's pipeline and its stages. pipelineId is a handle returned by list_pipelines." },
+  agent_activity: { capability: "Running agents: who is working on the project now.", description: "Read agents currently working on this project and their conversation handles." },
+  conversation_messages: { capability: "Agent messages: the latest messages of one running agent.", description: "Read the latest messages of one running agent in this project. conversationId is a handle returned by agent_activity. This reads agent messages; the voice session transcript is separate." },
+};
 
 /** Definitions, execution allowlist, argument validation and project admission
  * have one owner. No general MCP tool inventory enters a voice session. */
 export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
   ...READ_TOOL_NAMES.map((name): ToolEntry => ({ name, class: "board-read",
-    description: `Read ${name.replaceAll("_", " ")} on the current project. Summarize calmly; never speak handles.`,
+    ...READ_CAPABILITIES[name],
     parameters: schema(name === "get_task" ? { taskId: handle } : name === "get_pipeline" ? { pipelineId: handle }
       : name === "conversation_messages" ? { conversationId: handle } : {}),
     handler: (context, args) => context.reads.call(context.project, name, args),
   })),
-  { name: "request_orchestrator_delegation", class: "delegation",
+  { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: sends the operator's request to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
     description: "Send the complete request text to the project's orchestrator when the operator explicitly asks to send work to it. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. Input transcripts are optional context.",
     parameters: schema({ instruction: { type: "string", minLength: 1, maxLength: 2_000 },
       confirmation_reason: { type: ["string", "null"], maxLength: 240, description: "Why the operator should confirm first, in the operator's language; null to send at once." } }),
     handler: async (context, args) => spoken(await context.admission.delegate(context.sessionId, context.callId, context.delegationId, args.instruction as string,
       { sourceTurn: context.sourceTurn, ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) })) },
-  { name: "resolve_orchestrator_confirmation", class: "delegation",
+  { name: "resolve_orchestrator_confirmation", capability: "Confirmation answer: passes on the operator's yes or no to a request you asked about.", class: "delegation",
     description: "Pass on the operator's spoken answer to the confirmation that is waiting: send when they clearly agree, cancel when they decline or change their mind. When the answer is unclear, ask again and call nothing. A cancelled confirmation sends nothing; say so.",
     parameters: schema({ decision: { type: "string", enum: ["send", "cancel"] } }),
     handler: async (context, args) => {
@@ -67,10 +83,10 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       }
       // The model resolved the operator's spoken answer. Admission still binds
       // the decision to this pending proposal and rechecks withdrawal and expiry.
-      await context.admission.confirm(context.sessionId, { proposalId: proposal.proposalId, decision: args.decision as "send" | "cancel", via: "speech" });
-      return spoken(context.admission.outcome(context.sessionId, proposal.proposalId));
+      const answer = await context.admission.confirm(context.sessionId, { proposalId: proposal.proposalId, decision: args.decision as "send" | "cancel", via: "speech", sourceTurn: context.sourceTurn });
+      return spoken(answer ?? context.admission.outcome(context.sessionId, proposal.proposalId));
     } },
-  { name: "end_conversation", class: "session-control",
+  { name: "end_conversation", capability: "End the call: hangs up when the operator asks to finish the conversation.", class: "session-control",
     description: "End this entire voice conversation only after an explicit operator request to hang up or finish the call. Finishing a task, quoted words and conditional requests are insufficient. Offer a short goodbye before calling when possible.",
     parameters: schema(),
     // The description asks the model; this reads the operator's own words before anything ends.

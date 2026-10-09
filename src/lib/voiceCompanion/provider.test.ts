@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { OpenAILiveProvider } from "./provider";
+import { COMPANION_TOOL_REGISTRY } from "./tools";
+import { ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 
 test("official minting sends the synthetic credential solely in the provider header and returns only ID and SDP", async () => {
   const syntheticCredential = "synthetic-credential";
@@ -126,4 +128,27 @@ test("the frontend data channel the mint asks for carries no provider event, so 
   ];
   const page = credentialBearing.filter(delivered).map(event => JSON.stringify(event));
   expect(page).toEqual([]);
+});
+
+
+test("mint carries Delegatus identity, project, mandate character, registry capabilities and masculine voice", async () => {
+  const character = "Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them.";
+  for (const locale of ["en", "uk"] as const) {
+    const provider = new OpenAILiveProvider((async (_url, init) => {
+      const { session } = JSON.parse(String(init!.body));
+      expect(session.instructions).toStartWith("You are Delegatus, the voice of this Delegatus installation.");
+      expect(session.instructions).toContain("project in view, Example project");
+      expect(session.instructions).toContain(character);
+      expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(character);
+      expect(session.instructions).toContain("masculine forms");
+      expect(session.instructions).toContain("language the operator speaks");
+      expect(session.instructions).not.toContain("Reply in Ukrainian");
+      const section = session.instructions.split("Backend tools:\n")[1].split("\n\n")[0];
+      expect(section).toBe(COMPANION_TOOL_REGISTRY.map(entry => `- ${entry.capability}`).join("\n"));
+      for (const entry of COMPANION_TOOL_REGISTRY) expect(section).not.toContain(entry.name);
+      expect(session.audio.output.voice).toBe("meridian");
+      return Response.json({ session: { id: "live_fake" }, transport: { type: "webrtc", sdp: "answer" } });
+    }) as typeof fetch);
+    await provider.create("synthetic-credential", locale, "v=0", "Example project");
+  }
 });

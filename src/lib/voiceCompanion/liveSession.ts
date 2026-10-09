@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { reportHeaderName } from "@/lib/projects/settings";
 import { hardenedRedact } from "@/lib/view/compactText";
 import type { CompanionCommand, CompanionEvent, Locale, Payload } from "./contract";
 import { CompanionStorage, type StoredSession } from "./storage";
@@ -138,7 +139,7 @@ export class CompanionLiveSessions {
     let refused = false;
     let hungUpUnnamed = false;
     try {
-      const minted = await this.provider.create(key, input.locale, input.sdp).catch(error => {
+      const minted = await this.provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets))).catch(error => {
         refused = error instanceof Error && error.message === "PROVIDER_REFUSED";
         throw error;
       });
@@ -214,8 +215,11 @@ export class CompanionLiveSessions {
     const active = this.active.get(id);
     while (active && (active.processing || active.backend.size)) await Promise.all([active.processing, ...active.backend]);
   }
+  transcriptRecord(id: string) { return this.admission.transcriptRecord(id); }
   private transcript(active: ActiveSession, snapshots: ReturnType<LiveTranscript["finish"]>): void {
     for (const event of snapshots) {
+      this.admission.record(active.id, { id: event.itemId, kind: event.speaker === "operator" ? "utterance" : "reply", atMs: event.startMs ?? 0,
+        data: { text: event.text, final: event.final, startMs: event.startMs, endMs: event.endMs, fragments: active.transcript.timingsOf(event.itemId) } }, event.final);
       if (event.speaker === "operator") this.admission.input(active.id, { itemId: event.itemId, text: event.text, final: event.final,
         ...(active.transcript.turnOf(event.itemId) !== undefined ? { turn: active.transcript.turnOf(event.itemId) } : {}) }, { startMs: event.startMs, endMs: event.endMs });
       else this.admission.emit(active.id, event);
@@ -240,6 +244,8 @@ export class CompanionLiveSessions {
       if (active.delegations.size > 512) throw new Error("PROVIDER_ERROR");
       const turn = active.transcript.latestTurn();
       this.transcript(active, active.transcript.boundary(event.offset_ms));
+      this.admission.record(active.id, { id: `delegation-${delegation.id}`, kind: "delegation", atMs: event.offset_ms,
+        data: { delegationId: delegation.id, sourceTurn: turn } });
       this.delegate(active, delegation.id, turn);
     } else if (event.type === "session.usage.updated" || event.type === "session.closed") {
       const seconds = jsonObject(event.usage)?.seconds;
@@ -266,6 +272,7 @@ export class CompanionLiveSessions {
       const record = active.transcript.record().map(row => `${row.speaker === "operator" ? "Operator" : "Delegatus"}: ${row.text}`).join("\n").slice(-12_000);
       const waiting = this.admission.awaiting(active.id);
       const completedDelegations: string[] = [];
+      const refusalReasons: string[] = [];
       const input: BackendItem[] = [{ role: "user", content: `The conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
@@ -286,7 +293,7 @@ export class CompanionLiveSessions {
           const report = completedDelegations.length ? completedDelegations.map(delivery => delivery === "delivered" ? "The orchestrator received the request."
             : delivery === "queued" ? "The request is queued for the orchestrator."
               : delivery === "unknown" ? "The request's delivery is not confirmed yet."
-                : "The request delivery failed; nothing reached the orchestrator.").join(" ") : "No request was sent.";
+                : "The request delivery failed; nothing reached the orchestrator.").join(" ") : refusalReasons.length ? refusalReasons.join(" ") : "No request was sent.";
           this.say(active, delegationId, `The board could not be read just now. ${report}`);
           return;
         }
@@ -309,6 +316,7 @@ export class CompanionLiveSessions {
             && ["delivered", "queued", "unknown", "failed"].includes(String(resultObject.delivery))) {
             completedDelegations.push(String(resultObject.delivery));
           }
+          if (["refused", "failed"].includes(String(resultObject?.status)) && typeof resultObject?.reason === "string") refusalReasons.push(resultObject.reason);
           input.push({ type: "function_call_output", call_id: item.call_id, output: JSON.stringify(toolResult) });
         }
         if (active.endRequested) return;
@@ -325,18 +333,31 @@ export class CompanionLiveSessions {
   private async tool(active: ActiveSession, item: Record<string, unknown>, delegationId: string, sourceTurn: number | undefined,
     confirmationProposalId?: string | null): Promise<unknown> {
     const callId = item.call_id as string; const name = item.name as string;
+    const atMs = this.now() - active.createdAt;
+    let argumentsText: string;
+    try { argumentsText = JSON.stringify(JSON.parse(item.arguments as string), null, 2); } catch { argumentsText = String(item.arguments); }
+    const toolData = { name, callId, delegationId, arguments: withoutLocalPaths(withoutCredentials(argumentsText, active.secrets)).slice(0, 4_000) };
+    this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
     this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });
     try {
       const result = await runCompanionTool({ project: this.admission.session(active.id).project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId,
         admission: this.admission, reads: this.reads, endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
-      this.admission.emit(active.id, { type: "tool.result", callId, status: output?.status === "refused" ? "failed" : "done",
+      const status = output?.status === "refused" || output?.status === "failed" ? "failed" : "done";
+      this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
+        data: { ...toolData, status, code: output?.code, reason: output?.reason ?? output?.speech,
+          result: withoutLocalPaths(withoutCredentials(JSON.stringify(result, null, 2), active.secrets)).slice(0, 8_000) } });
+      this.admission.emit(active.id, { type: "tool.result", callId, status,
         summary: typeof output?.speech === "string" ? output.speech.slice(0, 240) : "Completed" });
       return result;
     } catch (error) {
       const code = error instanceof Error && ["TOOL_NOT_ALLOWED", "PROJECT_REFUSED", "INVALID_TOOL_ARGUMENTS", "SESSION_CLOSED"].includes(error.message) ? error.message : "TOOL_FAILED";
-      this.admission.emit(active.id, { type: "tool.result", callId, status: "failed", summary: code });
-      return { status: "refused", code };
+      const reason = code.replaceAll("_", " ").toLowerCase();
+      const result = { status: "refused", code, reason, speech: `The tool failed: ${reason}.` };
+      this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
+        data: { ...toolData, status: "failed", code, reason, result: JSON.stringify(result, null, 2) } });
+      this.admission.emit(active.id, { type: "tool.result", callId, status: "failed", summary: result.speech });
+      return result;
     }
   }
   /** Records a backend response's own usage and gives back what its
@@ -354,8 +375,11 @@ export class CompanionLiveSessions {
   private say(active: ActiveSession, delegationId: string | null, text: string): void {
     if (active.ended) return;
     const content = speakable(withoutLocalPaths(withoutCredentials(text, active.secrets)));
-    try { active.connection?.send({ type: "session.commentary.append", event_id: randomUUID(), delegation_id: delegationId, content }); }
-    catch { /* A lost sideband closes the session through its own handler. */ }
+    const eventId = randomUUID();
+    if (!active.connection) return;
+    try { active.connection.send({ type: "session.commentary.append", event_id: eventId, delegation_id: delegationId, content }); }
+    catch { return; /* A lost sideband closes the session through its own handler. */ }
+    this.admission.record(active.id, { id: `handoff-${eventId}`, kind: "handoff", atMs: this.now() - active.createdAt, data: { delegationId, text: content } });
   }
   private capReached(active: ActiveSession, delegationId?: string): void {
     if (!active.capRefused) {

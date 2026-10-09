@@ -169,7 +169,7 @@ test("an explicit refusal in the recent Live fragments withdraws a pending propo
   admission.input(session.id, { itemId: "refusal-fragment", text: "ні, не надсилай", final: false });
   await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
   expect(admission.session(session.id).proposals[proposal.proposalId].state).toBe("cancelled");
-  expect(admission.propose(session.id, "other-call", "other-delegation", "Перевір план")).toBeNull();
+  expect(admission.propose(session.id, "other-call", "other-delegation", "Перевір план")).not.toBeNull();
 });
 
 test("terminal queue receipts settle once after restart, with no second send", async () => {
@@ -323,7 +323,7 @@ test("a Send's delivery key and its unknown outcome are recorded together; a sec
   expect(restarted.session(session.id).proposals[proposal.proposalId]).toMatchObject({ status: "delivered", delivery: { operationId: "operation-restart" } });
 });
 
-test("a completed Live turn is read whole: a question, a condition or a turn that asks nothing refuses; later speech only withdraws on a refusal", async () => {
+test("Live admission follows the model decision on a finished turn; later speech can withdraw a waiting confirmation", async () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   const admission = new CompanionAdmission(new CompanionStorage(), {
     recipient: () => ({ project: "turns", conversationId: "conversation_turns", seatEpoch: 1, engine: "codex" }),
@@ -331,7 +331,7 @@ test("a completed Live turn is read whole: a question, a condition or a turn tha
   });
   const session = admission.create({ project: "turns", locale: "en", authority: "live-model" });
   admission.input(session.id, { itemId: "q", text: "What is on the board?", final: true, turn: 1 });
-  expect(admission.propose(session.id, "c1", "d1", "Report the board", { sourceTurn: 1 })).toBeNull();
+  expect(admission.propose(session.id, "c1", "d1", "Report the board", { sourceTurn: 1 })).not.toBeNull();
   admission.input(session.id, { itemId: "half", text: "Ask the orchestrator", final: false, turn: 2 });
   const partial = admission.propose(session.id, "c2", "d2", "Review the plan", { sourceTurn: 2, confirmation: "Half a sentence was heard." })!;
   expect(partial).not.toBeNull();
@@ -340,4 +340,45 @@ test("a completed Live turn is read whole: a question, a condition or a turn tha
   expect(admission.session(session.id).proposals[partial.proposalId].state).toBe("pending");
   admission.input(session.id, { itemId: "no", text: "Actually, don't send it.", final: true, turn: 4 });
   expect(admission.session(session.id).proposals[partial.proposalId].state).toBe("cancelled");
+});
+
+
+test("new sessions prune closed transcript files after 30 days and retain at most the latest 50", () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let now = Date.UTC(2026, 0, 1);
+  const storage = new CompanionStorage(() => now);
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } }, () => now);
+  const close = () => {
+    const session = admission.create({ project: "retention", locale: "en", authority: "live-model" });
+    admission.emit(session.id, { type: "session.closed", reason: "operator", incomplete: false });
+    admission.retire(session.id);
+    return session.id;
+  };
+  const old = close();
+  now += 31 * 86400_000;
+  const fresh = close();
+  const file = (id: string) => path.join(root, "state", "voice-companion", "transcripts", `${id}.jsonl`);
+  expect(fs.existsSync(file(old))).toBe(false);
+  expect(fs.existsSync(file(fresh))).toBe(true);
+  const recent = [fresh];
+  for (let index = 0; index < 50; index++) { now += 1000; recent.push(close()); }
+  const open = admission.create({ project: "retention", locale: "en", authority: "live-model" });
+  expect(fs.existsSync(file(recent[0]))).toBe(false);
+  expect(recent.slice(1).every(id => fs.existsSync(file(id)))).toBe(true);
+  expect(fs.existsSync(file(open.id))).toBe(true);
+});
+
+test("the session transcript stops at 4 MB with an explicit truncation marker and preserves its end", () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } });
+  const session = admission.create({ project: "bounded", locale: "en", authority: "live-model" });
+  for (let index = 0; index < 600; index++) admission.record(session.id, { id: `tool-${index}`, kind: "tool", atMs: index,
+    data: { arguments: "{}", result: "x".repeat(8000), status: "done" } });
+  expect(admission.transcriptRecord(session.id).truncated).toBe(true);
+  admission.emit(session.id, { type: "session.closed", reason: "operator", incomplete: false });
+  admission.retire(session.id);
+  const record = admission.transcriptRecord(session.id);
+  expect(record.truncated).toBe(true);
+  expect(record.entries.at(-1)?.kind).toBe("session_end");
+  expect(fs.statSync(path.join(root, "state", "voice-companion", "transcripts", `${session.id}.jsonl`)).size).toBeLessThanOrEqual(4 * 1024 * 1024);
 });

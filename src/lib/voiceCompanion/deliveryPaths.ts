@@ -17,18 +17,7 @@ export const companionDeliveryPaths: CompanionDeliveryPaths = {
     return engine === "claude" || engine === "codex" ? { project: canonicalProject(project),
       conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, engine } : null;
   },
-  async send(binding) {
-    const response = await orchestratorMessage(new NextRequest("http://127.0.0.1/api/orchestrator/message", {
-      method: "POST", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
-      body: JSON.stringify({ project: binding.delivery.recipient.project, conversationId: binding.delivery.recipient.conversationId,
-        text: binding.text, clientMessageId: binding.delivery.clientMessageId,
-        voiceDelegatus: { sessionId: binding.sessionId, proposalId: binding.proposalId } }),
-    }));
-    const result = await response.json();
-    if (!response.ok || typeof result.operationId !== "string") throw new Error("DELIVERY_UNCONFIRMED");
-    const receipt = await resolveSendReceipt(result.operationId);
-    return { status: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "unknown" : "queued", operationId: result.operationId };
-  },
+  send: binding => sendCompanionMessage(binding),
   reports: project => pageBridgeReports({ inProject: candidate => canonicalProject(candidate) === canonicalProject(project), limit: 100 }).reports,
   async receipt(delivery) {
     const receipt = delivery.operationId ? await resolveSendReceipt(delivery.operationId) : null;
@@ -36,3 +25,19 @@ export const companionDeliveryPaths: CompanionDeliveryPaths = {
     return receipt.state === "in-flight" ? "pending" : receipt.state;
   },
 };
+
+export async function sendCompanionMessage(binding: Parameters<CompanionDeliveryPaths["send"]>[0],
+  route: (req: NextRequest) => Promise<Response> = orchestratorMessage): ReturnType<CompanionDeliveryPaths["send"]> {
+  const response = await route(new NextRequest("http://127.0.0.1/api/orchestrator/message", {
+    method: "POST", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ project: binding.delivery.recipient.project, conversationId: binding.delivery.recipient.conversationId,
+      text: binding.text, clientMessageId: binding.delivery.clientMessageId,
+      voiceDelegatus: { sessionId: binding.sessionId, proposalId: binding.proposalId } }),
+  }));
+  const result = await response.json();
+  if (response.status >= 400 && response.status < 500 && typeof result.code === "string")
+    return { status: "failed", operationId: null, code: result.code };
+  if (!response.ok || typeof result.operationId !== "string") throw new Error("DELIVERY_UNCONFIRMED");
+  const receipt = await resolveSendReceipt(result.operationId);
+  return { status: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "unknown" : "queued", operationId: result.operationId };
+}

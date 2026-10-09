@@ -3,14 +3,17 @@ import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
-import { liveProposalRefusal, requestText, type EarlierRequest } from "./liveGate";
+import { liveProposalRefusal, waitingConfirmationWithdrawn, requestText, type EarlierRequest } from "./liveGate";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
+import { DELEGATION_REASONS, deliveryFailureReason, type DelegationCode } from "./delegationOutcome";
+import { CompanionTranscriptRecords, type TranscriptEntry } from "./transcriptRecord";
+import { LIVE_VOICE } from "./sessionConfig";
 import { CompanionStorage, type StoredProposal, type StoredSession } from "./storage";
 
 export interface CompanionDeliveryPaths {
   recipient(project: string): Recipient | null;
   /** Existing orchestrator send path. It owns durable receipt idempotency. */
-  send(binding: { sessionId: string; proposalId: string; delivery: Delivery; text: string }): Promise<{ status: "delivered" | "queued" | "unknown"; operationId: string | null }>;
+  send(binding: { sessionId: string; proposalId: string; delivery: Delivery; text: string }): Promise<{ status: "delivered" | "queued" | "unknown" | "failed"; operationId: string | null; code?: string }>;
   reports(project: string): BridgeReportV1[];
   receipt?(delivery: Delivery): Promise<"delivered" | "failed" | "pending">;
 }
@@ -64,10 +67,11 @@ export function admittedVoiceBinding(input: { sessionId: string; proposalId: str
  * retain their completed-input policy for deterministic demo fixtures. */
 export type DelegationOutcome =
   | { state: "awaiting"; proposal: Proposal }
-  | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed" }
-  | { state: "refused"; code: string };
-type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech" };
+  | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed"; failureCode?: string }
+  | { state: "refused"; code: DelegationCode };
+type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech"; sourceTurn?: number };
 export class CompanionAdmission {
+  private readonly records = new CompanionTranscriptRecords();
   private readonly sending = new Map<string, Promise<void>>();
   private readonly secrets = new Set<string>();
   constructor(readonly storage: CompanionStorage, private readonly paths: CompanionDeliveryPaths, private readonly now = Date.now) {}
@@ -79,6 +83,7 @@ export class CompanionAdmission {
       if (Object.values(document.sessions).filter(row => !row.closed).length >= 8) throw new Error("SESSION_LIMIT");
       document.sessions[session.id] = session;
     });
+    this.records.begin(session, LIVE_VOICE, this.storage.read().sessions, this.now());
     return session;
   }
   /** A credential in use that the key file and the environment do not hold. */
@@ -96,8 +101,46 @@ export class CompanionAdmission {
     return this.storage.change(document => {
       const session = document.sessions[id];
       if (!session) throw new Error("SESSION_UNAVAILABLE");
-      return appendEvent(session, payload, this.now(), clean);
+      return this.append(session, payload, this.now(), clean);
     });
+  }
+  /** Every persisted and served transcript string crosses this boundary. */
+  record(id: string, entry: TranscriptEntry, settled = true): void {
+    const clean = this.cleaner();
+    this.records.put(id, cleanStrings(entry, text => withoutLocalPaths(clean(text))), settled);
+  }
+  transcriptRecord(id: string) { this.session(id); return this.records.read(id); }
+  private append(session: StoredSession, payload: Payload, now: number, clean: (text: string) => string): CompanionEvent {
+    const event = appendEvent(session, payload, now, clean);
+    if (event.type === "session.closed") {
+      this.record(session.id, { id: "end", kind: "session_end", atMs: event.atMs,
+        data: { reason: event.reason, seconds: session.usage?.seconds ?? 0, endedAt: now, incomplete: event.incomplete } });
+      this.records.finish(session.id);
+    } else if (event.type === "delegation.tool.called") {
+      this.requestRecord(session.id, { id: `request-${event.callId}`, kind: "request", atMs: event.atMs,
+        data: { callId: event.callId, delegationId: event.sourceItemId, instruction: event.instruction, status: "proposed" } });
+    } else if (event.type === "delegation.sending" || event.type === "delegation.confirmation.required") {
+      this.requestRecord(session.id, { id: `request-${event.proposal.callId}`, kind: "request", atMs: event.atMs,
+        data: { ...event.proposal, status: event.type === "delegation.sending" ? "sending" : "awaiting_confirmation" } });
+    } else if (event.type === "delegation.tool.result" || event.type === "delegation.delivery.settled") {
+      const callId = event.type === "delegation.tool.result" ? event.callId : event.delivery.callId;
+      const previous = this.records.read(session.id).entries.find(entry => entry.id === `request-${callId}`);
+      this.requestRecord(session.id, { id: `request-${callId}`, kind: "request", atMs: previous?.atMs ?? event.atMs,
+        data: { ...previous?.data, ...(event.type === "delegation.tool.result" ? event.result : { status: event.status, code: event.code }), updatedAtMs: event.atMs } });
+    } else if (event.type === "orchestrator.answer") {
+      this.record(session.id, { id: `report-${event.reportId}`, kind: "report", atMs: event.atMs,
+        data: { status: event.status, text: event.text, delivery: event.delivery } });
+    }
+    return event;
+  }
+  private requestRecord(id: string, entry: TranscriptEntry): void {
+    const previous = this.records.read(id).entries.find(row => row.id === entry.id);
+    const code = entry.data.code as string | undefined;
+    const reason = entry.data.status === "failed" ? deliveryFailureReason(code) : code ? DELEGATION_REASONS[code as DelegationCode] : undefined;
+    const states = Array.isArray(previous?.data.states) ? previous.data.states : [];
+    const atMs = typeof entry.data.updatedAtMs === "number" ? entry.data.updatedAtMs : entry.atMs;
+    this.record(id, { ...entry, atMs: previous?.atMs ?? entry.atMs,
+      data: { ...previous?.data, ...entry.data, ...(reason ? { reason } : {}), states: [...states, { atMs, status: entry.data.status, ...(code ? { code, reason } : {}) }] } });
   }
   events(id: string, after: number): CompanionEvent[] { return this.session(id).events.filter(event => event.seq > after); }
   /** Trusted transcript normalization only; the browser command API cannot
@@ -114,7 +157,7 @@ export class CompanionAdmission {
       const removed: StoredProposal[] = [];
       for (const row of Object.values(session.proposals)) {
         if (row.state === "pending" && this.now() > row.expiresAt) { row.state = "cancelled"; row.cancelCode = "confirmation_expired"; removed.push(row); }
-        else if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId)) !== null
+        else if (row.state === "pending" && (session.authority === "live-model" ? waitingConfirmationWithdrawn(session.inputs, row.sourceTurn)
           : !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit)) {
           row.state = "cancelled"; row.cancelCode = "source_changed"; removed.push(row);
         }
@@ -160,7 +203,7 @@ export class CompanionAdmission {
       || sameRequest(held, clean(sourceItemId), logicalInstruction, options.sourceTurn));
     if (!row) {
       const last = this.events(id, 0).at(-1);
-      return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code : "not_admitted" };
+      return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code as DelegationCode : "not_admitted" };
     }
     if (proposal?.confirmation) return { state: "awaiting", proposal };
     if (row.state === "pending" || row.status === "unknown") await this.confirm(id, { proposalId: row.proposal.proposalId, decision: "send", via: "auto" });
@@ -170,7 +213,7 @@ export class CompanionAdmission {
   outcome(id: string, proposalId: string): DelegationOutcome {
     const row = this.session(id).proposals[proposalId];
     if (!row || row.state === "cancelled") return { state: "refused", code: row?.cancelCode ?? "proposal_unavailable" };
-    return row.state === "pending" ? { state: "awaiting", proposal: row.proposal } : { state: "sent", status: row.status ?? "unknown" };
+    return row.state === "pending" ? { state: "awaiting", proposal: row.proposal } : { state: "sent", status: row.status ?? "unknown", ...(row.failureCode ? { failureCode: row.failureCode } : {}) };
   }
   /** The confirmation included in the backend round that received this answer. */
   awaiting(id: string, proposalId?: string | null): Proposal | null {
@@ -182,13 +225,13 @@ export class CompanionAdmission {
   lastAsked(id: string): Proposal | null {
     return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
   }
-  /** `sourceTurn`: the operator's Live turn when Live delegated, read whole by the gate. */
+  /** `sourceTurn` binds this model request to the operator's Live turn. */
   propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean } = {}): Proposal | null {
     const { sourceTurn } = options;
     const [callId, sourceItemId, instruction, asked] = [rawCallId, rawSourceItemId, rawInstruction, options.confirmation?.trim().slice(0, 240) ?? ""].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
     if (existing) return existing.state === "pending" ? existing.proposal : null;
-    let refusal = "not_admitted";
+    let refusal: DelegationCode = "not_admitted";
     let reusedLogicalRequest = false;
     const proposal = this.storage.change(document => {
       const session = document.sessions[id];
@@ -217,8 +260,8 @@ export class CompanionAdmission {
       // The projection's first card event shares the admission commit. A
       // restart can therefore replay the admitted delivery even if the
       // process stops before it emits the later sending/result events.
-      appendEvent(session, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) }, this.now(), this.cleaner());
-      if (proposal.confirmation) appendEvent(session, { type: "delegation.confirmation.required", proposal }, this.now(), this.cleaner());
+      this.append(session, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) }, this.now(), this.cleaner());
+      if (proposal.confirmation) this.append(session, { type: "delegation.confirmation.required", proposal }, this.now(), this.cleaner());
       return proposal;
     });
     if (reusedLogicalRequest) return proposal;
@@ -231,8 +274,8 @@ export class CompanionAdmission {
   }
   /** Admits or declines one delegation. The page can only tap; the spoken
    * answer arrives through the model's tool, and "auto" from `delegate`. */
-  async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }> | Admit): Promise<void> {
-    let refusal = "proposal_unavailable";
+  async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }> | Admit): Promise<DelegationOutcome | void> {
+    const refused: { code: DelegationCode } = { code: "proposal_unavailable" };
     const binding = this.storage.change(document => {
       const session = document.sessions[id];
       const row = session?.proposals[command.proposalId];
@@ -240,11 +283,13 @@ export class CompanionAdmission {
       // Recovery remains available after closure/restart. A retry recovers its
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
-      if (command.decision === "cancel") { row.state = "cancelled"; row.cancelCode = refusal = "operator_cancelled"; return null; }
+      if (command.decision === "cancel") { row.state = "cancelled"; row.cancelCode = refused.code = "operator_cancelled"; return null; }
       const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId)) === null
         : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit;
+      if (session.authority === "live-model" && command.via === "speech" && row.sourceTurn !== undefined
+        && (("sourceTurn" in command ? command.sourceTurn : undefined) ?? session.inputs.at(-1)?.turn ?? row.sourceTurn) <= row.sourceTurn) { refused.code = "not_confirmed"; return null; }
       if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
-        row.state = "cancelled"; row.cancelCode = refusal = "proposal_changed"; return null;
+        row.state = "cancelled"; row.cancelCode = refused.code = "proposal_changed"; return null;
       }
       row.state = "admitted";
       row.via = command.via;
@@ -257,9 +302,10 @@ export class CompanionAdmission {
       return row;
     });
     if (!binding) {
+      if (refused.code === "not_confirmed") return { state: "refused", code: refused.code };
       const row = this.session(id).proposals[command.proposalId];
       if (row) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: command.proposalId,
-        result: { status: "cancelled", code: row.cancelCode ?? refusal } });
+        result: { status: "cancelled", code: row.cancelCode ?? refused.code } });
       return;
     }
     if (command.decision === "cancel") return; // already-admitted work cannot be undone
@@ -276,7 +322,7 @@ export class CompanionAdmission {
     // A request nobody was asked about announces its own send; a confirmed one names how it was answered.
     this.emit(id, row.proposal.confirmation ? { type: "delegation.confirmed", proposalId, via: row.via === "speech" ? "speech" : "tap" }
       : { type: "delegation.sending", proposal: row.proposal });
-    let settled = { status: row.status ?? "unknown", operationId: row.delivery!.operationId };
+    let settled: { status: "delivered" | "queued" | "unknown" | "failed"; operationId: string | null; code?: string } = { status: row.status ?? "unknown", operationId: row.delivery!.operationId };
     if (!row.status || row.status === "unknown") {
       try { settled = await this.paths.send({ sessionId: id, proposalId, delivery: row.delivery!, text: row.text! }); }
       catch { settled = { status: "unknown", operationId: row.delivery!.operationId }; }
@@ -290,10 +336,11 @@ export class CompanionAdmission {
       if (!stronger && !conflicting) {
         held.delivery!.operationId ??= settled.operationId;
         held.status = settled.status;
+        if (settled.code) held.failureCode = this.cleaner()(withoutLocalPaths(settled.code)).slice(0, 120);
       }
-      return { delivery: held.delivery!, status: held.status ?? "unknown" };
+      return { delivery: held.delivery!, status: held.status ?? "unknown", failureCode: held.failureCode };
     });
-    if (receipt.status === "failed") this.emit(id, { type: "delegation.delivery.settled", delivery: receipt.delivery, status: "failed" });
+    if (receipt.status === "failed") this.emit(id, { type: "delegation.delivery.settled", delivery: receipt.delivery, status: "failed", code: receipt.failureCode });
     else this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId,
       result: { status: receipt.status, delivery: receipt.delivery } });
   }
@@ -309,7 +356,7 @@ export class CompanionAdmission {
         const held = session.proposals[row.proposal.proposalId];
         if (held.status === "delivered" || held.status === "failed") return;
         held.status = status;
-        appendEvent(session, { type: "delegation.delivery.settled", delivery: held.delivery!, status }, this.now(), clean);
+        this.append(session, { type: "delegation.delivery.settled", delivery: held.delivery!, status }, this.now(), clean);
       });
     }
   }
@@ -330,7 +377,7 @@ export class CompanionAdmission {
           if (held.reports.includes(report.id)) return null;
           held.reports.push(report.id);
           // Persist correlation and its replay event in one atomic commit.
-          return appendEvent(session, { type: "orchestrator.answer", delivery: held.delivery!, reportId: report.id,
+          return this.append(session, { type: "orchestrator.answer", delivery: held.delivery!, reportId: report.id,
             status, text: withoutLocalPaths(clean(report.body)).slice(0, 1_200) }, this.now(), clean);
         });
         if (fresh) events.push(fresh);

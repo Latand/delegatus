@@ -1,3 +1,5 @@
+import { DISPLAY_PAUSE_MS } from "./liveTranscript";
+
 export interface MediaCallbacks {
   playback(sample: { rms: number; playedMs: number; speaking: boolean }): void;
   input(speaking: boolean): void;
@@ -12,24 +14,22 @@ export interface CompanionMedia {
 }
 
 /** Browser media only. Fresh duplex handling; no composer code is imported.
- * The model manages duplex audio. Local speech detection updates playback
- * presentation and drops audio during an explicit interruption. */
+ * The provider manages duplex audio. The output analyser drives presentation;
+ * only the explicit interrupt command mutes received audio. */
 export class BrowserCompanionMedia implements CompanionMedia {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private microphone: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
   private context: AudioContext | null = null;
-  private inputAnalyser: AnalyserNode | null = null;
   private outputAnalyser: AnalyserNode | null = null;
   private frame: number | null = null;
   private disposed = false;
-  private inputOn = false;
-  private inputLast = 0;
   private outputOn = false;
   private outputLast = 0;
   private outputStart = 0;
   private blocked = false;
+  private quietSince: number | null = null;
   private cancelIce: (() => void) | null = null;
   constructor(private readonly callbacks: MediaCallbacks) {}
 
@@ -44,8 +44,6 @@ export class BrowserCompanionMedia implements CompanionMedia {
       const context = this.context = new AudioContext();
       await context.resume();
       if (this.disposed) throw new Error("SESSION_CLOSED");
-      const input = this.inputAnalyser = context.createAnalyser(); input.fftSize = 512;
-      context.createMediaStreamSource(this.microphone!).connect(input);
       const audio = this.audio = new Audio(); audio.autoplay = true;
       peer.addEventListener("track", event => {
         if (this.disposed || event.track.kind !== "audio") return;
@@ -91,14 +89,15 @@ export class BrowserCompanionMedia implements CompanionMedia {
   private sample = (): void => {
     if (this.disposed) return;
     const now = performance.now();
-    const inputRms = this.rms(this.inputAnalyser);
-    if (inputRms >= 0.035 && this.microphone?.getAudioTracks().some(track => track.enabled)) this.inputLast = now;
-    const inputOn = now - this.inputLast < 200 && this.inputLast > 0;
-    if (inputOn !== this.inputOn) { this.inputOn = inputOn; this.callbacks.input(inputOn); }
     const raw = this.rms(this.outputAnalyser);
-    // Once an interrupted stream has gone quiet, a later spoken response can
-    // play again. Microphone mute never mutes the companion's output.
-    if (this.blocked && raw < 0.008 && !inputOn) { this.blocked = false; if (this.audio) this.audio.muted = false; }
+    if (this.blocked) {
+      if (raw >= 0.008) this.quietSince = null;
+      else this.quietSince ??= now;
+      if (this.quietSince !== null && now - this.quietSince >= DISPLAY_PAUSE_MS) {
+        this.blocked = false; this.quietSince = null;
+        if (this.audio) this.audio.muted = false;
+      }
+    }
     const audible = !this.blocked && this.audio && !this.audio.paused && !this.audio.muted ? raw : 0;
     if (audible >= 0.008) this.outputLast = now;
     const outputOn = !this.blocked && !!this.audio && !this.audio.paused && !this.audio.muted && this.outputLast > 0 && now - this.outputLast < 250;
@@ -109,7 +108,7 @@ export class BrowserCompanionMedia implements CompanionMedia {
   };
   mute(muted: boolean): void { this.microphone?.getAudioTracks().forEach(track => { track.enabled = !muted; }); }
   interrupt(): void {
-    this.blocked = true;
+    this.blocked = true; this.quietSince = null;
     if (this.audio) this.audio.muted = true;
     if (this.outputOn) this.callbacks.playback({ rms: 0, playedMs: performance.now() - this.outputStart, speaking: false });
     this.outputOn = false;
@@ -125,6 +124,6 @@ export class BrowserCompanionMedia implements CompanionMedia {
     if (this.audio) { this.audio.pause(); this.audio.srcObject = null; this.audio = null; }
     const context = this.context; this.context = null;
     if (context && context.state !== "closed") await context.close();
-    this.inputAnalyser = null; this.outputAnalyser = null;
+    this.outputAnalyser = null;
   }
 }

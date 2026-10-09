@@ -324,6 +324,8 @@ test("a spoken answer stays within the 500 tokens one commentary append takes, k
 
 const KEY = "synthetic-credential";
 const stateFile = () => fs.readFileSync(path.join(root, "state", "voice-companion.json"), "utf8");
+const transcriptFiles = () => fs.readdirSync(path.join(root, "state", "voice-companion", "transcripts"))
+  .filter(name => name.endsWith(".jsonl")).map(name => fs.readFileSync(path.join(root, "state", "voice-companion", "transcripts", name), "utf8")).join("");
 
 test("the active credential reflected in a transcript, a tool, a proposal, a report or an error is stored and answered nowhere", async () => {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
@@ -356,7 +358,7 @@ test("the active credential reflected in a transcript, a tool, a proposal, a rep
   await service.close(s.sessionId);
   expect(answered).toContain("orchestrator.answer");
   expect(answered).toContain("tool.called");
-  for (const surface of [answered, stateFile(), JSON.stringify(await service.events(s.sessionId, 0)), JSON.stringify(provider.commands.filter(row => row.type === "session.commentary.append"))])
+  for (const surface of [answered, stateFile(), transcriptFiles(), JSON.stringify(service.transcriptRecord(s.sessionId)), JSON.stringify(await service.events(s.sessionId, 0)), JSON.stringify(provider.commands.filter(row => row.type === "session.commentary.append"))])
     expect(surface).not.toContain(KEY);
 });
 
@@ -376,7 +378,7 @@ test("a credential cut into short pieces across paused segments cannot be put ba
     for (const event of events) if (event.type === "transcript.snapshot") latest.set(event.itemId, event.text);
     expect(latest.size).toBe(pieces.length);
     const all = events.filter(event => event.type === "transcript.snapshot").map(event => event.type === "transcript.snapshot" ? event.text : "");
-    const surfaces = [[...latest.values()].join(""), all.join(""), stateFile(), JSON.stringify(events)];
+    const surfaces = [[...latest.values()].join(""), all.join(""), stateFile(), transcriptFiles(), JSON.stringify(f.service.transcriptRecord(s.sessionId)), f.service.transcriptRecord(s.sessionId).entries.map(entry => entry.data.text ?? "").join(""), JSON.stringify(events)];
     for (const surface of surfaces) expect(surface, `${speaker} pieces of ${size}`).not.toContain(key);
     // Beyond the format's first two characters, no piece of it was ever stored or answered.
     for (const piece of pieces.slice(1)) for (const surface of piece.length >= 8 ? surfaces : surfaces.slice(0, 2)) if (piece.length >= 3) expect(surface.includes(piece), `${speaker} ${piece}`).toBe(false);
@@ -435,45 +437,14 @@ test("a backend round the cap cannot pay for is never requested", async () => {
   expect(f.admission.events(s.sessionId, 0)).toContainEqual(expect.objectContaining({ type: "session.closed", reason: "cap" }));
 });
 
-test("a completed board question never becomes a delegation, even when the model raises one", async () => {
-  for (const question of ["What is on the board?", "Що зараз на дошці?", "If the build is green, ask the orchestrator to merge it."]) {
-    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
-    const f = fixture();
-    f.provider.responder = calling(functionCall("wrong", "request_orchestrator_delegation", { instruction: "Report the state of the board" }));
-    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-    f.provider.replay(s.providerId, said(question, 0), delegationCreated("question", 900));
-    await f.service.drain(s.sessionId);
-    expect(f.admission.session(s.sessionId).inputs.at(-1)).toMatchObject({ text: question, final: true });
-    expect(Object.values(f.admission.session(s.sessionId).proposals), question).toEqual([]);
-    expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required" || event.type === "delegation.sending")).toBe(false);
-    await f.service.close(s.sessionId);
-    expect(f.sends()).toBe(0);
-  }
-  // The explicit request is sent at once, and a request split by a backchannel too.
-  for (const parts of [["Ask the orchestrator to review the plan."], ["Ask the orchestrator", "to review the plan."]]) {
-    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
-    const f = fixture();
-    f.provider.responder = calling(functionCall("right", "request_orchestrator_delegation", { instruction: "Review the plan" }));
-    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-    f.provider.replay(s.providerId, said(parts[0], 0), ...(parts[1] ? [said("Mm-hm.", 2_000, "output"), said(parts[1], 2_600)] : []), delegationCreated("request", 3_500));
-    await f.service.drain(s.sessionId);
-    const [held] = Object.values(f.admission.session(s.sessionId).proposals);
-    expect(held?.state, parts.join(" / ")).toBe("admitted");
-    expect(f.sends()).toBe(1);
-    await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
-    expect(f.sends()).toBe(1);
-    await f.service.close(s.sessionId);
-  }
-  // With no transcript at all, the model's reading stands and the request is sent.
+test("the Live backend answers board questions with read tools and the prompt keeps talk-first", async () => {
   const f = fixture();
-  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
-  f.storage.updateSettings({ enabled: true });
-  f.provider.responder = calling(functionCall("bare", "request_orchestrator_delegation", { instruction: "Review the plan" }));
+  f.provider.responder = calling(functionCall("read", "list_tasks", {}));
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-  f.provider.replay(s.providerId, delegationCreated("bare", 100));
+  f.provider.replay(s.providerId, said("What is on the board?", 0), delegationCreated("question", 900));
   await f.service.drain(s.sessionId);
-  expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.state)).toEqual(["admitted"]);
-  expect(f.sends()).toBe(1);
+  expect(f.sends()).toBe(0);
+  expect(f.provider.requests[0].instructions).toContain("Send only an explicit operator request");
   await f.service.close(s.sessionId);
 });
 
@@ -583,7 +554,7 @@ test("a credential said in pieces with separators between them cannot be put bac
     const latest = new Map<string, typeof events[number]>();
     for (const event of events) if (event.type === "transcript.snapshot") latest.set(event.itemId, event);
     const stored = f.admission.session(s.sessionId);
-    const surfaces = [stored.inputs.map(row => row.text).join(""), texts([...latest.values()]), texts(events), JSON.stringify(stored), stateFile(), JSON.stringify(events)]
+    const surfaces = [stored.inputs.map(row => row.text).join(""), texts([...latest.values()]), texts(events), JSON.stringify(stored), stateFile(), transcriptFiles(), JSON.stringify(f.service.transcriptRecord(s.sessionId)), f.service.transcriptRecord(s.sessionId).entries.map(entry => entry.data.text ?? "").join(""), JSON.stringify(events)]
       .map(surface => surface.replace(/\s|\\[tnr]/gu, ""));
     for (const surface of surfaces) {
       expect(surface.includes(key), `${speaker} ${JSON.stringify(gap)}`).toBe(false);
@@ -631,35 +602,21 @@ test("documented cache-write receipts never let the month spend past the cap, in
   }
 });
 
-test("a finished withdrawal stops a request not yet raised and takes a waiting confirmation off: the old tap, a retry and a restart send nothing", async () => {
+test("a finished withdrawal takes a waiting confirmation off: the old tap, a retry and a restart send nothing", async () => {
   const withdrawals = [["Never mind. Cancel that request."], ["Never mind."], ["Cancel that request."], ["Забудь."], ["Скасуй."], ["Передумав."], ["Забудь. Скасуй це."]];
-  for (const [withdrawal] of withdrawals) for (const late of [false, true]) {
+  for (const [withdrawal] of withdrawals) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
-    let answer!: () => void;
-    // Raised late, the request would go at once: the withdrawal said before it stops the send. Raised early, the model asked first.
-    const proposal = backendResponse("resp_0", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan", ...(late ? {} : { confirmation_reason: "Two plans exist." }) })]);
-    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Shown.")])
-      : late ? new Promise(resolve => { answer = () => resolve(proposal); }) : proposal;
+    const proposal = backendResponse("resp_0", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: "Two plans exist." })]);
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Shown.")]) : proposal;
     const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("request", 600));
-    if (!late) {
-      await f.service.drain(s.sessionId);
-      expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.state), withdrawal).toEqual(["pending"]);
-    } else await new Promise(resolve => setTimeout(resolve, 5));
-    // The withdrawal, then the companion's own next words complete it.
+    await f.service.drain(s.sessionId);
+    expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.state), withdrawal).toEqual(["pending"]);
     f.provider.replay(s.providerId, said(withdrawal, 3_000), said("All right.", 4_000, "output"));
-    if (late) { await new Promise(resolve => setTimeout(resolve, 5)); answer(); }
     await f.service.drain(s.sessionId);
     const session = f.admission.session(s.sessionId);
     expect(session.inputs.at(-1), withdrawal).toMatchObject({ text: withdrawal, final: true });
-    if (late) {
-      expect(Object.values(session.proposals), withdrawal).toEqual([]);
-      expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required" || event.type === "delegation.sending"), withdrawal).toBe(false);
-      await f.service.close(s.sessionId);
-      expect(f.sends(), withdrawal).toBe(0);
-      continue;
-    }
     const [held] = Object.values(session.proposals);
     expect(held.state, withdrawal).toBe("cancelled");
     expect(f.admission.events(s.sessionId, 0), withdrawal).toContainEqual(expect.objectContaining({ type: "delegation.tool.result", proposalId: held.proposal.proposalId, result: { status: "cancelled", code: "source_changed" } }));
@@ -904,7 +861,7 @@ test("the Live model's decision resolves spoken confirmation without a server-si
   }
 });
 
-test("one completed request reaches the orchestrator once whatever Live delegation ids name it, and the same words in a new turn are a new request", async () => {
+test("one completed request reaches the orchestrator once whatever Live delegation ids name it, and a repeated model request adds nothing", async () => {
   for (const parallel of [false, true]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
@@ -926,10 +883,10 @@ test("one completed request reaches the orchestrator once whatever Live delegati
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
     expect(await again.delegate(s.sessionId, "call-after-restart", "delegation-after-restart", "Review the plan", { sourceTurn: rows[0].sourceTurn })).toEqual({ state: "sent", status: "queued" });
     expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.delivery?.clientMessageId)).toEqual([key]);
-    // The operator asks the same thing again in a new turn: that is a new request.
+    // The same model instruction in a later turn is structurally a repeat.
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 3_000), delegationCreated("new-turn", 3_500));
     await f.service.drain(s.sessionId);
-    expect([parallel, f.sends()]).toEqual([parallel, 2]);
+    expect([parallel, f.sends()]).toEqual([parallel, 1]);
     await f.service.close(s.sessionId);
   }
 });
@@ -953,8 +910,9 @@ test("a request already acted on never authorizes a later turn through the lookb
     const again = new CompanionAdmission(f.storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
     expect((await again.delegate(s.sessionId, "call-restart", "delegation-restart", "Review the plan", { sourceTurn: thanksTurn })).state).toBe("refused");
-    expect((await again.delegate(s.sessionId, "call-other", "delegation-other", "Merge the branch", { sourceTurn: thanksTurn })).state).toBe("refused");
-    // A genuine new explicit request is its own request.
+    // Admission does not judge the meaning of a different model instruction.
+    // A different model instruction is its own request.
+    f.provider.responder = calling(functionCall("merge-call", "request_orchestrator_delegation", { instruction: "Merge the branch" }));
     f.provider.replay(s.providerId, said("Sure.", 4_000, "output"), said("Ask the orchestrator to merge the branch.", 6_000), delegationCreated("delegation_new", 6_600));
     await f.service.drain(s.sessionId);
     expect([after, f.sends()]).toEqual([after, 2]);
@@ -975,3 +933,84 @@ test("a model repeat of a sent request while the next turn is still arriving add
   expect(f.sends()).toBe(1);
   await f.service.close(s.sessionId);
 });
+
+
+test("Russian send-it requests reach the orchestrator once and return the actual missing-seat or route refusal", async () => {
+  for (const mode of ["sent", "no_seat", "refused"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    let sent = 0;
+    const { sendCompanionMessage } = await import("./deliveryPaths");
+    const admission = new CompanionAdmission(f.storage, {
+      recipient: () => mode === "no_seat" ? null : { project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" },
+      reports: () => [],
+      send: async binding => { sent++; expect(binding.text).toContain("Пока ничего не делайте");
+        return mode === "refused" ? sendCompanionMessage(binding, async () => Response.json({ code: "CONVERSATION_CLOSED" }, { status: 409 })) : { status: "queued", operationId: "operation_fixture" }; },
+    });
+    const service = new CompanionLiveSessions(f.storage, admission, noReads(), f.provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+    f.provider.responder = (request, index) => {
+      const output = request.input.find(item => item.type === "function_call_output");
+      if (!output) return backendResponse(`resp_${index}`, [functionCall("send-call", "request_orchestrator_delegation", { instruction: "Пока ничего не делайте с проблемами. Оператор хочет сам продолжить." })]);
+      const result = JSON.parse(String(output.output));
+      if (mode === "sent") expect(result).toMatchObject({ status: "sent", delivery: "queued" });
+      else expect(result.reason).toContain(mode === "no_seat" ? "no designated orchestrator" : "conversation closed");
+      return backendResponse(`resp_${index}`, [message(result.speech)]);
+    };
+    const session = await service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+    f.provider.replay(session.providerId, said("Передай только... попроси ничего не делать, я хочу сам продолжить", 0), said("Хорошо.", 700, "output"),
+      said("Не, всё-таки отошли, да, отошли", 2000), said("Да.", 2700, "output"),
+      said("А, ну, да, отправь ему все проблемы, которые я озвучил, скажи ему, чтобы он ничего не делал", 4000), delegationCreated("send-delegation", 4500));
+    await service.drain(session.sessionId);
+    for (let poll = 0; poll < 3; poll++) await service.events(session.sessionId, 0);
+    expect(sent).toBe(mode === "no_seat" ? 0 : 1);
+    expect(spoken(f).at(-1)?.content).toContain(mode === "sent" ? "Sent" : mode === "no_seat" ? "no designated orchestrator" : "conversation closed");
+    if (mode === "refused") expect(Object.values(admission.session(session.sessionId).proposals)[0]).toMatchObject({ status: "failed", failureCode: "CONVERSATION_CLOSED" });
+    await service.close(session.sessionId);
+  }
+});
+
+
+test("the session record survives 800 fragments, keeps each segment once, and stores cleaned tool arguments, results and handoffs", async () => {
+  const f = fixture();
+  f.provider.responder = calling(functionCall("record-call", "get_task", { taskId: "synthetic-credential" }), functionCall("record-read", "list_tasks", {}));
+  const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  // More segments than LiveTranscript retains and more events than the replay ring.
+  for (let group = 0; group < 80; group++) {
+    for (let fragment = 0; fragment < 10; fragment++) {
+      const at = group * 6000 + fragment * 300;
+      f.provider.replay(session.providerId, said(`word-${group}-${fragment} ${group === 0 && fragment === 0 ? root + "/private.txt " : ""}`, at, group % 2 ? "input" : "output"));
+    }
+    await f.service.drain(session.sessionId);
+  }
+  f.provider.replay(session.providerId, delegationCreated("record-delegation", 500000));
+  await f.service.drain(session.sessionId);
+  const open = f.service.transcriptRecord(session.sessionId);
+  const speech = open.entries.filter(entry => entry.kind === "utterance" || entry.kind === "reply");
+  expect(speech).toHaveLength(80);
+  expect(new Set(speech.map(entry => entry.id)).size).toBe(80);
+  expect(speech[0].data.text).toContain("word-0-0");
+  expect(speech[0].data.text).not.toContain(root);
+  expect(speech[0].data.text).toContain("[path]");
+  expect(speech[0].data.fragments).toHaveLength(10);
+  const tool = open.entries.find(entry => entry.kind === "tool")!;
+  expect(tool.data.arguments).toContain("[redacted]");
+  expect(tool.data.result).toContain("PROJECT_REFUSED");
+  expect(tool.data.status).toBe("failed");
+  const read = open.entries.find(entry => entry.id === "tool-record-read")!;
+  expect(read.data.status).toBe("done");
+  expect(read.data.arguments).toBe("{}");
+  expect(read.data.result).toContain("Review the plan");
+  expect(open.entries.some(entry => entry.kind === "delegation")).toBe(true);
+  expect(open.entries.some(entry => entry.kind === "handoff")).toBe(true);
+  expect(JSON.stringify(open)).not.toContain("synthetic-credential");
+  expect(f.admission.session(session.sessionId).events).toHaveLength(512);
+  await f.service.close(session.sessionId);
+  const fresh = new CompanionLiveSessions(f.storage, new CompanionAdmission(f.storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unused"); } }), noReads(), f.provider, { key: () => "synthetic-credential", timers: false });
+  const closed = fresh.transcriptRecord(session.sessionId);
+  expect(closed.entries.map(entry => entry.id)).toEqual(f.service.transcriptRecord(session.sessionId).entries.map(entry => entry.id));
+  expect(closed.entries.filter(entry => entry.kind === "utterance" || entry.kind === "reply")).toHaveLength(80);
+  expect(closed.entries.at(-1)?.kind).toBe("session_end");
+  const file = path.join(root, "state", "voice-companion", "transcripts", `${session.sessionId}.jsonl`);
+  expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  expect(stateFile()).not.toContain('"arguments"');
+}, 20_000);

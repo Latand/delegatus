@@ -78,7 +78,7 @@ export type Payload =
         | { status: "delivered" | "queued" | "unknown"; delivery: Delivery }
         | { status: "refused" | "cancelled"; code: string };
     }
-  | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed" }
+  | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed"; code?: string }
   | { type: "orchestrator.answer"; delivery: Delivery; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string }
   | { type: "error"; code: string; recoverable: boolean };
 

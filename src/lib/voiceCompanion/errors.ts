@@ -11,6 +11,7 @@ export const COMPANION_MESSAGES = {
   PROVIDER_ERROR: ["The voice provider could not continue. Try starting a new session.", "Голосовий сервіс не зміг продовжити. Спробуйте почати нову розмову."],
   MINT_UNCERTAIN: ["The provider did not confirm whether the last voice session started, so it may still be running and billing. Its cost is kept. Check your OpenAI usage, then allow a new call in Voice Delegatus settings.", "Сервіс не підтвердив, чи почалася попередня голосова розмова, тож вона може ще тривати й коштувати грошей. Її вартість збережено. Перевірте використання в OpenAI, а тоді дозвольте нову розмову в налаштуваннях Голосового Delegatus."],
   no_orchestrator: ["This project has no designated orchestrator.", "У цьому проєкті немає призначеного оркестратора."],
+  DELIVERY_FAILED: ["The delivery failed. Nothing reached the orchestrator.", "Доставка не вдалася. Оркестратор нічого не отримав."],
   DELIVERY_UNCONFIRMED: ["Delivery is unconfirmed. Recover the original send before retrying.", "Доставку не підтверджено. Перевірте початкове надсилання перед повтором."],
   SEND_UNCONFIRMED: ["Delivery is not confirmed. Tap Send again to check it: the request goes out once.", "Доставку не підтверджено. Натисніть «Надіслати» ще раз для перевірки: запит піде один раз."],
   REPLY_PENDING: ["Waiting for an orchestrator reply tied to this request.", "Чекаємо на відповідь оркестратора, пов’язану з цим запитом."],
@@ -21,5 +22,10 @@ export const COMPANION_MESSAGES = {
   COMPANION_UNAVAILABLE: ["Voice Delegatus is unavailable. Try again.", "Голосовий Delegatus недоступний. Спробуйте ще раз."],
 } as const;
 export function companionErrorMessage(code: string, locale: Locale): string {
+  if (code.startsWith("DELIVERY_REFUSED:")) {
+    const reason = code.slice("DELIVERY_REFUSED:".length).replaceAll("_", " ").toLowerCase();
+    return locale === "uk" ? `Розмова оркестратора відхилила повідомлення (${reason}). Нічого не надіслано.`
+      : `The orchestrator's conversation refused the message (${reason}). Nothing was sent.`;
+  }
   return (COMPANION_MESSAGES[code as keyof typeof COMPANION_MESSAGES] ?? COMPANION_MESSAGES.COMPANION_UNAVAILABLE)[locale === "uk" ? 1 : 0];
 }

@@ -110,7 +110,12 @@ test("the model resolves a pending voice confirmation without a server-side cons
   { instruction: "Review the plan", confirmation_reason: "Two plans exist." }) as { status: string };
   expect(request.status).toBe("awaiting_confirmation");
   const proposal = admission.awaiting(session.id)!;
-  admission.input(session.id, { itemId: "answer", text: "Please proceed with that.", final: true, turn: 2 });
+  const tooEarly = await runCompanionTool({ project: "fixture", sessionId: session.id, callId: "same-turn", delegationId: "request", sourceTurn: 1,
+    confirmationProposalId: proposal.proposalId, admission, reads, endConversation: () => undefined }, "resolve_orchestrator_confirmation", { decision: "send" });
+  expect(tooEarly).toMatchObject({ status: "refused", code: "not_confirmed" });
+  expect(admission.awaiting(session.id)?.proposalId).toBe(proposal.proposalId);
+  expect(sent).toEqual([]);
+  admission.input(session.id, { itemId: "answer", text: "Я тебе разрешаю", final: true, turn: 2 });
   const context = { project: "fixture", sessionId: session.id, callId: "answer", delegationId: "answer", sourceTurn: 2,
     confirmationProposalId: proposal.proposalId, admission, reads, endConversation: () => undefined };
 
@@ -157,4 +162,13 @@ test("ending the call needs the operator's own explicit request, in English, Ukr
   expect(liveEndRefusal([turn("End the call.", 1), turn("Thanks.", 2)], 2)).toBeNull(); // a backchannel split the turn
   expect(liveEndRefusal([turn("End the call.", 1), turn("What is on the board?", 2)], 2)).toBe("not_requested");
   expect(liveEndRefusal([turn("End the call.", 1), turn("No, wait, stay.", 2)], 1)).toBe("retracted");
+});
+
+
+test("every delegation refusal code has a concrete sentence", async () => {
+  const { DELEGATION_REASONS } = await import("./delegationOutcome");
+  for (const reason of Object.values(DELEGATION_REASONS)) {
+    expect(reason.length).toBeGreaterThan(15);
+    expect(reason).not.toContain("This request was refused");
+  }
 });

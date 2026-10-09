@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 import { READ_TOOL_NAMES } from "./boardReads";
 import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./contract";
-import { COMPANION_MESSAGES } from "./errors";
+import { COMPANION_MESSAGES, companionErrorMessage } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
 import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
@@ -1146,4 +1146,19 @@ describe("geometry", () => {
   test("the synthetic level opens on vowels", () => {
     expect(syntheticLevel("a b", 0)).toBeGreaterThan(syntheticLevel("a b", 60));
   });
+});
+
+
+test("a route refusal settles the sending card without an operation and names its reason", () => {
+  let seq = 0;
+  const at = (payload: Payload): CompanionEvent => ({ ...payload, version: 1, sessionId: "s", generation: 1, eventId: `e${++seq}`, seq, atMs: seq } as CompanionEvent);
+  const proposal: Proposal = { proposalId: "p", callId: "c", sourceItemId: "d", instruction: "Review the plan", authority: "live-model", recipient: RECIPIENT };
+  const state = [at({ type: "session.ready", mode: "official-realtime" }),
+    at({ type: "delegation.tool.called", callId: "c", sourceItemId: "d", instruction: proposal.instruction }),
+    at({ type: "delegation.sending", proposal }),
+    at({ type: "delegation.delivery.settled", status: "failed", code: "CONVERSATION_CLOSED",
+      delivery: { proposalId: "p", callId: "c", clientMessageId: "m", operationId: null, recipient: RECIPIENT } })].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
+  expect(state.delegation).toMatchObject({ stage: "failed", refusal: "CONVERSATION_CLOSED", notice: "DELIVERY_REFUSED:CONVERSATION_CLOSED" });
+  expect(companionErrorMessage(state.delegation!.notice!, "en")).toContain("conversation closed");
+  expect(companionErrorMessage(state.delegation!.notice!, "uk")).toContain("Нічого не надіслано");
 });

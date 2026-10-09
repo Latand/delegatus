@@ -220,3 +220,24 @@ test("a mint the provider refused outright leaves no barrier and no charge", asy
   expect(f.provider.sessions).toHaveLength(1);
   await POST(request({ action: "close", sessionId: (await next.json()).sessionId }));
 });
+
+
+test("the operator can read the complete transcript after close, while foreign and agent callers cannot", async () => {
+  const f = fixture();
+  const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(session.providerId, { type: "session.input_transcript.delta", event_id: "utterance", delta: "Hello", start_ms: 0, end_ms: 400 },
+    { type: "session.output_transcript.delta", event_id: "reply", delta: "Hello there", start_ms: 500, end_ms: 900 });
+  await f.service.drain(session.sessionId);
+  await f.service.close(session.sessionId);
+  const read = (headers = {}) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${session.sessionId}&view=transcript`,
+    { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers } }));
+  expect((await read({ "sec-fetch-site": "cross-site" })).status).toBe(403);
+  expect((await read({ "x-llv-spawn-capability": "agent" })).status).toBe(403);
+  const response = await read();
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const record = await response.json();
+  expect(record.entries.map((entry: { kind: string }) => entry.kind)).toEqual(["session_start", "utterance", "reply", "session_end"]);
+  expect(record.entries[1].data).toMatchObject({ text: "Hello", final: true, startMs: 0, endMs: 400 });
+  expect(record.truncated).toBe(false);
+});

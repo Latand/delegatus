@@ -5,6 +5,7 @@ import { configFilePath, statePath } from "@/lib/configDir";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionEvent, Delivery, Locale, Proposal } from "./contract";
+import type { DelegationCode } from "./delegationOutcome";
 import type { OperatorInput } from "./gate";
 
 export interface CompanionSettings {
@@ -33,7 +34,8 @@ export interface StoredProposal {
   /** The operator's Live turn when the proposal was raised. */
   sourceTurn?: number;
   /** Why a waiting confirmation ended with nothing sent. */
-  cancelCode?: string;
+  cancelCode?: DelegationCode;
+  failureCode?: string;
   /** What admitted the send: no confirmation asked, a tap, or the operator's spoken answer. */
   via?: "auto" | "tap" | "speech";
   reports: string[];
@@ -114,7 +116,7 @@ function sessionValid(key: string, session: unknown): boolean {
 }
 
 /** Owner-only atomic publication, including the containing directory's sync. */
-function writePrivate(file: string, body: string): void {
+export function writePrivate(file: string, body: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);

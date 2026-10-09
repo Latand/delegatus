@@ -23,7 +23,7 @@ const CONTINUE_MS = 1_500;
  * plays the oldest line nothing has played yet, or carries on the line it
  * paused in; with no such line it waits, mouth moving, and takes the next line
  * that arrives, even after it stopped. Stretches waiting for words take them
- * oldest first. A barge-in cuts it, and lines already
+ * oldest first. An explicit interrupt cuts it, and lines already
  * shown that never played stay unplayed. */
 export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   readonly mode = "official-realtime";
@@ -80,7 +80,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.cursor = 0; this.seq = 0; this.born = performance.now();
     this.outputs = []; this.claimed = new Set(); this.playing = null; this.lastPlayed = null; this.unbound = [];
     const callbacks: MediaCallbacks = { playback: sample => { if (epoch === this.epoch) this.playback(sample); },
-      input: value => { if (epoch === this.epoch) this.input(value); }, lost: code => { if (epoch === this.epoch) this.lost(code); } };
+      input: () => {}, lost: code => { if (epoch === this.epoch) this.lost(code); } };
     const media = this.media = this.options.media?.(callbacks) ?? new BrowserCompanionMedia(callbacks);
     try {
       const sdp = await media.open();
@@ -192,17 +192,12 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     if (!bound) this.unbound = [...this.unbound, { responseId, playedMs, reason }].slice(-4);
     this.lastPlayed = reason === "ended" ? { responseId, itemId, bound, endedAt: this.clock(), playedMs } : null;
   }
-  /** A barge-in or an interruption: what plays is cut, and lines that never played will not. */
+  /** An explicit interruption: what plays is cut, and lines that never played will not. */
   private yieldPlayback(): void {
     this.stopPlayback("interrupted");
     this.lastPlayed = null;
     for (const itemId of this.outputs) this.claimed.add(itemId);
     this.media?.interrupt();
-  }
-  private input(speaking: boolean): void {
-    if (!this.sessionId) return;
-    if (speaking) this.yieldPlayback();
-    this.emit({ type: speaking ? "input.speech.started" : "input.speech.stopped", itemId: "local-microphone" });
   }
   async command(command: CompanionCommand): Promise<void> {
     if (!this.sessionId) throw new Error("SESSION_CLOSED");

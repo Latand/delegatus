@@ -738,3 +738,36 @@ documentation, and both replays (`liveGate.ts`, `media.ts`) ran under a scratch
 directory with an isolated state directory and a closed control port. The seat
 wake and tick code, seat rotation, provider-limit recovery, the update drain
 and `usage.ts` pricing are untouched by every fix above.
+
+## Implementation handoff: items 1–4 and the transcript data
+
+This build implements identity and registry-generated capabilities, the default
+masculine voice, model-decided delivery with concrete refusal reasons, and
+provider-owned audio interruption. The voice table was checked again on
+2026-10-09 at the official source linked in item 2.
+
+The page can read `GET /api/voice-companion/session?sessionId=<id>&view=transcript`.
+It returns `{ entries, truncated }` behind the existing operator check with
+`Cache-Control: no-store`, including after closure. Entries have `id`, `kind`,
+`order`, `atMs` and `data`; `order` preserves first occurrence across updates.
+Speech data carries text, finality, provider start/end and fragment timing pairs.
+Tool data carries name, call/delegation ids, cleaned pretty JSON arguments
+(4,000 characters), result (8,000 characters), status, code and reason.
+Request data preserves its delivery transitions in `states`; delegations,
+commentary handoffs, orchestrator reports and session boundaries have their own
+entries. Local paths and credentials are cleaned before storage and serving.
+
+Growing segments update in memory. Settled entries are written to the private
+session JSONL; late finals or masking corrections replace their settled entry.
+The record is independent of the replay ring, UI history and backend context.
+At the 4 MB limit, `truncated` becomes true and the end entry is retained.
+The next mint prunes closed files after 30 days from closure and keeps at most
+50 closed records. The transcript control, its variants and rendered evidence,
+and the connection cues belong to the subsequent stages.
+
+Regression coverage exercises the mint HTTP body; Russian send requests,
+missing seats and a coded 409 through the fake provider; Russian confirmation
+and waiting-request withdrawal; a 14-second echo replay and 600–1,400 ms
+playback pauses; 800 transcript fragments and both successful and refused tool
+records; record privacy, post-close GET admission, retention and the byte cap.
+Tests use the local fake provider and isolated state, home and temporary roots.

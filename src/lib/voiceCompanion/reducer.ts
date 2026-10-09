@@ -70,7 +70,7 @@ export type DelegationStage =
   | "failed";
 
 export interface DelegationView {
-  notice: "REPLY_PENDING" | "DELIVERY_UNCONFIRMED" | null;
+  notice: "REPLY_PENDING" | "DELIVERY_UNCONFIRMED" | "DELIVERY_FAILED" | `DELIVERY_REFUSED:${string}` | null;
   callId: Id;
   instruction: string;
   stage: DelegationStage;
@@ -395,8 +395,11 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
     }
     case "delegation.delivery.settled": {
       const current = base.delegation;
-      if (!current || current.stage === "answered" || !settles(current.delivery, event.delivery)) return next({});
-      return next({ delegation: { ...current, stage: event.status, delivery: event.delivery, notice: event.status === "failed" ? "DELIVERY_UNCONFIRMED" : "REPLY_PENDING" } });
+      if (!current || current.stage === "answered") return next({});
+      const sendingRefusal = current.stage === "sending" && current.proposal?.proposalId === event.delivery.proposalId
+        && current.callId === event.delivery.callId && validId(event.delivery.clientMessageId) && sameRecipient(current.proposal.recipient, event.delivery.recipient);
+      if (!sendingRefusal && !settles(current.delivery, event.delivery)) return next({});
+      return next({ delegation: { ...current, stage: event.status, delivery: event.delivery, refusal: event.code ?? current.refusal, notice: event.status === "failed" ? (event.code ? `DELIVERY_REFUSED:${event.code}` : "DELIVERY_FAILED") : "REPLY_PENDING" } });
     }
     case "orchestrator.answer": {
       const current = base.delegation;

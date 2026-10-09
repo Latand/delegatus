@@ -45,6 +45,8 @@ export async function GET(req: NextRequest) {
     const sessionId = req.nextUrl.searchParams.get("sessionId");
     const after = Number(req.nextUrl.searchParams.get("after") ?? 0);
     if (!id(sessionId) || !Number.isSafeInteger(after) || after < 0) throw new Error("INVALID_REQUEST");
+    if (req.nextUrl.searchParams.get("view") === "transcript")
+      return NextResponse.json(companionSessions().transcriptRecord(sessionId), { headers });
     return NextResponse.json({ events: await companionSessions().events(sessionId, after) }, { headers });
   } catch (error) { return companionFailure(error); }
 }
