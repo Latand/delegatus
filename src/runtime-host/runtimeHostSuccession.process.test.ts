@@ -44,7 +44,7 @@ async function stop(process: ReturnType<typeof boot>) {
   const timer = setTimeout(() => process.child.kill("SIGKILL"), 3000);
   try { await process.exited; } finally { clearTimeout(timer); }
 }
-async function until(predicate: () => boolean, child?: ReturnType<typeof boot>, timeout = 120000): Promise<void> {
+async function until(predicate: () => boolean | undefined, child?: ReturnType<typeof boot>, timeout = 120000): Promise<void> {
   const deadline = performance.now() + timeout;
   while (!predicate()) {
     if (child && (child.child.exitCode !== null || child.child.signalCode !== null)) throw new Error(`isolated host exited: ${child.log()}`);
@@ -161,7 +161,7 @@ test("generation read after the singleton fence prevents same-revision self-hand
     writeRuntimeHostHandoffIntent({ revision: successor.revision, image: successor.image, successorContainer: successor.container, predecessorId: previous.container, previousRelease: previous, successorRelease: successor, recordedAt: "2026-01-01T00:00:00.000Z" }, files.handoffIntent);
     writeRuntimeHostRelease(successor, files.release); fence.release();
     let status: ViewerDeploymentStatus | undefined;
-    await until(() => { const db = new Database(path.join(directory, "runtime-events.sqlite"), { readonly: true }); try { status = JSON.parse(db.query<{ status_json: string }, [string]>("SELECT status_json FROM viewer_deployments WHERE deployment_id=?").get(receipt.deploymentId)!.status_json); return status.terminal === true; } finally { db.close(); } }, s);
+    await until(() => { const db = new Database(path.join(directory, "runtime-events.sqlite"), { readonly: true }); try { status = JSON.parse(db.query<{ status_json: string }, [string]>("SELECT status_json FROM viewer_deployments WHERE deployment_id=?").get(receipt.deploymentId)!.status_json); return status?.terminal === true; } finally { db.close(); } }, s);
     console.log(JSON.stringify({ boot: "staged-generation", phase: status!.phase, untracked: s.log().includes("running generation is untracked"), dockerCalls: fs.existsSync(files.dockerCalls) ? fs.readFileSync(files.dockerCalls, "utf8").trim().split("\n") : [] }));
     expect(status!.phase).toBe("succeeded"); expect(status!.runtimeHostHandoff?.generation).toEqual({ image: successor.image, revision: successor.revision, container: successor.container });
     expect(s.child.exitCode).toBeNull(); expect(fs.existsSync(files.handoffIntent)).toBe(false);

@@ -809,6 +809,126 @@
       "500 ms retry: release to acquire 230 ms, 9 refused probes before acquisition.",
       "25 ms retry: release to acquire 8 ms, 1 refused probe before acquisition and 0 after binding.",
       "Remaining TCP close/rebind interval is independent of journal size; absolute zero-refusal ownership transfer requires a persistent entry owner or descriptor transfer."
-    ]
+    ],
+    "runtimeHostVerification": {
+      "checkedAt": "2026-10-09T00:30:48.502Z",
+      "runtime": "bun 1.4.0",
+      "succession": {
+        "predecessorReadyMs": 1019,
+        "successorTookOverMs": 1009,
+        "completed": true
+      },
+      "listener": {
+        "windowMs": 15000,
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "socket": {
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "recovery": {
+        "retained": {
+          "image": "agent-log-viewer:rehearsal-aaaaaaaaaaaa",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "container": "llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+        },
+        "failed": {
+          "image": "delegatus:rehearsal-dddddddddddd",
+          "revision": "dddddddddddddddddddddddddddddddddddddddd",
+          "container": "delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+        },
+        "docker": [
+          "container inspect delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+          "container update --restart no delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+          "container stop --time 40 delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+          "container rm -f delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+        ]
+      },
+      "ok": true
+    },
+    "viewerVerification": {
+      "checkedAt": "2026-10-09T00:31:09.625Z",
+      "runtime": "bun 1.4.0",
+      "modules": {
+        "probed": 24,
+        "loaded": 24,
+        "failures": []
+      },
+      "served": {
+        "status": 200,
+        "bytes": 34408,
+        "readyMs": 2707
+      },
+      "ok": true
+    },
+    "checks": {
+      "journal.test.ts": {
+        "passed": 110,
+        "failed": 0
+      },
+      "journalRetention.test.ts": {
+        "passed": 6,
+        "failed": 0
+      },
+      "journalSessionMetadata.test.ts": {
+        "passed": 6,
+        "failed": 0
+      },
+      "runtimeHostStartup.test.ts": {
+        "passed": 7,
+        "failed": 0
+      },
+      "socket.test.ts": {
+        "passed": 5,
+        "failed": 0
+      },
+      "deploymentProxy.test.ts": {
+        "passed": 22,
+        "failed": 0
+      },
+      "deploymentHealth.test.ts": {
+        "passed": 21,
+        "failed": 0
+      },
+      "hostRehearsal.test.ts": {
+        "passed": 15,
+        "failed": 0
+      },
+      "hostRehearsalRun.test.ts": {
+        "passed": 7,
+        "failed": 0
+      },
+      "fenceWait.test.ts": {
+        "passed": 6,
+        "failed": 0
+      },
+      "runtimeHostFence.test.ts": {
+        "passed": 5,
+        "failed": 0
+      },
+      "route.test.ts": {
+        "passed": 8,
+        "failed": 0
+      },
+      "ci-platform-scope.test.ts": {
+        "passed": 9,
+        "failed": 0
+      },
+      "journalStartup.test.ts": {
+        "passed": 10,
+        "failed": 0
+      },
+      "runtimeHostSuccession.process.test.ts": {
+        "passed": 3,
+        "failed": 0
+      },
+      "eslint": "0 introduced errors",
+      "build": "Next.js production build and MCP bundle passed",
+      "privacy": "full post-merge publication gate with committed fingerprints and commit checking passed"
+    },
+    "selfReview": "Full diff inspected against merged main: receipt/cursor atomicity, newest numeric engine cursor, chain anchor/tail verification, FULL sync, early entry authentication, runtime readiness, predecessor drain and release-generation read retained."
   }
 }
