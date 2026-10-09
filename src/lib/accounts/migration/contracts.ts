@@ -324,6 +324,7 @@ export interface HeldDeliveryCommand {
   kind: "send" | "steer" | "inject";
   policy: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   /** Message authorship stamped at admission (#1117), persisted on the held
       record so a migration-held delivery replays with the same attribution.
       Ordinary sends retain stamp-upgrade compatibility outside the request
@@ -343,6 +344,7 @@ export interface HeldDeliveryCommandInput {
   kind?: HeldDeliveryCommand["kind"];
   policy?: HeldDeliveryCommand["policy"];
   turnId?: string | null;
+  onlyIfIdle?: HeldDeliveryCommand["onlyIfIdle"];
   origin?: MessageOrigin;
   cohortAt?: string;
 }
