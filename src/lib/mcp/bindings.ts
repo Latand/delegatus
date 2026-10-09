@@ -4221,7 +4221,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   if (!requested) {
     throw new Error("project is required: this session's own project could not be resolved, so name the project whose tick to read or change");
   }
-  const project = await resolveOrchestratorToolProject(requested, dependencies);
+  // Explicit input was resolved by the binding before its receipt was claimed.
+  const project = text(args.project) || await resolveOrchestratorToolProject(requested, dependencies);
 
   const readSettings = dependencies.readTickSettings ?? readSeatTickSettings;
   const writeSettings = dependencies.writeTickSettings ?? writeSeatTickSettings;
@@ -7155,7 +7156,7 @@ export function viewerMcpBindings(
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
-    /* Same reason as above: this binding refuses by throwing. */
+    /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     role_presets: async (args) => rolePresetsTool(args, domainDependencies),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
