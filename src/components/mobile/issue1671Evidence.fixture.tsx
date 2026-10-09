@@ -1218,6 +1218,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       description: "Answers questions in the example chats.", owner, pairedAt: iso(86_400), paused: false, targets: [], ...over });
     const pendingRow = { id: "pair-1", origin: "https://relay.example", name: "Example relay", description: "Answers questions in the example chats.",
       code: "K7QM-9XTD", verify_url: "https://relay.example/pair?code=K7QM-9XTD", expires_at: new Date(Date.now() + 540_000).toISOString(), poll_interval_s: 3 };
+    if (RELAY_SCENE === "owner-key" && url.pathname.endsWith("/owner-key") && method === "PUT") return json({ error: "key_rejected" }, 409);
     if (url.pathname === "/api/external-relay") {
       if (RELAY_SCENE === "owner-key") return json({ relays: ["none", "bound", "expired", "rejected"].map((state, index) => relayRow({ id: `relay-${index + 1}`, ownerApi: { offered: true, state, boundAt: state === "bound" ? "2026-10-08T12:00:00Z" : null, expiresAt: state === "bound" ? "2027-10-08T12:00:00Z" : null, keyUrl: "https://relay.example/key" } })), pending: [], status: [] });
       if (RELAY_SCENE === "paired") return json({

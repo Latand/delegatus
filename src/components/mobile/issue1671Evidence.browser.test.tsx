@@ -8659,6 +8659,15 @@ browserTest("external relay owner key: write-only states at phone and desktop wi
           const name = `variant-1-owner-key-${state}-${width}-${locale}.png`;
           await row.screenshot({ path: path.join(out, name) }); readings.push({ locale, width, state, ...reading, frame: name });
         }
+        const refused = page.locator("[data-owner-key-row]").nth(3);
+        await refused.locator("input").fill("clst_browser_fixture_key"); await refused.locator("[data-owner-key-save]").click();
+        await refused.locator('[role="alert"]').waitFor();
+        const refusal = await refused.evaluate((element) => ({ text: (element as HTMLElement).innerText, overflow: element.scrollWidth > element.clientWidth,
+          inputType: element.querySelector("input")?.getAttribute("type"), autocomplete: element.querySelector("input")?.getAttribute("autocomplete"),
+          minControlHeight: Math.min(...Array.from(element.querySelectorAll<HTMLElement>("input, button, a")).map((node) => node.getBoundingClientRect().height)) }));
+        expect(refusal.overflow).toBe(false); expect(refusal.text).toContain(locale === "en" ? "The service refused this key. Create a new key." : "Сервіс відхилив цей ключ. Створіть новий ключ."); expect(refusal.text).not.toContain("key_rejected"); expect(refusal.text).not.toContain("clst_browser_fixture_key");
+        const frame = `variant-1-owner-key-refusal-${width}-${locale}.png`; await refused.screenshot({ path: path.join(out, frame) });
+        readings.push({ locale, width, state: "refusal", ...refusal, frame });
         expect(errors).toEqual([]);
       } finally { await context.close(); }
     }

@@ -46,6 +46,17 @@
     },
     {
       "locale": "en",
+      "width": 390,
+      "state": "refusal",
+      "text": "Owner key\n\nKey refused\n\nSave\nCreate a key\n\nThe service refused this key. Create a new key.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-390-en.png"
+    },
+    {
+      "locale": "en",
       "width": 1440,
       "state": "none",
       "text": "Owner key\n\nNot set\n\nSave\nCreate a key",
@@ -87,6 +98,17 @@
       "autocomplete": "off",
       "minControlHeight": 44,
       "frame": "variant-1-owner-key-rejected-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "refusal",
+      "text": "Owner key\n\nKey refused\n\nSave\nCreate a key\n\nThe service refused this key. Create a new key.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-1440-en.png"
     },
     {
       "locale": "uk",
@@ -134,6 +156,17 @@
     },
     {
       "locale": "uk",
+      "width": 390,
+      "state": "refusal",
+      "text": "Ключ власника\n\nКлюч відхилено\n\nЗберегти\nСтворити ключ\n\nСервіс відхилив цей ключ. Створіть новий ключ.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-390-uk.png"
+    },
+    {
+      "locale": "uk",
       "width": 1440,
       "state": "none",
       "text": "Ключ власника\n\nНе задано\n\nЗберегти\nСтворити ключ",
@@ -175,6 +208,17 @@
       "autocomplete": "off",
       "minControlHeight": 44,
       "frame": "variant-1-owner-key-rejected-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "refusal",
+      "text": "Ключ власника\n\nКлюч відхилено\n\nЗберегти\nСтворити ключ\n\nСервіс відхилив цей ключ. Створіть новий ключ.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-1440-uk.png"
     }
   ]
 }

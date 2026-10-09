@@ -82,6 +82,10 @@ const ERROR_KEYS: Record<string, Parameters<TFunction>[0]> = {
   operator_only: "externalRelay.error.operatorOnly",
   owner_required: "externalRelay.error.operatorOnly",
   rate_limited: "externalRelay.error.rateLimited",
+  owner_api_unavailable: "externalRelay.ownerKey.unavailable",
+  owner_mismatch: "externalRelay.ownerKey.mismatch",
+  key_rejected: "externalRelay.ownerKey.refused",
+  key_expired: "externalRelay.ownerKey.expiredAdvice",
   refused_here: "externalRelay.error.refusedHere",
   local_error: "externalRelay.error.local",
 };
@@ -656,7 +660,7 @@ export function OwnerKeyRow({ relay, onChange }: { relay: RelayView; onChange: (
       const response = await fetch(`/api/external-relay/relays/${encodeURIComponent(relay.id)}/owner-key`, { method,
         ...(method === "PUT" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: typed }) } : {}) });
       if (!response.ok) { const body = await response.json(); setError(typeof body.error === "string" ? body.error : "local_error"); }
-      else onChange();
+      onChange();
     } catch { setError("unreachable"); }
     finally { setBusy(false); }
   }
