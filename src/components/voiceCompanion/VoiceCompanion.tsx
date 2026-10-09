@@ -16,6 +16,8 @@ import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/v
 import type { DelegationView, SpeechLine, ToolCallView } from "@/lib/voiceCompanion/reducer";
 
 import { CompanionCharacter, type CharacterHandle } from "./CompanionCharacter";
+import { CompanionTranscript, transcriptLabels, transcriptRect, TRANSCRIPT_CSS, type TranscriptVariant } from "./CompanionTranscript";
+import type { SessionTranscriptRecord } from "@/lib/voiceCompanion/transcriptRecord";
 import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
 
 /**
@@ -349,7 +351,7 @@ const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.repl
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
 const speechLocaleOf = (locale: string): Locale => (locale === "uk" ? "uk" : "en");
 
-export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, rows, reserve, ready, defaultCollapsed = false }: {
+export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, rows, reserve, ready, defaultCollapsed = false, transcript }: {
   adapter: VoiceCompanionAdapter;
   /** The project in view; null on a view that shows none, where a conversation cannot start. */
   project: string | null;
@@ -378,6 +380,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       where it will stay and is not moved by them a moment later. */
   ready?: () => boolean;
   defaultCollapsed?: boolean;
+  /** PROTOTYPE (item 6 variants): the session's transcript record and the variant of its view. With it, a tap on
+      the character that does not move it, or Enter, opens the whole conversation beside it; the same closes it. */
+  transcript?: { variant: TranscriptVariant; record: SessionTranscriptRecord };
 }) {
   const { t, locale } = useLocale();
   const [store] = useState(() => createCompanionStore(adapter));
@@ -404,6 +409,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* While held: where the character is and the lane it would have there. */
   const [heldView, setHeld] = useState<{ at: Point; lane: LaneLayout | null } | null>(null);
   const [muted, setMuted] = useState(false);
+  /* The whole conversation is open beside the character, in place of the lane. */
+  const [reading, setReading] = useState(false);
   const [dragging, setDragging] = useState(false);
   /* Each proposal owns its pending tap and delivery error independently. */
   const [decidedFor, setDecidedFor] = useState<ReadonlySet<string>>(() => new Set());
@@ -1200,6 +1207,12 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       style={style}
     >
       <style>{VOICE_COMPANION_CSS}</style>
+      {transcript ? <style>{TRANSCRIPT_CSS}</style> : null}
+      {expanded && reading && transcript && view ? (() => {
+        const box = transcriptRect(transcript.variant, viewportSize(), { ...at, ...block });
+        return <CompanionTranscript variant={transcript.variant} record={transcript.record} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
+          onClose={() => { setReading(false); root.current?.querySelector<HTMLElement>("[data-grip]")?.focus(); }} />;
+      })() : null}
       {expanded && shownLane ? (
         <div
           className="vc-lane"
@@ -1208,6 +1221,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           data-align={shownLane.align}
           data-direction={shownLane.direction}
           data-relocating={relocating ?? undefined}
+          data-reading={reading && transcript ? "" : undefined}
           style={{ left: shownLane.rect.x - at.x, top: shownLane.rect.y - at.y, width: shownLane.rect.width, height: shownLane.rect.height, ["--vc-room" as string]: `${shownLane.rect.height - EXIT_ROOM - END_ROOM}px` }}
         >
           <div className="vc-stack" ref={stackEl}>
@@ -1227,7 +1241,11 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
             type="button"
             className="vc-figure"
             data-grip
-            aria-label={`${t("voiceCompanion.move")} · ${phaseLabel}`}
+            aria-label={`${t("voiceCompanion.move")} · ${phaseLabel}${transcript ? ` · ${transcriptLabels(locale).open}` : ""}`}
+            aria-expanded={transcript ? reading : undefined}
+            title={transcript ? transcriptLabels(locale).open : undefined}
+            data-companion-open-transcript={transcript ? "" : undefined}
+            onClick={transcript ? () => { if (!swallowClick.current) setReading((open) => !open); } : undefined}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

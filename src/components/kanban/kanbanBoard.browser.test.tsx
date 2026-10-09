@@ -20560,6 +20560,81 @@ describe("floating voice companion", () => {
      Each runs twice: once measured (no recording, no screenshot,
      no sampler, so the frame clock reads the page alone) and once recorded as a video with screenshots and the
      geometry sampler. Every measured run comes before the first recording. */
+  /* PROTOTYPE, item 6 of docs/design/voice-delegatus-live-feedback.md: the three numbered variants of the whole
+     conversation's view, over one session's transcript record (`transcriptSample.fixture.ts`), opened by a tap on the
+     character. Each run plays the `delegation` scenario, then frames the companion as the operator finds it (the
+     character focused), the view at its newest line, and the view scrolled back with its calls open. Images go to
+     `<hand-off>/transcript-variants`, never into the tree. The interface stage keeps the picked variant's case. */
+  browserTest("transcript view variants: the character opens the whole conversation, 1440 and 1000, en and uk, light and dark", async () => {
+    const out = path.join(HANDOFF, "transcript-variants");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const variants = (process.env.LLV_VOICE_TRANSCRIPT_VARIANTS?.split(",").map(Number) ?? [1, 2, 3]).filter((variant) => [1, 2, 3].includes(variant));
+    const readings: unknown[] = [];
+    try {
+      await Promise.all(variants.map(async (variant) => {
+        for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const label = `v${variant}-${viewport.width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=delegation&transcript=${variant}`, { viewport, scheme, lang, motion: "reduce" });
+          try {
+            await page.locator("[data-companion-talk]").click();
+            await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 60_000, polling: 100 });
+            await page.waitForTimeout(400);
+            expect(await page.locator("[data-companion-variant-number]").innerText(), `${label}: the number is printed`).toBe(String(variant));
+            const grip = page.locator("[data-voice-companion] [data-grip]");
+            expect(await grip.getAttribute("aria-expanded"), `${label}: the character is the control`).toBe("false");
+            /* Focused from the keyboard, so the frame shows the control the way a keyboard reaches it. */
+            await page.keyboard.press("Tab");
+            await grip.focus();
+            await page.screenshot({ path: path.join(out, `transcript-v${variant}-${viewport.width}-${lang}-${scheme}-1-control.png`) });
+            await page.keyboard.press("Enter");
+            await page.waitForSelector("[data-companion-transcript-view]", { timeout: 5_000 });
+            await page.waitForTimeout(250);
+            const reading = await page.evaluate(() => {
+              const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+              const box = view.getBoundingClientRect();
+              const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+              const selection = getSelection()!;
+              selection.selectAllChildren(body);
+              const copied = selection.toString();
+              selection.removeAllRanges();
+              const lane = document.querySelector<HTMLElement>("[data-companion-lane]");
+              return {
+                box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+                inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+                scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
+                laneHidden: !lane || getComputedStyle(lane).visibility === "hidden",
+                copied: copied.length, calls: view.querySelectorAll("[data-tool]").length,
+                hasArgs: copied.includes("task_retry_banner") || view.querySelector("[data-transcript-call]") !== null,
+                speakers: ["Delegatus", document.documentElement.lang === "uk" ? "Ви" : "You"].map((name) => copied.includes(name)),
+              };
+            });
+            expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
+            expect(reading.laneHidden, `${label}: the lane gives way`).toBe(true);
+            expect(reading.atEnd, `${label}: opens at the newest line`).toBe(true);
+            expect(reading.calls, `${label}: both read calls are listed`).toBe(2);
+            await page.screenshot({ path: path.join(out, `transcript-v${variant}-${viewport.width}-${lang}-${scheme}-2-open.png`) });
+            for (const summary of await page.locator("[data-transcript-call] > summary").all()) await summary.click();
+            await page.locator("[data-transcript-body]").evaluate((body) => { body.scrollTop = 0; });
+            await page.waitForTimeout(150);
+            await page.screenshot({ path: path.join(out, `transcript-v${variant}-${viewport.width}-${lang}-${scheme}-3-calls.png`) });
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
+            expect(await grip.getAttribute("aria-expanded"), `${label}: Escape closes it`).toBe("false");
+            expect(pageErrors, label).toEqual([]);
+            readings.push({ variant, viewport: viewport.width, lang, scheme, ...reading });
+          } finally { await context.close(); }
+        }
+      }));
+    } finally {
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+      server.stop();
+      const processes = await close();
+      expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+    }
+  }, 1_800_000);
+
   browserTest("every scripted scenario runs on the event contract, recorded, with frame times while bubbles rise and arrive together", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
