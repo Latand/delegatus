@@ -91,6 +91,12 @@ export const awaitsReport = (record: SessionTranscriptRecord): boolean =>
 
 export const clock = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
+/** The `speech` field of a call's result, the text the voice is handed as the result itself. */
+const spokenResult = (result: string | null): string | null => {
+  if (!result) return null;
+  try { return str((JSON.parse(result) as { speech?: unknown } | null)?.speech)?.trim() ?? null; } catch { return null; }
+};
+
 /** A line that opens: one row with a chevron, the detail under it only while open. Closed by default. */
 function Disclosure({ summary, children, name, label }: { summary: ReactNode; children: ReactNode; name: string; label: { show: string; hide: string } }) {
   const [open, setOpen] = useState(false);
@@ -141,11 +147,12 @@ export function CompanionTranscript({ record, left, top, width, height, onClose 
         </span>
       )}
     >
-      {row.reason ? <p className="vc-tr-reason" data-status={row.status}>{row.reason}</p> : null}
+      {/* The header says failed and the result carries the reason; the reason stands alone only when there is no result. */}
+      {row.reason && !row.result ? <p className="vc-tr-reason" data-status={row.status}>{row.reason}</p> : null}
       <span className="vc-tr-label">{L.args}</span>
       <pre className="vc-tr-pre">{row.args}</pre>
       {row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre" data-status={row.status}>{row.result}</pre></> : null}
-      {row.handoffs.map((text, index) => <p key={index} className="vc-tr-handoff"><span className="vc-tr-label">{L.toVoice}</span> {text}</p>)}
+      {row.handoffs.filter((text) => text.trim() !== spokenResult(row.result)).map((text, index) => <p key={index} className="vc-tr-handoff"><span className="vc-tr-label">{L.toVoice}</span> {text}</p>)}
     </Disclosure>
   );
   /* A request to the orchestrator: one line with its delivery outcome; opened, the instruction, each delivery step and the raw call. */
@@ -159,7 +166,7 @@ export function CompanionTranscript({ record, left, top, width, height, onClose 
           summary={(
             <span className="vc-call" data-status={failed ? "failed" : row.stage === "delivered" || row.stage === "queued" ? "done" : "running"} data-stage={row.stage} data-transcript-request>
               <span className="vc-call-icon" aria-hidden>{failed ? <CircleAlert size={14} /> : row.stage === "delivered" || row.stage === "queued" ? <Check size={14} /> : <SendHorizontal size={14} />}</span>
-              <span className="vc-call-body"><span className="vc-call-name">{L.request}</span></span>
+              <span className="vc-call-body"><span className="vc-call-name" data-human-label>{L.request}</span></span>
               {row.engine ? <span className="vc-deleg-engine"><EngineMark engine={row.engine} size={14} /></span> : null}
               <span className="vc-call-state">{stageLine(row.stage)}</span>
             </span>
@@ -261,6 +268,7 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-toggle { position: relative; display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
 .vc-tr-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .vc-tr-toggle .vc-call { cursor: pointer; }
+.vc-tr .vc-call-name[data-human-label] { font-family: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vc-tr-chev { position: absolute; right: 10px; top: calc(50% - 7px); color: var(--color-muted); transition: transform 150ms ease-out; pointer-events: none; }
 .vc-tr-toggle[aria-expanded="true"] .vc-tr-chev { transform: rotate(90deg); }
 .vc-tr-toggle .vc-call { display: flex; padding-right: 30px; }

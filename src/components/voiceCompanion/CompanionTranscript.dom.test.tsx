@@ -222,3 +222,52 @@ test("a record waits for a report only while a queued or delivered request has n
   expect([wait(request("queued")), wait(request("delivered")), wait(request("queued"), report("progress", 2))]).toEqual([true, true, true]);
   expect([wait(request("queued"), report("result", 2)), wait(request("failed")), wait(request("refused")), wait(request("cancelled")), wait()]).toEqual([false, false, false, false, false]);
 });
+
+test("an opened failed call states its refusal once outside the raw result, and what was passed to the voice appears only when it differs from the result's speech", async () => {
+  const { view } = await open();
+  const call = view.querySelector<HTMLElement>('[data-transcript-call="get_task"]')!;
+  await click(call.querySelector("[data-transcript-toggle]"));
+  const detail = call.querySelector<HTMLElement>("[data-transcript-detail]")!;
+  /* The arguments and the result stay. */
+  expect(detail.textContent).toContain("Arguments");
+  expect(detail.querySelectorAll("pre")).toHaveLength(2);
+  /* Outside the result block there is no second statement of the refusal, loose or as a voice hand-off. */
+  const outside = [...detail.children].filter((child) => child.tagName !== "PRE").map((child) => child.textContent).join(" ");
+  expect(outside).not.toContain("project refused");
+  expect(detail.querySelector(".vc-tr-reason, .vc-tr-handoff")).toBeNull();
+  expect(detail.textContent).not.toContain("Passed to the voice");
+
+  /* A hand-off that says something the result does not stays, once. */
+  const entries = sampleTranscript("en").entries.map((entry) => (entry.id === "handoff-open" ? { ...entry, data: { ...entry.data, text: "Tell them the other project owns it." } } : entry));
+  await act(async () => mounted!.root.render(<CompanionTranscript record={{ entries, truncated: false }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+  await act(async () => settle());
+  const again = mounted!.host.querySelector<HTMLElement>('[data-transcript-call="get_task"]')!;
+  /* The line keeps the open state it had across the new record. */
+  expect(again.querySelector("[data-transcript-detail]")).toBeTruthy();
+  const handoffs = again.querySelectorAll(".vc-tr-handoff");
+  expect(handoffs).toHaveLength(1);
+  expect(handoffs[0]!.textContent).toContain("Passed to the voice");
+  expect(handoffs[0]!.textContent).toContain("Tell them the other project owns it.");
+});
+
+test("a failed call whose result is missing keeps its reason, so the refusal is never absent", async () => {
+  const entries = [{ id: "tool-x", kind: "tool" as const, atMs: 1_000, order: 0, data: { name: "get_task", callId: "x", arguments: "{}", status: "failed", reason: "project refused" } }];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  await act(async () => root.render(<CompanionTranscript record={{ entries, truncated: false }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+  await act(async () => settle());
+  await click(host.querySelector("[data-transcript-toggle]"));
+  expect(host.querySelector("[data-transcript-detail]")!.textContent!.match(/project refused/g)).toHaveLength(1);
+});
+
+test("the request row's human label is set in the UI sans font, not the tool-name monospace, and does not wrap", async () => {
+  const { view } = await open();
+  const label = view.querySelector<HTMLElement>("[data-transcript-request] .vc-call-name")!;
+  expect(label.hasAttribute("data-human-label")).toBe(true);
+  const real = view.querySelector<HTMLElement>('[data-tool="get_task"] .vc-call-name')!;
+  expect(real.hasAttribute("data-human-label")).toBe(false);
+  expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*font-family:\s*inherit/);
+  expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*white-space:\s*nowrap/);
+});
