@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
@@ -36,10 +37,9 @@ import {
   setFileScanRunnerForTests,
   setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
-import { filesResponseWorkerPoolDiagnostics, setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -121,14 +121,15 @@ beforeEach(() => {
 });
 
 async function stopTestWorker(): Promise<void> {
-  const pid = filesResponseWorkerPoolDiagnostics().pid;
-  const identity = pid === null ? null : captureProcessIdentity(pid);
+  // The pool retains the original launch handle even after exit while inherited
+  // stdio stays open. Its diagnostic PID can already belong to another process.
+  const child = (globalThis as typeof globalThis & {
+    __llvFilesResponseWorker?: { child: ChildProcess } | null;
+  }).__llvFilesResponseWorker?.child;
   shutdownFilesResponseWorker("test");
-  if (identity) {
-    await stopFixtureIdentity(identity);
-    const deadline = Date.now() + 2_000;
-    while (processIdentityStatus(identity) === "alive" && Date.now() < deadline) await Bun.sleep(10);
-    expect(processIdentityStatus(identity), "test worker was reaped before fixture cleanup").toBe("dead");
+  if (child) {
+    await stopFixtureProcess(child);
+    expect(child.exitCode !== null || child.signalCode !== null, "test worker was reaped before fixture cleanup").toBe(true);
   }
 }
 

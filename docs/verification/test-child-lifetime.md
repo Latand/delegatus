@@ -222,7 +222,8 @@ wait. Ordinary Node/Bun children retain their original handles.
 | `src/lib/flows/exec.test.ts` | Sleeper handles replace PID-only signals; final teardown waits for every retained handle. |
 | `src/lib/flows/engine.test.ts` | Reviewer cleanup retains and awaits the original child handle. |
 | `src/lib/pipelines/engine.test.ts` | Release fault injection uses the original child handle; every fixture teardown awaits its exit. |
-| `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; every shutdown waits for that identity to be reaped before returning. |
+| `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; shutdown retains and awaits the pool's original child handle. Private-namespace regressions exercise both worker and files-route helpers against actual PID reuse and a live worker. |
+| `src/app/api/files/route.test.ts` | Worker cleanup retains the pool's original child handle and awaits its exit before removing fixture directories. An exited root's diagnostics PID grants no signal authority. |
 | `scripts/owned-runner.integration.test.ts` | Hard-kill fault injection uses the shared identity signal; recovery already retains original identities. |
 | `scripts/local-gate.test.ts` | Refused-root and group-preparation fixtures capture PID/start/boot identities from live launch reports before awaiting hook exit; group fault release follows capture, and bounded cleanup revalidates each original identity. Transient-scope fixtures launch actual scopes directly and retain live root/helper/neighbor identities; gate-slot service containment keeps its independent verification. |
 | `scripts/local-gate.noproc.test.ts` | Root/helper identities are captured while alive before awaiting the step deadline. Lifetime capture and bounded cleanup use real OS evidence outside the injected missing-/proc and ps faults; original root handles are retained from spawn and reaped before runner teardown. |
@@ -295,8 +296,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 269 files: 176 with asynchronous primitives and
-93 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 270 files: 176 with asynchronous primitives and
+94 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -571,6 +572,7 @@ repeated for this inventory correction.
 | `src/lib/runtime/pipelineStageHostAccess.integration.test.ts` | 36 | synchronous |
 | `src/lib/runtime/sendSettlement.test.ts` | 1558, 1666 | synchronous |
 | `src/lib/scanner/describe.test.ts` | 661, 701, 726 | synchronous |
+| `src/lib/scanner/filesResponseWorker.test.ts` | Private-namespace spawnSync | synchronous; each seven-second probe retains original worker and bystander handles, awaits bounded cleanup, and the runner contains namespace descendants on interruption |
 | `src/lib/search/projectScope.test.ts` | 30, 31 | synchronous |
 | `src/lib/selfUpdate/auto.test.ts` | 39, 114, 517, 551, 725, 807, 864, 913, 1615 | synchronous |
 | `src/lib/selfUpdate/package.test.ts` | 35 | synchronous |
