@@ -619,6 +619,25 @@ root and `LLV_VIEWER_CONTROL_URL` on a closed port.
   says when it was checked.
 - **A `lane-merge` row.** The panel does not show it; it stays a card reason.
 
+## 13. Reconciliation with main after batch D
+
+Main `9e9d395b6` includes the working-agent counter from #2604 and the agent
+window from #2612. The five reviewed kanban assertions all fail against native
+main with the cleanup changes absent. Each failure comes from #2604's count
+semantics; the cleanup's prototype-dismissal behavior remains covered separately.
+
+| Reviewed case | Current behavior and retained check |
+| --- | --- |
+| Seat conversations draw no band (#1841) | The working seat agent contributes to the header's total of two. It has no card or column contribution; the mixed task keeps its product member. |
+| Holds and provisioning use one motion | The provisioning card moves as working and survives the live-work filter. Its zero agents contribute zero to the header and column; the operator hold still counts as needs-you. |
+| Zero-member in-flight and step work | Both fixtures keep working motion and remain visible through the filter. Their agent counts are zero. Main's renamed case retains both fixtures. |
+| Hidden provisioning work | The hidden provisioning card keeps working motion with zero agents and no visible column contribution. A separate restored fixture covers this alongside main's hidden working-agent case, whose header count remains one. |
+| Terminal steps awaiting publication | Done and dropped steps remain done; the open step keeps working motion and its filter visibility. Every fixture has zero working agents. |
+
+The merge keeps all of main's kanban checks and the cleanup's cleared-prototype
+check. The restored hidden-provisioning fixture preserves the older scenario
+under the current counting rule. Production counting needs no additional change.
+
 ## Notes
 
 - Risk: `operatorBoardRepresentation` must not run the task-board migration or

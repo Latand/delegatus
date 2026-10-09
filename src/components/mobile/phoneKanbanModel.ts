@@ -264,7 +264,7 @@ export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDO
     const rest = column.shown.filter((card) => !cardNeeds(card, closing));
     const windowed = status === "done" ? rest.slice(0, Math.max(0, doneShown)) : rest;
     const loose = status === "inbox" ? unlinked.filter((entry) => !cardNeeds(entry.card, closing)) : [];
-    const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + (entry.card.motion.key === "working" ? 1 : 0), 0) : 0;
+    const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + entry.card.working, 0) : 0;
     return [status, {
       status,
       count: column.shown.length,

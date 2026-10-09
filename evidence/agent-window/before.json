@@ -1,0 +1,797 @@
+{
+  "base": "5a197eeb5",
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=stages",
+  "target": "Build chip of «Rework the retry banner until review passes»",
+  "readings": {
+    "before-1440-uk": {
+      "before": {
+        "inboxColumn": {
+          "x": 264,
+          "y": 154,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 556,
+          "y": 154,
+          "w": 480,
+          "h": 784
+        },
+        "card": {
+          "x": 569,
+          "y": 747,
+          "w": 454,
+          "h": 207
+        },
+        "chip": {
+          "x": 582,
+          "y": 860,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 569,
+          "y": 966,
+          "w": 454,
+          "h": 279
+        },
+        "columnScrollTop": 0,
+        "reader": null,
+        "rail": null
+      },
+      "at120": {
+        "inboxColumn": {
+          "x": 464,
+          "y": 117,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 756,
+          "y": 117,
+          "w": 576,
+          "h": 784
+        },
+        "card": {
+          "x": 769,
+          "y": 226,
+          "w": 550,
+          "h": 751
+        },
+        "chip": {
+          "x": 782,
+          "y": 339,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 769,
+          "y": 989,
+          "w": 550,
+          "h": 245
+        },
+        "columnScrollTop": 448,
+        "reader": {
+          "x": 782,
+          "y": 373,
+          "w": 524,
+          "h": 539
+        },
+        "rail": {
+          "tier": "full",
+          "box": {
+            "x": 264,
+            "y": 117,
+            "w": 184,
+            "h": 107
+          },
+          "opacity": "1",
+          "headColor": "rgb(85, 85, 95)"
+        }
+      },
+      "settled": {
+        "inboxColumn": {
+          "x": 464,
+          "y": 117,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 756,
+          "y": 117,
+          "w": 576,
+          "h": 784
+        },
+        "card": {
+          "x": 769,
+          "y": 226,
+          "w": 550,
+          "h": 751
+        },
+        "chip": {
+          "x": 782,
+          "y": 339,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 769,
+          "y": 989,
+          "w": 550,
+          "h": 245
+        },
+        "columnScrollTop": 448,
+        "reader": {
+          "x": 782,
+          "y": 373,
+          "w": 524,
+          "h": 539
+        },
+        "rail": {
+          "tier": "full",
+          "box": {
+            "x": 264,
+            "y": 117,
+            "w": 184,
+            "h": 107
+          },
+          "opacity": "1",
+          "headColor": "rgb(85, 85, 95)"
+        }
+      },
+      "second": {
+        "inboxColumn": {
+          "x": 464,
+          "y": 117,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 756,
+          "y": 117,
+          "w": 576,
+          "h": 784
+        },
+        "card": {
+          "x": 769,
+          "y": -347,
+          "w": 550,
+          "h": 1324
+        },
+        "chip": {
+          "x": 782,
+          "y": -234,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 769,
+          "y": 989,
+          "w": 550,
+          "h": 245
+        },
+        "columnScrollTop": 1021,
+        "reader": {
+          "x": 782,
+          "y": -200,
+          "w": 524,
+          "h": 539
+        },
+        "rail": {
+          "tier": "full",
+          "box": {
+            "x": 264,
+            "y": 117,
+            "w": 184,
+            "h": 150
+          },
+          "opacity": "1",
+          "headColor": "rgb(85, 85, 95)"
+        }
+      },
+      "cardGrewBy": 544,
+      "chipMovedBy": -521,
+      "nextCardMovedBy": 23,
+      "inboxColumnMovedBy": {
+        "dx": 200,
+        "dy": -37
+      },
+      "assignedColumnWidthBy": 96,
+      "errors": []
+    },
+    "before-1000-uk": {
+      "before": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 260,
+          "y": 183,
+          "w": 728,
+          "h": 705
+        },
+        "card": {
+          "x": 273,
+          "y": 740,
+          "w": 702,
+          "h": 207
+        },
+        "chip": {
+          "x": 286,
+          "y": 853,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 273,
+          "y": 959,
+          "w": 702,
+          "h": 245
+        },
+        "columnScrollTop": 0,
+        "reader": null,
+        "rail": null
+      },
+      "at120": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 316,
+          "y": 183,
+          "w": 672,
+          "h": 705
+        },
+        "card": {
+          "x": 329,
+          "y": 213,
+          "w": 646,
+          "h": 732
+        },
+        "chip": {
+          "x": 342,
+          "y": 326,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 329,
+          "y": 958,
+          "w": 646,
+          "h": 245
+        },
+        "columnScrollTop": 527,
+        "reader": {
+          "x": 342,
+          "y": 360,
+          "w": 620,
+          "h": 520
+        },
+        "rail": {
+          "tier": "compact",
+          "box": {
+            "x": 260,
+            "y": 183,
+            "w": 36,
+            "h": 36
+          },
+          "opacity": "1",
+          "headColor": "rgb(28, 28, 34)"
+        }
+      },
+      "settled": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 316,
+          "y": 183,
+          "w": 672,
+          "h": 705
+        },
+        "card": {
+          "x": 329,
+          "y": 213,
+          "w": 646,
+          "h": 732
+        },
+        "chip": {
+          "x": 342,
+          "y": 326,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 329,
+          "y": 958,
+          "w": 646,
+          "h": 245
+        },
+        "columnScrollTop": 527,
+        "reader": {
+          "x": 342,
+          "y": 360,
+          "w": 620,
+          "h": 520
+        },
+        "rail": {
+          "tier": "compact",
+          "box": {
+            "x": 260,
+            "y": 183,
+            "w": 36,
+            "h": 36
+          },
+          "opacity": "1",
+          "headColor": "rgb(28, 28, 34)"
+        }
+      },
+      "second": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 316,
+          "y": 183,
+          "w": 672,
+          "h": 705
+        },
+        "card": {
+          "x": 329,
+          "y": -341,
+          "w": 646,
+          "h": 1287
+        },
+        "chip": {
+          "x": 342,
+          "y": -228,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 329,
+          "y": 958,
+          "w": 646,
+          "h": 245
+        },
+        "columnScrollTop": 1081,
+        "reader": {
+          "x": 342,
+          "y": -194,
+          "w": 620,
+          "h": 520
+        },
+        "rail": {
+          "tier": "compact",
+          "box": {
+            "x": 260,
+            "y": 183,
+            "w": 36,
+            "h": 36
+          },
+          "opacity": "1",
+          "headColor": "rgb(28, 28, 34)"
+        }
+      },
+      "cardGrewBy": 525,
+      "chipMovedBy": -527,
+      "nextCardMovedBy": -1,
+      "inboxColumnMovedBy": {
+        "dx": 0,
+        "dy": 0
+      },
+      "assignedColumnWidthBy": -56,
+      "errors": []
+    },
+    "before-1440-en": {
+      "before": {
+        "inboxColumn": {
+          "x": 264,
+          "y": 154,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 556,
+          "y": 154,
+          "w": 480,
+          "h": 784
+        },
+        "card": {
+          "x": 569,
+          "y": 747,
+          "w": 454,
+          "h": 207
+        },
+        "chip": {
+          "x": 582,
+          "y": 860,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 569,
+          "y": 966,
+          "w": 454,
+          "h": 279
+        },
+        "columnScrollTop": 0,
+        "reader": null,
+        "rail": null
+      },
+      "at120": {
+        "inboxColumn": {
+          "x": 464,
+          "y": 117,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 756,
+          "y": 117,
+          "w": 576,
+          "h": 784
+        },
+        "card": {
+          "x": 769,
+          "y": 226,
+          "w": 550,
+          "h": 751
+        },
+        "chip": {
+          "x": 782,
+          "y": 339,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 769,
+          "y": 989,
+          "w": 550,
+          "h": 245
+        },
+        "columnScrollTop": 448,
+        "reader": {
+          "x": 782,
+          "y": 373,
+          "w": 524,
+          "h": 539
+        },
+        "rail": {
+          "tier": "full",
+          "box": {
+            "x": 264,
+            "y": 117,
+            "w": 184,
+            "h": 107
+          },
+          "opacity": "1",
+          "headColor": "rgb(85, 85, 95)"
+        }
+      },
+      "settled": {
+        "inboxColumn": {
+          "x": 464,
+          "y": 117,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 756,
+          "y": 117,
+          "w": 576,
+          "h": 784
+        },
+        "card": {
+          "x": 769,
+          "y": 226,
+          "w": 550,
+          "h": 751
+        },
+        "chip": {
+          "x": 782,
+          "y": 339,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 769,
+          "y": 989,
+          "w": 550,
+          "h": 245
+        },
+        "columnScrollTop": 448,
+        "reader": {
+          "x": 782,
+          "y": 373,
+          "w": 524,
+          "h": 539
+        },
+        "rail": {
+          "tier": "full",
+          "box": {
+            "x": 264,
+            "y": 117,
+            "w": 184,
+            "h": 107
+          },
+          "opacity": "1",
+          "headColor": "rgb(85, 85, 95)"
+        }
+      },
+      "second": {
+        "inboxColumn": {
+          "x": 464,
+          "y": 117,
+          "w": 280,
+          "h": 784
+        },
+        "assignedColumn": {
+          "x": 756,
+          "y": 117,
+          "w": 576,
+          "h": 784
+        },
+        "card": {
+          "x": 769,
+          "y": -347,
+          "w": 550,
+          "h": 1324
+        },
+        "chip": {
+          "x": 782,
+          "y": -234,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 769,
+          "y": 989,
+          "w": 550,
+          "h": 245
+        },
+        "columnScrollTop": 1021,
+        "reader": {
+          "x": 782,
+          "y": -200,
+          "w": 524,
+          "h": 539
+        },
+        "rail": {
+          "tier": "full",
+          "box": {
+            "x": 264,
+            "y": 117,
+            "w": 184,
+            "h": 150
+          },
+          "opacity": "1",
+          "headColor": "rgb(85, 85, 95)"
+        }
+      },
+      "cardGrewBy": 544,
+      "chipMovedBy": -521,
+      "nextCardMovedBy": 23,
+      "inboxColumnMovedBy": {
+        "dx": 200,
+        "dy": -37
+      },
+      "assignedColumnWidthBy": 96,
+      "errors": []
+    },
+    "before-1000-en": {
+      "before": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 260,
+          "y": 183,
+          "w": 728,
+          "h": 705
+        },
+        "card": {
+          "x": 273,
+          "y": 740,
+          "w": 702,
+          "h": 207
+        },
+        "chip": {
+          "x": 286,
+          "y": 853,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 273,
+          "y": 959,
+          "w": 702,
+          "h": 245
+        },
+        "columnScrollTop": 0,
+        "reader": null,
+        "rail": null
+      },
+      "at120": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 316,
+          "y": 183,
+          "w": 672,
+          "h": 705
+        },
+        "card": {
+          "x": 329,
+          "y": 213,
+          "w": 646,
+          "h": 732
+        },
+        "chip": {
+          "x": 342,
+          "y": 326,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 329,
+          "y": 958,
+          "w": 646,
+          "h": 245
+        },
+        "columnScrollTop": 527,
+        "reader": {
+          "x": 342,
+          "y": 360,
+          "w": 620,
+          "h": 520
+        },
+        "rail": {
+          "tier": "compact",
+          "box": {
+            "x": 260,
+            "y": 183,
+            "w": 36,
+            "h": 36
+          },
+          "opacity": "1",
+          "headColor": "rgb(28, 28, 34)"
+        }
+      },
+      "settled": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 316,
+          "y": 183,
+          "w": 672,
+          "h": 705
+        },
+        "card": {
+          "x": 329,
+          "y": 213,
+          "w": 646,
+          "h": 732
+        },
+        "chip": {
+          "x": 342,
+          "y": 326,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 329,
+          "y": 958,
+          "w": 646,
+          "h": 245
+        },
+        "columnScrollTop": 527,
+        "reader": {
+          "x": 342,
+          "y": 360,
+          "w": 620,
+          "h": 520
+        },
+        "rail": {
+          "tier": "compact",
+          "box": {
+            "x": 260,
+            "y": 183,
+            "w": 36,
+            "h": 36
+          },
+          "opacity": "1",
+          "headColor": "rgb(28, 28, 34)"
+        }
+      },
+      "second": {
+        "inboxColumn": {
+          "x": 0,
+          "y": 0,
+          "w": 0,
+          "h": 0
+        },
+        "assignedColumn": {
+          "x": 316,
+          "y": 183,
+          "w": 672,
+          "h": 705
+        },
+        "card": {
+          "x": 329,
+          "y": -341,
+          "w": 646,
+          "h": 1287
+        },
+        "chip": {
+          "x": 342,
+          "y": -228,
+          "w": 65,
+          "h": 22
+        },
+        "nextCard": {
+          "x": 329,
+          "y": 958,
+          "w": 646,
+          "h": 245
+        },
+        "columnScrollTop": 1081,
+        "reader": {
+          "x": 342,
+          "y": -194,
+          "w": 620,
+          "h": 520
+        },
+        "rail": {
+          "tier": "compact",
+          "box": {
+            "x": 260,
+            "y": 183,
+            "w": 36,
+            "h": 36
+          },
+          "opacity": "1",
+          "headColor": "rgb(28, 28, 34)"
+        }
+      },
+      "cardGrewBy": 525,
+      "chipMovedBy": -527,
+      "nextCardMovedBy": -1,
+      "inboxColumnMovedBy": {
+        "dx": 0,
+        "dy": 0
+      },
+      "assignedColumnWidthBy": -56,
+      "errors": []
+    },
+    "before-390-uk": {
+      "errors": []
+    },
+    "before-390-en": {
+      "errors": []
+    }
+  }
+}

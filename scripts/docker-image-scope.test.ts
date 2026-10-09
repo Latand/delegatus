@@ -28,7 +28,7 @@ const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/
 
 test("image inputs build, while prose, unrelated CI and shell tooling skip", () => {
   for (const file of [
-    "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml", "tsconfig.json",
+    "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml", "tsconfig.json", "tsconfig.production.json",
     "next.config.ts", "postcss.config.mjs", "patches/framework.patch", "src/app/page.tsx",
     "src/app/globals.css", "src/template.md", "public/icon.svg", "bin/cli.mjs", "vendor/tool/data.txt",
     "scripts/build-mcp.ts", "scripts/whisper_transcribe.py", "scripts/runtime-host-viewer-adapter.ts",

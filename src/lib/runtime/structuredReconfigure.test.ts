@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
 import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import type { LaunchProfile, SuccessorProviderPort, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -20,10 +20,16 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(profile: Partial<LaunchProfile> = {}, engine: "claude" | "codex" | "copilot" = "codex") {
+function fixture(
+  profile: Partial<LaunchProfile> = {},
+  engine: "claude" | "codex" | "copilot" = "codex",
+  storage: { sqliteWriterDeadlineMs?: number } | null = null,
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-reconfigure-"));
   roots.push(root);
-  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sqliteFilename = path.join(root, "registry.sqlite");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+    storage ? { sqliteMode: "sqlite", sqliteFilename, ...storage } : { sqliteMode: "off" });
   const sessionId = crypto.randomUUID();
   const transcript = path.join(root, `rollout-${sessionId}.jsonl`);
   fs.writeFileSync(transcript, "{}\n");
@@ -59,7 +65,7 @@ function fixture(profile: Partial<LaunchProfile> = {}, engine: "claude" | "codex
     launchProfile: begun.receipt.launchProfile,
   });
   if (settled.kind !== "settled") throw new Error("fixture settlement failed");
-  return { registry, conversationId: begun.receipt.conversationId, transcript, cwd: root };
+  return { registry, conversationId: begun.receipt.conversationId, transcript, cwd: root, sqliteFilename };
 }
 
 function effect(overrides: Partial<StructuredReconfigureEffect> = {}): StructuredReconfigureEffect {
@@ -312,6 +318,54 @@ test("account reconfigure stays pending until the durable successor commits", as
   expect(outcome).toBe("pending");
   expect(releases).toBe(0);
   expect(target.registry.conversation(target.conversationId)!.generations).toHaveLength(1);
+});
+
+test("an account switch's reseat waits for the registry lock off the loop under its operation, and a refused reseat changes nothing for the next pass", async () => {
+  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  for (const refused of [false, true]) {
+    const target = fixture({}, "codex", refused ? { sqliteWriterDeadlineMs: 20 } : {});
+    const holder = registryLockHolder(target.sqliteFilename);
+    resetBlockingWaitsForTests(() => {});
+    try {
+      const held = target.registry.holdDelivery(target.conversationId, "held behind the switch", "reseat-held-key");
+      const apply = () => applyStructuredReconfigure(effect({ conversationId: target.conversationId, accountId: "target" }), {
+        registry: target.registry,
+        /* Another process takes the registry's lock just before the reseat is written. */
+        validateAccount: async () => { await holder.hold(refused ? 800 : 600); },
+        resolveAccount: () => ({}) as never,
+        migrate: async () => target.registry.conversation(target.conversationId)!,
+        releaseHost: async () => true,
+      });
+      if (!refused) {
+        const { value: outcome, gapMs } = await longestLoopGap(apply);
+        expect(outcome).toBe("pending");
+        expect(gapMs).toBeLessThan(50);
+        expect(blockingWaitDiagnostics().longest.some((sample) => sample.label === "delivery.reseat" && sample.operationId === "switch-one")).toBe(true);
+        expect(target.registry.conversation(target.conversationId)!.migration?.targetId).toBe("target");
+        continue;
+      }
+      await expect(apply()).rejects.toThrow(REGISTRY_WRITER_BUSY);
+      const after = target.registry.conversation(target.conversationId)!;
+      expect(after.migration ?? null).toBeNull();
+      expect(after.reconfigure).toMatchObject({ operationId: "switch-one", status: "applying" });
+      expect(target.registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: held.state, generationId: held.generationId });
+      await holder.release();
+      /* The next pass repeats the claim and the reseat under the same operation. */
+      const outcome = await applyStructuredReconfigure(effect({ conversationId: target.conversationId, accountId: "target" }), {
+        registry: target.registry,
+        validateAccount: async () => {},
+        resolveAccount: () => ({}) as never,
+        migrate: async () => target.registry.conversation(target.conversationId)!,
+        releaseHost: async () => true,
+      });
+      expect(outcome).toBe("pending");
+      expect(target.registry.conversation(target.conversationId)!.migration?.targetId).toBe("target");
+    } finally {
+      await holder.close();
+      target.registry.close();
+    }
+  }
 });
 
 test("account reconfigure restores the admitted profile after a pending attempt later fails", async () => {

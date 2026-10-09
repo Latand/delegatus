@@ -556,13 +556,13 @@ test("committed and rolled-back migrations both settle a delivery-uncertain deli
   expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual([]);
 });
 
-test("the reaper terminalizes a stale delivery-uncertain delivery so it stops being owed (issue #652)", () => {
+test("the reaper terminalizes a stale delivery-uncertain delivery so it stops being owed (issue #652)", async () => {
   const store = registry();
   const conversation = deadConversation(store, "/accounts/claude/work/projects/-repo/reaped.jsonl", "work");
   const uncertain = uncertainDelivery(store, conversation.id, "queued but never resolved");
   settledMigration(store, conversation.id);
 
-  const failed = terminalizeStaleUndeliverableHeldDeliveries(store, Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const failed = await terminalizeStaleUndeliverableHeldDeliveries(store, Date.now() + 3 * 24 * 60 * 60 * 1000);
 
   expect(failed).toEqual([uncertain.id]);
   expect(store.readOnlySnapshot().heldDeliveries[uncertain.id]?.state).toBe("failed");
@@ -570,14 +570,14 @@ test("the reaper terminalizes a stale delivery-uncertain delivery so it stops be
   expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual([]);
 });
 
-test("the reaper leaves an in-grace or in-flight delivery-uncertain delivery owed", () => {
+test("the reaper leaves an in-grace or in-flight delivery-uncertain delivery owed", async () => {
   const store = registry();
   const conversation = deadConversation(store, "/accounts/claude/work/projects/-repo/kept.jsonl", "work");
   const uncertain = uncertainDelivery(store, conversation.id, "attempt just started");
   settledMigration(store, conversation.id);
 
   // Within the recovery grace: nothing terminalized.
-  expect(terminalizeStaleUndeliverableHeldDeliveries(store, Date.now())).toEqual([]);
+  expect(await terminalizeStaleUndeliverableHeldDeliveries(store, Date.now())).toEqual([]);
   expect(store.readOnlySnapshot().heldDeliveries[uncertain.id]?.state).toBe("delivery-uncertain");
 });
 

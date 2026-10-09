@@ -16,6 +16,7 @@ import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 import { workingSince } from "@/components/workingSince";
+import { isWorkingAgent, workingAgentCount } from "@/components/workingAgents";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
@@ -112,6 +113,7 @@ export interface KanbanCard {
   holdTarget?: { title: string; done: boolean };
   motion: TaskMotion;
   stepSummary: TaskStepsSummary | null;
+  /** Its members working now, by the rule every «working» count uses (`isWorkingAgent`). */
   working: number;
   /** Something on the card needs the operator: `reasons` is not empty. */
   needsYou: boolean;
@@ -194,6 +196,7 @@ export interface KanbanColumn {
   cards: KanbanCard[];
   /** The cards the current search keeps, in the same order. */
   shown: KanbanCard[];
+  /** Agents working on the column's cards (`isWorkingAgent`). */
   working: number;
   needsYou: number;
   stopped: number;
@@ -246,6 +249,8 @@ export interface KanbanModel {
   totals: {
     tasks: number;
     onBoard: number;
+    /** Agents working now in the files the board carries: the number the
+        sidebar row of the same project shows (`workingAgentCount`). */
     working: number;
     needsYou: number;
   };
@@ -295,7 +300,6 @@ const IN_FLIGHT_STAGES: ReadonlySet<StageChipState> = new Set(["running", "revie
 /* Only a flagged reason needs the operator; a stalled or rate-limited member
    keeps its word and counts as neither (docs/design/needs-attention.md §3). */
 const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting"]);
-const WORKING_STATES: ReadonlySet<MobileRowStateKey> = new Set(["working", "held"]);
 
 function parseMs(iso: string | undefined | null): number {
   const ms = iso ? Date.parse(iso) : NaN;
@@ -307,12 +311,12 @@ function descriptionOf(text: string): string {
   return newline < 0 ? "" : text.slice(newline).trim();
 }
 
-/** The stage conversations working right now, by the row state the card's
+/** The stage conversations working right now, by the rule the card's
     «N working» reads. Only a stage's own transcripts are asked. */
 function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Set<string> {
   const working = new Set<string>();
   for (const file of files) {
-    if (!stagePaths.has(file.path) || !WORKING_STATES.has(mobileRowState(file, now).key)) continue;
+    if (!stagePaths.has(file.path) || !isWorkingAgent(file, now)) continue;
     working.add(file.path);
     if (file.conversationId) working.add(file.conversationId);
   }
@@ -344,7 +348,7 @@ function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string,
     state: row.key,
     needsYou: NEEDS_STATES.has(row.key),
     need: conversationNeed(file, now)?.need ?? null,
-    working: WORKING_STATES.has(row.key),
+    working: isWorkingAgent(file, now),
     latest: nowFragment(file),
     stage: stageByPath.get(file.path) ?? null,
   };
@@ -793,7 +797,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       status,
       cards: inColumn,
       shown: inColumn.filter((card) => keeps(card)),
-      working: inColumn.filter(card => card.motion.key === "working").length,
+      working: inColumn.reduce((sum, card) => sum + card.working, 0),
       needsYou: inColumn.filter((card) => card.motion.key === "needs-you").length,
       stopped: inColumn.filter((card) => card.motion.key === "stopped").length,
       noReason: inColumn.filter(cardHasUnknownReason).length,
@@ -822,9 +826,11 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     totals: {
       tasks: tasks.length - seatOnly.size,
       onBoard: recorded.length,
-      /* Agents of a hidden group keep working, and the header says so; a
-         decision the operator hid is not counted as waiting on them. */
-      working: cards.filter((card) => card.motion.key === "working").length,
+      /* Every agent working in the project, the sidebar row's own selector over
+         the same files: a hidden group's agents and the seat keep working, and
+         the header says so. A decision the operator hid is not counted as
+         waiting on them. */
+      working: workingAgentCount(input.files ?? [], now),
       needsYou: cards.filter((card) => card.motion.key === "needs-you" && !card.hide.hidden).length,
     },
   };
