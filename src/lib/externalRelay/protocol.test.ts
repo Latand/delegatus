@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
 import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
@@ -188,4 +191,15 @@ test("X1 tool indexes keep their compact wire bytes and every result parses", ()
   expect(checkedAnswer(call, request)).toBeNull();
   expect(checkedRound({ action: "reply", text: "Done", reply_to: null, calls: [] }, request))
     .toEqual(checkedAnswer({ action: "reply", text: "Done", reply_to: null }, request));
+});
+
+test("all earlier fixtures and wire evidence retain their slice 2b hashes; X3 copies match the manifest", () => {
+  const pins = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/switches-off-2b-hashes.json"), "utf8"));
+  for (const [name, sha] of Object.entries(pins)) if (name.startsWith("src/") || name.startsWith("evidence/"))
+    expect(createHash("sha256").update(fs.readFileSync(path.resolve(name))).digest("hex")).toBe(String(sha));
+  const readme = fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1/README.md"), "utf8");
+  for (const row of readme.matchAll(/\| `([^`]+\.json)` \| (\d+) \| `([a-f0-9]{64})` \|/g)) {
+    const bytes = fs.readFileSync(path.join(import.meta.dir, "fixtures/relay_v1", row[1]!));
+    expect(bytes.length).toBe(Number(row[2])); expect(createHash("sha256").update(bytes).digest("hex")).toBe(row[3]);
+  }
 });

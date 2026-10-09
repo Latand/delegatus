@@ -2332,6 +2332,9 @@ export interface McpRecoverableTool {
   /** Resolve the server-derived caller and target for fresh admission. Runs
       before receipt access unless bindForRecovery authenticates that access first. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Fresh-request admission after an absent receipt lookup, before any claim.
+      Existing receipts retain their recorded caller and digest checks. */
+  authorizeClaim?(args: McpToolArgs, binding: McpRequestBindingInput): void | Promise<void>;
   /** Authenticate recovery without resolving a mutable target name. Existing
       receipts supply their own target; absent receipts still run bind before admission. */
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
@@ -2886,7 +2889,7 @@ export function createMcpToolService(
             }
           }
         }
-        if (recoveryOnly) {
+        if (recoveryOnly || tool.authorizeClaim) {
           let record: McpReceiptRecord | null;
           try {
             record = await store.lookup(key);
@@ -2895,6 +2898,15 @@ export function createMcpToolService(
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
           if (record) return recoverRecord(record);
+          try {
+            await tool.authorizeClaim?.(digestArgs, binding);
+          } catch (error) {
+            outcome = "failure";
+            return failure(typedTool, requestId,
+              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof McpToolRefusal ? error.details : undefined);
+          }
           /* Nothing has claimed this key HERE — an observation, never a
              verdict: the original may be a moment from claiming it, in this
              process or another, and a lookup that wrote anything under the
@@ -2904,13 +2916,15 @@ export function createMcpToolService(
              establishes whose work a downstream record under this key would
              be, so an answer built from it could hand one caller another's
              ids. The answer stays unknown while execution remains possible. */
-          outcome = "failure";
-          return recoveryAnswer(typedTool, requestId, {
-            outcome: "unknown",
-            evidence: "none",
-            reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
-            ids: {},
-          }, false);
+          if (recoveryOnly) {
+            outcome = "failure";
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "none",
+              reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
+              ids: {},
+            }, false);
+          }
         }
         let claim: ReceiptClaim;
         try {
@@ -3230,6 +3244,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
+    'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     "When a turn of the new agent ends, Delegatus sends you, the caller, one message from it: its title and id, how long it ran, its Verdict line first, and its final message (up to 4 KB). Briefs need no 'report back' line. Pass `notifyLauncher: false` to turn this off; the answer's `launcherNotice` says whether it is on.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -3635,6 +3650,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Codex only: catalog tier id such as priority or ultrafast; refused if the model/account does not offer it. default or standard opts out of a role tier."),
     fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier when both are present."),
     role: z.enum(ROLE_IDS).optional(),
+    confirm: z.string().optional()
+      .describe('For deployer, must be "deploy": honoured only for the target project\'s designated orchestrator seat and the operator\'s own session. Other roles ignore this field.'),
     roleParams: z.record(z.string(), z.unknown()).optional()
       .describe("Role-specific parameters. Bounded integers accept numeric strings, clamp to their declared role bounds, and report the applied value in clamped."),
     reviews: z.string().optional(),

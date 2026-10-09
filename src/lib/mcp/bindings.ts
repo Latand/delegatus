@@ -107,7 +107,7 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import {
@@ -1305,7 +1305,7 @@ function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string
   if (!model) return;
   if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
-  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
+  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
   let engine: "claude" | "codex" | "copilot" | null = null;
   if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
@@ -1457,7 +1457,7 @@ export function requestAttentionOperationKey(clientRequestId: string): string {
 function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "registrySnapshot">): void {
   const roleId = text(args.role);
   const role = roleId
-    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, engine: args.engine, model: args.model, effort: args.effort })
+    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort })
     : null;
   /* An unresolvable role is the route's to refuse, with its own words. */
   if (role && !role.ok) return;
@@ -1479,7 +1479,38 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
   if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from a large model (Claude Opus or Fable, or a large Codex model), or the role's own row" }] });
 }
 
+/** Check the deployer's caller before a fresh request claims a key,
+    and again at dispatch so a seat change cannot authorize a fresh launch. */
+function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dependencies?: ViewerMcpDomainDependencies): void {
+  if (text(args.role) !== "deployer") return;
+  let allowed = false;
+  try {
+    const caller = dependencies ? attributionOf(dependencies) : null;
+    if (dependencies && caller?.conversationId && !caller.via) {
+      allowed = caller.kind === "gateway" || (caller.kind === "manager"
+        && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
+    }
+  } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
+  if (!allowed) {
+    throw new McpToolRefusal("only the target project's designated orchestrator seat or the operator's own session may launch a deployer", {
+      code: "deployer_spawn_caller_unauthorized", status: 403,
+    });
+  }
+}
+
+function requireMcpDeployerConfirmation(args: McpToolArgs): void {
+  if (text(args.role) !== "deployer") return;
+  const role = resolveSpawnRole({
+    role: "deployer", roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams,
+    confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort,
+  });
+  if (!role.ok) throw new McpToolRefusal(role.error, { status: 400 });
+}
+
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
+  requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
   if (dependencies) {
     try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
@@ -6930,6 +6961,9 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
+  // An unidentified caller cannot own a receipt. Keep the deployer's refusal
+  // before lookup; identified owners are checked again only for fresh work.
+  if (caller.kind === "unidentified") requireMcpDeployerCaller(args, project, dependencies);
   refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
@@ -7190,6 +7224,10 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      authorizeClaim: (args, binding) => {
+        requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
+        requireMcpDeployerConfirmation(args);
+      },
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
