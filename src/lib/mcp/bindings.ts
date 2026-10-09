@@ -123,7 +123,7 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -851,6 +851,7 @@ export interface ViewerMcpDomainDependencies {
       tick can wake that seat when it settles. Optional so partial harnesses
       fall back to the production store. */
   recordSeatDeployment?(record: SeatDeploymentRecord): void;
+  findDeploymentByIdempotencyKey?: typeof import("@/lib/orchestrator/seatDeployments").findSeatDeploymentByKey;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
       writes the durable record, and every answer is a read of it. */
@@ -3264,10 +3265,21 @@ async function deployExactSha(
   }
   const seat = authority.seat;
 
-  const receipt = await control.post("/api/runtime/deployments", {
-    revision,
-    idempotencyKey: requestId(args),
-  });
+  const idempotencyKey = requestId(args);
+  const pending = { conversationId: seat.conversationId, project: seat.project,
+    revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
+  beginSeatDeployment(pending);
+  let receipt: Record<string, unknown>;
+  try {
+    receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
+  } catch (error) {
+    await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+      dependencies.recordSeatDeployment);
+    throw error;
+  }
+  if (receipt.state === "busy" || receipt.state === "refused") {
+    forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+  }
   /* #2063: the ledger never learns who asked, and the seat ends its turn so
      the promotion can replace its host. Recording the pair is what lets the
      seat tick wake this seat when the deployment settles. A `busy` receipt
@@ -3282,8 +3294,10 @@ async function deployExactSha(
         conversationId: seat.conversationId,
         project: seat.project,
         revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
-        requestedAt: new Date().toISOString(),
+        requestedAt: pending.requestedAt,
+        idempotencyKey,
       });
+      forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       wakeOnSettle = true;
     } catch (error) {
       console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);

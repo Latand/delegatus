@@ -110,6 +110,7 @@ test("delivered agendas leave debt-only reminders at the configured interval unt
   const agenda = { pipelines: OPEN, ownLanes: [laneSettled("pipeline_debt")], changeFingerprint: "unchanged.pr" };
   const cadence = settings({ wakeIntervalMinutes: 10 });
   let state = landed(input({ ...agenda, settings: cadence })).state;
+  agenda.pipelines = []; // The work ended; only the report debt remains.
   for (let round = 1; round <= DEFAULT_SEAT_TICK_POLICY.retryGuard + 2; round++) {
     const now = T0 + round * 10 * MINUTE;
     expect(seatTickDecision(input({ ...agenda, settings: cadence, state, now: now - MINUTE })).verdict.kind).toBe("quiet");
@@ -130,6 +131,7 @@ test("delivered agendas leave debt-only reminders at the configured interval unt
 test("a newly aged question debt wakes after agenda delivery, repeats until answered or reported, and then falls silent", () => {
   const agenda = { pipelines: OPEN, changeFingerprint: "unchanged.pr" };
   const first = landed(input(agenda)).state;
+  agenda.pipelines = []; // Recurring live-work reminders have their own cadence test.
   const suggestion = { conversationId: SEAT_A, setId: "rsg_after_agenda", at: iso(T0 + MINUTE) };
   let state = first;
   for (let round = 1; round <= DEFAULT_SEAT_TICK_POLICY.retryGuard + 2; round++) {
@@ -534,9 +536,9 @@ test("the replayed day: one report asked per outcome wake, each settled by one c
   expect(day.digestLines.length).toBeLessThanOrEqual(6);
   /* Before and after, on the same day: the seats filed 11 reports and
      followed 5 of the 15 outcome wakes of the day seat with one; a seat that
-     files what the tick asks for files 23 — 21 outcome reports, 1 digest and
+     files what the tick asks for files 27 — 21 outcome reports, 5 interval digests and
      1 question. */
-  expect({ owed: day.owedLines.length, digests: day.digestLines.length, asks: day.askLines.length, filed: day.filed }).toEqual({ owed: 21, digests: 1, asks: 1, filed: 23 });
+  expect({ owed: day.owedLines.length, digests: day.digestLines.length, asks: day.askLines.length, filed: day.filed }).toEqual({ owed: 21, digests: 5, asks: 1, filed: 27 });
   expect(REAL_REPORTS).toHaveLength(11);
   /* The one ask the day left unanswered for more than ten minutes is asked
      once, and reported. */
