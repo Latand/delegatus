@@ -1,5 +1,5 @@
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
-import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
+import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
@@ -21,7 +21,7 @@ import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversati
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
-import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
@@ -824,6 +824,12 @@ export async function bindStructuredDeliveryQueue(
         });
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
+      idleContinuationCurrent: async (conversationId, fence) => {
+        const session = await readRuntimeSession(client, { conversationId });
+        // This operation itself blocks retirement. Admission and the claim
+        // checked other work; the shared actuation section now excludes sends.
+        return !!session && runtimeIdleKillMatches({ ...session, retirementBlocked: false }, session.sessionKey, fence);
+      },
       bindDeliveryGeneration: (operationId, generationId) => registry.bindDeliveryOperationGeneration(operationId, generationId),
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
@@ -938,7 +944,8 @@ export async function bindStructuredDeliveryQueue(
       },
     },
     hostResolver(registry, hosts),
-    async (conversationId, expectedKey, onlyIfIdle, authority) => {
+    async (conversationId, expectedKey, onlyIfIdle, authority, providerRecovery) => {
+      if (providerRecovery && !onlyIfIdle) return false;
       if (onlyIfIdle) {
         // Re-read the journal after admission and immediately before actuation.
         // Missing evidence leaves retirement deferred, with no process effects.
@@ -946,10 +953,23 @@ export async function bindStructuredDeliveryQueue(
         if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
+      let recoveryStartedAt: string | null = null;
+      const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
+        agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
       const durableAuthority = async (): Promise<boolean> => {
         if (!onlyIfIdle) return true;
         if (!authority || stopped || state.activeQueue !== queue) return false;
         const result = await client.operationStatus(authority.operationId).catch(() => null);
+        recoveryStartedAt = null;
+        if (providerRecovery) {
+          try {
+            const snapshot = registry.readOnlySnapshot();
+            const attempt = providerRecoveryAttempt(loadPipelinesForRetirement(), providerRecovery, recoveryTarget(),
+              id => resolveConversationAlias(snapshot, id as ViewerConversationId));
+            if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
+            recoveryStartedAt = attempt.startedAt;
+          } catch { return false; }
+        }
         // Rebind may have happened while the socket read was pending.
         return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
           && result.receipt.retirementClaim?.executorId === authority.claim.executorId
@@ -970,9 +990,14 @@ export async function bindStructuredDeliveryQueue(
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
         try {
-          if (pipelineHostHasLiveWork(loadPipelinesForRetirement(), {
+          const pipelines = loadPipelinesForRetirement();
+          const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
+          const recoveryAttempt = providerRecovery
+            ? providerRecoveryAttempt(pipelines, providerRecovery, recoveryTarget(), resolve) : null;
+          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
+          if (pipelineHostHasLiveWork(pipelines, {
             conversationId, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null, paneId: null,
-          }, id => resolveConversationAlias(snapshot, id as ViewerConversationId))) return false;
+          }, resolve, recoveryAttempt ?? undefined)) return false;
         } catch { return false; }
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.

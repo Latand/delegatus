@@ -4338,3 +4338,17 @@ test("a late structured same-path recovery preserves the newer durable profile",
     model: "gpt-6.1-sol", effort: "xhigh", fast: true, serviceTier: "priority",
   });
 });
+
+
+test("held automatic continuation retains its idle fence and binds it to request identity", () => {
+  const store = registry();
+  const conversation = store.ensureConversation("claude", "/sessions/continuation.jsonl", "default");
+  const command = { kind: "send" as const, policy: "queue" as const, turnId: null, onlyIfIdle: { revision: 3, writerClaim: "fixture:1" } };
+  const held = store.holdDelivery(conversation.id, "continue", "automatic", "text", [], undefined, command);
+  expect(store.snapshot().heldDeliveries[held.id]!.command.onlyIfIdle).toEqual(command.onlyIfIdle);
+  expect(store.holdDelivery(conversation.id, "continue", "automatic", "text", [], undefined, command).id).toBe(held.id);
+  expect(() => store.holdDelivery(conversation.id, "continue", "automatic", "text", [], undefined,
+    { ...command, onlyIfIdle: { revision: 4, writerClaim: "fixture:1" } })).toThrow(DeliveryReservationConflictError);
+  expect(() => store.holdDelivery(conversation.id, "continue", "automatic", "text", [], undefined,
+    { ...command, onlyIfIdle: undefined })).toThrow(DeliveryReservationConflictError);
+});
