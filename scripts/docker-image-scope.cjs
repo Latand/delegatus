@@ -6,7 +6,7 @@ const { execFileSync } = require("node:child_process");
 // against the installed TypeScript program so new imports cannot drift.
 const files = new Set([
   "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", ".gitignore", "package.json", "bun.lock", "bunfig.toml",
-  "tsconfig.json", ".github/workflows/docker-image.yml",
+  "tsconfig.json", "tsconfig.production.json", ".github/workflows/docker-image.yml",
   "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
   "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs",
   "scripts/npm-package-smoke.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
