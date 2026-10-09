@@ -1,7 +1,8 @@
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
+import { ForgeAppWriteRefused, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
 import { withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
@@ -50,6 +51,11 @@ export { MERGE_REASONS };
 export interface AutoMergePorts {
   now: () => number;
   run: GithubRunner;
+  /** Every write to GitHub (the branch update and the merge) goes through
+      this. In a declared App repository it goes out as the Delegatus GitHub
+      App, and one it cannot authenticate as the App throws and nothing is
+      sent; in any other repository it is `run`. `run` itself only reads. */
+  write: ForgeAppWriter;
   loadPipelines: () => readonly Pipeline[];
   /** Applies `change` to the live record under the pipeline lock and persists
       it when `change` answers true. False when the record is gone or unchanged. */
@@ -289,14 +295,12 @@ function reviewedHead(pipeline: Pipeline): string | null {
 /** A behind diagnostic requires Git to prove the PR head is an ancestor of
  * the exact head a successful review judged. SHA mentions in reports do not
  * prove ancestry: rejected attempts can be divergent retries. */
-function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): string | null {
+async function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): Promise<string | null> {
   const head = reviewedHead(pipeline);
   if (!head || prHead === head) return null;
   if (pipeline.repoDir && /^[0-9a-f]{40}$/i.test(prHead) && /^[0-9a-f]{40}$/i.test(head)) {
-    const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", prHead, head], {
-      cwd: pipeline.repoDir, timeout: 5_000, stdio: "ignore",
-    });
-    return ancestor.status === 0 ? head : null;
+    const ancestor = await realExec("git", ["merge-base", "--is-ancestor", prHead, head], pipeline.repoDir, undefined, { timeoutMs: 5_000 });
+    return ancestor.code === 0 ? head : null;
   }
   return null;
 }
@@ -414,7 +418,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
       merge.chain = [view.headRefOid];
     }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
-      ? prHeadBehindReviewedHead(read, view.headRefOid)
+      ? (await prHeadBehindReviewedHead(read, view.headRefOid))
       : null;
     if (behindReviewedHead) {
       await commit(ports, read, (live) => block(live, `PR head is behind the reviewed head ${behindReviewedHead}`, now));
@@ -493,12 +497,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     });
     if (!recorded) return;
     try {
-      await ports.run(["api", "-X", "PUT", `repos/${merge.repository}/pulls/${merge.prNumber}/update-branch`, "-f", `expected_head_sha=${tip}`]);
+      await ports.write(["api", "-X", "PUT", `repos/${merge.repository}/pulls/${merge.prNumber}/update-branch`, "-f", `expected_head_sha=${tip}`], merge.repository);
     } catch (error) {
       const message = githubMessage(error);
       const current = ports.loadPipelines().find((pipeline) => pipeline.id === read.id);
       if (current?.merge) {
-        await commit(ports, current, (live) => block(live, /expected head sha/i.test(message) ? MERGE_REASONS.headChanged : `GitHub refused to update the branch: ${message}`, ports.now()));
+        const reason = error instanceof ForgeAppWriteRefused ? error.message
+          : /expected head sha/i.test(message) ? MERGE_REASONS.headChanged : `GitHub refused to update the branch: ${message}`;
+        await commit(ports, current, (live) => block(live, reason, ports.now()));
       }
     }
     return;
@@ -516,9 +522,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
-    await ports.run(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid]);
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository);
   } catch (error) {
-    failure = githubMessage(error);
+    /* No App credential: the refusal is the whole reason, in its own words. */
+    failure = error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
   }
   let after: PullRequestView | null = null;
   try {
@@ -539,7 +546,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
       live.nextReadAt = null;
       return;
     }
-    if (failure) block(live, `GitHub refused the merge: ${failure}`, ports.now());
+    if (failure) block(live, failure, ports.now());
     /* Otherwise the merge was accepted and the PR does not read merged yet:
        the next read in `merging` settles it. */
   });
@@ -705,9 +712,11 @@ export function finishBoardTask(taskId: string): TaskFinishOutcome {
 const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvAutoMergeStartedAt?: number };
 
 export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): AutoMergePorts {
+  const run = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS);
   return {
     now: Date.now,
-    run: githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
+    run,
+    write: forgeWriter(run, forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS)),
     mutate: (pipelineId, change) => withPipelineMutation((pipelines, persist) => {
       const pipeline = pipelines.find((candidate) => candidate.id === pipelineId);
       if (!pipeline || !change(pipeline)) return false;

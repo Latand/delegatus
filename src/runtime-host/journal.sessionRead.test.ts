@@ -19,7 +19,9 @@ test("keyed RPC shares snapshot normalization, identity precedence and absence s
       voiceDeliveries: [{ deliveryId: "voice-one", responses: [{ responseId: "response-one", text: "retained body" }] }],
     },
   });
-  const expected = journal.snapshot().sessions[0]!;
+  const snapshotSession = journal.snapshot().sessions[0]!;
+  expect(snapshotSession.retirementBlocked).toBeUndefined();
+  const expected = { ...snapshotSession, retirementBlocked: false };
   const snapshotSpy = spyOn(journal, "snapshotJson");
   const host = new RuntimeHost(journal);
   try {
@@ -42,7 +44,7 @@ test("upgrade creates the artifact index without rewriting old projections or co
   journal.append({ scope: runtimeScope("session", "conversation_old"), kind: "session-status", payload: {
     artifactPath: "/sessions/old.jsonl", host: "dead", turn: "idle", liveTurn: { text: "stale" },
   } });
-  const expected = journal.snapshot().sessions[0]!;
+  const expected = { ...journal.snapshot().sessions[0]!, retirementBlocked: false };
   const pending = journal.unconsumedEvents("pending-consumer");
   journal.close();
   const legacy = new Database(filename);
@@ -75,4 +77,39 @@ test("a faulted pre-upgrade journal serves keyed diagnostics without installing 
     const db = (faulted as unknown as { db: Database }).db;
     expect(db.query("SELECT name FROM sqlite_master WHERE name='session_artifact_path'").get()).toBeNull();
   } finally { faulted.close(); }
+});
+
+test("an event bound to a session revision is recorded only while the row still has it", async () => {
+  const journal = new RuntimeJournal(path.join(root, "fence.sqlite"));
+  const host = new RuntimeHost(journal);
+  const scope = runtimeScope("session", "conversation_fenced");
+  const status = (payload: Record<string, unknown>, expectedSessionRevision?: number) => ({ scope, kind: "session-status",
+    payload: { hostKind: "codex-app-server", ...payload }, ...(expectedSessionRevision === undefined ? {} : { expectedSessionRevision }) });
+  try {
+    journal.append(status({ host: "hosted", turn: "running", activeTurnId: "turn-one" }));
+    const read = journal.readSession({ conversationId: "conversation_fenced" })!;
+    /* A new owner publishes after the reading; the stale verdict is refused whole. */
+    journal.append(status({ host: "hosted", turn: "running", activeTurnId: "turn-two" }));
+    const seq = journal.publishedSeq();
+    expect(await host.handle({ id: "stale", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, read.revision) } }))
+      .toMatchObject({ ok: false, error: "the session row changed after this event's writer read it" });
+    expect(journal.publishedSeq()).toBe(seq);
+    const current = journal.readSession({ conversationId: "conversation_fenced" })!;
+    expect(current).toMatchObject({ host: "hosted", turn: "running", activeTurnId: "turn-two" });
+    /* The same verdict against the row as it stands is recorded. */
+    /* The dedicated RPC cannot omit the fence or apply it to another scope. */
+    for (const event of [status({ host: "dead" }), status({ host: "dead" }, -1), status({ host: "dead" }, 1.5),
+      { ...status({ host: "dead" }, current.revision), scope: runtimeScope("system", "fence") },
+      { ...status({ host: "dead" }, current.revision), kind: "delta" }]) {
+      expect(await host.handle({ id: "invalid", method: "append-session-fenced", params: { event } })).toMatchObject({ ok: false });
+      expect(journal.publishedSeq()).toBe(seq);
+    }
+    expect(await host.handle({ id: "current", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, current.revision) } }))
+      .toMatchObject({ ok: true });
+    expect(journal.readSession({ conversationId: "conversation_fenced" })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
+    /* A row that does not exist, and a scope that holds no session row, have no revision to match. */
+    expect(() => journal.append({ ...status({ host: "dead" }, 1), scope: runtimeScope("session", "conversation_absent") })).toThrow();
+    expect(() => journal.append({ scope: runtimeScope("system", "fence"), kind: "session-status", payload: {}, expectedSessionRevision: 1 })).toThrow();
+    expect(journal.readSession({ conversationId: "conversation_absent" })).toBeNull();
+  } finally { journal.close(); }
 });

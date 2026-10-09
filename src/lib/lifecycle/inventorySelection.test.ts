@@ -155,6 +155,121 @@ test("an already-cancelled caller never reaches the generation", async () => {
   expect(reads).toBe(0);
 });
 
+function heldGeneration() {
+  const signals: AbortSignal[] = [];
+  let publish!: () => void;
+  const read: CompletedGenerationRead = ({ signal } = {}) => new Promise((resolve, reject) => {
+    if (signal) {
+      signals.push(signal);
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }
+    publish = () => resolve({
+      snapshot: { files: productionShapedCorpus(), projectCatalog: [], complete: true },
+      generation: 3,
+      targetGeneration: 3,
+      cacheStatus: "miss",
+      requestCount: 1,
+      cloneDurationMs: 0,
+    });
+  });
+  return { read, signals, publish: () => publish() };
+}
+
+test("a spent catalog budget answers pending and leaves the first generation subscribed", async () => {
+  const held = heldGeneration();
+
+  const selection = await completedGenerationSelection({ limit: 10 }, {
+    completedFileScan: held.read,
+    budgetMs: 5,
+    lastCompletedFiles: () => null,
+  });
+
+  expect(selection).toMatchObject({ cacheStatus: "pending", generation: null, entries: [], scanned: 0, matched: 0 });
+  expect(selection.hostedSeen.size).toBe(0);
+  /* Releasing the wait would cancel a scan nobody else holds, and every later
+     call would start it again. */
+  expect(held.signals).toHaveLength(1);
+  expect(held.signals[0]!.aborted).toBe(false);
+  held.publish();
+});
+
+test("a spent catalog budget answers from the last completed rows as stale", async () => {
+  const held = heldGeneration();
+
+  const selection = await completedGenerationSelection({ project: "viewer", liveOnly: true, limit: 10 }, {
+    completedFileScan: held.read,
+    budgetMs: 5,
+    lastCompletedFiles: () => productionShapedCorpus(),
+  });
+
+  expect(selection.cacheStatus).toBe("stale");
+  expect(selection.generation).toBeNull();
+  expect(selection.entries).toHaveLength(6);
+  held.publish();
+});
+
+test("a generation that arrives inside the catalog budget is the answer", async () => {
+  const held = heldGeneration();
+  const pending = completedGenerationSelection({ project: "viewer", liveOnly: true, limit: 10 }, {
+    completedFileScan: held.read,
+    budgetMs: 10_000,
+    lastCompletedFiles: () => { throw new Error("the generation arrived; nothing falls back"); },
+  });
+  held.publish();
+
+  expect(await pending).toMatchObject({ cacheStatus: "miss", generation: 3 });
+});
+
+test("a caller that cancels inside the catalog budget releases the generation", async () => {
+  const held = heldGeneration();
+  const controller = new AbortController();
+  const pending = completedGenerationSelection({ limit: 10 }, {
+    completedFileScan: held.read,
+    signal: controller.signal,
+    budgetMs: 10_000,
+  });
+  controller.abort();
+
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  expect(held.signals[0]!.aborted).toBe(true);
+});
+
+test("a caller that cancels after the catalog budget was spent releases its own subscription", async () => {
+  const held = heldGeneration();
+  const controller = new AbortController();
+
+  const selection = await completedGenerationSelection({ limit: 10 }, {
+    completedFileScan: held.read,
+    signal: controller.signal,
+    budgetMs: 5,
+    lastCompletedFiles: () => null,
+  });
+  expect(selection.cacheStatus).toBe("pending");
+  expect(held.signals[0]!.aborted).toBe(false);
+
+  /* The call is still reading its hosts when its caller goes away. */
+  controller.abort();
+  expect(held.signals).toHaveLength(1);
+  expect(held.signals[0]!.aborted).toBe(true);
+});
+
+test("a cancellation after the generation arrived has no scan left to release", async () => {
+  const held = heldGeneration();
+  const controller = new AbortController();
+  const selection = await completedGenerationSelection({ limit: 10 }, {
+    completedFileScan: held.read,
+    signal: controller.signal,
+    budgetMs: 5,
+    lastCompletedFiles: () => null,
+  });
+  expect(selection.cacheStatus).toBe("pending");
+  held.publish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  controller.abort();
+  expect(held.signals[0]!.aborted).toBe(false);
+});
+
 test("hydration never runs more than its concurrency and reports the bytes it charged", async () => {
   const items = Array.from({ length: 20 }, (_, index) => ({ index, size: 1_000 }));
   let inFlight = 0;

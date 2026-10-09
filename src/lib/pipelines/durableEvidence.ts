@@ -26,6 +26,12 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
+  /** The newest assistant prose of a turn a native shutdown marker closed.
+      `message` drops it, since unfinished output never settles a verdict; a
+      fresh attempt is told it as what the cut attempt last said. */
+  cutProse?: string | null;
+  /** Native human prompt or task start witness, excluding tool results and shutdown markers. */
+  turnStartedAt?: number | null;
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
@@ -35,6 +41,13 @@ export type StageTurnEvidence = {
       assistant message: a delivered prompt and a tool result move this and not
       that. Null when the read found no record carrying a timestamp. */
   lastRecordAt?: number | null;
+  /** Timestamp of the newest record the agent's work wrote: a prompt, a reply,
+      a tool call or its result. The bookkeeping a CLI writes as it exits or
+      resumes (a shutdown interrupt, a replayed meta prompt, a synthetic
+      no-response, Codex token counts and turn aborts) is left out, and so is
+      an undated record, which `lastRecordAt` dates by the file. A move here is
+      work; a move of `lastRecordAt` alone may be neither. */
+  lastAgentEventAt?: number | null;
   /** The provider's own end-of-turn notice, when the record that closed the
       turn is one: a session or model limit, an expired credential, a refusal —
       a message the CLI writes *instead of* the agent's answer, so the turn
@@ -207,6 +220,83 @@ function providerTurnRecords(records: RecordLike[], codex: boolean): RecordLike[
   return records;
 }
 
+function nativeTurnStartedAt(records: RecordLike[], codex: boolean): number | null {
+  for (let index = records.length - 1; index >= 0; index--) {
+    const record = records[index]!;
+    if (codex) {
+      const payload = recordValue(record.payload);
+      if (!payload || !(CODEX_TURN_START_TYPES.has(String(payload.type))
+        || payload.type === "message" && payload.role === "user")) continue;
+    } else {
+      if (record.type !== "user" || record.isMeta === true || record.interruptedByShutdown === true || "interruptedMessageId" in record) continue;
+      const content = recordValue(record.message)?.content;
+      if (recordsValue(content).some(part => part.type === "tool_result")) continue;
+      const text = typeof content === "string" ? content : recordsValue(content).filter(part => part.type === "text").map(part => stringValue(part.text) ?? "").join("\n");
+      if (!text.trim() || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text)) continue;
+    }
+    const timestamp = recordTs(record, 0);
+    if (timestamp) return timestamp;
+  }
+  return null;
+}
+
+/** Recover a continuation boundary without retaining intervening tool output.
+ * Backward reads hold one small native record; oversized records are skipped.
+ * The descriptor and pathname must still match the snapshot preceding the tail. */
+async function recoverNativeTurnStart(pathname: string, codex: boolean, after: number, baseline: fs.BigIntStats): Promise<number | null> {
+  let handle: fs.promises.FileHandle | null = null;
+  const same = (a: fs.BigIntStats, b: fs.BigIntStats) => a.dev === b.dev && a.ino === b.ino && a.size === b.size
+    && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+  try {
+    handle = await fs.promises.open(pathname, "r");
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile() || !same(baseline, before)) return null;
+    let position = Number(before.size);
+    if (!Number.isSafeInteger(position)) return null;
+    const buffer = Buffer.alloc(65_536);
+    let pending: Buffer = Buffer.alloc(0);
+    let oversized = false;
+    let found: number | null = null;
+    let done = false;
+    const prepend = (part: Buffer) => {
+      if (oversized) return;
+      if (part.length + pending.length > 131_072) { pending = Buffer.alloc(0); oversized = true; }
+      else pending = Buffer.concat([part, pending]);
+    };
+    const finish = () => {
+      if (!oversized && pending.length) {
+        try {
+          const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(pending));
+          const record = recordValue(value);
+          const timestamp = record ? nativeTurnStartedAt([record], codex) : null;
+          if (timestamp !== null) { found = timestamp >= after ? timestamp : null; done = true; }
+        } catch { /* A non-native or oversized historical line supplies no witness. */ }
+      }
+      pending = Buffer.alloc(0); oversized = false;
+    };
+    while (position > 0 && !done) {
+      const length = Math.min(buffer.length, position); position -= length;
+      let read = 0;
+      while (read < length) {
+        const chunk = await handle.read(buffer, read, length - read, position + read);
+        if (!chunk.bytesRead) return null;
+        read += chunk.bytesRead;
+      }
+      let end = length;
+      for (let index = length - 1; index >= 0 && !done; index--) {
+        if (buffer[index] !== 0x0a) continue;
+        prepend(buffer.subarray(index + 1, end)); finish(); end = index;
+      }
+      if (!done) prepend(buffer.subarray(0, end));
+    }
+    if (!done) finish();
+    const end = await handle.stat({ bigint: true });
+    const pathEnd = await fs.promises.stat(pathname, { bigint: true });
+    return same(before, end) && same(end, pathEnd) ? found : null;
+  } catch { return null; }
+  finally { await handle?.close().catch(() => undefined); }
+}
+
 /**
  * The notice the provider wrote when it ended the turn, read from the record
  * that CLOSED it — the assistant record Claude flags `isApiErrorMessage`, or
@@ -265,6 +355,80 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
+const CODEX_BOOKKEEPING_TYPES = new Set(["token_count", "turn_aborted"]);
+
+/** Index of the newest dated record the agent's own work wrote, or -1. The
+    bookkeeping a CLI writes as it exits or resumes is passed over. */
+export function lastAgentWorkIndex(records: RecordLike[], codex: boolean): number {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!;
+    const at = Date.parse(String(record.timestamp ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (codex) {
+      const type = stringValue(recordValue(record.payload)?.type);
+      if (type && !CODEX_BOOKKEEPING_TYPES.has(type)) return index;
+      continue;
+    }
+    if (record.type !== "user" && record.type !== "assistant") continue;
+    const message = recordValue(record.message);
+    if (record.isMeta === true || message?.model === "<synthetic>") continue;
+    if (claudeInterruptMarker(record)) continue;
+    return index;
+  }
+  return -1;
+}
+
+function claudeInterruptMarker(record: RecordLike): boolean {
+  if (record.type !== "user") return false;
+  const content = stringValue(recordValue(record.message)?.content) ?? claudeAssistantText(record);
+  return record.interruptedByShutdown === true || "interruptedMessageId" in record
+    || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content);
+}
+
+/** The records left once the bookkeeping a CLI writes as it exits or resumes
+    is removed, record by record: Codex token counts and turn aborts, and for
+    Claude meta prompts, shutdown and interrupt markers and the synthetic
+    no-response no-op. A provider failure record stays: it is how a turn the
+    provider closed is told from one a restart cut. */
+export function withoutExitBookkeeping(records: RecordLike[], codex: boolean): RecordLike[] {
+  return records.filter((record) => {
+    if (codex) {
+      const type = stringValue(recordValue(record.payload)?.type);
+      return !type || !CODEX_BOOKKEEPING_TYPES.has(type);
+    }
+    if (record.type === "user") return record.isMeta !== true && !claudeInterruptMarker(record);
+    if (record.type !== "assistant" || record.isApiErrorMessage === true) return true;
+    return recordValue(record.message)?.model !== "<synthetic>"
+      || !/^no response requested\.?$/i.test(claudeAssistantText(record).trim());
+  });
+}
+
+function agentEventAt(records: RecordLike[], codex: boolean): number | null {
+  const index = lastAgentWorkIndex(records, codex);
+  return index < 0 ? null : Date.parse(String(records[index]!.timestamp));
+}
+
+/** Whether a Claude stage attempt ended on a provider failure the CLI gave up
+    on: its newest prompt or assistant record is a flagged API error stamped
+    with a closing stop reason. The shared turn projection keeps such a turn
+    open unless the error class is terminal for the session, because activity
+    and account migration must not read a retry as an end (#1811). A stage
+    reads it as the end of its attempt whatever the class, since the engine
+    retries the stage itself and needs the class to choose how. */
+function claudeApiErrorClosedAttempt(records: RecordLike[]): boolean {
+  const newest = records.findLast((record) => record.type === "assistant" || record.type === "user");
+  if (newest?.type !== "assistant" || newest.isApiErrorMessage !== true) return false;
+  const stop = stringValue(recordValue(newest.message)?.stop_reason);
+  return stop === "end_turn" || stop === "stop_sequence";
+}
+
+/** Whether a Claude transcript's turn ended on a provider failure the CLI gave
+    up on, read past the bookkeeping a shutdown appends after it. A service
+    restart did not cut such a turn: the provider had ended it already. */
+export function claudeTurnClosedByProviderFailure(records: RecordLike[]): boolean {
+  return claudeApiErrorClosedAttempt(providerTurnRecords(records, false));
+}
+
 /** The widest verified read spent looking for a reported attempt's prose. A
     brief is relayed at 60 KiB at most, so a window this size holds it with
     room for the tool output written after the report. */
@@ -277,6 +441,7 @@ export async function durableStageTurnEvidence(
   attemptStartedAt?: string | null,
   readTail: typeof readStableTailRecords = readStableTailRecords,
 ): Promise<StageTurnEvidence | null> {
+  const artifactBefore = await fs.promises.stat(transcriptPath, { bigint: true }).catch(() => null);
   const read = await readTail(transcriptPath);
   if (read.integrity !== "complete") return null;
   const codex = engine === "codex";
@@ -327,25 +492,34 @@ export async function durableStageTurnEvidence(
     if (expanded.integrity !== "complete") break;
     evidenceRead = expanded;
   }
+  let turnStartedAt = nativeTurnStartedAt(turnRecords, codex);
+  // Equal temporal fences query the continuation admission itself. Its native
+  // start must remain recoverable even when final-output evidence hits its cap.
+  if (turnStartedAt === null && evidenceRead.prefixTruncated && Number.isFinite(startedTime)
+    && reportTime === startedTime && artifactBefore) turnStartedAt = await recoverNativeTurnStart(transcriptPath, codex, startedTime, artifactBefore);
   const terminalNotice = terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs);
   const nativeCut = terminalNotice?.errorClass === "turn_aborted";
+  const terminal = nativeCut || turn.state === "terminal" || (!codex && claudeApiErrorClosedAttempt(turnRecords));
   const newest = turnRecords.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {
-    turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
+    turn: terminal ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
+    ...(nativeCut ? { cutProse: message?.text ?? null } : {}),
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
+    lastAgentEventAt: agentEventAt(evidenceRead.records, codex),
+    turnStartedAt,
     launchOnly: codex
       && !evidenceRead.prefixTruncated
       && evidenceRead.records.length === 1
       && evidenceRead.records[0]?.type === "session_meta",
-    /* Gated on the same turn reading the rest of the engine trusts: a provider
-       error the CLI may still retry inside an open turn keeps the busy
-       projection (#516), and so never reads as the end of the turn here. */
-    terminalProviderMessage: nativeCut || turn.state === "terminal"
-      ? terminalNotice
-      : null,
+    /* Gated on the turn reading above: a provider error the CLI may still
+       retry inside an open turn keeps the busy projection (#516) and carries
+       no notice. The one reading past the shared projection is a Claude API
+       error stamped with a closing stop reason, which ends the stage attempt
+       whatever its class (`claudeApiErrorClosedAttempt`). */
+    terminalProviderMessage: terminal ? terminalNotice : null,
     ...(codex
       ? { backgroundTasks: [], backgroundReportedAt: null }
       : ledger

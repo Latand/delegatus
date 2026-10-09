@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
+import { seatGrowth } from "@/lib/composerScroll";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -13,6 +14,9 @@ import {
   clampSeatHeight, clampSeatTopWidth, clampSeatWidth, publishSeatSignal, SEAT_KEY_STEP, SEAT_SIDE_MAX_WIDTH, SEAT_SIDE_MIN_WIDTH,
   SEAT_TOP_MIN_WIDTH, expandKanbanSeat, useKanbanSeat,
 } from "./kanbanSeatStore";
+
+/* The most steps one measurement of the seat's growth takes (#1734). */
+const SEAT_GROWTH_PASSES = 8;
 
 /** The board's room for the seat on top: its container less the board's edge on each side (`--kb-edge`). */
 function seatRoom(section: HTMLElement | null): number {
@@ -76,6 +80,70 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     if (section.parentElement) observer.observe(section.parentElement);
     return () => observer.disconnect();
   }, [side, seat.collapsed]);
+
+  /* The seat on top grows with its composer (#1734). Its transcript yields to
+     a growing draft down to its minimum (the stylesheet holds it there), and
+     from then on the form is what runs short: it scrolls its own content. That
+     overflow is what the seat adds to its height, up to the stop its grip has,
+     and a transcript back above its minimum is what it gives back. One step
+     is not always the whole of it: a seat dragged to the grip's lower stop is
+     too short for the transcript's minimum and the control strip alone, and
+     the form cannot report more overflow than its own content, so the step
+     repeats until it changes nothing. It runs on every change inside the seat and before the frame is
+     painted, so the form is never drawn cut. The side seat is the full height
+     of the page and a folded one draws no conversation. */
+  useLayoutEffect(() => {
+    const section = sectionRef.current;
+    if (side || seat.collapsed || !section || typeof MutationObserver === "undefined") return;
+    let grown = 0;
+    const step = () => {
+      const conversation = section.querySelector<HTMLElement>("[data-orchestrator-conversation]");
+      const form = conversation?.querySelector<HTMLElement>("form");
+      const transcript = conversation?.querySelector<HTMLElement>("[data-composer-yields]");
+      let next = 0;
+      if (form && transcript) {
+        const limit = parseFloat(getComputedStyle(section).maxHeight);
+        next = seatGrowth({
+          grown,
+          transcriptHeight: transcript.getBoundingClientRect().height,
+          overflow: form.scrollHeight - form.clientHeight,
+          room: Number.isFinite(limit) ? limit - (section.getBoundingClientRect().height - grown) : 0,
+        });
+      }
+      if (next === grown) return false;
+      grown = next;
+      if (next > 0) section.style.setProperty("--seat-grow", `${next}px`);
+      else section.style.removeProperty("--seat-grow");
+      return true;
+    };
+    /* Each step reads the layout the one before it wrote; the seat at its
+       lower stop settles in two, and the bound is there for a layout that
+       never does. */
+    const measure = () => {
+      for (let pass = 0; pass < SEAT_GROWTH_PASSES && step(); pass += 1);
+    };
+    measure();
+    /* A transcript that streams changes nothing here: its row is held at its
+       minimum whatever is in it, so its own mutations are not measured. */
+    const observer = new MutationObserver((records) => {
+      const transcript = section.querySelector("[data-composer-yields]");
+      if (transcript && records.every((record) => transcript.contains(record.target))) return;
+      measure();
+    });
+    observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("resize", measure);
+    /* The seat eases its height, so the commit that sets a new height is
+       measured against the old one: what the form lacks at the grip's lower
+       stop is known once the height has arrived. */
+    const arrived = (event: TransitionEvent) => { if (event.target === section && event.propertyName === "height") measure(); };
+    section.addEventListener("transitionend", arrived);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+      section.removeEventListener("transitionend", arrived);
+      section.style.removeProperty("--seat-grow");
+    };
+  }, [side, seat.collapsed, height, topWidth]);
 
   /* The header toggle's dot reads the seat's state from here. */
   const onSeatSignal = useCallback((signal: SeatSignal) => publishSeatSignal(project, signal), [project]);
@@ -198,7 +266,10 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
   const onGripKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
-    const current = sectionRef.current?.getBoundingClientRect().height ?? height ?? 0;
+    /* Step from the height the seat is going to. The seat's height eases,
+       so a held arrow that read the drawn height mid-transition stepped from
+       a passing height and went nowhere, or back. */
+    const current = height ?? sectionRef.current?.getBoundingClientRect().height ?? 0;
     seat.setHeight(current + (event.key === "ArrowDown" ? SEAT_KEY_STEP : -SEAT_KEY_STEP));
   }, [height, seat]);
 
@@ -230,6 +301,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
         data-placement={seat.placement}
         data-role-host="seat"
         data-role="orchestrator"
+        {...(side || seat.collapsed ? {} : { "data-composer-grows": "" })}
         style={style}
       >
         <OrchestratorPanel

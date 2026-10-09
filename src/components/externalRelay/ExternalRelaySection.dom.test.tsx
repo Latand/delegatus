@@ -72,7 +72,7 @@ const answers: { accounts: unknown; relay: unknown; relayStatus: number; pairing
   relayStatus: 200,
   pairing: { status: "pending" },
 };
-function route(extra?: (url: string, init: RequestInit | undefined) => Response | undefined) {
+function route(extra?: (url: string, init: RequestInit | undefined) => Response | Promise<Response> | undefined) {
   harness.setRoute((url, init) => {
     const answer = extra?.(url, init);
     if (answer) return answer;
@@ -84,12 +84,14 @@ function route(extra?: (url: string, init: RequestInit | undefined) => Response 
   });
 }
 
-test("pairing starts from the address and shows the code and the link while the owner acts in the service", async () => {
+test("a custom address, reached behind the disclosure, pairs and shows the code and the link while the owner acts in the service", async () => {
   accounts({ codex: [signedIn("work")] });
   answers.relay = { relays: [], pending: [], status: [] };
   answers.pairing = { status: "pending" };
   route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? jsonResponse({ pairing: pending() }, 201) : undefined);
   const host = await mount(<ExternalRelaySection pairEngine="codex" />);
+  expect(host.querySelector("[data-external-relay-connect]")).toBeNull();
+  await click(host.querySelector("[data-external-relay-other-toggle]"));
   const form = host.querySelector("[data-external-relay-connect]")!;
   expect(form.textContent).toContain("Connect a relay service");
   await act(async () => typeInto(form.querySelector("input")!, "https://relay.example"));
@@ -124,10 +126,10 @@ test("a pending pairing resumes on open: the identity to confirm, confirm sends 
   expect(owner?.textContent).toBe("The relay service says this is Person A (@person_a). Is this you?");
   await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Yes, pair"));
   expect(harness.calls.find((call) => call.url === "/api/external-relay/pairings/pair-1" && call.method === "POST")?.body).toEqual({ ownerId: "owner-1" });
-  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6-astra" } });
+  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol" } });
   expect(paired).toEqual(["relay-1"]);
   expect(host.querySelector("[data-external-relay=relay-1]")).toBeTruthy();
-  expect(host.querySelector("[data-external-relay-connect]")).toBeTruthy();
+  expect(host.querySelector("[data-external-relay-connect-area]")).toBeTruthy();
 });
 
 test("a pairing the service declined shows its reason as text and starts again", async () => {
@@ -142,7 +144,7 @@ test("a pairing the service declined shows its reason as text and starts again",
   expect(ended.textContent).toContain("<b>not admitted</b>");
   expect(ended.querySelector("b")).toBeNull();
   await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Start again"));
-  expect(host.querySelector("[data-external-relay-connect]")).toBeTruthy();
+  expect(host.querySelector("[data-external-relay-connect-area]")).toBeTruthy();
 });
 
 test("a relay-provided link that is not a web address is never rendered as one", async () => {
@@ -198,7 +200,7 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
     engine.dispatchEvent(new (window as unknown as { Event: typeof Event }).Event("change", { bubbles: true }));
   });
   await act(async () => settle());
-  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6-astra", effort: null } });
+  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol", effort: null } });
 });
 
 test("a relay whose credential was refused reads as an error, and a paused one offers Resume and its failed targets refresh", async () => {
@@ -249,12 +251,15 @@ test("the setup guide's step pairs only when an account of the chosen engine is 
   const host = await mount(<RelayStep {...props} />);
   expect(host.querySelector("[data-onboarding-relay-engine=claude]")?.getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account")).toBe("signed-in");
+  expect((host.querySelector("[data-external-relay-connect-known=celestia]") as HTMLButtonElement).disabled).toBe(false);
+  await click(host.querySelector("[data-external-relay-other-toggle]"));
   expect((host.querySelector("[data-external-relay-connect] input") as HTMLInputElement).disabled).toBe(false);
 
   await click(host.querySelector("[data-onboarding-relay-engine=codex]"));
   expect(host.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account")).toBe("signed-out");
   expect(host.textContent).toContain("No Codex account is signed in here. Sign one in first.");
   expect((host.querySelector("[data-external-relay-connect] input") as HTMLInputElement).disabled).toBe(true);
+  expect((host.querySelector("[data-external-relay-connect-known=celestia]") as HTMLButtonElement).disabled).toBe(true);
   await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Go to Engines"));
   await click(host.querySelector("[data-onboarding-relay-skip]"));
   expect(gone).toEqual(["engines", "skip"]);
@@ -318,4 +323,341 @@ test("a refusal made by this install, or its own failure, never reads as the rel
       expect(text).not.toMatch(/relay service|Сервіс/i);
     }
   }
+});
+
+const CELESTIA = "https://chatmoderator.botfather.dev";
+const celestiaPending = (over: Record<string, unknown> = {}) => pending({
+  origin: CELESTIA, name: "Celestia Connect", description: "", verify_url: "https://t.me/celestia_bot?start=pair-ABCD", ...over,
+});
+type FakeWindow = { opener: unknown; closed: boolean; location: { href: string }; document: { body: { textContent: string } }; close: () => void };
+/** Stands in for `window.open` and records what the click did with the window it opened. */
+function windowOpen(mode: "opens" | "blocked") {
+  const opened: { url: string | undefined; target: string | undefined; win: FakeWindow }[] = [];
+  const win: FakeWindow = { opener: "page", closed: false, location: { href: "about:blank" }, document: { body: { textContent: "" } }, close() { this.closed = true; } };
+  (harness.dom as unknown as { open: unknown }).open = (url?: string, target?: string) => {
+    if (mode === "blocked") return null;
+    opened.push({ url, target, win });
+    return win;
+  };
+  return { opened, win };
+}
+const knownButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-external-relay-connect-known=celestia]");
+
+test("the Celestia button leads, shows its icon and description from the descriptor, and the address field stays behind a disclosure", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay()], pending: [], status: [] };
+  route((url) => url === "/api/external-relay/known" ? jsonResponse({ known: [{ id: "celestia", name: "Celestia", origin: CELESTIA, description: "Answers on your own machine.", iconUrl: `${CELESTIA}/.well-known/celestia-connect.jpg` }] }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const section = host.querySelector("[data-external-relay-section]")!;
+  expect(section.firstElementChild?.getAttribute("data-external-relay-connect-area")).toBe("");
+  const block = host.querySelector("[data-external-relay-known=celestia]")!;
+  expect(knownButton(host)?.textContent).toBe("Connect Celestia");
+  expect(block.textContent).toContain("Answers on your own machine.");
+  expect(block.querySelector("img")?.getAttribute("src")).toBe(`${CELESTIA}/.well-known/celestia-connect.jpg`);
+  expect(host.querySelector("[data-external-relay-connect]")).toBeNull();
+  const toggle = host.querySelector("[data-external-relay-other-toggle]")!;
+  expect(toggle.textContent).toBe("Other address…");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  await click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector("[data-external-relay-connect] input")).toBeTruthy();
+  await click(toggle);
+  expect(host.querySelector("[data-external-relay-connect]")).toBeNull();
+});
+
+test("with no descriptor the button still works under the listed name, and a connected Celestia replaces the button", async () => {
+  accounts({});
+  answers.relay = { relays: [], pending: [], status: [] };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  expect(knownButton(host)?.textContent).toBe("Connect Celestia");
+  expect(host.querySelector("[data-external-relay-monogram]")?.textContent).toBe("C");
+  answers.relay = { relays: [relay({ origin: CELESTIA, name: "Celestia Connect" })], pending: [], status: [] };
+  const connected = await mount(<ExternalRelaySection />);
+  expect(knownButton(connected)).toBeNull();
+  expect(connected.querySelector("[data-external-relay]")?.textContent).toContain("Celestia Connect");
+  expect(connected.querySelector("[data-external-relay-other-toggle]")).toBeTruthy();
+});
+
+test("one click pairs with the built-in origin, opens the window inside the click and points it at the verify link", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  answers.pairing = { status: "pending" };
+  const { opened, win } = windowOpen("opens");
+  let release: (value: Response) => void = () => {};
+  const held = new Promise<Response>((resolve) => { release = resolve; });
+  route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? held : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  // The click itself: the window is already open while the pairing request is still in flight.
+  await act(async () => knownButton(host)!.click());
+  expect(opened).toHaveLength(1);
+  expect(opened[0]!.url).toBe("about:blank");
+  expect(opened[0]!.target).toBe("_blank");
+  expect(win.opener).toBeNull();
+  expect(win.location.href).toBe("about:blank");
+  expect(harness.calls.find((call) => call.url === "/api/external-relay/pairings")?.body).toEqual({ url: CELESTIA });
+
+  await act(async () => { release(jsonResponse({ pairing: celestiaPending() }, 201)); await settle(); });
+  expect(win.location.href).toBe("https://t.me/celestia_bot?start=pair-ABCD");
+  expect(win.closed).toBe(false);
+  expect(opened).toHaveLength(1);
+  const card = host.querySelector("[data-external-relay-pairing]")!;
+  expect(card.querySelector("[data-external-relay-code]")?.textContent).toBe("ABCD-EFGH");
+  expect(card.textContent).toContain("Waiting for you to confirm in the relay service");
+  expect(card.querySelector("a")?.getAttribute("data-external-relay-link")).toBe("again");
+  expect(card.querySelector("a")?.textContent).toBe("Open the pairing page again");
+});
+
+test("when the browser blocks the window, the pairing card offers the link as the way in", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  answers.pairing = { status: "pending" };
+  windowOpen("blocked");
+  route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? jsonResponse({ pairing: celestiaPending() }, 201) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  await click(knownButton(host));
+  const link = host.querySelector("[data-external-relay-pairing] a")!;
+  expect(link.getAttribute("href")).toBe("https://t.me/celestia_bot?start=pair-ABCD");
+  expect(link.getAttribute("data-external-relay-link")).toBe("open");
+  expect(link.textContent).toBe("Open the relay service's pairing page");
+  expect(host.querySelector("[data-external-relay-code]")?.textContent).toBe("ABCD-EFGH");
+});
+
+test("a pairing with no usable link closes the window it opened, and a failed start closes it too", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  answers.pairing = { status: "pending" };
+  const first = windowOpen("opens");
+  route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? jsonResponse({ pairing: celestiaPending({ verify_url: "javascript:alert(1)" }) }, 201) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  await click(knownButton(host));
+  expect(first.win.closed).toBe(true);
+  expect(first.win.location.href).toBe("about:blank");
+  expect(host.querySelector("[data-external-relay-pairing] a")).toBeNull();
+  expect(host.querySelector("[data-external-relay-code]")?.textContent).toBe("ABCD-EFGH");
+});
+
+test("the window follows only an https verify link on the relay's origin or its verify channel; any other link closes it and stays in the card", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.pairing = { status: "pending" };
+  const cases: { verify: string; navigates: boolean }[] = [
+    { verify: "https://t.me/celestia_bot?start=pair-ABCD", navigates: true },
+    { verify: `${CELESTIA}/pair?c=ABCD-EFGH`, navigates: true },
+    { verify: `${CELESTIA.replace(/^https:/, "http:")}/pair`, navigates: false },
+    { verify: "https://elsewhere.example/pair", navigates: false },
+    { verify: "http://elsewhere.example/pair", navigates: false },
+  ];
+  for (const { verify, navigates } of cases) {
+    answers.relay = { relays: [], pending: [], status: [] };
+    const { win } = windowOpen("opens");
+    route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? jsonResponse({ pairing: celestiaPending({ verify_url: verify }) }, 201) : undefined);
+    const host = await mount(<ExternalRelaySection />);
+    await click(knownButton(host));
+    expect(win.location.href).toBe(navigates ? verify : "about:blank");
+    expect(win.closed).toBe(!navigates);
+    const link = host.querySelector("[data-external-relay-pairing] a");
+    expect(link?.getAttribute("data-external-relay-link")).toBe(navigates ? "again" : "open");
+    if (!navigates) expect(link?.getAttribute("href")).toBe(verify);
+  }
+});
+
+test("a service that is not available over https yet reads as that, in English and Ukrainian, and closes the window", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  const { win } = windowOpen("opens");
+  route((url, init) => url === "/api/external-relay/pairings" && init?.method === "POST" ? jsonResponse({ error: "http_public" }, 409) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  await click(knownButton(host));
+  const block = host.querySelector("[data-external-relay-known=celestia]")!;
+  expect(block.querySelector("[role=alert]")?.textContent).toBe("This service is not available over a secure connection yet. Try again later.");
+  expect(win.closed).toBe(true);
+  expect(block.querySelector("[role=alert]")?.textContent).not.toMatch(/http_public|refused \(/);
+  expect(knownButton(host)?.disabled).toBe(false);
+  const { relayErrorText } = await import("./ExternalRelaySection");
+  const { translate } = await import("@/lib/i18n");
+  expect(relayErrorText((key, params) => translate("uk", key, params), "http_public")).toBe("Сервіс поки що недоступний через захищене з’єднання. Спробуйте пізніше.");
+});
+
+test("a first Celestia connection takes the signed-in engine's default model and is answered by this install", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [celestiaPending()], status: [] };
+  answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
+  const celestia = relay({ origin: CELESTIA, name: "Celestia Connect", targets: [target(), target({ id: "bot-2", name: "Other chat", answered_by: "install" })] });
+  route((url, init) => {
+    if (url === "/api/external-relay/pairings/pair-1" && init?.method === "POST") return jsonResponse({ relay: celestia });
+    if (init?.method === "PATCH") return jsonResponse({ relay: celestia, target: {} });
+    return undefined;
+  });
+  const host = await mount(<ExternalRelaySection />);
+  expect(host.querySelector("[data-external-relay-owner]")?.textContent).toBe("The relay service says this is Person A (@person_a). Is this you?");
+  await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Yes, pair"));
+  const patches = harness.calls.filter((call) => call.method === "PATCH");
+  const { defaultModelFor } = await import("@/lib/agent/models");
+  expect(patches.map((call) => [call.url, call.body])).toEqual([
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", engine: "claude", model: defaultModelFor("claude") } }],
+    ["/api/external-relay/relays/relay-1/targets/bot-1", { answered_by: "install" }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-2", engine: "claude", model: defaultModelFor("claude") } }],
+  ]);
+});
+
+test("a first Celestia connection with no signed-in account leaves the targets for the operator", async () => {
+  accounts({});
+  answers.relay = { relays: [], pending: [celestiaPending()], status: [] };
+  answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
+  const celestia = relay({ origin: CELESTIA, name: "Celestia Connect" });
+  route((url, init) => url === "/api/external-relay/pairings/pair-1" && init?.method === "POST" ? jsonResponse({ relay: celestia }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Yes, pair"));
+  expect(harness.calls.filter((call) => call.method === "PATCH")).toEqual([]);
+});
+
+test("in Ukrainian the button, its lead and the disclosure are written in Ukrainian", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  route();
+  setLocale("uk");
+  try {
+    const host = await mount(<ExternalRelaySection />);
+    expect(knownButton(host)?.textContent).toBe("Під’єднати Celestia");
+    expect(host.querySelector("[data-external-relay-known]")?.textContent).toContain("Celestia відкриється в новій вкладці.");
+    expect(host.querySelector("[data-external-relay-other-toggle]")?.textContent).toBe("Інша адреса…");
+  } finally {
+    setLocale("en");
+  }
+});
+
+const ANSWERS_URL = "/api/external-relay/relays/relay-1/targets/bot-1/answers";
+const exchanges = {
+  answers: [
+    { requestId: "rq_2", startedAt: "2026-10-06T09:05:00.000Z", finishedAt: "2026-10-06T09:05:04.000Z", durationMs: 4200, state: "finished", outcome: "declined:handoff", delivery: "accepted", request: "@helper mute him for an hour", answer: null },
+    { requestId: "rq_1", startedAt: "2026-10-06T09:00:00.000Z", finishedAt: "2026-10-06T09:00:06.000Z", durationMs: 6100, state: "finished", outcome: "answered", delivery: "accepted", request: "When is the <b>meetup</b>?", answer: "Thursday at 18:30." },
+  ],
+  retentionDays: 30,
+};
+const handoffRecord = {
+  requestId: "rq_2", startedAt: "2026-10-06T09:05:00.000Z", finishedAt: "2026-10-06T09:05:04.000Z", durationMs: 4200, state: "finished",
+  outcome: "declined:handoff", delivery: "accepted", engine: "claude", model: "opus", answer: { action: "handoff", text: "", reply_to: null },
+  input: {
+    conversation: [{ id: "m9", author: { key: "u_a", name: "Admin A", self: false }, text: "@helper mute him for an hour", reply_to: null }],
+    respond_to: "m9", request_text: null,
+    requester: { key: "u_a", is_admin: true, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false },
+    tools: [{ name: "restrict_member", summary: "Mute a participant", mode: "handoff" }],
+  },
+};
+function answersRoute(list: unknown = exchanges) {
+  route((url) => {
+    if (url === ANSWERS_URL) return jsonResponse(list);
+    if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: handoffRecord });
+    if (url === `${ANSWERS_URL}/rq_gone`) return jsonResponse({ error: "not_found" }, 404);
+    return undefined;
+  });
+}
+
+test("recent answers open from the target row, list the kept exchanges and show one read-only", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+  answersRoute();
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  const toggle = row.querySelector("[data-external-relay-answers-toggle]")!;
+  expect(toggle.textContent).toBe("Recent answers");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(harness.calls.some((call) => call.url === ANSWERS_URL)).toBe(false);
+  await click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  const list = row.querySelector("[data-external-relay-answer-list]")!;
+  const items = Array.from(list.querySelectorAll("[data-external-relay-answer]"));
+  expect(items.map((item) => item.getAttribute("data-external-relay-answer"))).toEqual(["rq_2", "rq_1"]);
+  expect(items[0]!.textContent).toContain("Handed off to the service");
+  expect(items[1]!.textContent).toContain("Answered");
+  expect(items[1]!.textContent).toContain("When is the <b>meetup</b>?");
+  expect(items[1]!.querySelector("b")).toBeNull();
+  expect(row.textContent).toContain("Each exchange is kept for 30 days and can only be read.");
+
+  await click(items[0]);
+  const exchange = row.querySelector("[data-external-relay-exchange=rq_2]")!;
+  expect(exchange.querySelector("[data-external-relay-exchange-outcome]")?.textContent).toBe("Handed off to the service");
+  expect(exchange.querySelector("[data-external-relay-exchange-request]")?.textContent).toBe("@helper mute him for an hour");
+  expect(exchange.querySelector("[data-external-relay-exchange-answer]")?.textContent).toBe("Handed back to the service, whose own assistant answers it.");
+  expect(exchange.textContent).toContain("Admin A · Admin");
+  expect(exchange.textContent).toContain("Claude · Opus 5.5");
+  expect(exchange.textContent).toContain("Received the result");
+  expect(exchange.querySelector("[data-external-relay-exchange-input]")?.textContent).toContain("\"restrict_member\"");
+  // Read-only: no composer, no field to type into.
+  expect(exchange.querySelector("textarea, input")).toBeNull();
+  await click(Array.from(exchange.querySelectorAll("button")).find((button) => button.textContent === "Back to recent answers"));
+  expect(row.querySelector("[data-external-relay-answer-list]")).toBeTruthy();
+});
+
+for (const locale of ["en", "uk"] as const)
+  for (const [role, flags, labels] of [
+    ["member", { is_admin: false, is_owner: false, is_anonymous_admin: false }, { en: "Member", uk: "Учасник" }],
+    ["admin", { is_admin: true, is_owner: false, is_anonymous_admin: false }, { en: "Admin", uk: "Адміністратор" }],
+    ["owner", { is_admin: false, is_owner: true, is_anonymous_admin: false }, { en: "Member · the owner", uk: "Учасник · власник" }],
+    ["anonymous admin", { is_admin: true, is_owner: false, is_anonymous_admin: true }, { en: "Admin · anonymous", uk: "Адміністратор · анонімно" }],
+  ] as const)
+    test(`the exchange shows service role flags for ${role} (${locale})`, async () => {
+      setLocale(locale);
+      try {
+        accounts({ claude: [signedIn("main")] });
+        answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+        route((url) => {
+          if (url === ANSWERS_URL) return jsonResponse(exchanges);
+          if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: {
+            ...handoffRecord, input: { ...handoffRecord.input, requester: { ...handoffRecord.input.requester, ...flags } },
+          } });
+          return undefined;
+        });
+        const host = await mount(<ExternalRelaySection />);
+        await click(host.querySelector("[data-external-relay-answers-toggle]"));
+        await click(host.querySelector("[data-external-relay-answer=rq_2]"));
+        expect(host.querySelector("[data-external-relay-exchange=rq_2]")?.textContent).toContain(`Admin A · ${labels[locale]}`);
+      } finally {
+        setLocale("en");
+      }
+    });
+
+test("recent answers in Ukrainian, empty and expired", async () => {
+  setLocale("uk");
+  try {
+    accounts({ claude: [signedIn("main")] });
+    answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+    answersRoute({ answers: [], retentionDays: 30 });
+    const host = await mount(<ExternalRelaySection />);
+    const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+    const toggle = row.querySelector("[data-external-relay-answers-toggle]")!;
+    expect(toggle.textContent).toBe("Останні відповіді");
+    await click(toggle);
+    expect(row.querySelector("[data-external-relay-answers-empty]")?.textContent).toBe("За останні 30 днів відповідей немає.");
+    await click(toggle);
+    answersRoute({ ...exchanges, answers: [{ ...exchanges.answers[0], requestId: "rq_gone" }] });
+    await click(toggle);
+    await click(row.querySelector("[data-external-relay-answer=rq_gone]"));
+    expect(row.querySelector("[data-external-relay-exchange]")?.textContent).toContain("Цей обмін більше не зберігається.");
+  } finally {
+    setLocale("en");
+  }
+});
+
+test("the member limit shows the default, saves a number on leaving the field, and saves an empty field as no limit", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+  route((url, init) => url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  const field = row.querySelector("[data-external-relay-member-limit]") as HTMLInputElement;
+  expect(field.value).toBe("10");
+  expect(row.textContent).toContain("Answers per member per hour");
+  expect(row.textContent).toContain("The owner and chat admins are not counted.");
+  const patches = () => harness.calls.filter((call) => call.method === "PATCH").map((call) => call.body);
+  await act(async () => { field.focus(); });
+  await act(async () => typeInto(field, "3"));
+  await act(async () => { field.blur(); });
+  await act(async () => settle());
+  expect(patches()).toEqual([{ target: { id: "bot-1", memberLimitPerHour: 3 } }]);
+  await act(async () => { field.focus(); });
+  await act(async () => typeInto(field, ""));
+  await act(async () => { field.blur(); });
+  await act(async () => settle());
+  expect(patches().at(-1)).toEqual({ target: { id: "bot-1", memberLimitPerHour: null } });
 });

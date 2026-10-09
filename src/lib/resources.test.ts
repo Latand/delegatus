@@ -5,10 +5,15 @@ import path from "node:path";
 
 import { createTranscriptHostObserver, type TranscriptHost } from "@/lib/agent/transcriptHost";
 import { procBackend } from "@/lib/proc";
+import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
 import { allowedKillTarget, applyResourceTargets, buildResourceSnapshot, canonicalResourceEntry, conflictingResourceHost, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES } from "./resources";
+
+const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
+const NODE_SHELL = shellQuote(NODE_BIN);
 
 const SESSION_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const SECOND_SESSION_ID = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
@@ -127,6 +132,19 @@ function fileHasText(filename: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Holds the caller until a fixture process has written a file. The wait is
+    synchronous on purpose: it stands inside a signal the collector is sending,
+    so the collector's own timers cannot run past the fixture. */
+function waitForFixtureText(filename: string, timeoutMs = 1_000): boolean {
+  const deadline = Date.now() + timeoutMs;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (!fileHasText(filename)) {
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(pause, 0, 0, 1);
+  }
+  return true;
 }
 
 interface FixtureProcessGroup {
@@ -281,6 +299,11 @@ function deferred<T>() {
 }
 
 const CLEANUP_DEADLINE = Symbol("cleanup-deadline");
+/** How long a test waits for a read that the collector's own cleanup deadline
+    has to end. It elapses only when the collector never settles. What a
+    passing run takes is the worker starting plus the collector's limits, and
+    the first of those belongs to the machine. */
+const SETTLEMENT_STALL_MS = 1_000;
 
 async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | typeof CLEANUP_DEADLINE> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -348,7 +371,7 @@ async function withResourceWorkerChunks<T>(
   const pidFile = path.join(directory, "pid");
   const encodedChunks = JSON.stringify(chunks.map((chunk) => chunk.toString("base64")));
   writeFileSync(executable, [
-    "#!/usr/bin/env node",
+    `#!${NODE_BIN}`,
     'const { readFileSync, writeFileSync } = require("node:fs");',
     `writeFileSync(${JSON.stringify(pidFile)}, readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0]);`,
     `const chunks = ${encodedChunks}.map((chunk) => Buffer.from(chunk, "base64"));`,
@@ -376,6 +399,54 @@ async function withResourceWorkerChunks<T>(
 function stamped(payload: ResourcesPayload, capturedAt: number, stale: boolean): ResourcesPayload {
   return { ...payload, sessionsCapturedAt: new Date(capturedAt).toISOString(), sessionsStale: stale };
 }
+
+function gatedInProcessReader() {
+  const payload: ResourcesPayload = { system: null, sessions: [] };
+  const diagnostic = { fresh: false, status: "complete" as const, durationMs: 0, phases: {
+    systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+  } };
+  let builds = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const reader = createResourcesReader(async () => {
+    builds += 1;
+    await gate;
+    return payload;
+  }, () => null, Date.now, () => diagnostic, { inProcess: true, collectorId: "pending-fixture", initial: null, persist: () => true });
+  return { reader, release, builds: () => builds };
+}
+
+test("a bounded ordinary read reports a first collection as pending and the next read serves it", async () => {
+  const { reader, release, builds } = gatedInProcessReader();
+
+  const pending = await reader.read(false, { waitMs: 5 });
+  expect(pending.diagnostic).toMatchObject({ status: "pending", cache: { status: "miss" } });
+  expect(pending.diagnostic).not.toHaveProperty("degradedReason");
+  expect(pending.payload).toMatchObject({ sessions: [], sessionsCapturedAt: null, sessionsStale: true });
+
+  /* The wait ended; the collection did not. A second caller joins it. */
+  const again = await reader.read(false, { waitMs: 5 });
+  expect(again.diagnostic.status).toBe("pending");
+  expect(builds()).toBe(1);
+
+  release();
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  const served = await reader.read(false, { waitMs: 5 });
+  expect(served.diagnostic).toMatchObject({ status: "complete", cache: { status: "memory" } });
+  expect(served.payload.sessionsStale).toBe(false);
+  expect(builds()).toBe(1);
+});
+
+test("a fresh read waits for its observation whatever the ordinary budget", async () => {
+  const { reader, release } = gatedInProcessReader();
+  let settled = false;
+  const fresh = reader.read(true, { waitMs: 1 }).then((read) => { settled = true; return read; });
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  expect(settled).toBe(false);
+  release();
+  expect((await fresh).diagnostic).toMatchObject({ status: "complete", fresh: true });
+});
 
 function workerTestReader(options: Parameters<typeof createResourcesReader>[4] = {}) {
   const payload: ResourcesPayload = { system: null, sessions: [] };
@@ -432,7 +503,7 @@ describe("resource observation", () => {
         delete env.XDG_CACHE_HOME;
         delete env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
         delete env.LLV_RESOURCE_OBSERVATION_WORKER;
-        const child = Bun.spawn(["/usr/bin/node", path.join(directory, bundleName)], {
+        const child = Bun.spawn([NODE_BIN, path.join(directory, bundleName)], {
           cwd: process.cwd(),
           env,
           stdin: new Blob(["{\"type\":\"collect\",\"fresh\":false,\"identityEpoch\":null,\"files\":[],\"hosts\":[]}\n"]),
@@ -1403,7 +1474,7 @@ describe("resource recurring reads", () => {
         }).read(true);
         let initial: Awaited<typeof read> | typeof CLEANUP_DEADLINE;
         try {
-          initial = await settleWithin(read, 120);
+          initial = await settleWithin(read, SETTLEMENT_STALL_MS);
         } finally {
           kill.mockRestore();
         }
@@ -1449,7 +1520,7 @@ describe("resource recurring reads", () => {
       let initial: Awaited<typeof read> | typeof CLEANUP_DEADLINE;
       let handles = -1;
       try {
-        initial = await settleWithin(read, 120);
+        initial = await settleWithin(read, SETTLEMENT_STALL_MS);
         if (initial !== CLEANUP_DEADLINE) {
           await new Promise<void>((resolve) => setImmediate(resolve));
           handles = newReferencedHandleCount(baseline);
@@ -1457,14 +1528,16 @@ describe("resource recurring reads", () => {
       } finally {
         kill.mockRestore();
       }
-      killConfirmedFixtureProcessGroups(
-        path.join(directory, "fixture-worker"),
-        confirmedFixtureProcessGroups(path.join(directory, "fixture-worker")),
-      );
+      /* No signal reached the worker, so it is still running. A read that
+         settled over it was ended by the cleanup deadline and by nothing
+         else, whatever the machine's speed. */
+      const survivors = confirmedFixtureProcessGroups(path.join(directory, "fixture-worker"));
+      killConfirmedFixtureProcessGroups(path.join(directory, "fixture-worker"), survivors);
       await settleWithin(read, 300);
 
       expect(initial === CLEANUP_DEADLINE).toBeFalse();
       if (initial === CLEANUP_DEADLINE) return;
+      expect(survivors.length).toBeGreaterThan(0);
       expect(initial.diagnostic).toMatchObject({
         degradedReason: "collector-crash",
         failure: {
@@ -1578,7 +1651,7 @@ describe("resource recurring reads", () => {
     });
   });
 
-  test("TERM-handler escaped descendants are absent before every worker outcome settles", async () => {
+  describe("TERM-handler escaped descendants are absent before every worker outcome settles", () => {
     const fixtures = [
       {
         name: "success",
@@ -1629,102 +1702,142 @@ describe("resource recurring reads", () => {
       },
     ] as const;
 
-    for (const pipes of ["inherited", "redirected"] as const) {
-      for (const fixture of fixtures) {
-        await withResourceWorkerScript((directory) => {
-          const escapedScript = path.join(directory, "escaped-child.cjs");
-          const memberScript = path.join(directory, "term-member.cjs");
-          const escapedPid = path.join(directory, "term-escaped-pid");
-          const escapedReady = path.join(directory, "term-escaped-ready");
-          const memberReady = path.join(directory, "term-member-ready");
-          writeFileSync(escapedScript, [
-            '#!/usr/bin/node',
-            'const fs = require("node:fs");',
-            'const [pidFile, readyFile] = process.argv.slice(2);',
-            'process.on("SIGTERM", () => {});',
-            'process.on("SIGINT", () => {});',
-            'const hostPid = fs.readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0];',
-            'fs.writeFileSync(pidFile, hostPid);',
-            'fs.writeFileSync(readyFile, "ready");',
-            'setInterval(() => {}, 1_000);',
-            '',
-          ].join("\n"));
-          writeFileSync(memberScript, [
-            '#!/usr/bin/node',
-            'const fs = require("node:fs");',
-            'const { spawn } = require("node:child_process");',
-            'const [escapedScript, escapedPid, escapedReady, memberReady, pipes] = process.argv.slice(2);',
-            'let handled = false;',
-            'process.on("SIGTERM", () => {',
-            '  if (handled) return;',
-            '  handled = true;',
-            '  const stdio = pipes === "inherited" ? ["ignore", "inherit", "inherit"] : "ignore";',
-            '  const child = spawn(process.execPath, [escapedScript, escapedPid, escapedReady], { detached: true, stdio });',
-            '  child.unref();',
-            '  process.exit(0);',
-            '});',
-            'fs.writeFileSync(memberReady, "ready");',
-            'setInterval(() => {}, 1_000);',
-            '',
-          ].join("\n"));
-          return [
-            `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
-            `trap 'exit 0' TERM INT`,
-            `/usr/bin/node "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedReady}" "${memberReady}" "${pipes}" &`,
-            "member_pid=$!",
-            `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
-            "sleep 0.08",
-            fixture.name === "crash"
-              ? `kill -TERM "$member_pid"; while [ ! -e "${escapedReady}" ]; do sleep 0.005; done; exit 7`
-              : fixture.name === "timeout"
-                ? `kill -TERM "$member_pid"; while [ ! -e "${escapedReady}" ]; do sleep 0.005; done`
-              : fixture.output,
-            "while :; do sleep 0.01; done",
-          ];
-        }, async (directory) => {
-          const baseline = referencedHandles();
-          const escapedPidFile = path.join(directory, "term-escaped-pid");
-          const realKill = process.kill.bind(process);
-          const kill = fixture.denyEscaped
-            ? spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
-                if (pid > 0 && signal !== 0 && existsSync(escapedPidFile)
-                  && pid === Number(readFileSync(escapedPidFile, "utf8"))) throw errno("EPERM");
-                return realKill(pid, signal as NodeJS.Signals | number | undefined);
-              }) as typeof process.kill)
-            : null;
-          let escapedPid = 0;
-          let leaked = false;
-          let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
-          try {
-            outcome = await workerTestReader({
-              initial: null,
-              workerLimits: {
-                observeTimeoutMs: 900,
-                inputTimeoutMs: 10,
-                timeoutMs: fixture.name === "timeout" ? 180 : 500,
-                closeTimeoutMs: 40,
-                cleanupTimeoutMs: 150,
-                headroomMs: 250,
-              },
-            }).read(true);
-            for (let attempt = 0; attempt < 20 && !existsSync(escapedPidFile); attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 5));
-            }
-            escapedPid = Number(readFileSync(escapedPidFile, "utf8"));
-            leaked = processExists(escapedPid);
-          } finally {
-            kill?.mockRestore();
-            if (escapedPid > 0 && processExists(escapedPid)) realKill(escapedPid, "SIGKILL");
+    /* One worker lifecycle per test. Twelve in one test shared a single
+       5 s test budget, which a busy machine spent before the last of them. */
+    test.each((["inherited", "redirected"] as const).flatMap((pipes) => fixtures.map((fixture) => ({
+      label: `${pipes} ${fixture.name}`,
+      pipes,
+      fixture,
+    }))))("$label", async ({ pipes, fixture }) => {
+      await withResourceWorkerScript((directory) => {
+        const escapedScript = path.join(directory, "escaped-child.cjs");
+        const memberScript = path.join(directory, "term-member.cjs");
+        const escapedPid = path.join(directory, "term-escaped-pid");
+        const escapedReady = path.join(directory, "term-escaped-ready");
+        const memberReady = path.join(directory, "term-member-ready");
+        writeFileSync(escapedScript, [
+          `#!${NODE_BIN}`,
+          'const fs = require("node:fs");',
+          'const [readyFile] = process.argv.slice(2);',
+          'process.on("SIGTERM", () => {});',
+          'process.on("SIGINT", () => {});',
+          'fs.writeFileSync(readyFile, "ready");',
+          'setInterval(() => {}, 1_000);',
+          '',
+        ].join("\n"));
+        writeFileSync(memberScript, [
+          `#!${NODE_BIN}`,
+          'const fs = require("node:fs");',
+          'const { spawn } = require("node:child_process");',
+          'const [escapedScript, escapedPid, escapedReady, memberReady, pipes] = process.argv.slice(2);',
+          'let handled = false;',
+          'process.on("SIGTERM", () => {',
+          '  if (handled) return;',
+          '  handled = true;',
+          '  const stdio = pipes === "inherited" ? ["ignore", "inherit", "inherit"] : "ignore";',
+          '  const child = spawn(process.execPath, [escapedScript, escapedReady], { detached: true, stdio });',
+          // /proc is mounted in the host PID namespace. The spawning thread
+          // has exactly one child, whose host PID is available immediately;
+          // the child's Node bootstrap must not race the cleanup deadline.
+          '  const hostPid = fs.readFileSync("/proc/thread-self/children", "utf8").trim();',
+          '  if (!/^\\d+$/.test(hostPid)) throw new Error("expected one escaped child");',
+          '  fs.writeFileSync(escapedPid, hostPid);',
+          '  child.unref();',
+          // Keep the owner present while cleanup verifies its identity. The
+          // later SIGKILL removes it and the escaped child together.
+          '  setInterval(() => {}, 1_000);',
+          '});',
+          // The handler is installed by now; the host PID names this member
+          // to the test, which holds cleanup until the handler has run.
+          'fs.writeFileSync(memberReady, fs.readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0]);',
+          'setInterval(() => {}, 1_000);',
+          '',
+        ].join("\n"));
+        return [
+          `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+          `trap 'exit 0' TERM INT`,
+          `${NODE_SHELL} "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedReady}" "${memberReady}" "${pipes}" &`,
+          "member_pid=$!",
+          `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
+          "sleep 0.08",
+          fixture.name === "crash"
+            ? `kill -TERM "$member_pid"; while [ ! -e "${escapedReady}" ]; do sleep 0.005; done; exit 7`
+            : fixture.name === "timeout"
+              ? `kill -TERM "$member_pid"; while [ ! -e "${escapedReady}" ]; do sleep 0.005; done`
+            : fixture.output,
+          // Avoid short-lived sleep children racing namespace ownership
+          // verification; one blocking child keeps the process tree stable.
+          "tail -f /dev/null & wait",
+        ];
+      }, async (directory) => {
+        const baseline = referencedHandles();
+        const escapedPidFile = path.join(directory, "term-escaped-pid");
+        const memberReadyFile = path.join(directory, "term-member-ready");
+        const realKill = process.kill.bind(process);
+        let injectedDenial = false;
+        let memberTermDelivered = false;
+        /* Cleanup gives a member closeTimeoutMs between its SIGTERM and the
+           SIGKILL behind it, and the timeout fixture's worker budget can end
+           before the member has installed its handler. A member killed before
+           its handler runs never escapes anything, and the escape is what
+           this test is about. So the first SIGTERM cleanup sends waits for the
+           handler to be installed, and the member's own SIGTERM returns once
+           the handler has run. No series on this host lost that window by
+           itself; a member whose handler is delayed past it shows the loss. */
+        const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+          if (fixture.denyEscaped && pid > 0 && signal !== 0 && existsSync(escapedPidFile)
+            && pid === Number(readFileSync(escapedPidFile, "utf8"))) {
+            injectedDenial = true;
+            throw errno("EPERM");
           }
-          await new Promise<void>((resolve) => setImmediate(resolve));
-          const label = `${pipes} ${fixture.name}`;
+          if (memberTermDelivered || pid <= 0 || signal !== "SIGTERM") {
+            return realKill(pid, signal as NodeJS.Signals | number | undefined);
+          }
+          if (!waitForFixtureText(memberReadyFile)
+            || pid !== Number(readFileSync(memberReadyFile, "utf8"))) return realKill(pid, signal);
+          memberTermDelivered = true;
+          const delivered = realKill(pid, signal);
+          waitForFixtureText(escapedPidFile);
+          return delivered;
+        }) as typeof process.kill);
+        let escapedPid = 0;
+        let leaked = false;
+        let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
+        try {
+          /* Only the timeout fixture's worker budget and the SIGTERM to
+             SIGKILL window elapse here. The other limits bound a stalled
+             fixture: the worker budget covers a member starting on a busy
+             machine, cleanup covers both holds above, and the whole
+             observation stays inside the default test timeout. */
+          outcome = await workerTestReader({
+            initial: null,
+            workerLimits: {
+              observeTimeoutMs: 4_600,
+              inputTimeoutMs: 10,
+              timeoutMs: fixture.name === "timeout" ? 180 : 2_000,
+              closeTimeoutMs: 40,
+              cleanupTimeoutMs: 2_250,
+              headroomMs: 250,
+            },
+          }).read(true);
+          // Read the completed receipt and sample liveness at settlement;
+          // waiting here would allow a late cleanup to hide a leak.
+          escapedPid = Number(readFileSync(escapedPidFile, "utf8"));
+          expect(escapedPid, `${pipes} ${fixture.name} escaped PID`).toBeGreaterThan(0);
+          leaked = processExists(escapedPid);
+        } finally {
+          kill.mockRestore();
+          if (escapedPid > 0 && processExists(escapedPid)) realKill(escapedPid, "SIGKILL");
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const label = `${pipes} ${fixture.name}`;
 
-          expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
-          expect(leaked, `${label} escaped descendant`).toBe(fixture.escapedAtSettlement);
-          expect(newReferencedHandleCount(baseline), `${label} referenced handles`).toBe(0);
-        });
-      }
-    }
+        expect(leaked, `${label} escaped descendant`).toBe(fixture.escapedAtSettlement);
+        expect(newReferencedHandleCount(baseline), `${label} referenced handles`).toBe(0);
+        if (fixture.denyEscaped) expect(injectedDenial, `${label} injected denial`).toBeTrue();
+        expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
+      });
+    });
   });
 
   test("pre-armed owner-mutating TERM descendants observe member-before-root cleanup", async () => {
@@ -1773,7 +1886,7 @@ describe("resource recurring reads", () => {
           const transitionArmed = path.join(directory, "owner-transition-armed");
           const transitionOrder = path.join(directory, "owner-transition-order");
           writeFileSync(escapedScript, [
-            '#!/usr/bin/node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
@@ -1786,7 +1899,7 @@ describe("resource recurring reads", () => {
             '',
           ].join("\n"));
           writeFileSync(memberScript, [
-            '#!/usr/bin/node',
+            `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
             'const { spawn } = require("node:child_process");',
             'const [escapedScript, escapedPid, escapedNamespace, escapedReady, memberReady, ownerMode, transitionOrder] = process.argv.slice(2);',
@@ -1812,7 +1925,7 @@ describe("resource recurring reads", () => {
             `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
             `readlink /proc/self/ns/pid > "${path.join(directory, "root-namespace")}"`,
             `trap 'printf "root\\n" >> "${transitionOrder}"; exit 0' TERM INT`,
-            `/usr/bin/node "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedNamespace}" "${escapedReady}" "${memberReady}" "${owner}" "${transitionOrder}" &`,
+            `${NODE_SHELL} "${memberScript}" "${escapedScript}" "${escapedPid}" "${escapedNamespace}" "${escapedReady}" "${memberReady}" "${owner}" "${transitionOrder}" &`,
             "member_pid=$!",
             `while [ ! -e "${memberReady}" ]; do sleep 0.005; done`,
             `: > "${transitionArmed}"`,
@@ -1904,7 +2017,7 @@ describe("resource recurring reads", () => {
       const escapedScript = path.join(directory, "retained-namespace-child.cjs");
       const memberScript = path.join(directory, "retained-namespace-member.cjs");
       writeFileSync(escapedScript, [
-        '#!/usr/bin/node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const [pidFile, namespaceFile, readyFile] = process.argv.slice(2);',
         'process.on("SIGTERM", () => {});',
@@ -1916,7 +2029,7 @@ describe("resource recurring reads", () => {
         '',
       ].join("\n"));
       writeFileSync(memberScript, [
-        '#!/usr/bin/node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [escapedScript, pidFile, namespaceFile, readyFile, memberReady] = process.argv.slice(2);',
@@ -1936,7 +2049,7 @@ describe("resource recurring reads", () => {
       return [
         `readlink /proc/self/ns/pid > "${path.join(directory, "root-namespace")}"`,
         "trap 'exit 0' TERM INT",
-        `/usr/bin/node "${memberScript}" "${escapedScript}" "${path.join(directory, "escaped-pid")}" "${path.join(directory, "escaped-namespace")}" "${path.join(directory, "escaped-ready")}" "${path.join(directory, "member-ready")}" &`,
+        `${NODE_SHELL} "${memberScript}" "${escapedScript}" "${path.join(directory, "escaped-pid")}" "${path.join(directory, "escaped-namespace")}" "${path.join(directory, "escaped-ready")}" "${path.join(directory, "member-ready")}" &`,
         `while [ ! -e "${path.join(directory, "member-ready")}" ]; do sleep 0.005; done`,
         `while [ ! -e "${path.join(directory, "release")}" ]; do sleep 0.005; done`,
         `printf '%s\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
@@ -1992,7 +2105,7 @@ describe("resource recurring reads", () => {
     await withResourceWorkerScript((directory) => {
       const memberScript = path.join(directory, "concurrent-term-member.cjs");
       writeFileSync(memberScript, [
-        '#!/usr/bin/node',
+        `#!${NODE_BIN}`,
         'const fs = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         'const [directory, key] = process.argv.slice(2);',
@@ -2023,7 +2136,7 @@ describe("resource recurring reads", () => {
         `printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
         `readlink /proc/self/ns/pid > "${directory}/$host_pid.root-namespace"`,
         "trap 'exit 0' TERM INT",
-        `/usr/bin/node "${memberScript}" "${directory}" "$host_pid" &`,
+        `${NODE_SHELL} "${memberScript}" "${directory}" "$host_pid" &`,
         `while [ ! -e "${directory}/$host_pid.member" ]; do sleep 0.005; done`,
         `while [ ! -e "${directory}/$host_pid.release" ]; do sleep 0.005; done`,
         `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
@@ -2097,6 +2210,69 @@ describe("resource recurring reads", () => {
     });
   }, 15_000);
 
+  test("a contained member that exits while cleanup verifies it leaves the observation healthy", async () => {
+    await withResourceWorkerScript((directory) => {
+      const holder = (name: string) => `sh -c 'read host_pid _ < /proc/self/stat; printf "%s" "$host_pid" > "$1"; exec tail -f /dev/null' sh "${path.join(directory, name)}" &`;
+      return [
+        `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+        "trap 'exit 0' TERM INT",
+        holder("holder-a"),
+        holder("holder-b"),
+        `while [ ! -s "${path.join(directory, "holder-a")}" ] || [ ! -s "${path.join(directory, "holder-b")}" ]; do sleep 0.005; done`,
+        `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
+        "wait",
+      ];
+    }, async (directory) => {
+      const realKill = process.kill.bind(process);
+      const realIdentity = procBackend.processIdentity.bind(procBackend);
+      const holders = () => ["holder-a", "holder-b"].map((name) => Number(readFileSync(path.join(directory, name), "utf8")));
+      let victim = 0;
+      let exitedDuringVerification = false;
+      /* Cleanup verifies a member and then signals it, one member at a time.
+         The first signalled holder names the other as the next one verified;
+         that one is gone by the time its first identity read returns. */
+      const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+        if (victim === 0 && signal === "SIGTERM" && holders().includes(pid)) {
+          victim = holders().find((holder) => holder !== pid)!;
+        }
+        return realKill(pid, signal as NodeJS.Signals | number | undefined);
+      }) as typeof process.kill);
+      const processIdentity = spyOn(procBackend, "processIdentity").mockImplementation((pid) => {
+        const identity = realIdentity(pid);
+        if (pid !== victim || exitedDuringVerification || identity === null) return identity;
+        exitedDuringVerification = true;
+        realKill(victim, "SIGKILL");
+        const deadline = Date.now() + 5_000;
+        while (realIdentity(victim) !== null && Date.now() < deadline) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+        }
+        return identity;
+      });
+      let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
+      try {
+        outcome = await workerTestReader({
+          initial: null,
+          workerLimits: {
+            observeTimeoutMs: 20_000,
+            inputTimeoutMs: 10,
+            timeoutMs: 10_000,
+            closeTimeoutMs: 250,
+            cleanupTimeoutMs: 6_000,
+            headroomMs: 900,
+          },
+        }).read(true);
+      } finally {
+        kill.mockRestore();
+        processIdentity.mockRestore();
+      }
+
+      expect(exitedDuringVerification).toBeTrue();
+      expect(realIdentity(victim)).toBeNull();
+      expect(outcome.diagnostic.degradedReason).toBeUndefined();
+      expect(outcome.diagnostic).toMatchObject({ fresh: true, status: "complete" });
+    });
+  }, 30_000);
+
   test("leader-first cleanup sends no signals to recycled or null-identity groups", async () => {
     for (const identity of ["recycled", "null"] as const) {
       await withResourceWorkerScript((directory) => [
@@ -2138,6 +2314,9 @@ describe("resource recurring reads", () => {
 
   test("cleanup never adopts a recycled process group after the original leader exits", async () => {
     await withResourceWorkerScript([
+      // Consume the request before exiting so this exercises exit cleanup,
+      // rather than racing the input write and reporting EPIPE.
+      "cat > /dev/null",
       "exit 0",
     ], async () => {
       let leaderPid = 0;
@@ -2338,6 +2517,7 @@ describe("resource recurring reads", () => {
 
   test("individual cleanup revalidates identity after a verified group signal", async () => {
     await withResourceWorkerScript([
+      "read -r _",
       `printf '%s\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
       "exit 0",
     ], async () => {
@@ -2405,7 +2585,7 @@ describe("resource recurring reads", () => {
       `);
       const built = await Bun.build({ entrypoints: [entrypoint], outdir: directory, target: "node", format: "esm", naming: path.basename(bundle) });
       expect(built.success).toBeTrue();
-      const child = Bun.spawn(["node", bundle], {
+      const child = Bun.spawn([NODE_BIN, bundle], {
         cwd: process.cwd(),
         env: { ...process.env, LLV_RESOURCE_COLLECTOR_EXECUTABLE: path.join(directory, "fixture-worker"), PATH: "/usr/bin:/bin" },
         stdout: "pipe",
@@ -2492,6 +2672,31 @@ describe("resource recurring reads", () => {
         failure: {
           cause: "worker-exit",
           stderr: "API_TOKEN=<redacted>",
+        },
+      });
+    });
+  });
+
+  test("a worker that exits without reading its request reports its exit over the broken input pipe", async () => {
+    await withResourceWorkerScript([
+      "printf 'unread-request-trace\\n' >&2",
+      "exit 7",
+    ], async () => {
+      /* A request larger than a pipe holds stays partly unwritten until the
+         worker is gone, so the write fails with EPIPE on every run. */
+      const files = resourceWorkerFileSnapshot(
+        Array.from({ length: 4_000 }, (_, index) => ({ ...entry, path: `${PATHNAME}.${index}`, name: `${PATHNAME}.${index}` })),
+        () => null,
+      );
+      expect(Buffer.byteLength(JSON.stringify(files))).toBeGreaterThan(1024 * 1024);
+      const outcome = await workerTestReader({ initial: null, readFiles: async () => files }).read(true);
+
+      expect(outcome.diagnostic).toMatchObject({
+        degradedReason: "collector-crash",
+        failure: {
+          cause: "worker-exit",
+          message: "resource collector worker exited before observation (7)",
+          stderr: expect.stringContaining("unread-request-trace"),
         },
       });
     });

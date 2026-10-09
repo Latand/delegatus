@@ -73,6 +73,7 @@ const OVERRIDES: Record<string, unknown> = {
   /* A tiny in-memory board API: the view switch writes through /api/board, and
      the store needs a real `{ board }` envelope back to fold the write in. */
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     if (url.startsWith("/api/board")) {
       if (init?.method === "PATCH") {
@@ -299,26 +300,31 @@ test("no docked task rows on the phone: a background process is host data in the
   expect(q(root, '[data-mobile2-kill="/repo/worktrees/mobile-shell/next-dev.log"]')).not.toBeNull();
 });
 
-test("⋯ opens the board menu over the board with every former header control as a row, in the design's order", async () => {
+test("⋯ opens the board menu over the board: create cells, the places as rows, the header's entries, the project's rules as a page", async () => {
   const root = mount({ files: [settled] });
   expect(await waitFor(() => boardReady(root))).toBe(true);
   await openMenu(root);
   expect(boardReady(root)).toBe(true);
-  const rows = Array.from(root.querySelectorAll("[data-mobile2-menu-row]")).map((el) => el.getAttribute("data-mobile2-menu-row"));
+  const rows = () => Array.from(root.querySelectorAll("[data-mobile2-menu-row]")).map((el) => el.getAttribute("data-mobile2-menu-row"));
   /* Pipelines is a row since the columns carry each lane on its task (#2072
      slice 4), and the hidden tasks beside it since they left the board's top
-     (#2098); the setup rows are the onboarding entries, the interface walk
-     among them (#2166), and self-update. */
-  expect(rows).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "setup-guide", "interface-walk", "agent-mapping", "dictation", "self-update", "archive"]);
+     (#2098). The header's entries follow docs/design/header-menu.md:
+     Activity, Team and Update as cells, then Settings and Help and learning;
+     the project's switches and Archive are a page behind «Project rules». */
+  expect(rows()).toEqual(["new-agent", "new-task", "new-pipeline", "tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "host", "activity", "team", "self-update", "settings", "help", "rules"]);
   expect(q(root, '[data-mobile2-menu-row="pipelines"]')!.getAttribute("data-mobile2-go")).toBe("pipelines");
-  for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toContain("min-h-11");
+  /* Every target is at least 44 px: a row by its own height, a cell by its 60. */
+  for (const row of root.querySelectorAll("[data-mobile2-menu-row]")) expect((row as unknown as HTMLElement).className).toMatch(/min-h-11|min-h-\[60px\]/);
   expect(q(root, '[data-mobile2-go="accounts"]')).not.toBeNull();
   expect(q(root, '[data-mobile2-open="host"]')).not.toBeNull();
-  /* The device-local settings ride as rows too. */
-  expect(q(root, '[data-mobile2-sheet="menu"]')!.textContent).toContain(translate("en", "mobile2.menu.sound"));
   /* Delete project is cut on the phone (README §6): nothing in the menu is
      in danger colour. */
   expect(q(root, '[data-mobile2-sheet="menu"]')!.querySelector(".text-danger")).toBeNull();
+  /* The device-local settings ride as rows of the Settings page. */
+  click(q(root, '[data-mobile2-menu-row="settings"]'));
+  await settle();
+  expect(q(root, '[data-mobile2-sheet="menu"]')!.textContent).toContain(translate("en", "mobile2.menu.sound"));
+  expect(rows()).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "linked-settings", "external-relay", "ping"]);
 });
 
 test("both board faces stay one tap away inside the menu, announced as radio rows, and still switch the board", async () => {
@@ -390,6 +396,8 @@ test("Archive project acts on the tap and answers with a receipt whose Restore u
   const root = mount({ files: [settled] });
   expect(await waitFor(() => boardReady(root))).toBe(true);
   await openMenu(root);
+  click(q(root, '[data-mobile2-menu-row="rules"]'));
+  await settle();
   click(q(root, '[data-mobile2-menu-row="archive"]'));
   expect(archived).toEqual([PROJECT]);
   expect(q(root, '[data-mobile2-sheet="menu"]')).toBeNull();
@@ -405,6 +413,8 @@ test("an archived project offers Unarchive instead, and a project with a live ag
   const shelved = mount({ archived: true });
   expect(await waitFor(() => boardReady(shelved))).toBe(true);
   await openMenu(shelved);
+  click(q(shelved, '[data-mobile2-menu-row="rules"]'));
+  await settle();
   expect(q(shelved, '[data-mobile2-menu-row="unarchive"]')).not.toBeNull();
   expect(q(shelved, '[data-mobile2-menu-row="archive"]')).toBeNull();
   click(q(shelved, '[data-mobile2-menu-row="unarchive"]'));
@@ -415,6 +425,8 @@ test("an archived project offers Unarchive instead, and a project with a live ag
   const live = mount({ files: [{ ...conversation, proc: "running" } as FileEntry] });
   expect(await waitFor(() => boardReady(live))).toBe(true);
   await openMenu(live);
+  click(q(live, '[data-mobile2-menu-row="rules"]'));
+  await settle();
   expect(q(live, '[data-mobile2-menu-row="archive"]')).toBeNull();
   expect(q(live, '[data-mobile2-menu-row="unarchive"]')).toBeNull();
 });

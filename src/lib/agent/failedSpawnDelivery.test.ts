@@ -49,7 +49,7 @@ function makeFailedSpawnWithHeldDelivery(): FailedSpawnFixture {
     transport: "structured",
     accountId: "acctA",
     conversationId: conversation.id,
-    launchProfile: emptyLaunchProfile({ cwd }),
+    launchProfile: emptyLaunchProfile({ cwd, title: "Review the requested change" }),
     launchDisplay: { prompt: "Round 2 review PR #618", images: 0, echo: "Round 2 review PR #618" },
   });
   if (begun.kind !== "created") throw new Error("expected structured launch creation");
@@ -125,7 +125,7 @@ test("issue 653: failStructuredSpawn terminalizes the initial held delivery in t
     const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
     const begun = registry.beginSpawnRequest({
       engine: "claude", cwd, transport: "structured", accountId: "acctA",
-      launchProfile: emptyLaunchProfile({ cwd }),
+      launchProfile: emptyLaunchProfile({ cwd, title: "Review the requested change" }),
     });
     if (begun.kind !== "created") throw new Error("expected structured launch creation");
     const { launchId, conversationId } = begun.receipt;
@@ -160,7 +160,7 @@ test("issue 922: a never-started spawn whose migration-cancelled delivery is alr
     const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
     const begun = registry.beginSpawnRequest({
       engine: "codex", cwd, transport: "structured", accountId: "account-a",
-      launchProfile: emptyLaunchProfile({ cwd }),
+      launchProfile: emptyLaunchProfile({ cwd, title: "Review the requested change" }),
       launchDisplay: { prompt: "synthetic kickoff", images: 0, echo: "synthetic kickoff" },
     });
     if (begun.kind !== "created") throw new Error("expected structured launch creation");
@@ -205,7 +205,7 @@ test("issue 922: a promote-race spawn failure terminalizes an assigned attempts-
     const begun = registry.beginSpawnRequest({
       engine: "codex", cwd, transport: "structured", accountId: "account-a",
       conversationId: conversation.id,
-      launchProfile: emptyLaunchProfile({ cwd }),
+      launchProfile: emptyLaunchProfile({ cwd, title: "Review the requested change" }),
     });
     if (begun.kind !== "created") throw new Error("expected structured launch creation");
     const delivery = registry.holdDelivery(
@@ -245,7 +245,7 @@ test("issue 922: a promote-race failure preserves an attempted delivery whose ou
     const begun = registry.beginSpawnRequest({
       engine: "codex", cwd, transport: "structured", accountId: "account-a",
       conversationId: conversation.id,
-      launchProfile: emptyLaunchProfile({ cwd }),
+      launchProfile: emptyLaunchProfile({ cwd, title: "Review the requested change" }),
     });
     if (begun.kind !== "created") throw new Error("expected structured launch creation");
     const delivery = registry.holdDelivery(

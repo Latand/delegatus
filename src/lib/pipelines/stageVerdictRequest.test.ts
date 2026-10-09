@@ -48,7 +48,7 @@ const PRODUCTION_FINAL_MESSAGE = [
 const PROGRESS_LINE = "Only the runtime check remains. Waiting on it.";
 
 function harness() {
-  const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string }> = [];
+  const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string; cohortAt?: string }> = [];
   let wall = Date.parse("2026-09-19T00:45:00.000Z");
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: wall };
   let deliveryOutstanding = false;
@@ -153,13 +153,14 @@ function harness() {
 }
 
 /** A pipeline whose first stage is running on a pane-less structured host. */
-async function runningStage(h: ReturnType<typeof harness>) {
+async function runningStage(h: ReturnType<typeof harness>, publication?: "internal" | "remote-branch") {
   savePipelines([]);
   const created = await createPipelineFromRequest({
     task: "Finish the lane",
     spec: "AC1",
     repoDir: "/repo",
     src: "/claude/creator.jsonl",
+    ...(publication ? { publication } : {}),
     stages: [
       { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "verify" },
       { id: "verify", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Verify {{prev.output}}", next: null },
@@ -203,6 +204,9 @@ test("a completed turn without a verdict is asked once and settles when the answ
   expect(h.requests[0]).toMatchObject({ conversationId: STAGE_CONVERSATION, transcriptPath: STAGE_TRANSCRIPT });
   const asked = loadPipelines()[0]!;
   expect(asked.state).toBe("running");
+  /* The request names the attempt's own admission, so an update drain that
+     found the attempt running delivers it instead of holding it as new work. */
+  expect(h.requests[0]!.cohortAt).toBe(asked.runs[0]!.attempts[0]!.startedAt!);
   /* The request is not a recovery check: none has been spent. */
   expect(asked.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
   expect(asked.runs[0]!.attempts[0]!.verdictRequest).toMatchObject({
@@ -325,8 +329,8 @@ test("a request the delivery surface refuses still parks the lane on its bound (
 /** Park the lane exactly as production lane d0cf20f0 parked: a finished stage
     whose verdict nobody could read, with its work committed past the
     last-passed commit. */
-async function parkedFinishedLane(h: ReturnType<typeof harness>) {
-  await runningStage(h);
+async function parkedFinishedLane(h: ReturnType<typeof harness>, publication?: "internal" | "remote-branch") {
+  await runningStage(h, publication);
   h.endTurn(PROGRESS_LINE, 1_000);
   await tickPipelines([], h.ports);
   h.advance(20_000);
@@ -343,17 +347,20 @@ async function parkedFinishedLane(h: ReturnType<typeof harness>) {
 
 test("skip-stage adopts the parked stage's pushed head and advances the lane (#1756)", async () => {
   const h = harness();
-  const pipeline = await parkedFinishedLane(h);
+  const pipeline = await parkedFinishedLane(h, "remote-branch");
   /* Pushed: the branch on the remote is exactly the worktree HEAD. */
   h.setRemote(STAGE_HEAD);
 
   const skipped = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
 
   expect(skipped.error).toBeUndefined();
+  /* Publication is reserved by the patch and executed by the next tick. */
+  await tickPipelines([], h.ports);
   const advanced = loadPipelines()[0]!;
   expect(advanced.lastPassedCommit).toBe(STAGE_HEAD);
   expect(advanced.state).not.toBe("needs_decision");
-  expect(advanced.cursor).toMatchObject({ stageId: "verify", state: "pending" });
+  /* The tick can also activate the next stage after publication settles. */
+  expect(advanced.cursor).toMatchObject({ stageId: "verify" });
   expect(advanced.runs[0]!.attempts[0]).toMatchObject({ state: "skipped" });
   expect(advanced.runs[0]!.attempts[0]!.output).toContain(STAGE_HEAD);
   expect(h.calls.some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
@@ -361,15 +368,21 @@ test("skip-stage adopts the parked stage's pushed head and advances the lane (#1
 
 test("skip-stage carries the parked stage's unpublished local head in an internal lane (#1756)", async () => {
   const h = harness();
-  const pipeline = await parkedFinishedLane(h);
-  /* This legacy internal lane has no remote publication policy. */
+  const pipeline = await parkedFinishedLane(h, "internal");
   const callsBefore = h.calls.length;
 
   const skipped = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
 
   expect(skipped.error).toBeUndefined();
+  // The accepted skip reserves work; the controller tick verifies and adopts it.
+  await tickPipelines([], h.ports);
   expect(h.calls.slice(callsBefore).some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
-  expect(loadPipelines()[0]!).toMatchObject({ lastPassedCommit: STAGE_HEAD, cursor: { stageId: "verify", state: "pending" } });
+  const advanced = loadPipelines()[0]!;
+  expect(advanced.state).toBe("running");
+  expect(advanced.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(advanced.cursor).toMatchObject({ stageId: "verify", state: "running" });
+  expect(advanced.runs.find((run) => run.stageId === "verify")!.attempts[0]).toMatchObject({ state: "running" });
+  expect(advanced.runs.find((run) => run.stageId === "build")!.attempts[0]).toMatchObject({ state: "skipped" });
 });
 
 test("retry-stage is refused over a pushed head, which it would reset away (#1756)", async () => {

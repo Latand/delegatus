@@ -1,3 +1,5 @@
+import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
@@ -27,6 +29,7 @@ import {
   type RuntimeEvent,
   type RuntimeEventInput,
   RuntimeIdempotencyConflictError,
+  RuntimeSessionFenceError,
   newOperationId,
   runtimeCompactCapability,
   isStructuredHostKind,
@@ -148,6 +151,24 @@ function engineProducerCursor(producerKind: string, producerKey: string): Engine
   const sequence = Number(producerKey.slice(separator + 1));
   if (!Number.isSafeInteger(sequence) || sequence < 0) return null;
   return { prefix: producerKey.slice(0, separator + 1), sequence };
+}
+
+/** A folded delta stands under its last sequence, so the cursor check alone
+    would admit a group whose earlier deltas another writer already recorded:
+    a predecessor's append can commit after its successor read the cursor. Only
+    the text of the deltas after the recorded sequence is kept. */
+function unrecordedFoldedText(
+  input: NormalizedRuntimeEventInput,
+  sequence: number,
+  recorded: number,
+): NormalizedRuntimeEventInput {
+  const lengths = input.foldedTextLengths;
+  const text = input.payload.text;
+  if (input.kind !== "delta" || !lengths || typeof text !== "string") return input;
+  const recordedParts = lengths.length - (sequence - recorded);
+  if (recordedParts <= 0) return input;
+  const offset = lengths.slice(0, recordedParts).reduce((total, length) => total + length, 0);
+  return { ...input, payload: { ...input.payload, text: text.slice(offset) } };
 }
 
 function loadSecretKey(filename: string): Buffer {
@@ -572,6 +593,12 @@ export class RuntimeJournal {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const previousPublished = Number(this.meta("published_seq"));
+      /* Read inside the write transaction, so no other writer can land
+         between this comparison and the event it admits. */
+      if (input.expectedSessionRevision !== undefined && (input.scope.type !== "session"
+        || this.entity<RuntimeSession>("session", input.scope.id)?.revision !== input.expectedSessionRevision)) {
+        throw new RuntimeSessionFenceError("the session row changed after this event's writer read it");
+      }
       const event = this.appendInTransaction(input);
       this.db.exec("COMMIT");
       this.compactIfNeeded();
@@ -610,7 +637,7 @@ export class RuntimeJournal {
       const existing = this.db.query<{ operation_id: string; request_hash: string; receipt_json: string }, [string, string]>("SELECT operation_id, request_hash, receipt_json FROM operations WHERE conversation_id = ? AND idempotency_key = ?").get(command.conversationId, command.idempotencyKey);
       if (existing) {
         if (existing.request_hash !== requestHash) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another request");
-        const result = { operationId: existing.operation_id, receipt: JSON.parse(existing.receipt_json) as RuntimeOperationReceipt, replayed: true };
+        const result = { operationId: existing.operation_id, receipt: this.presentReceipt(JSON.parse(existing.receipt_json) as RuntimeOperationReceipt), replayed: true };
         this.db.exec("COMMIT");
         return result;
       }
@@ -742,7 +769,7 @@ export class RuntimeJournal {
   operationResult(operationId: string): RuntimeOperationResult | null {
     this.assertHealthy();
     const row = this.db.query<{ operation_id: string; receipt_json: string }, [string]>("SELECT operation_id, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
-    return row ? { operationId: row.operation_id, receipt: JSON.parse(row.receipt_json) as RuntimeOperationReceipt, replayed: false } : null;
+    return row ? { operationId: row.operation_id, receipt: this.presentReceipt(JSON.parse(row.receipt_json) as RuntimeOperationReceipt), replayed: false } : null;
   }
 
   /** The journal owns operation identity, so this is the single durable
@@ -769,9 +796,9 @@ export class RuntimeJournal {
         this.db.exec("COMMIT");
         return recorded;
       }
-      const actionStatuses: readonly RuntimeReceiptStatus[] = action === "retry"
-        ? ["pending", "queued", "failed", "uncertain", "rejected"]
-        : ["pending", "queued", "failed", "uncertain"];
+      // A host refusal can leave an unverified failure in the Viewer. Either
+      // operator action still needs this same durable retry/discard fence.
+      const actionStatuses: readonly RuntimeReceiptStatus[] = ["pending", "queued", "failed", "uncertain", "rejected"];
       if (!actionStatuses.includes(receipt.status)) {
         throw new Error(`runtime delivery cannot ${action} after its outcome is resolved`);
       }
@@ -875,6 +902,18 @@ export class RuntimeJournal {
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
+      // Dead executors can be recovered; deadlines and health failures cannot
+      // release a barrier underneath a live signal ladder.
+      const automaticKill = command.kind === "kill" && !!command.onlyIfIdle;
+      const owner = previous.retirementClaim;
+      const claimant = options.retirementClaim;
+      if (automaticKill && previous.status === "delivering" && owner) {
+        const owns = claimant?.executorId === owner.executorId
+          && sameRecordedProcessIdentity(claimant.process, owner.process);
+        if (!owns && !(status === "queued" && processIdentityProvenDead(owner.process))) {
+          throw new Error("automatic retirement is owned by another executor");
+        }
+      }
       const nativeCommand = this.nativeQueue.command(command, operationId);
       let nativeEntry: NativeQueueRecord | null = null;
       if (nativeTransition) {
@@ -909,6 +948,17 @@ export class RuntimeJournal {
         if (previous.status === status && !nativeTransition) {
           this.db.exec("COMMIT");
           return { operationId, receipt: previous, replayed: true };
+        }
+      }
+      // Acquire automatic retirement inside the same transaction as admission.
+      // A queued kill carries no reservation; delivering excludes new work.
+      if (status === "delivering" && command.kind === "kill" && command.onlyIfIdle) {
+        const session = this.entity<RuntimeSession>("session", command.conversationId);
+        if (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
+          || this.retirementBlocked(command.conversationId)
+          || (previous.status !== "delivering" && this.retirementInProgress(command.conversationId))) {
+          status = "failed";
+          details = { ...details, reason: "idle-retirement-deferred" };
         }
       }
       const queueing = status === "queued"
@@ -953,6 +1003,8 @@ export class RuntimeJournal {
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
+        ...(command.kind === "kill" ? { origin: command.onlyIfIdle ? "system" as const : "operator" as const } : {}),
+        ...(automaticKill ? { retirementClaim: status === "delivering" ? claimant ?? owner ?? null : null } : {}),
         ...(nativeEntry ? { nativeQueue: nativeQueueReceipt(nativeEntry) } : {}),
         ...(deliveredVersion ? { text: deliveredVersion.text.slice(0, 240), imageCount: deliveredVersion.images.length,
           turnId: nativeEntry!.proof!.turnId } : {}),
@@ -1111,6 +1163,12 @@ export class RuntimeJournal {
         && previous.status !== "uncertain") {
         throw new Error("only failed or uncertain runtime operations can retry in place");
       }
+      // Re-arming an existing row admits work just like a fresh send. Hold the
+      // same transaction as the retirement claim and leave retry ownership
+      // untouched when teardown has already acquired it.
+      if (this.retirementInProgress(command.conversationId)) {
+        throw new Error("idle-retirement-in-progress");
+      }
       const claimed = recorded ?? this.acquireDeliveryActionInTransaction(operationId, "retry", previous);
       if (claimed.winner !== "retry") throw this.deliveryActionConflict(claimed.winner, "retry");
       if (previous.status === "pending" || previous.status === "queued") {
@@ -1180,12 +1238,30 @@ export class RuntimeJournal {
       throw new Error("runtime session identity is invalid");
     }
     const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
-    if (session) return presentSession(session);
+    if (session) return { ...this.presentSession(session), retirementBlocked: this.retirementBlocked(session.conversationId) };
     if (!artifactPath) return null;
     const row = this.db.query<{ state_json: string }, [string]>(
       "SELECT state_json FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.artifactPath') = ? ORDER BY id LIMIT 1",
     ).get(artifactPath);
-    return row ? presentSession(JSON.parse(row.state_json) as RuntimeSession) : null;
+    if (!row) return null;
+    const matched = JSON.parse(row.state_json) as RuntimeSession;
+    return { ...this.presentSession(matched), retirementBlocked: this.retirementBlocked(matched.conversationId) };
+  }
+
+  /** Older receipts recover kill authorship from their durable command. Audit
+      events and their hashes remain intact; reasons never classify an origin. */
+  private presentReceipt(receipt: RuntimeOperationReceipt): RuntimeOperationReceipt {
+    if (receipt.kind !== "kill" || receipt.origin !== undefined) return receipt;
+    const row = this.db.query<{ automatic: number | null }, [string]>(`
+      SELECT json_type(request_json, '$.onlyIfIdle') = 'object' AS automatic
+      FROM operations WHERE operation_id = ? AND json_extract(request_json, '$.kind') = 'kill'
+    `).get(receipt.operationId);
+    return row ? { ...receipt, origin: row.automatic ? "system" : "operator" } : receipt;
+  }
+
+  private presentSession(session: RuntimeSession): RuntimeSession {
+    const presented = presentSession(session);
+    return { ...presented, recentReceipts: presented.recentReceipts.map((receipt) => this.presentReceipt(receipt)) };
   }
 
   snapshot(): RuntimeSnapshot {
@@ -1202,11 +1278,11 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues(voiceBodiesFor).map(presentSession),
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => this.presentSession(session)),
         attentions: this.entityValues<RuntimeAttention>("attention"),
         recentOperations: visibleReceipts(
           this.recentEntityValues<RuntimeOperationReceipt>("operation", 100),
-        ).map(runtimePresentationReceipt),
+        ).map((receipt) => this.presentReceipt(runtimePresentationReceipt(receipt))),
         edges: this.snapshotEdgeValues(now),
         flows: this.scopedValues<RuntimeSnapshot["flows"][number]["value"]>("flow"),
         workflows: this.scopedValues<RuntimeSnapshot["workflows"][number]["value"]>("workflow"),
@@ -1260,7 +1336,7 @@ export class RuntimeJournal {
     for (const row of rows) {
       const durableEvent = toEvent(row);
       const receipt = durableEvent.kind === "receipt"
-        ? runtimePresentationReceipt(durableEvent.payload as unknown as RuntimeOperationReceipt)
+        ? runtimePresentationReceipt(this.presentReceipt(durableEvent.payload as unknown as RuntimeOperationReceipt))
         : null;
       const event = receipt ? {
         ...durableEvent,
@@ -1888,7 +1964,8 @@ export class RuntimeJournal {
 
   close(): void { this.sessionHostMetadata.close(); this.db.close(); }
 
-  private appendInTransaction(input: NormalizedRuntimeEventInput): RuntimeEvent {
+  private appendInTransaction(admitted: NormalizedRuntimeEventInput): RuntimeEvent {
+    let input = admitted;
     const producerKey = input.producer.eventKey ?? null;
     const engineCursor = producerKey ? engineProducerCursor(input.producer.kind, producerKey) : null;
     if (producerKey) {
@@ -1904,6 +1981,7 @@ export class RuntimeJournal {
             ).run(input.producer.kind, engineCursor.prefix, `${engineCursor.prefix}\uffff`, latest.producer_key);
             return JSON.parse(latest.event_json) as RuntimeEvent;
           }
+          if (latestCursor) input = unrecordedFoldedText(input, engineCursor.sequence, latestCursor.sequence);
         }
       } else {
         const duplicate = this.db.query<{ event_json: string }, [string, string]>("SELECT event_json FROM producer_receipts WHERE producer_kind = ? AND producer_key = ?").get(input.producer.kind, producerKey);
@@ -2005,6 +2083,7 @@ export class RuntimeJournal {
 
   private normalizeOperation(command: RuntimeOperationCommand): RuntimeOperationCommand {
     if (command.kind === "native-queue") return parseRuntimeCommand("native-queue", command);
+    if (command.kind === "kill") return parseRuntimeCommand("kill", command);
     if (command.kind === "inject") {
       const normalized = parseRuntimeCommand("inject", command);
       /* The parser recomputes the digest from the text it accepted. Comparing
@@ -2069,7 +2148,10 @@ export class RuntimeJournal {
     let reason: string | null = null;
     let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : session?.activeTurnId ?? null;
     let queuePosition: number | null = null;
-    if (command.kind === "native-queue") {
+    if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
+      status = "rejected";
+      reason = "idle-retirement-in-progress";
+    } else if (command.kind === "native-queue") {
       turnId = command.turnId ?? null;
       if (!this.structuredHosts || !session || session.host !== "hosted") {
         status = "rejected"; reason = "no-claim";
@@ -2221,7 +2303,9 @@ export class RuntimeJournal {
         turnId = attention.turnId ?? turnId;
       }
     } else if (command.kind === "kill") {
-      status = "queued";
+      status = command.onlyIfIdle && (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
+        || this.retirementBlocked(command.conversationId)) ? "rejected" : "queued";
+      if (status === "rejected") reason = "idle-retirement-deferred";
       turnId = null;
     } else {
       status = "queued";
@@ -2238,6 +2322,7 @@ export class RuntimeJournal {
       idempotencyKey: command.idempotencyKey,
       conversationId: command.conversationId,
       kind: command.kind,
+      ...(command.kind === "kill" ? { origin: command.onlyIfIdle ? "system" as const : "operator" as const } : {}),
       status,
       turnId,
       queuePosition,
@@ -2266,6 +2351,31 @@ export class RuntimeJournal {
     const session = this.entity<RuntimeSession>("session", conversationId);
     if (!session?.writerClaim) return null;
     return { threadId: session.sessionKey.sessionId, accountId: session.accountId, writerClaim: session.writerClaim };
+  }
+
+  private retirementInProgress(conversationId: string): boolean {
+    return !!this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND json_extract(request_json, '$.kind') = 'kill'
+        AND json_type(request_json, '$.onlyIfIdle') = 'object'
+        AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
+    `).get(conversationId);
+  }
+
+  /** Keyed, durable work evidence; the eight displayed receipts cannot prove
+      an empty queue. Unknown outcomes also retain their work obligation. */
+  private retirementBlocked(conversationId: string): boolean {
+    const operation = this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND json_extract(request_json, '$.kind') <> 'kill'
+        AND json_extract(receipt_json, '$.status') IN ('pending', 'queued', 'delivering', 'applying', 'uncertain')
+      LIMIT 1
+    `).get(conversationId);
+    if (operation) return true;
+    return !!this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM native_queue_entries WHERE conversation_id = ?
+        AND json_extract(state_json, '$.state') NOT IN ('delivered', 'removed', 'refused') LIMIT 1
+    `).get(conversationId);
   }
 
   private queuedSendCount(conversationId: string): number {

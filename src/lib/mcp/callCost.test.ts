@@ -135,15 +135,365 @@ test("routine actions omit unchanged delivery and digests; graph edits and full 
   expect(takeover).toHaveProperty("delivery");
 });
 
-test("resource summaries retain stale/freshness evidence; full rows remain available", async () => {
+test("resources hands its one-second budget to the reader and reports a first collection as pending", async () => {
+  const waits: Array<{ fresh: boolean; waitMs: number | undefined }> = [];
+  const diagnostic = { fresh: false, durationMs: 750, phases: {}, generation: 1, startedAt: "2026-10-01T00:00:00Z", completedAt: "2026-10-01T00:00:01Z", collectorId: "fixture", cache: { status: "miss" } };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readResourcesWithDiagnostic: async (fresh: boolean, options: { waitMs?: number } = {}) => {
+      waits.push({ fresh, waitMs: options.waitMs });
+      return fresh
+        ? { payload: { system: null, sessions: [], sessionsCapturedAt: "2026-10-01T00:00:01Z", sessionsStale: false }, diagnostic: { ...diagnostic, fresh: true, status: "complete" } }
+        : { payload: { system: null, sessions: [], sessionsCapturedAt: null, sessionsStale: true }, diagnostic: { ...diagnostic, status: "pending" } };
+    },
+  } as never);
+
+  const pending = await bindings.resources({}) as { sessionSummary: { count: number }; freshness: Record<string, unknown> };
+  expect(pending.sessionSummary.count).toBe(0);
+  expect(pending.freshness).toMatchObject({ pending: true, reason: "collecting", cache: "miss", sessionsStale: true, sessionsCapturedAt: null, refreshSucceeded: null });
+  const fresh = await bindings.resources({ fresh: true }) as { freshness: Record<string, unknown> };
+  expect(fresh.freshness).not.toHaveProperty("pending");
+  expect(fresh.freshness).toMatchObject({ reason: null, refreshSucceeded: true });
+  expect(waits.map((wait) => wait.waitMs)).toEqual([750, 750]);
+  expect(waits[0]!.waitMs).toBeLessThan(1_000);
+});
+
+test("agent_activity with no completed catalog names the hosted conversations and says the catalog is pending", async () => {
+  const now = Date.now();
+  const hosted = Array.from({ length: 3 }, (_, i) => `/fixtures/hosted-${i}.jsonl`);
+  const entries = Object.fromEntries(hosted.map((artifactPath, i) => [`entry-${i}`, {
+    key: { engine: "codex", accountId: null, sessionId: `session-${i}` }, artifactPath,
+    status: "live", host: null, accountId: null,
+    structuredHost: { process: { pid: 1000 + i, startIdentity: `identity-${i}` } },
+    updatedAt: new Date(now).toISOString(),
+  }]));
+  const budgets: Array<number | undefined> = [];
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: (catalog: { catalogBudgetMs?: number } = {}) => {
+      budgets.push(catalog.catalogBudgetMs);
+      return {
+        now: () => now,
+        probe: { now: () => now, pidAlive: () => true, processIdentity: (pid: number) => `identity-${pid - 1000}` },
+        registrySnapshot: () => ({ entries, conversations: {} }), pipelines: () => [],
+        /* What the selection answers once its budget is spent with nothing completed. */
+        selectInventory: async () => ({ entries: [], matched: 0, scanned: 0, hostedSeen: new Set<string>(), generation: null, cacheStatus: "pending", freshScan: false, selectionMs: 700 }),
+        describeTranscript: async (pathname: string) => ({ path: pathname, project: "activity-board", title: pathname.slice(pathname.lastIndexOf("/") + 1), engine: "codex", mtimeMs: now, conversationId: `conversation-${pathname.slice(pathname.lastIndexOf("/") + 1)}`, activity: "live", activityReason: null }),
+        transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
+      };
+    }, refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  const compact = await bindings.agent_activity({ clientRequestId: "pending-compact" });
+  expect(compact).toMatchObject({ catalog: "pending", count: 3 });
+  const full = await bindings.agent_activity({ clientRequestId: "pending-full", full: true });
+  expect(full).toMatchObject({ catalog: "pending", selection: { cacheStatus: "pending", generation: null, scanned: 0, recovered: 3 } });
+  expect(budgets).toEqual([650, 650]);
+});
+
+/** A catalog row as a completed generation publishes it. */
+const catalogRow = (pathname: string, mtime: number) => ({
+  path: pathname, project: "activity-board", title: path.basename(pathname), engine: "codex", kind: "session", root: "codex",
+  name: path.basename(pathname), fmt: "jsonl", parent: null, mtime, size: 1024, activity: "live", proc: null, pid: null,
+  conversationId: `conversation-${path.basename(pathname)}`,
+});
+
+/** One live structured host per transcript, verified by the probe below. */
+function hostedRegistry(paths: string[], now: number) {
+  return {
+    entries: Object.fromEntries(paths.map((artifactPath, i) => [`entry-${i}`, {
+      key: { engine: "codex", accountId: null, sessionId: `session-${i}` }, artifactPath,
+      status: "live", host: null, accountId: null,
+      structuredHost: { process: { pid: 1000 + i, startIdentity: `identity-${i}` } },
+      updatedAt: new Date(now).toISOString(),
+    }])),
+    conversations: {},
+  };
+}
+const hostedProbe = (now: number) => ({ now: () => now, pidAlive: () => true, processIdentity: (pid: number) => `identity-${pid - 1000}` });
+
+/** A scan the test completes by hand, recording every subscriber's signal. */
+function heldScan(files: () => unknown[]) {
+  const signals: AbortSignal[] = [];
+  let done = false;
+  const waiting: Array<() => void> = [];
+  const read = ({ signal }: { signal?: AbortSignal | null } = {}) => new Promise((resolve, reject) => {
+    const answer = () => resolve({ snapshot: { files: files(), projectCatalog: [], complete: true }, generation: 2, targetGeneration: 2, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0 });
+    if (done) return answer();
+    if (signal) {
+      signals.push(signal);
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }
+    waiting.push(answer);
+  });
+  return { read, signals, complete: () => { done = true; for (const answer of waiting.splice(0)) answer(); } };
+}
+
+test("agent_activity says the catalog is stale in every projection until the scan completes", async () => {
+  const { completedGenerationSelection } = await import("@/lib/lifecycle/inventorySelection");
+  const now = Date.now();
+  const older = catalogRow("/fixtures/stale/old.jsonl", now / 1000 - 60);
+  const newer = catalogRow("/fixtures/stale/new.jsonl", now / 1000);
+  const scan = heldScan(() => [newer, older]);
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],
+      selectInventory: (request: never, options: { signal?: AbortSignal | null } = {}) => completedGenerationSelection(request, {
+        completedFileScan: scan.read as never, signal: options.signal ?? null, budgetMs: 20, lastCompletedFiles: () => [older] as never,
+      }),
+      describeTranscript: async () => null,
+      transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+  const titles = (answer: unknown) => (answer as { conversations: Array<{ title: string }> }).conversations.map((row) => row.title);
+
+  for (const args of [{}, { compact: true }, { full: true }]) {
+    const answer = await bindings.agent_activity({ clientRequestId: `stale-${JSON.stringify(args)}`, ...args });
+    expect(answer).toMatchObject({ catalog: "stale", count: 1 });
+    expect(titles(answer)).toEqual(["old.jsonl"]);
+  }
+
+  scan.complete();
+  for (const args of [{}, { compact: true }, { full: true }]) {
+    const answer = await bindings.agent_activity({ clientRequestId: `fresh-${JSON.stringify(args)}`, ...args });
+    expect(answer).not.toHaveProperty("catalog");
+    expect(titles(answer)).toEqual(["new.jsonl", "old.jsonl"]);
+  }
+});
+
+test("a cold agent_activity over slow hosted tails answers inside a second and the next call carries the evidence", async () => {
+  const { completedGenerationSelection } = await import("@/lib/lifecycle/inventorySelection");
+  const now = Date.now();
+  const hosted = Array.from({ length: 6 }, (_, i) => `/fixtures/slow-tail/hosted-${i}.jsonl`);
+  const scan = heldScan(() => hosted.map((pathname) => catalogRow(pathname, now / 1000)));
+  let tailReads = 0;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: (catalog: { catalogBudgetMs?: number } = {}) => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => hostedRegistry(hosted, now), pipelines: () => [],
+      selectInventory: (request: never, options: { signal?: AbortSignal | null } = {}) => completedGenerationSelection(request, {
+        completedFileScan: scan.read as never, signal: options.signal ?? null, budgetMs: catalog.catalogBudgetMs, lastCompletedFiles: () => null,
+      }),
+      describeTranscript: async (pathname: string) => ({ path: pathname, project: "activity-board", title: path.basename(pathname), engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: `conversation-${path.basename(pathname)}`, activity: "live", activityReason: null }),
+      transcriptIdentity: async () => "unchanged",
+      transcriptEvidence: async () => {
+        tailReads += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        return { turn: "busy", lastRecordTs: now, providerProgressAt: null };
+      },
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  const startedAt = performance.now();
+  const first = await bindings.agent_activity({ clientRequestId: "slow-tail-first", full: true }) as { conversations: Array<{ evidenceSource: string; transcriptPath: string }> };
+  expect(performance.now() - startedAt).toBeLessThan(1_000);
+  /* Every hosted row is there; none of them claims a tail it has not read. */
+  expect(first).toMatchObject({ catalog: "pending", count: 6, evidence: "pending", unverifiedCount: 6, selection: { recovered: 6, hydrated: 0, projected: 6, budget: "deadline" } });
+  expect(first.conversations.map((row) => row.transcriptPath).sort()).toEqual(hosted);
+  expect(first.conversations.every((row) => row.evidenceSource === "projection")).toBe(true);
+  const compactStartedAt = performance.now();
+  const compact = await bindings.agent_activity({ clientRequestId: "slow-tail-compact" });
+  expect(performance.now() - compactStartedAt).toBeLessThan(1_000);
+  expect(compact).toMatchObject({ catalog: "pending", count: 6 });
+
+  /* The reads an answer leaves behind finish and a later call takes them, four
+     tails at a time; every answer in between keeps all six rows. */
+  scan.complete();
+  let settled = compact as { conversations: Array<{ evidenceSource?: string; turnState: string }> };
+  for (let call = 0; call < 6 && (settled as { evidence?: string }).evidence !== undefined || call === 0; call += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const callStartedAt = performance.now();
+    settled = await bindings.agent_activity({ clientRequestId: `slow-tail-follow-${call}`, full: true }) as typeof settled;
+    expect(performance.now() - callStartedAt).toBeLessThan(1_000);
+    expect(settled).toMatchObject({ count: 6 });
+    expect(settled).not.toHaveProperty("catalog");
+  }
+  expect(settled).not.toHaveProperty("evidence");
+  expect(settled).toMatchObject({ count: 6, selection: { hydrated: 6, projected: 0, budget: "complete" } });
+  expect(settled.conversations.every((row) => row.evidenceSource === "transcript" && row.turnState === "busy")).toBe(true);
+  /* An unchanged file is read once however many calls ask about it. */
+  expect(tailReads).toBe(6);
+}, 30_000);
+
+test("a tail read left behind is not evidence once the transcript has changed", async () => {
+  const now = Date.now();
+  const transcript = path.join(sandbox, "carried-append.jsonl");
+  fs.writeFileSync(transcript, "{\"type\":\"task_complete\"}\n");
+  /* The catalog row keeps its generation's mtime and size through the append. */
+  const row = { ...catalogRow(transcript, now / 1000), size: fs.statSync(transcript).size };
+  let tailReads = 0;
+  let turn: "idle" | "busy" = "idle";
+  let tailMs = 1_100;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => hostedRegistry([transcript], now), pipelines: () => [],
+      selectInventory: async () => ({ entries: [row], matched: 1, scanned: 1, hostedSeen: new Set([transcript]), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }),
+      describeTranscript: async () => null,
+      transcriptEvidence: async () => {
+        tailReads += 1;
+        const seen = turn;
+        await new Promise((resolve) => setTimeout(resolve, tailMs));
+        return { turn: seen, lastRecordTs: now, providerProgressAt: null };
+      },
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+  const read = (key: string) => bindings.agent_activity({ clientRequestId: key, full: true }) as Promise<{ evidence?: string; conversations: Array<{ turnState: string; evidenceSource: string }> }>;
+
+  expect(await read("append-first")).toMatchObject({ evidence: "pending", unverifiedCount: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  fs.appendFileSync(transcript, "{\"type\":\"task_started\"}\n");
+  turn = "busy";
+  tailMs = 0;
+  const second = await read("append-second");
+  expect(second).not.toHaveProperty("evidence");
+  expect(second.conversations).toMatchObject([{ turnState: "busy", evidenceSource: "transcript" }]);
+  expect(tailReads).toBe(2);
+}, 15_000);
+
+test("repeated agent_activity calls over slow tails reach every row and read each tail once", async () => {
+  const now = Date.now();
+  const rows = Array.from({ length: 24 }, (_, i) => catalogRow(`/fixtures/progress/row-${String(i).padStart(2, "0")}.jsonl`, now / 1000 - i));
+  const reads = new Map<string, number>();
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],
+      selectInventory: async () => ({ entries: rows, matched: rows.length, scanned: rows.length, hostedSeen: new Set<string>(), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }),
+      describeTranscript: async () => null,
+      transcriptIdentity: async () => "unchanged",
+      transcriptEvidence: async (_engine: string, pathname: string) => {
+        reads.set(pathname, (reads.get(pathname) ?? 0) + 1);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        return { turn: "idle", lastRecordTs: now, providerProgressAt: null };
+      },
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  type Answer = { evidence?: string; unverifiedCount?: number; count: number; selection: { hydrated: number } };
+  let answer: Answer = { evidence: "pending", count: 0, selection: { hydrated: 0 } };
+  let verified = 0;
+  for (let call = 0; call < 40 && answer.evidence !== undefined; call += 1) {
+    const startedAt = performance.now();
+    answer = await bindings.agent_activity({ clientRequestId: `progress-${call}`, limit: 24, full: true }) as Answer;
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(answer.count).toBe(24);
+    /* Every answer names the rest as pending, and no call loses ground. */
+    expect(answer.selection.hydrated + (answer.unverifiedCount ?? 0)).toBe(24);
+    expect(answer.selection.hydrated).toBeGreaterThanOrEqual(verified);
+    verified = answer.selection.hydrated;
+  }
+  expect(answer).not.toHaveProperty("evidence");
+  expect(answer).toMatchObject({ selection: { hydrated: 24, projected: 0, budget: "complete" } });
+  expect([...reads.values()]).toEqual(Array.from({ length: 24 }, () => 1));
+}, 60_000);
+
+test("a targeted agent_activity with a slow description answers inside its budget and the next call returns that transcript", async () => {
+  const now = Date.now();
+  const byPath = "/fixtures/targeted/by-path.jsonl";
+  const byConversation = "/fixtures/targeted/by-conversation.jsonl";
+  let describes = 0;
+  let catalogReads = 0;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), pipelines: () => [],
+      registrySnapshot: () => ({ entries: {}, conversations: { conversation_targeted: { id: "conversation_targeted", generations: [{ path: byConversation }] } } }),
+      selectInventory: async () => { catalogReads += 1; return { entries: [], matched: 0, scanned: 0, hostedSeen: new Set<string>(), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }; },
+      describeTranscript: async (pathname: string) => {
+        describes += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        return { path: pathname, project: "activity-board", title: path.basename(pathname), engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: null, activity: null, activityReason: null };
+      },
+      transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  for (const [target, transcriptPath] of [[{ transcriptPath: byPath }, byPath], [{ conversationId: "conversation_targeted" }, byConversation]] as const) {
+    const startedAt = performance.now();
+    const first = await bindings.agent_activity({ clientRequestId: `targeted-first-${transcriptPath}`, full: true, ...target });
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(first).toMatchObject({ count: 0, evidence: "pending", unverifiedCount: 0, undescribedTargetCount: 1, selection: { scope: "targeted", recoveryPending: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const followUpStartedAt = performance.now();
+    const followUp = await bindings.agent_activity({ clientRequestId: `targeted-follow-${transcriptPath}`, full: true, ...target }) as { conversations: Array<{ transcriptPath: string; evidenceSource: string }> };
+    expect(performance.now() - followUpStartedAt).toBeLessThan(1_000);
+    expect(followUp).not.toHaveProperty("evidence");
+    expect(followUp).toMatchObject({ count: 1, selection: { scope: "targeted", recoveryPending: 0 } });
+    expect(followUp.conversations).toMatchObject([{ transcriptPath, evidenceSource: "transcript" }]);
+  }
+  expect(describes).toBe(2);
+  expect(catalogReads).toBe(0);
+
+  const caller = new AbortController();
+  const cancelled = bindings.agent_activity({ clientRequestId: "targeted-cancel", transcriptPath: "/fixtures/targeted/cancelled.jsonl" }, { signal: caller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const abortedAt = performance.now();
+  caller.abort();
+  await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  expect(performance.now() - abortedAt).toBeLessThan(100);
+}, 30_000);
+
+test("cancelling agent_activity after its catalog budget releases the scan it was waiting on", async () => {
+  const { completedGenerationSelection } = await import("@/lib/lifecycle/inventorySelection");
+  const now = Date.now();
+  const hosted = ["/fixtures/cancel/hosted.jsonl"];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  const scans: Array<ReturnType<typeof heldScan>> = [];
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: (catalog: { catalogBudgetMs?: number } = {}) => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => hostedRegistry(hosted, now), pipelines: () => [],
+      selectInventory: (request: never, options: { signal?: AbortSignal | null } = {}) => completedGenerationSelection(request, {
+        completedFileScan: scans.at(-1)!.read as never, signal: options.signal ?? null, budgetMs: Math.min(50, catalog.catalogBudgetMs ?? 50), lastCompletedFiles: () => null,
+      }),
+      describeTranscript: async (pathname: string) => ({ path: pathname, project: "activity-board", title: "hosted", engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: "conversation-cancel", activity: "live", activityReason: null }),
+      transcriptEvidence: () => new Promise((resolve) => setTimeout(() => resolve({ turn: "idle", lastRecordTs: now, providerProgressAt: null }), 400)),
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  try {
+    scans.push(heldScan(() => []));
+    const caller = new AbortController();
+    const cancelled = bindings.agent_activity({ clientRequestId: "cancel-after-budget" }, { signal: caller.signal });
+    /* Past the catalog budget, inside the tail read. */
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(scans[0]!.signals[0]!.aborted).toBe(false);
+    const abortedAt = performance.now();
+    caller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    expect(performance.now() - abortedAt).toBeLessThan(100);
+    expect(scans[0]!.signals).toHaveLength(1);
+    expect(scans[0]!.signals[0]!.aborted).toBe(true);
+
+    /* An ordinary pending answer keeps the scan, and the next call gets its generation. */
+    scans.push(heldScan(() => [catalogRow(hosted[0]!, now / 1000)]));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const pending = await bindings.agent_activity({ clientRequestId: "pending-keeps-scan" });
+    expect(pending).toMatchObject({ catalog: "pending", count: 1 });
+    expect(scans[1]!.signals[0]!.aborted).toBe(false);
+    scans[1]!.complete();
+    const complete = await bindings.agent_activity({ clientRequestId: "generation-arrived" });
+    expect(complete).not.toHaveProperty("catalog");
+    expect(complete).toMatchObject({ count: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+}, 15_000);
+
+test("resource summaries retain freshness and cleanup holds; full rows remain available", async () => {
   const sessions = [{ target: "fixture", panePid: 1, path: null, engine: "codex", title: "worker", project: "fixture", activity: null, lastActiveAt: null, cwd: null, rssBytes: 123, swapBytes: 45, procCount: 2 }];
+  const tempSweep = { at: "2026-10-01T00:00:00Z", removed: 0, removedBytes: 0,
+    kept: { young: 1, inUse: 1, worktree: 1, deferred: 1 },
+    keptBytes: { young: 128 * 1024, inUse: 64 * 1024, worktree: 256 * 1024, deferred: 32 * 1024 }, heldCounts: { "git-checkout": 1 },
+    heldBytes: { "git-checkout": 256 * 1024 }, errors: 0,
+    summary: "1 temporary checkout held for inspection" };
   const bindings = viewerMcpBindings(undefined, undefined, { readResourcesWithDiagnostic: undefined,
-    readResources: async () => ({ system: null, sessions, sessionsCapturedAt: "2026-10-01T00:00:00Z", sessionsStale: true, viewer: null, viewerUnavailable: "not-the-viewer" }) } as never);
+    readResources: async () => ({ system: null, sessions, sessionsCapturedAt: "2026-10-01T00:00:00Z", sessionsStale: true, viewer: null, viewerUnavailable: "not-the-viewer", tempSweep }) } as never);
   const compact = await bindings.resources({});
   expect(compact).not.toHaveProperty("sessions");
   expect(compact).toMatchObject({ sessionSummary: { count: 1, rssBytes: 123, swapBytes: 45, procCount: 2 }, freshness: { sessionsStale: true }, viewerUnavailable: "not-the-viewer" });
   const full = await bindings.resources({ full: true });
   expect(full).toMatchObject({ sessions: [{ ...sessions[0], stale: true, capturedAt: "2026-10-01T00:00:00Z" }] });
+  expect(compact.tempSweep).toEqual(tempSweep);
+  expect(full.tempSweep).toEqual(tempSweep);
   expect((await bindings.resources({ compact: false })).sessions).toEqual(full.sessions);
   const task = { id: "fixture", project: "fixture", text: "Task", status: "inbox", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", placement: "unplaced", assignments: [] };
   expect(taskAcknowledgement(task as never, {}, ["status"])).not.toHaveProperty("readMore");

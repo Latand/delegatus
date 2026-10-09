@@ -121,6 +121,7 @@ const OVERRIDES: Record<string, unknown> = {
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (url === "/api/tmux") {
@@ -520,7 +521,9 @@ test("narrow, the bar keeps one row: icons, one + with both creators, and the ac
   expect(await waitFor(() => menu.querySelector("[data-account-switch-engine]") !== null)).toBe(true);
   const row = menu.querySelector("[data-account-switch-engine] button") as HTMLElement;
   expect(row.getAttribute("data-account-switch-appearance")).toBe("menu");
-  expect(row.closest("[data-bar-menu-group]")!.getAttribute("data-bar-menu-group")).toBe("accounts");
+  /* They are a section of ⋯ that opens in place, its rows mounted while it is closed. */
+  expect(row.closest("[data-bar-menu-section]")!.getAttribute("data-bar-menu-section")).toBe("accounts");
+  expect(menu.querySelector('[data-bar-menu-head="accounts"]')?.getAttribute("aria-expanded")).toBe("false");
 });
 
 test("Undo and Redo are gone from the header, its ⋯ and Ctrl+Z, even with a close in the log (#1856)", async () => {
@@ -552,12 +555,20 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
 
   const menu = openMore(host);
   expect(menu.querySelector('[role="separator"]')).toBeNull();
-  const project = menu.querySelector('[data-bar-menu-group="project"]') as HTMLElement;
-  /* #2187 §6: the project's merge setting stays in its group when Archive and
-     Delete stand down, and its Bridge reports setting (#2146) beside it. */
-  expect(Array.from(project.children).map((child) =>
-    child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.tagName,
-  )).toEqual(["merge", "bridge"]);
+  /* #2187 §6: the project's merge setting stays when Archive and Delete stand
+     down, and its Bridge reports setting (#2146): two sections of ⋯, each a
+     page. The section whose rows all stood down draws nothing. */
+  const rowsOf = (section: string) => Array.from(menu.querySelector(`[data-bar-menu-body="${section}"]`)?.children ?? []).map((child) =>
+    child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-share-project-switch]") ? "share" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.querySelector("[data-asks-you-switch]") ? "asks" : child.tagName);
+  expect([rowsOf("merging"), rowsOf("seat"), rowsOf("project")]).toEqual([["merge", "share"], ["bridge", "asks"], []]);
+  expect(Array.from(menu.querySelectorAll("[data-bar-menu-head]")).map((head) => [head.getAttribute("data-bar-menu-head"), head.getAttribute("data-bar-menu-opens")])).toEqual([["merging", "page"], ["seat", "page"], ["project", "place"]]);
+  /* A page replaces the list: its own rows and a back row, nothing else. */
+  flushSync(() => (menu.querySelector('[data-bar-menu-head="seat"]') as HTMLElement).click());
+  expect(menu.getAttribute("data-bar-menu-view")).toBe("seat");
+  expect(menu.querySelector("[data-bar-menu-back]")?.textContent?.trim()).toBe("Orchestrator");
+  expect(menu.querySelector('[data-bar-menu-group="sound"]')?.children.length).toBe(0);
+  flushSync(() => (menu.querySelector("[data-bar-menu-back]") as HTMLElement).click());
+  expect(menu.getAttribute("data-bar-menu-view")).toBe("rest");
 });
 
 test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {

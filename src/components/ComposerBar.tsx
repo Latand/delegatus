@@ -4,12 +4,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 
-import { ChevronDown, Loader2, Play, Square } from "@/components/icons";
+import { ChevronDown, Loader2, Mic, Play, Square, X } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 import type { UseComposerReturn } from "@/hooks/useComposer";
 import { prewarmLiveToken } from "@/hooks/useDictation";
+import { useMicPermissionHint } from "@/hooks/useMicPermissionHint";
 
 import { recallHistory } from "./composerHistory";
 import { Hint } from "./Hint";
@@ -343,6 +344,7 @@ export function ComposerBar({
   } = composer;
   const { t } = useLocale();
   const isMobile = useIsMobile();
+  const micHint = useMicPermissionHint();
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   /* Where the menu goes when it opens: measured off the send control, because
      it renders through a portal to escape the composer box's own scroll clip. */
@@ -592,7 +594,34 @@ export function ComposerBar({
   /* Rendered only with something in it: an empty region is still a row of the
      composer's box and would cost the gap above the input on every conversation
      that has none of these. */
-  const accessories = Boolean(voicePanel || queuePanel || deliveries || receipts || stagedStrip);
+  /* The browser is about to ask for the microphone again on a device that
+     already allowed it; the row names the setting that ends the question. It
+     sits in the accessory region, in the flow above the input, so it takes
+     room and covers nothing: the field and Send stay where they were. The
+     dismiss control's touch target is 46 px and lies inside the row: it reaches
+     the row's own top and right edges (9 px and 11 px from the button) and
+     takes the rest downward and leftward, because the accessory region is a
+     scrollport and clips whatever leaves the row. */
+  const micHintRow = micHint.hint ? (
+    <div
+      data-mic-permission-hint={micHint.hint}
+      role="note"
+      className="flex items-start gap-2 rounded-control border border-border bg-canvas px-2.5 py-2 text-label leading-snug text-secondary"
+    >
+      <Mic className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+      <span className="min-w-0 flex-1">{t(`mic.hint.${micHint.hint}`)}</span>
+      <button
+        type="button"
+        data-mic-permission-hint-dismiss
+        aria-label={t("mic.hint.dismiss")}
+        onClick={micHint.dismiss}
+        className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 before:absolute before:-top-[9px] before:-right-[11px] before:-bottom-[17px] before:-left-[15px] before:content-['']"
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  ) : null;
+  const accessories = Boolean(micHintRow || voicePanel || queuePanel || deliveries || receipts || stagedStrip);
   return (
     <>
       {accessories ? (
@@ -601,6 +630,7 @@ export function ComposerBar({
           className="grid min-h-0 auto-rows-[minmax(0,max-content)] gap-1.5 overflow-y-auto overscroll-contain [&>*]:min-h-0"
         >
           {deliveries}
+          {micHintRow}
           {voicePanel}
           {queuePanel}
           {/* On phones, staged images are the composer's first bounded row. The
@@ -655,6 +685,8 @@ export function ComposerBar({
                moves between the card and the floating PiP document. */
             ref={attachInput}
             value={displayText}
+            /* Native spelling can block Chromium's renderer on pasted transcripts. */
+            spellCheck={false}
             rows={1}
             readOnly={Boolean(dictation.liveText)}
             onChange={(event) => {

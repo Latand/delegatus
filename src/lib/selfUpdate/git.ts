@@ -78,6 +78,14 @@ export async function fetchTip(repo: string, remote: string, branch: string): Pr
   await git(repo, "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`);
 }
 
+/** Historical check evidence survives a force-push. Fetch current main and
+    pin its SHA independently of the mutable check ref before proving ancestry. */
+export async function targetOnCurrentBranch(repo: string, remote: string, branch: string, target: string): Promise<boolean> {
+  await fetchTip(repo, remote, branch);
+  const tip = await lsRemote(repo, remote, branch);
+  return (await runGit(["merge-base", "--is-ancestor", target, tip], repo)).code === 0;
+}
+
 async function hasCommit(repo: string, sha: string): Promise<boolean> {
   return (await runGit(["cat-file", "-e", `${sha}^{commit}`], repo)).code === 0;
 }

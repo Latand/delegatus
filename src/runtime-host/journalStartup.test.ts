@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { RuntimeJournal, type RuntimeJournalStartupProgress } from "./journal";
 import { expectedReceipts, largeJournal, pinWal, processWrites, receiptKeys, walCommits } from "./fixtures/largeRuntimeJournal";
+
+import { runtimeScope } from "@/lib/runtime/contracts";
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "journal-startup-"));
 let next = 0;
@@ -107,7 +109,7 @@ test("pre-receipt journal migrates newest engine keys and preserves durable dupl
   journal.close();
   // Exercise the old writer's actual startup statements against the migrated schema.
   const db = new Database(f);
-  for (const row of db.query<Record<string, any>, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
+  for (const row of db.query<{ seq: number; event_id: string; revision: number; kind: string; occurred_at: string; recorded_at: string; producer_kind: string; producer_key: string; causation_id: string | null; correlation_id: string | null; payload_json: string }, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
     const event = { schemaVersion: 1, seq: row.seq, eventId: row.event_id, scope: { type: "session", id: "conversation-fixture" }, revision: row.revision, kind: row.kind, occurredAt: row.occurred_at, recordedAt: row.recorded_at, producer: { kind: row.producer_kind, eventKey: row.producer_key }, causationId: row.causation_id, correlationId: row.correlation_id, payload: JSON.parse(row.payload_json) };
     db.query("INSERT INTO producer_receipts VALUES (?,?,?) ON CONFLICT(producer_kind,producer_key) DO NOTHING").run(row.producer_kind, row.producer_key, JSON.stringify(event));
   }
@@ -145,3 +147,110 @@ test("cooperative open yields while verifying the full large-history hash chain"
   expect(() => faulted.append({ scope: "system:fixture", kind: "fixture.history", payload: {} })).toThrow("read-only");
   faulted.close();
 }, 120_000);
+
+const sandboxes: string[] = [];
+
+afterEach(() => {
+  for (const dir of sandboxes.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function legacyFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-journal-startup-"));
+  sandboxes.push(dir);
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { maxEvents: 100 });
+  const inputs = ["codex-app-server", "claude-broker"].flatMap((kind) =>
+    [1, 2, 3].map((sequence) => ({
+      scope: runtimeScope("session", kind),
+      kind: "turn.started",
+      payload: { turnId: `turn-${sequence}` },
+      producer: { kind, eventKey: `startup-${sequence}` },
+    })),
+  );
+  const events = inputs.map((input) => journal.append(input));
+  journal.close();
+  // Model an old release, before the versioned receipt migration existed.
+  const legacy = new Database(filename);
+  legacy.exec("DELETE FROM journal_meta WHERE key IN ('producer_receipts_backfill_version', 'producer_receipts_backfill_cursor')");
+  legacy.close();
+  return { filename, inputs, events };
+}
+
+test("startup backfills missing producer receipts and preserves existing receipts and replay", () => {
+  const { filename, inputs, events } = legacyFixture();
+  const db = new Database(filename);
+  const retained = db.query<{ producer_kind: string; producer_key: string; event_json: string }, []>(
+    "SELECT producer_kind, producer_key, event_json FROM producer_receipts WHERE producer_key = 'startup-1' ORDER BY producer_kind",
+  ).all();
+  db.exec("DELETE FROM producer_receipts WHERE producer_key != 'startup-1'");
+  db.close();
+
+  const reopened = new RuntimeJournal(filename);
+  try {
+    expect(reopened.isWritable()).toBe(true);
+    for (const [index, input] of inputs.entries()) expect(reopened.append(input)).toEqual(events[index]);
+    expect(reopened.snapshot().snapshotSeq).toBe(6);
+  } finally {
+    reopened.close();
+  }
+
+  const read = new Database(filename, { readonly: true });
+  try {
+    expect(read.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM producer_receipts").get()?.count).toBe(6);
+    expect(read.query(
+      "SELECT producer_kind, producer_key, event_json FROM producer_receipts WHERE producer_key = 'startup-1' ORDER BY producer_kind",
+    ).all()).toEqual(retained);
+  } finally {
+    read.close();
+  }
+});
+
+test("startup receipt backfill rolls back the whole batch on failure and can retry", () => {
+  const { filename, inputs, events } = legacyFixture();
+  const db = new Database(filename);
+  db.exec(`
+    DELETE FROM producer_receipts;
+    CREATE TRIGGER reject_startup_receipt BEFORE INSERT ON producer_receipts
+    WHEN NEW.producer_kind = 'codex-app-server' AND NEW.producer_key = 'startup-2'
+    BEGIN SELECT RAISE(ABORT, 'injected startup receipt failure'); END;
+  `);
+  db.close();
+
+  expect(() => new RuntimeJournal(filename)).toThrow("injected startup receipt failure");
+  const repair = new Database(filename);
+  try {
+    expect(repair.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM producer_receipts").get()?.count).toBe(0);
+    repair.exec("DROP TRIGGER reject_startup_receipt");
+  } finally {
+    repair.close();
+  }
+
+  const reopened = new RuntimeJournal(filename);
+  try {
+    expect(reopened.isWritable()).toBe(true);
+    for (const [index, input] of inputs.entries()) expect(reopened.append(input)).toEqual(events[index]);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("startup does not attempt to insert receipts that already exist", () => {
+  const { filename } = legacyFixture();
+  const db = new Database(filename);
+  db.exec(`
+    CREATE TRIGGER reject_existing_receipt BEFORE INSERT ON producer_receipts
+    WHEN EXISTS (
+      SELECT 1 FROM producer_receipts
+      WHERE producer_kind = NEW.producer_kind AND producer_key = NEW.producer_key
+    )
+    BEGIN SELECT RAISE(ABORT, 'existing receipt must be skipped'); END;
+  `);
+  db.close();
+
+  const reopened = new RuntimeJournal(filename);
+  try {
+    expect(reopened.isWritable()).toBe(true);
+  } finally {
+    reopened.close();
+  }
+});

@@ -68,6 +68,9 @@ const drafts = [
   { label: "Both, by header", text: "Both, chosen by the Accept header." },
   { label: "Ask the orchestrator", text: "Ask the orchestrator which format the spreadsheet import expects." },
 ];
+/* The reply that approves a bug report's publication, as the tool words it. */
+const APPROVAL = `Yes, publish report ${"ab".repeat(32)}`;
+const publicationDrafts = [{ label: "Yes, publish as a public issue", text: APPROVAL }, { label: "No", text: "No, do not publish it." }];
 
 const requests: { url: string; body: Record<string, unknown> | null }[] = [];
 globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
@@ -76,7 +79,7 @@ globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
   requests.push({ url, body });
   if (url.startsWith("/api/log/suggestions")) {
     const conversationId = decodeURIComponent(url.split("conversationId=")[1] ?? "");
-    return { ok: true, json: async () => ({ set: { conversationId, setId: `rsg_${conversationId}`, at: SET_AT, origin: { kind: "manager", conversationId: "seat", role: "orchestrator" }, replies: drafts } }) } as Response;
+    return { ok: true, json: async () => ({ set: { conversationId, setId: `rsg_${conversationId}`, at: SET_AT, origin: { kind: "manager", conversationId: "seat", role: "orchestrator" }, replies: conversationId.startsWith("conv_publication") ? publicationDrafts : drafts } }) } as Response;
   }
   if (url === "/api/answer") return { ok: true, status: 200, json: async () => ({ ok: true, answer: body?.text }) } as Response;
   throw new Error(`unexpected request: ${url}`);
@@ -178,6 +181,24 @@ test("phone: with no question pending a chip sends through the outbox and the ro
   expect(requests.some((entry) => entry.url === "/api/answer")).toBe(false);
   /* The chips are gone the moment one was tapped. */
   expect(host.querySelector("[data-reply-suggestions]")).toBeNull();
+});
+
+test("phone: the chip that approves a publication fills the composer and sends nothing", async () => {
+  setViewport("narrowPhone");
+  const host = mount(<SuggestedReplies file={file("conv_publication", pendingQuestion("lanes:2.0"))} revision="1" />);
+  await settle(host, "[data-reply-suggestion]", publicationDrafts.length);
+  const [approve, refuse] = [...host.querySelectorAll("[data-reply-suggestion]")] as HTMLButtonElement[];
+  flushSync(() => { approve!.click(); });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  /* The draft waits in the field for the operator's own send. */
+  expect(sessionStorage.getItem("llvDraft:conv_publication")).toBe(APPROVAL);
+  expect(readOutbox("conv_publication")).toHaveLength(0);
+  expect(requests.some((entry) => entry.url === "/api/answer")).toBe(false);
+  expect(host.querySelectorAll("[data-reply-suggestion]")).toHaveLength(publicationDrafts.length);
+  /* Every other chip of the same set still sends on tap. */
+  flushSync(() => { refuse!.click(); });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(requests.find((entry) => entry.url === "/api/answer")?.body).toMatchObject({ text: publicationDrafts[1]!.text });
 });
 
 test("phone: with a pane-backed question pending a chip answers it and the row retires", async () => {

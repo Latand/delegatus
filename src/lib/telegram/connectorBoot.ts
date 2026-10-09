@@ -1,5 +1,5 @@
+import { runSharedTelegramHealthCheck } from "./launchReadiness";
 import { readTelegramConnection, readTelegramSession } from "./sessionStore";
-import { readTelegramReports } from "./reportStore";
 
 /**
  * Bringing the shared connector back after a viewer restart (issue #1133).
@@ -13,10 +13,12 @@ import { readTelegramReports } from "./reportStore";
  * arrived on four consecutive report runs.
  *
  * So the release that owns traffic re-provisions it on boot, for exactly the
- * account that already has one: a stored credential AND reports switched on.
- * Nothing else is provisioned proactively — an operator who has not connected
- * Telegram, or who has switched the reports off, gets no process they did not
- * ask for.
+ * account that already has one: a stored credential. Reports used to be the
+ * second condition, from the time they were the connector's only unattended
+ * consumer. Orchestrator seats and the agents they grant hold the Telegram
+ * tool too, and with reports off a restart left their connector dead behind a
+ * record that still read connected. An operator who has not connected
+ * Telegram gets no process they did not ask for.
  *
  * The provisioning runs through the connection service's ORDINARY health
  * check. That path already owns the connector lifecycle, already holds the
@@ -34,8 +36,6 @@ import { readTelegramReports } from "./reportStore";
 export type TelegramConnectorBootOutcome =
   /** No stored credential: there is no account to provision a connector for. */
   | "no_session"
-  /** Reports are switched off, so no unattended consumer needs the connector. */
-  | "reports_disabled"
   /** The connector is up and the connection reads connected. */
   | "provisioned"
   /** The health check ran and the connector still is not serving. */
@@ -48,8 +48,6 @@ export type TelegramConnectorBootLogCode = "connector_unavailable" | "provision_
 export interface TelegramConnectorBootPorts {
   /** Whether an owner-only Telegram credential is stored. */
   hasCredentialedSession(): boolean;
-  /** Whether the unattended consumer this exists for is switched on. */
-  reportsEnabled(): boolean;
   /** The ordinary health check: ensures the connector and republishes status. */
   provision(): Promise<void>;
   /** Whether the durable connection record reads connected afterwards. */
@@ -67,11 +65,9 @@ export const productionTelegramConnectorBootPorts: TelegramConnectorBootPorts = 
       return false;
     }
   },
-  reportsEnabled: () => readTelegramReports().settings.enabled,
-  provision: async () => {
-    const { telegramService } = await import("./service");
-    await telegramService().checkHealth();
-  },
+  /* The check a launch joins: a host raised while the Viewer starts waits for
+     this one to confirm the record before it reads it. */
+  provision: () => runSharedTelegramHealthCheck(),
   connected: () => {
     try {
       return readTelegramConnection().status === "connected";
@@ -86,7 +82,6 @@ export async function provisionTelegramConnectorAtStartup(
   ports: TelegramConnectorBootPorts = productionTelegramConnectorBootPorts,
 ): Promise<TelegramConnectorBootOutcome> {
   if (!ports.hasCredentialedSession()) return "no_session";
-  if (!ports.reportsEnabled()) return "reports_disabled";
   try {
     await ports.provision();
   } catch {

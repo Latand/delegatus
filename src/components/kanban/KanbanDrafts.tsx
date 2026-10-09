@@ -16,9 +16,9 @@ import { CloseGlyph } from "./kanbanGlyphs";
 /**
  * Agent drafts and the new task on the kanban board (#1695 K9a).
  *
- * A draft is the conversation an agent will be: engine, directory, account and
- * first prompt are chosen in the same `DraftAgentPane` the scheme board drew,
- * and its fields live in this tab's storage under the draft's id, so a draft
+ * A draft is the conversation an agent will be: the conversation composer and
+ * nothing else (`DraftAgentPane`), with the first prompt and the runtime the
+ * pill picks. Its fields live in this tab's storage under the draft's id, so a draft
  * survives a reload, a collapse or a trip to Conversations. The board decides
  * which card holds it (its band); this module only draws it there.
  */
@@ -35,8 +35,13 @@ export const KanbanDraftContext = createContext<KanbanDraftActions | null>(null)
 
 /** The drafts one card holds, each at reading width. */
 export function CardDrafts({ ids }: { ids: readonly string[] }) {
+  /* A card with no draft reads no context, so a files poll renders only the cards that hold one. */
+  return ids.length === 0 ? null : <DraftPanes ids={ids} />;
+}
+
+function DraftPanes({ ids }: { ids: readonly string[] }) {
   const actions = useContext(KanbanDraftContext);
-  if (!actions || ids.length === 0) return null;
+  if (!actions) return null;
   return (
     <div className="agent-drafts">
       {ids.map((id) => (

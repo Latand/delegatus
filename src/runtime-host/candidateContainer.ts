@@ -10,7 +10,7 @@ export interface ViewerComposeVolume {
   source: string;
   target: string;
   read_only?: boolean;
-  bind: Record<string, never>;
+  bind: { create_host_path?: boolean };
 }
 
 export interface ViewerComposeService {
@@ -110,14 +110,17 @@ function composeVolume(value: unknown, index: number): ViewerComposeVolume {
   assertCoveredKeys(volume, VOLUME_KEYS, `viewer Compose volume ${index}`);
   if (volume.type !== "bind") throw new Error(`viewer Compose volume ${index} type is unsupported`);
   const bind = objectValue(volume.bind ?? {}, `viewer Compose volume ${index}.bind`);
-  assertCoveredKeys(bind, new Set(), `viewer Compose volume ${index}.bind`);
+  assertCoveredKeys(bind, new Set(["create_host_path"]), `viewer Compose volume ${index}.bind`);
+  if (bind.create_host_path !== undefined && typeof bind.create_host_path !== "boolean") {
+    throw new Error(`viewer Compose volume ${index}.bind.create_host_path is invalid`);
+  }
   if (volume.read_only !== undefined && typeof volume.read_only !== "boolean") throw new Error(`viewer Compose volume ${index}.read_only is invalid`);
   return {
     type: "bind",
     source: stringValue(volume.source, `viewer Compose volume ${index}.source`),
     target: stringValue(volume.target, `viewer Compose volume ${index}.target`),
     ...(volume.read_only === undefined ? {} : { read_only: volume.read_only }),
-    bind: {},
+    bind: bind.create_host_path === undefined ? {} : { create_host_path: bind.create_host_path as boolean },
   };
 }
 
@@ -200,6 +203,20 @@ export function viewerCandidateVolumes(
   ];
 }
 
+/** Compose short binds explicitly request source creation. Docker --volume
+ * preserves that policy; --mount keeps explicit false and older snapshots strict. */
+function candidateBindArgs(volume: ViewerComposeVolume): string[] {
+  for (const value of [volume.source, volume.target]) {
+    if (!path.isAbsolute(value) || /[\r\n\0]/.test(value)) throw new Error("candidate bind paths must be absolute and single-line");
+  }
+  if (volume.bind.create_host_path === true) {
+    if ([volume.source, volume.target].some(value => value.includes(":"))) throw new Error("candidate auto-created bind paths cannot contain colons");
+    return ["--volume", `${volume.source}:${volume.target}${volume.read_only ? ":ro" : ""}`];
+  }
+  if ([volume.source, volume.target].some(value => /[,"]/.test(value))) throw new Error("candidate strict bind paths cannot contain CSV delimiters");
+  return ["--mount", `type=bind,source=${volume.source},target=${volume.target}${volume.read_only ? ",readonly" : ""}`];
+}
+
 export function viewerCandidateDockerArgs(
   candidate: ViewerReleaseIdentity,
   service: ViewerComposeService,
@@ -236,10 +253,7 @@ export function viewerCandidateDockerArgs(
     "--user", service.user,
     "--workdir", service.working_dir,
     ...Object.entries(environment).sort(([left], [right]) => left.localeCompare(right)).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
-    ...volumes.flatMap((volume) => [
-      "--mount",
-      `type=bind,source=${volume.source},target=${volume.target}${volume.read_only ? ",readonly" : ""}`,
-    ]),
+    ...volumes.flatMap(candidateBindArgs),
     candidate.image,
     ...command,
   ];

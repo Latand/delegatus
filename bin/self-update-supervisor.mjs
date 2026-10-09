@@ -28,15 +28,17 @@
 /* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
    environment (docs/design/rename-delegatus.md §5). */
 import "./envAlias.mjs";
+import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
+import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
 
 export const RECORD_VERSION = 1;
-const REQUEST_ROLES = new Set(["web", "runtime-host"]);
+const REQUEST_ROLES = new Set(["web", "runtime-host", "relaunch"]);
 
 /**
  * @param {{ stateDirectory: string, cacheDirectory: string, installId: string }} input
@@ -47,6 +49,8 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
     record: join(base, `launcher-${installId}.json`),
     request: join(base, `request-${installId}.json`),
     releasePointer: join(base, `release-${installId}.json`),
+    trial: join(base, `trial-${installId}.json`),
+    adopt: join(base, `adopt-${installId}.json`),
     /* Each release holds its own node_modules and .next (well over a
        gigabyte), so they live in the cache, not in the state directory. */
     releasesDir: join(appDirIn(cacheDirectory), "self-update", installId, "releases"),
@@ -56,11 +60,24 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
 /** Field 22 of /proc/<pid>/stat: the start time in clock ticks. Null where
     there is no /proc (the record then carries no identity, and the Viewer
     treats the process as unverifiable rather than as the same process). */
-export function readStartIdentity(pid) {
+/** The identity written by the runtime-host fence, distinct from old
+    launcher records which retain bare Linux ticks or macOS ps start time. */
+export function runtimeHostStartIdentity(pid) {
+  if (process.platform === "darwin") return darwinKernelIdentity(pid);
+  const identity = readStartIdentity(pid);
+  return process.platform === "win32" ? identity : identity === null ? null : `${pid}:${identity}`;
+}
+
+export function readStartIdentity(pid, platform = process.platform, run = spawnSync) {
+  if (platform === "win32") return windowsStartIdentity(pid, run);
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
   } catch {
+    if (platform === "darwin") {
+      const result = run("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+      return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
+    }
     return null;
   }
 }
@@ -88,6 +105,13 @@ export function installedRelease(pointerFile, packageRoot) {
   const rootHead = headRevision(packageRoot);
   try {
     const parsed = JSON.parse(readFileSync(pointerFile, "utf8"));
+    if (parsed.kind === "package" && typeof parsed.dir === "string" && /^[0-9a-f]{40}$/.test(parsed.sha)) {
+      const base = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+      const next = JSON.parse(readFileSync(join(parsed.dir, "package.json"), "utf8"));
+      if (base.version === parsed.baseVersion && next.version === parsed.version
+        && existsSync(join(parsed.dir, "dist", "standalone", "server.js")) && existsSync(join(parsed.dir, "dist", "runtime-host.mjs")))
+        return { dir: parsed.dir, sha: parsed.sha, published: true };
+    }
     const sha = typeof parsed?.sha === "string" && /^[0-9a-f]{40}$/.test(parsed.sha) ? parsed.sha : null;
     const dir = typeof parsed?.dir === "string" ? parsed.dir : null;
     const rootUnmoved = typeof parsed?.checkoutHead !== "string" || parsed.checkoutHead === rootHead;
@@ -125,7 +149,9 @@ function emptyProcess() {
 export function createLauncherRecord(file, base, clock = () => Date.now()) {
   const record = {
     version: RECORD_VERSION,
-    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1 },
+    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1,
+      ...(process.platform !== "win32" && typeof process.execve === "function" ? { relaunch: 1 } : {}),
+      revision: null, requestId: null, state: "starting", error: null },
     ...base,
     web: emptyProcess(),
     runtimeHost: emptyProcess(),
@@ -144,7 +170,7 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
   return {
     file,
     read: () => record,
-    /** @param {"web" | "runtimeHost"} role */
+    /** @param {"web" | "runtimeHost" | "launcher"} role */
     set(role, patch) {
       record[role] = { ...record[role], ...patch };
       flush();
@@ -164,7 +190,35 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
       flush();
     },
     remove() {
-      rmSync(file, { force: true });
+      try {
+        const current = JSON.parse(readFileSync(file, "utf8"));
+        if (current?.launcher?.pid !== record.launcher.pid
+          || current?.launcher?.startIdentity !== record.launcher.startIdentity) return;
+        // Graceful shutdown can land after the Viewer published an apply but
+        // before its request became a durable trial. Keep the original owner
+        // fence until the apply settles; cold recovery must verify that owner.
+        let apply;
+        try { apply = JSON.parse(readFileSync(join(dirname(file), "apply.json"), "utf8")); }
+        catch (error) {
+          if (error.code !== "ENOENT") return; // Unreadable custody is retained.
+        }
+        if (apply && apply.releasePointer === record.releasePointer
+          && (apply.launcherPid === record.launcher.pid && apply.launcherIdentity === record.launcher.startIdentity
+            || current.launcher.requestId === apply.requestId)) {
+          if (["building", "ready", "switching"].includes(apply.state)) return;
+          // Terminal persistence and hold release are separate writes. Retain
+          // the original owner across a signal between those two boundaries.
+          let drain, gate;
+          try { drain = JSON.parse(readFileSync(join(dirname(file), "auto-drain.json"), "utf8")); }
+          catch (error) { if (error.code !== "ENOENT") return; }
+          try { gate = JSON.parse(readFileSync(join(dirname(file), "auto-admission.json"), "utf8")); }
+          catch (error) { if (error.code !== "ENOENT") return; }
+          if (drain?.id === apply.requestId || apply.autoGateId && gate?.id === apply.autoGateId) return;
+        }
+        rmSync(file, { force: true });
+      } catch (error) {
+        if (error.code !== "ENOENT") console.error("[self-update] could not remove the owned launcher record.");
+      }
     },
   };
 }
@@ -172,18 +226,25 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
 /**
  * Polls for a restart request and hands each one to `handle`, one at a time.
  * A request that arrives while another is handled waits in its file. A
- * request is consumed (its file removed) before it is handled, so a crash
- * mid-restart never replays it.
+ * Ordinary restarts consume before handling. Relaunch consumes only after
+ * its controller has persisted the trial that owns crash recovery.
+ *
+ * Work the installation admits is known to the Viewer alone: the registry and
+ * the pipelines live in its database, and the files of an open turn move with
+ * every event. The launcher therefore reads no work evidence of its own. An
+ * automatic request is admitted by the Viewer before the handler runs, and a
+ * handler that waits on anything afterwards asks again through `readmit`, so
+ * the Viewer's read is the last awaited step before anything is stopped.
  *
  * @param {string} requestFile
- * @param {(request: { requestId: string, role: "web" | "runtime-host" }) => Promise<void>} handle
- * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host", autoGateId: string }) => Promise<boolean> }} options
+ * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }, dispatchFence: (consumed?: boolean) => boolean, readmit: () => Promise<boolean>) => Promise<void | false>} handle
+ * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean>, isStopping?: () => boolean }} options
  */
-export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false } = {}) {
+export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false, isStopping = () => false } = {}) {
   let busy = false;
   const gateFile = join(dirname(requestFile), "auto-admission.json");
   const poll = async () => {
-    if (busy || !existsSync(requestFile)) return;
+    if (busy || isStopping() || !existsSync(requestFile)) return;
     let request = null;
     try {
       request = JSON.parse(readFileSync(requestFile, "utf8"));
@@ -195,26 +256,81 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
       return;
     }
     busy = true;
+    let admitted = request.autoGateId === undefined;
+    let retain = false;
+    const original = readFileSync(requestFile, "utf8");
+    const recordFile = join(dirname(requestFile), basename(requestFile).replace(/^request/, "launcher"));
+    const owner = () => { try { return JSON.stringify(JSON.parse(readFileSync(recordFile, "utf8"))?.launcher); } catch { return null; } };
+    const originalOwner = owner();
+    const originalGate = request.autoGateId ? (() => { try { return readFileSync(gateFile, "utf8"); } catch { return null; } })() : null;
+    const dispatchFence = (consumed = false) => {
+      try {
+        let pending = null;
+        try { pending = readFileSync(requestFile, "utf8"); } catch (error) { if (error.code !== "ENOENT") return false; }
+        if (pending !== original) {
+          if (!consumed || pending !== null) return false;
+          const trial = JSON.parse(readFileSync(join(dirname(requestFile), basename(requestFile).replace(/^request/, "trial")), "utf8"));
+          if (trial.requestId !== request.requestId || trial.target !== request.target) return false;
+        }
+        if (owner() !== originalOwner) return false;
+        if (request.autoGateId) {
+          const bytes = readFileSync(gateFile, "utf8"), gate = JSON.parse(bytes);
+          if (bytes !== originalGate || gate.id !== request.autoGateId || gate.until <= Date.now()) return false;
+          if (gate.issuerPid !== undefined && (!gate.issuerIdentity || readStartIdentity(gate.issuerPid) !== gate.issuerIdentity)) return false;
+        }
+        return true;
+      } catch { return false; }
+    };
+    const rejected = (detail) => {
+      const file = `${requestFile}.result.json`;
+      const temporary = `${file}.${process.pid}.tmp`;
+      writeFileSync(temporary, JSON.stringify({ requestId: request.requestId, state: "rejected", detail }), { mode: 0o600 });
+      renameSync(temporary, file);
+    };
     try {
       if (request.autoGateId !== undefined) {
         let gate = null;
         try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* no valid admission */ }
         if (typeof request.autoGateId !== "string" || gate?.id !== request.autoGateId || typeof gate.until !== "number" || gate.until <= Date.now()
-          || !await admitAuto(request)) return;
+          || !await admitAuto(request)) {
+          if (isStopping()) return;
+          retain = request.role === "relaunch";
+          rejected("Final automatic admission was refused or expired");
+          return;
+        }
       }
+      if (isStopping()) return;
+      // The admission HTTP read may outlive its gate or its issuer. This is
+      // synchronous with dispatch and never consumes a stale relaunch request.
+      if (request.autoGateId) {
+        let gate;
+        try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* stale */ }
+        if (!gate || gate.id !== request.autoGateId || gate.until <= Date.now()
+          || readFileSync(gateFile, "utf8") !== originalGate) {
+          retain = request.role === "relaunch";
+          rejected("Final automatic dispatch has stale gate or issuer custody"); return;
+        }
+      }
+      if (!dispatchFence()) {
+        retain = true; rejected("Final dispatch has stale launcher custody"); return;
+      }
+      admitted = true;
       // Do not remove a newer request that arrived while admission was read.
       try {
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
-      rmSync(requestFile, { force: true });
-      await handle({ requestId: request.requestId, role: request.role });
+      if (request.role !== "relaunch") rmSync(requestFile, { force: true });
+      if (await handle(request, dispatchFence, () => admitAuto(request)) === false) retain = true;
     } catch (error) {
+      if (!isStopping() && !admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (request.autoGateId) {
+      if (!retain && !isStopping() && (request.autoGateId || request.role === "relaunch")) {
         try {
           if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
         } catch { /* already consumed */ }
+      }
+      if (!retain && !isStopping() && request.autoGateId && request.role !== "relaunch") {
         try {
           if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
         } catch { /* already removed */ }
@@ -253,7 +369,11 @@ export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}) {
     await asset.body?.cancel();
     return asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    // Fetch errors can include the rejected header value. Restart diagnostics
+    // are persisted and printed by the launcher, so the message stays out and
+    // only the error's own code or class name says what kind it was.
+    const kind = [error?.code, error?.name].find((value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(value));
+    return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
   }
 }
 
@@ -265,4 +385,16 @@ export function exitError(child, startedAt, clock = () => Date.now()) {
     signal: child.signalCode ?? null,
     afterMs: Math.max(0, clock() - startedAt),
   };
+}
+
+/** The registry records an admission saw, by launch: each record's key, the
+    epoch of its host claim and its pending launch, plus the spawn receipts.
+    A record's status and timestamps move with every event of a turn that is
+    already running, so they are not evidence of newly admitted work. The
+    Viewer builds its work evidence from this over its own registry; the
+    launcher has no registry to read. */
+export function admittedRecords(file) {
+  if (!file || typeof file.entries !== "object" || file.entries === null || Array.isArray(file.entries)) return null;
+  const receipts = file.receipts && typeof file.receipts === "object" ? Object.keys(file.receipts).sort() : [];
+  return [Object.keys(file.entries).sort().map(id => [id, file.entries[id]?.claimEpoch ?? null, file.entries[id]?.pendingAction ?? null]), receipts];
 }

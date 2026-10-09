@@ -59,6 +59,9 @@ export interface PhoneCard {
   /** The newest dismissal still live, while nothing else asks: the muted
       «Cleared · who» line and its Undo. */
   cleared: ClearedNeed | null;
+  /** The task's prototype review waits for a choice and nothing else on the
+      card asks: the card's own line says so, and the choice clears it. */
+  waitsOnPrototype: boolean;
   /** The card's one coloured edge: the need's hue. A task's colour label
       takes the edge only when nothing is needed (the component draws it). */
   edge: "warning" | "danger" | null;
@@ -157,9 +160,17 @@ function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason
   return card.reasons.filter((need) => need.subject !== "pipeline" || !closing.has(need.pipeline.id));
 }
 
+/** The task's prototype review still waits for the operator's choice. */
+function prototypeWaits(card: KanbanCard): boolean {
+  return Boolean(card.task?.prototypeReview?.waitingReviewId);
+}
+
 /** Whether the card needs the operator, as the ⚠ queue reads it. */
 function cardNeeds(card: KanbanCard, closing: ReadonlySet<string>): boolean {
-  return liveReasons(card, closing).length > 0;
+  const live = liveReasons(card, closing);
+  const motionReason = typeof card.motion.reason === "object" ? card.motion.reason : null;
+  return live.length > 0 || prototypeWaits(card) || (card.motion.key === "needs-you"
+    && (motionReason?.kind === "operator" || (card.stepSummary?.needsYou ?? 0) > 0));
 }
 
 /** Where a reason stands in the attention queue, or Infinity when the queue
@@ -200,7 +211,7 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
     const member = card.members.find((entry) => entry.file.path === first.file.path);
     if (member) need = { kind: "conversation", member, state: mobileRowState(member.file, now), reason: first };
   }
-  const edge = need?.kind === "conversation" ? need.state.edge ?? "warning" : need ? "warning" : null;
+  const edge = need?.kind === "conversation" ? need.state.edge ?? "warning" : need || card.motion.key === "needs-you" ? "warning" : null;
 
   const shownId = shown?.pipeline.id ?? null;
   const outside = card.members.filter((member) => member.working && member.stage?.pipeline.id !== shownId).length;
@@ -211,7 +222,8 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
   const says = need?.kind === "conversation" ? working > 0 : !shown || outside > 0;
   const agents = kind === "task" && says ? { working, conversations: card.conversations, atMs } : null;
   const cleared = reasons.length ? null : card.cleared[0] ?? null;
-  return { key: card.id, kind, card, need, reasons, cleared, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };
+  const waitsOnPrototype = kind === "task" && !reasons.length && prototypeWaits(card);
+  return { key: card.id, kind, card, need, reasons, cleared, waitsOnPrototype, edge, shown, others, finished, agents, firstAgent: firstAgentOf(card) };
 }
 
 /** Where each card stands in the attention queue: its earliest ask. */
@@ -251,7 +263,7 @@ export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDO
     const rest = column.shown.filter((card) => !cardNeeds(card, closing));
     const windowed = status === "done" ? rest.slice(0, Math.max(0, doneShown)) : rest;
     const loose = status === "inbox" ? unlinked.filter((entry) => !cardNeeds(entry.card, closing)) : [];
-    const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + entry.card.working, 0) : 0;
+    const looseWorking = status === "inbox" ? unlinked.reduce((sum, entry) => sum + (entry.card.motion.key === "working" ? 1 : 0), 0) : 0;
     return [status, {
       status,
       count: column.shown.length,

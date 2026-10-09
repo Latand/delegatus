@@ -4,6 +4,7 @@ import { processTelegramAdapter, type TelegramAdapter, type TelegramEnrollmentEv
 import { ensureTelegramConnector, stopTelegramConnector, stopTelegramConnectorForSession, telegramConnectorOwnsSession, type ConnectorEnsureResult } from "./connector";
 import type { TelegramAccountIdentity, TelegramErrorCode, TelegramStatusPayload } from "./contracts";
 import { registerTelegramHosts, unregisterTelegramHosts, type TelegramHostRegistrationResult } from "./hostRegistration";
+import { trackTelegramHealthCheck } from "./launchReadiness";
 import { telegramApiCredentials } from "./packaging";
 import { connectorReadPort } from "./reportSources";
 import {
@@ -423,11 +424,14 @@ export class TelegramConnectionService {
   /** Health check against the stored session; updates the durable status. */
   checkHealth(): Promise<TelegramStatusPayload> {
     const expectedGeneration = this.lifecycleGeneration;
-    return this.enqueueLifecycle(async (generation) => {
+    /* Every check is one a launch waits for, whoever asked for it: while it
+       replaces a connector the record can read connected over a process that
+       is not verified yet. */
+    return trackTelegramHealthCheck(this.enqueueLifecycle(async (generation) => {
       if (this.login) return this.status();
       await this.runHealthCheck(generation);
       return this.status();
-    }, { expectedGeneration, stale: () => this.status() });
+    }, { expectedGeneration, stale: () => this.status() }));
   }
 
   private async runHealthCheck(generation: number): Promise<void> {

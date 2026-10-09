@@ -37,17 +37,58 @@ export class BoundedLru<Value> {
   }
 }
 
+/* A scan of the feed's rows is selector passes over every node under it:
+   about 4 ms for two thousand rows on a desktop, so about 15 ms at 4x CPU, on
+   every scroll event. The rows only change when the feed's own markup does, so
+   an answer is kept per root and rebuilt when a mutation says it may have
+   changed. The array is shared: callers read it, they do not edit it. */
+interface Reading { rows: HTMLElement[]; stale: boolean; watch: MutationObserver }
+
+function cachedRows(scan: (root: ParentNode) => HTMLElement[], attributeFilter: string[]): (root: ParentNode) => HTMLElement[] {
+  const readings = new WeakMap<ParentNode, Reading>();
+  return (root) => {
+    const cached = readings.get(root);
+    if (cached) {
+      /* `takeRecords` hands over mutations the observer has not delivered yet,
+         so a read made right after a commit (a layout effect) sees them. */
+      const changed = cached.watch.takeRecords().length > 0 || cached.stale;
+      if (!changed) return cached.rows;
+      cached.stale = false;
+      cached.rows = scan(root);
+      return cached.rows;
+    }
+    const rows = scan(root);
+    const Observer = (root as Node).ownerDocument?.defaultView?.MutationObserver;
+    if (Observer) {
+      const reading: Reading = { rows, stale: false, watch: new Observer(() => { reading.stale = true; }) };
+      reading.watch.observe(root as Node, { childList: true, subtree: true, attributes: true, attributeFilter });
+      readings.set(root, reading);
+    }
+    return rows;
+  };
+}
+
 /** The anchors that can be the row at the top of a viewport: the feed's own
  * rows in document order. Two kinds of `[data-feed-key]` element never are.
  * An empty reasoning record keeps its source identities inside a `hidden`
  * wrapper, so they have no box and a rect of zeros. A reasoning group's member
  * anchors sit inside the row that holds them and end above that row's bottom.
  * Either one breaks the non-decreasing bottoms the bisection below relies on.
- * Both stay reachable by key; only the reading position skips them. */
-export function readingRows(root: ParentNode): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>("[data-feed-key]"))
-    .filter((anchor) => !anchor.parentElement?.closest("[data-feed-key], [data-empty-reasoning]"));
-}
+ * Both stay reachable by key; only the reading position skips them. The scan
+ * is two selector passes, and the second one is an ancestor walk per row. */
+export const readingRows = cachedRows((root) => {
+  const anchors = Array.from(root.querySelectorAll<HTMLElement>("[data-feed-key]"));
+  const inside = new Set(root.querySelectorAll("[data-feed-key] [data-feed-key], [data-empty-reasoning] [data-feed-key]"));
+  return inside.size ? anchors.filter((anchor) => !inside.has(anchor)) : anchors;
+}, ["data-feed-key", "data-empty-reasoning"]);
+
+/** The rows the feed draws as the operator's own bubble, in document order
+ * (docs/design/own-message-steps.md). A row becomes one, or stops being one,
+ * by its `data-own-message` mark alone when a late sender is read. */
+export const ownMessageRows = cachedRows(
+  (root) => Array.from(root.querySelectorAll<HTMLElement>("[data-own-message]")),
+  ["data-own-message"],
+);
 
 /** The first row whose bottom edge is below `top`, the row at the top of a
  * scrolled viewport. Rows stack in document order, so their bottoms never

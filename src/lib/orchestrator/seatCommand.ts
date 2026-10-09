@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
-import { AccountMutationBusyError, withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE, AccountAdmissionChangedError, AccountMutationBusyError, isAccountAdmissionRetryable, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -30,16 +30,9 @@ import { mappingRowRefusal, type LaunchRuntime } from "@/lib/roles/sizing";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
-import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
-
-function operatorTelegramConnected(): boolean {
-  try {
-    const connection = readTelegramConnection();
-    return connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
-  } catch {
-    return false;
-  }
-}
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { activeDrain } from "@/lib/selfUpdate/drain";
+import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 
 import {
   boundHistoryBody,
@@ -74,6 +67,7 @@ import {
   orchestratorRevocations,
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
+  recordOrchestratorSeatAuthCredentialBaseline,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -113,9 +107,15 @@ import {
  * duplicated.
  */
 
+/** Trusted in-process restrictions; request JSON cannot supply admission. */
+export interface SeatLaunchAdmission {
+  autonomous?: boolean;
+  assertAccount?(accountId: string): void;
+}
+
 export interface SeatCommandDependencies {
   /** POST /api/spawn in-process, on the operator's own authority. */
-  spawn(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
+  spawn(body: Record<string, unknown>, autonomous?: boolean, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }>;
   /** Deliver the mandate to an existing conversation, idempotent on
       `clientMessageId`. */
   deliver(input: { conversationId: string; path: string | null; clientMessageId: string; text: string }): Promise<{ ok: boolean; error?: string; outcome?: string }>;
@@ -136,6 +136,9 @@ export interface SeatCommandDependencies {
       from the launch receipt, for reconciling an accepted launch whose
       accepting request died before activation. */
   launchSettlement(input: { launchId: string | null; clientRequestId: string }): LaunchSettlement;
+  /** How long a designation queues for the account store; `SEAT_STORE_WAIT_MS`
+      when absent. A seam for tests that hold the store past the bound. */
+  seatStoreWaitMs?: number;
   /** Persist the active seat's role, membership, and rotation lineage. */
   stampRegistryIdentity(seat: OrchestratorSeat): void;
   /** Durable runtime identity for legacy seats that predate engine/model. */
@@ -250,15 +253,15 @@ function resolveOrchestratorCwd(project: string, requested: unknown, dependencie
   return dependencies.projectRoot?.(project) ?? null;
 }
 
-async function postSpawnInProcess(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
-  const { executeSpawnRequest } = await import("@/lib/agent/spawnCommand");
+async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { executeSpawnRequest, productionSpawnCommandDependencies } = await import("@/lib/agent/spawnCommand");
   /* An in-process call the VIEWER makes, on its own authority: the designation
      surfaces have already made their authority decision — the seat route by
      refusing an agent, the rotation route by naming one (#1402) — so this
      presents the operator spawn capability either way, the same lane the MCP
      server's spawn_agent uses. Who triggered the designation travels on the
-     seat record; this spawn carries none of it. Only `headers` and `json` are
-     read by the spawn command. */
+     seat record; its autonomous admission restriction is rechecked under the
+     spawn command's account lock. Only `headers` and `json` are read there. */
   const request = {
     headers: new Headers({
       host: "127.0.0.1",
@@ -267,7 +270,9 @@ async function postSpawnInProcess(body: Record<string, unknown>): Promise<{ stat
     }),
     json: async () => body,
   } as unknown as NextRequest;
-  const response = await executeSpawnRequest(request);
+  const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
+    autonomousAdmissionHeld: () => autonomous && !!activeDrain(),
+    assertAccountAdmission: admission?.assertAccount });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -433,6 +438,11 @@ export interface SeatCommandResult {
   body: Record<string, unknown>;
 }
 
+function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null, autonomous = false): SeatCommandResult | null {
+  const hold = autonomous || triggeredBy?.kind === "agent" ? activeDrain() : null;
+  return hold ? { status: 409, body: { ...launchHoldRefusal(hold) } } : null;
+}
+
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -489,7 +499,12 @@ async function activate(
   dependencies: SeatCommandDependencies,
 ): Promise<{ seat: OrchestratorSeat } | null> {
   let projectedSeat: OrchestratorSeat | null = null;
-  const completed = withAccountMutationLock(() => {
+  /* Activation follows an await (the spawn, the delivery), so nothing here
+     depends on staying synchronous, and by now a launch may already be running
+     for this intent. It therefore queues for the lock instead of asking once:
+     a writer that holds it for a few milliseconds must not cost the project
+     the seat its launch was accepted for. */
+  const completed = await withAccountMutationLockAsync(() => {
     const result = completeOrchestratorSeatIntent({
       project: input.project,
       clientRequestId: input.clientRequestId,
@@ -502,7 +517,7 @@ async function activate(
     });
     if (result.kind !== "missing") projectedSeat = reconcileAuthorityProjections(result.seat, dependencies);
     return result;
-  });
+  }, { holder: "orchestrator seat activation", waitMs: dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS });
   if (completed.kind === "missing") return null;
   const seat: OrchestratorSeat = projectedSeat ?? completed.seat;
   /* Once per new seat epoch — a fresh seat, an adopted conversation, a
@@ -693,6 +708,44 @@ export function reconcileActiveOrchestratorSeat(
 }
 
 /**
+ * Reconcile ONE project's designation against the launch it rests on, for the
+ * read the pane polls.
+ *
+ * A pending intent used to be reconciled only by the next POST to the seat
+ * route. When the request that began it lost its answer, nothing came round on
+ * its own: the launch settled or failed, the task card said so, and the pane
+ * went on reading «creating» from a record nobody was going to touch. The read
+ * the pane already makes is the driver that is always there while somebody is
+ * looking, and it survives a reload because it is the server's record that
+ * moves. A provisional active seat is reconciled by the same call, so a launch
+ * that dies after activation does not wait minutes for the seat tick.
+ *
+ * Starts nothing and waits on no launch. A busy store is the caller's to
+ * swallow: the next poll asks again.
+ *
+ * A FAILED launch is recorded from here only once the intent is
+ * {@link READ_FAILURE_GRACE_MS} old. A retry begins a fresh intent under the
+ * key of a launch that already failed and then asks the spawn route to claim
+ * that launch again; for the moment in between, the receipt still reads failed
+ * under an intent whose request is alive. Recording it then would answer that
+ * request «superseded» while its launch went on to start. Seating a settled
+ * launch needs no such wait: the request and the read write the same row.
+ */
+export async function reconcileOrchestratorSeatLaunch(
+  project: string,
+  dependencies: SeatCommandDependencies = activeSeatCommandDependencies(),
+): Promise<void> {
+  const canonical = canonicalOrchestratorProject(project);
+  reconcileActiveSeatLaunch(canonical, dependencies);
+  const reconciliation = reconcilePendingSeatIntent(canonical, dependencies, READ_FAILURE_GRACE_MS);
+  if (reconciliation) await reconciliation;
+}
+
+/** How old a pending intent must be before the pane's read records its launch
+    as failed; see {@link reconcileOrchestratorSeatLaunch}. */
+export const READ_FAILURE_GRACE_MS = 15_000;
+
+/**
  * Reconcile a pending spawn intent against the durable settlement of the launch
  * its request attempted, so a 202 Accepted spawn converges to exactly one seat
  * whether or not the accepting request survived. A settled launch activates the
@@ -708,7 +761,7 @@ export function reconcileActiveOrchestratorSeat(
  * progresses synchronously to its durable begin before yielding, which is what
  * keeps two concurrent requests serialized by the pending-intent write.
  */
-function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies): Promise<unknown> | null {
+function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies, failureGraceMs = 0): Promise<unknown> | null {
   const pending = orchestratorSeatFor(project).pending;
   if (!pending || pending.intent.mode !== "spawn" || pending.intent.error !== null) return null;
   const settlement = dependencies.launchSettlement({
@@ -727,60 +780,117 @@ function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDe
     }, dependencies);
   }
   if (settlement.kind === "failed") {
+    const age = Date.parse(dependencies.now()) - Date.parse(pending.designatedAt);
+    if (failureGraceMs > 0 && Number.isFinite(age) && age < failureGraceMs) return null;
     failOrchestratorSeatIntent(project, pending.intent.clientRequestId, settlement.error, dependencies.now());
   }
   return null;
 }
 
+/** How long a designation queues for the account store behind another writer
+    before it gives up, in total across its replays. */
+export const SEAT_STORE_WAIT_MS = ACCOUNT_MUTATION_WAIT_MS;
+/** How many times a designation that met a busy store is replayed. Each replay
+    first queues for the lock, so the number bounds a store that answers busy
+    while reading free; the wait above bounds one that stays held. */
+const SEAT_STORE_BUSY_REPLAYS = 3;
+/** What a designation records and answers when the store stayed busy through
+    every replay. It names no holder: which writer held the lock is nothing the
+    operator chose and nothing they can act on. */
+export const SEAT_STORE_BUSY_REASON = "the account store stayed busy, so the designation could not be recorded; try again";
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/** Queue behind whoever holds the account store, within what is left of the
+    budget. False when the budget ran out first. */
+async function seatStoreReleased(deadline: number, attempt: number): Promise<boolean> {
+  /* A store that answers busy while its lock reads free must not be replayed
+     in a tight loop. */
+  await delay(Math.min(25 * attempt, Math.max(0, deadline - performance.now())));
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) return false;
+  try {
+    await withAccountMutationLockAsync(() => undefined, { holder: "orchestrator seat retry", waitMs: remaining });
+    return true;
+  } catch (error) {
+    if (error instanceof AccountMutationBusyError) return false;
+    throw error;
+  }
+}
+
 /**
  * EVERY WAY OUT OF A SEAT TRANSITION IS A RECORD (issue #1757).
  *
- * The seat store is guarded by the account mutation lock, and that lock throws
- * `AccountMutationBusyError` rather than waiting forever. Any throw past the
- * durable begin — that one, a registry read that blew up, a bug — used to
- * leave the route answering an unhandled 500 with no body, the burnt epoch
+ * The seat store is guarded by the account mutation lock, and its synchronous
+ * form waits at most 25 ms for a foreign holder. Any throw
+ * past the durable begin — that one, a registry read that blew up, a bug — used
+ * to leave the route answering an unhandled 500 with no body, the burnt epoch
  * sitting in `pending` with `error: null`, and every later designation refused
  * as `seat_intent_in_progress` behind it. The operator's evidence was three
  * epochs missing from the record and a stack trace in a container log.
  *
  * So the two exported entry points are wrapped: the thrown reason is recorded
  * on the intent, which terminalizes it into `intentHistory`, and the caller is
- * answered with that row and a code it can act on. A busy store answers 503,
- * because retrying shortly is the whole remedy.
+ * answered with that row and a code it can act on.
+ *
+ * A BUSY STORE IS WAITED OUT FIRST. That lock is one lock for every account
+ * write on the machine, and the account controller takes it on its own once a
+ * minute for each Codex account with a login on record. A creation that asked
+ * in the same few milliseconds failed with a message about an engine the
+ * operator had not chosen, after its launch had already been accepted. The
+ * request is idempotent by its key (the intent replays, the spawn answers from
+ * its receipt, the mandate is deduplicated), so it queues for the lock and runs
+ * again, up to {@link SEAT_STORE_BUSY_REPLAYS} times inside
+ * {@link SEAT_STORE_WAIT_MS}. Only when that is spent does it answer 503.
+ *
+ * Even then an intent whose launch was ACCEPTED is left pending: an agent is
+ * starting under it, and recording «failed» would tell the pane nothing is
+ * running while the task card shows it working. The pane's read reconciles that
+ * intent onto its launch on the next poll.
  */
 async function guardedSeatTransition(
   rawBody: Record<string, unknown>,
   code: "seat_transition_failed" | "rotation_failed",
   run: () => Promise<SeatCommandResult>,
+  busy: { replay: boolean; waitMs?: number; launchAccepted?: (clientRequestId: string) => boolean } = { replay: false },
 ): Promise<SeatCommandResult> {
-  try {
-    return await run();
-  } catch (thrown) {
-    const busy = thrown instanceof AccountMutationBusyError;
-    const reason = thrown instanceof Error ? thrown.message : String(thrown);
-    const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
-    const clientRequestId = text(rawBody.clientRequestId);
-    let terminalized: OrchestratorSeatTerminalization | null = null;
-    if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
-      const project = canonicalOrchestratorProject(named);
-      try {
-        terminalized = failOrchestratorSeatIntent(project, clientRequestId, reason);
-      } catch {
-        /* The store itself is what failed. Nothing to record, and the answer
-           below still names the reason — silence is the one outcome this
-           wrapper exists to prevent. */
+  const deadline = performance.now() + (busy.waitMs ?? SEAT_STORE_WAIT_MS);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (thrown) {
+      const storeBusy = isAccountAdmissionRetryable(thrown);
+      if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
+      const admissionChanged = thrown instanceof AccountAdmissionChangedError;
+      const reason = admissionChanged ? thrown.message : storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
+      const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
+      const clientRequestId = text(rawBody.clientRequestId);
+      let terminalized: OrchestratorSeatTerminalization | null = null;
+      let launchAccepted = false;
+      if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
+        const project = canonicalOrchestratorProject(named);
+        try {
+          launchAccepted = storeBusy && busy.launchAccepted?.(clientRequestId) === true;
+          if (!launchAccepted) terminalized = failOrchestratorSeatIntent(project, clientRequestId, reason);
+        } catch {
+          /* The store itself is what failed. Nothing to record, and the answer
+             below still names the reason — silence is the one outcome this
+             wrapper exists to prevent. */
+        }
       }
+      console.error(`orchestrator seat transition failed for ${String(rawBody.project)}: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+      return {
+        status: storeBusy ? 503 : 500,
+        body: {
+          error: reason,
+          code: admissionChanged ? "account_admission_changed" : storeBusy ? "seat_store_busy" : code,
+          retryable: storeBusy,
+          seat: terminalized?.seat ?? null,
+        },
+      };
     }
-    console.error(`orchestrator seat transition failed for ${String(rawBody.project)}: ${reason}`);
-    return {
-      status: busy ? 503 : 500,
-      body: {
-        error: reason,
-        code: busy ? "seat_store_busy" : code,
-        retryable: busy,
-        seat: terminalized?.seat ?? null,
-      },
-    };
   }
 }
 
@@ -810,14 +920,20 @@ export function executeOrchestratorSeatRequest(
      Deliberately not a `rawBody` field: the body is caller-supplied JSON, and
      attribution that a caller can write is not attribution. */
   triggeredBy: OrchestratorSeatTrigger | null = null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy));
+  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission), {
+    replay: true,
+    waitMs: dependencies.seatStoreWaitMs,
+    launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+  });
 }
 
 async function runOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
   triggeredBy: OrchestratorSeatTrigger | null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
@@ -1002,7 +1118,15 @@ async function runOrchestratorSeatRequest(
   }
   const spawnSizing = agentSeatSizingRefusal(triggeredBy, resolvedRuntime.value.config, incumbent);
   if (spawnSizing) return spawnSizing;
-  const telegramGrant = operatorTelegramConnected();
+  // Reconciliation and completed replay above can settle admitted work. A
+  // fresh agent spawn still needs admission after any awaited handoff work.
+  const hold = agentSeatLaunchHold(triggeredBy, admission?.autonomous);
+  if (hold) return hold;
+  if (admission?.assertAccount) admission.assertAccount(text(rawBody.accountId));
+  /* A seat holds the grant wherever Telegram is set up, whatever its
+     connection reads this minute: the launch repairs a connection that is down
+     or starts without the tool, and the grant brings the tool back later. */
+  const telegramGrant = telegramSetUp();
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
@@ -1095,7 +1219,15 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawned = await dependencies.spawn(spawnBody);
+  const spawnAdmission: SeatLaunchAdmission = { ...admission, assertAccount: (accountId) => {
+    admission?.assertAccount?.(accountId);
+    recordOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
+  } };
+  const spawned = await dependencies.spawn(spawnBody, admission?.autonomous || begun.seat.triggeredBy?.kind === "agent", spawnAdmission);
+  if (spawned.body.code === "AUTO_UPDATE_DRAIN") {
+    // No receipt was admitted: keep the pending intent and its downstream key.
+    return { status: 409, body: { ...spawned.body, code: "launch_held_for_update", seat: begun.seat } };
+  }
   const spawnedConversationId = text(spawned.body.conversationId);
   const admitted = spawned.status >= 200 && spawned.status < 300 && spawned.body.ok !== false;
   const launchId = text(spawned.body.launchId);
@@ -1105,6 +1237,11 @@ async function runOrchestratorSeatRequest(
     && Boolean(launchId);
   const launched = admitted && spawned.body.launched !== false && Boolean(spawnedConversationId);
   if (!launched && !acceptedPending) {
+    /* The spawn route answers its own busy store as a plain failure. It is the
+       same wait as ours: nothing was launched, and the replay asks again under
+       the same attempt id. */
+    if (spawned.body.code === "account_admission_changed" || text(spawned.body.error) === "spawn account changed during admission") throw new AccountAdmissionChangedError();
+    if (spawned.body.code === "account_store_busy" || text(spawned.body.error) === ACCOUNT_STORE_BUSY_MESSAGE || text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError();
     const error = text(spawned.body.error)
       || (!admitted
         ? `spawn was rejected with HTTP status ${spawned.status}`
@@ -1210,8 +1347,8 @@ const HANDOFF_NOTES_CAP = 2_000;
  * the route's answer by construction — for the actor it accepts and for every
  * refusal the rotation itself makes.
  *
- * Cross-origin rejection stays in the route, ahead of this: it is the perimeter,
- * and it is the only thing here that turns a caller away.
+ * Cross-origin rejection stays in the route, ahead of this: it is the perimeter.
+ * Automatic-update admission can also defer fresh agent launches.
  */
 export function handleOrchestratorRotationRequest(
   request: Pick<NextRequest, "headers">,
@@ -1267,8 +1404,9 @@ function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
  * every earlier handoff, and this rotation's fresh handoff — so a seat that has
  * rotated a dozen times designates exactly as cheaply as one that never has.
  *
- * Never automatic: context pressure only ever produces a recommendation
- * (`./health`), and this function runs solely when explicitly called.
+ * Context pressure only produces a recommendation (`./health`). The seat tick
+ * automatically calls this path after an authentication failure, selecting
+ * another allowed account; all other rotations are explicitly requested.
  */
 export function executeOrchestratorRotation(
   rawBody: Record<string, unknown>,
@@ -1278,14 +1416,20 @@ export function executeOrchestratorRotation(
      someone else. Null is an in-process caller that named nobody, and records
      unknown provenance; the operator is never credited by default. */
   actor: ViewerActor | null = null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor));
+  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor, admission), {
+    replay: true,
+    waitMs: dependencies.seatStoreWaitMs,
+    launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+  });
 }
 
 async function runOrchestratorRotation(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
   actor: ViewerActor | null,
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
@@ -1330,6 +1474,14 @@ async function runOrchestratorRotation(
       },
     };
   }
+  if (typeof rawBody.expectedIncumbentSeatEpoch === "number"
+    && rawBody.expectedIncumbentSeatEpoch !== incumbent.seatEpoch) {
+    return incumbentChangedResult(project, Number(rawBody.expectedIncumbentSeatEpoch), incumbent);
+  }
+  // An accepted rotation can be replayed during a hold. Defer a fresh one
+  // before composition, which may itself launch a handoff summarizer.
+  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy, admission?.autonomous);
+  if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
   const predecessor = predecessorTarget?.kind === "eligible" ? predecessorTarget : null;
@@ -1377,6 +1529,7 @@ async function runOrchestratorRotation(
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
+    autonomousAdmissionHeld: admission?.autonomous || triggeredBy?.kind === "agent" ? () => !!activeDrain() : undefined,
   }, dependencies);
   const composed = composition instanceof Promise ? await composition : composition;
   const rotatedFrom = {
@@ -1435,7 +1588,7 @@ async function runOrchestratorRotation(
           ? { cwd: readable.cwd }
           : {}),
     ...(rawBody.accountId !== undefined ? { accountId: rawBody.accountId } : {}),
-  }, dependencies, triggeredBy);
+  }, dependencies, triggeredBy, admission);
   return {
     status: outcome.status,
     body: {
@@ -1491,6 +1644,7 @@ type RotationMandate =
  * creates an intent, so the incumbent keeps its seat and nothing goes pending.
  */
 interface RotationComposition {
+  autonomousAdmissionHeld?: () => boolean;
   project: string;
   clientRequestId: string;
   base: string;
@@ -1522,6 +1676,7 @@ function composeRotationMandate(
       outcome = await dependencies.summarizeHandoffs({
         project: input.project,
         clientRequestId: input.clientRequestId,
+        autonomousAdmissionHeld: input.autonomousAdmissionHeld,
         priorHistory: split.history,
         priorHandoffs: split.handoffs,
         predecessor: input.predecessor,

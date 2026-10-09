@@ -1,3 +1,4 @@
+import { searchUnavailable } from "@/lib/search/unavailable";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { MEMORY_KINDS, type MemoryKind } from "@/lib/memory/parsers";
 import { memoryIndex } from "@/lib/memory/service";
@@ -21,7 +22,11 @@ export async function GET(request: Request): Promise<Response> {
   }
   const parsedLimit = Number(params.get("limit"));
   const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.max(1, Math.min(20, Math.trunc(parsedLimit))) : 10;
-  return Response.json(memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget }));
+  try {
+    return Response.json(await memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget }));
+  } catch (error) {
+    return searchUnavailable("memory", error);
+  }
 }
 
 /** Opening a hit only appends a local outcome. Engine stores are never opened for writing. */
@@ -35,6 +40,10 @@ export async function POST(request: Request): Promise<Response> {
     || (body.conversationId != null && (typeof body.conversationId !== "string" || body.conversationId.length > 256))) {
     return Response.json({ error: "id and bounded requestId are required; project and conversationId must be bounded strings" }, { status: 400 });
   }
-  const item = memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000);
-  return item ? Response.json({ item }) : Response.json({ error: "memory entry not found" }, { status: 404 });
+  try {
+    const item = await memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000);
+    return item ? Response.json({ item }) : Response.json({ error: "memory entry not found" }, { status: 404 });
+  } catch (error) {
+    return searchUnavailable("memory", error);
+  }
 }

@@ -1,8 +1,10 @@
+import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -29,8 +31,10 @@ import {
   fileScanCacheStatus,
   resetFilesRouteCacheForTests,
   setFileScanRunnerForTests,
+  setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
 import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -75,6 +79,8 @@ beforeEach(() => {
   // touches the real ~/.config/agent-log-viewer state.
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-route-state-"));
   process.env.LLV_STATE_DIR = stateDir;
+  // Activation imports this collection before serving requests.
+  readAttentionDismissals();
   setAgentRegistryForTests(withLegacySpawnFixtureTitles(new AgentRegistry(path.join(registryRoot, "registry.json"))));
   resetFilesRouteCacheForTests();
   resetFilesProjectionCacheForTests();
@@ -93,11 +99,14 @@ beforeEach(() => {
   pipelinesStore = () => [];
   pipelineVisibility = () => [];
   setFileScanRunnerForTests(filesRouteScanRunner);
+  setFileCatalogMembershipProbeForTests(async () => null);
   setFilesResponseDependenciesForTests({
     loadFlows: () => flowsStore() as never,
     loadPipelinesForProjection: () => pipelinesStore() as never,
     filterPipelinesForFileScan: (pipelines: readonly Pipeline[]) => pipelineVisibility([...pipelines]) as Pipeline[],
-    loadTasks: () => boardTasksStore() as never,
+    /* Frozen as production hands it out: the shared task list. A files read
+       that wrote into one of these would throw in every case below. */
+    loadTasks: () => deepFreeze(boardTasksStore()) as never,
     loadWorkflows: () => [],
     filterWorkflowsForFileScan: () => [],
     tmuxEndpointHealth: () => tmuxHealth as never,
@@ -111,6 +120,7 @@ afterEach(() => {
   setStateFreeBytesProbeForTests(null);
   noteStateCommit();
   setFileScanRunnerForTests(null);
+  setFileCatalogMembershipProbeForTests(null);
   setFilesResponseDependenciesForTests(null);
   setAgentRegistryForTests(null);
   resetPresenceForTest();
@@ -1071,6 +1081,30 @@ test("an ordinary resource snapshot reuses the completed scanner generation", as
   expect(files.map((entry) => entry.path)).toEqual([before.path]);
 });
 
+test("an ordinary resource snapshot with no completed generation takes the scan scope and does not wait for enrichment", async () => {
+  const only = file("/sessions/cold-resource.jsonl");
+  let release!: () => void;
+  scanGates.push(new Promise<void>((resolve) => { release = resolve; }));
+  scannedFiles = [only];
+  let settled = false;
+  const handoff = readResourceFileSnapshot(false).then((files) => {
+    settled = true;
+    return files;
+  });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const settledBeforeFullScan = settled;
+  release();
+  const files = await handoff;
+
+  expect(settledBeforeFullScan).toBeTrue();
+  expect(files.map((entry) => entry.path)).toEqual([only.path]);
+  expect(scans).toBe(1);
+  /* The one scan still completes as the process's generation. */
+  expect((await cachedFileScan()).snapshot.files.map((entry) => entry.path)).toEqual([only.path]);
+  expect(scans).toBe(1);
+});
+
 test("a fresh resource handoff publishes the exact scan scope before full file enrichment settles", async () => {
   const before = file("/sessions/resource-stage-before.jsonl");
   const after = file("/sessions/resource-stage-after.jsonl");
@@ -1227,9 +1261,8 @@ test("concurrent fresh callers share one pending generation through failure and 
     return scan;
   });
 
-  // The scan coordinator starts the merged generation one microtask after the
-  // callers enqueue (#287); both retries still share exactly one scan.
-  await Promise.resolve();
+  // The membership probe precedes the coordinator; wait for it to enqueue.
+  for (let attempt = 0; attempt < 20 && scans === scansAfterFailure; attempt += 1) await Promise.resolve();
   expect(scans).toBe(scansAfterFailure + 1);
   expect(firstRetrySettled).toBeFalse();
   expect(secondRetrySettled).toBeFalse();
@@ -1312,9 +1345,7 @@ test("a fresh resource snapshot fences a pre-kill refresh before host election",
   });
 
   expect(filesFresh).toBeTrue();
-  // The scan coordinator starts the fresh generation one microtask after the
-  // resource reader enqueues it (#287).
-  await Promise.resolve();
+  for (let attempt = 0; attempt < 20 && scans < 2; attempt += 1) await Promise.resolve();
   expect(scans).toBe(2);
   const payload = await payloadPromise;
   expect(resourceSettled).toBeTrue();
@@ -1515,7 +1546,7 @@ test("a corrupt completed snapshot falls back to a cold scan and repairs persist
   expect(scans).toBe(1);
   const persisted = JSON.parse(fs.readFileSync(path.join(stateDir, "files-scan-snapshot.json"), "utf8"));
   expect(persisted.version).toBe(1);
-  expect(persisted.schemaVersion).toBe(11);
+  expect(persisted.schemaVersion).toBe(12);
 });
 
 test("repeated first-ever incomplete scans stay unpublished until recovery", async () => {
@@ -2084,6 +2115,7 @@ test("unique pinned snapshots use bounded LRU retention while recent pins stay w
   scanPinOverlayResults = [[pins[0]!]];
   const evicted = await cachedFileScan(undefined, pins[0], now);
   expect(evicted.snapshot.files.map((entry) => entry.path)).toEqual([global.path]);
+  for (let attempt = 0; attempt < 20 && scans < 11; attempt += 1) await Promise.resolve();
   expect(scans).toBe(11);
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
@@ -2254,6 +2286,7 @@ test("an arbitrary client revision cannot suppress a later refresh beyond the co
   const stale = await cachedFileScan(undefined, undefined, Number.MAX_SAFE_INTEGER, 7);
 
   expect(stale.snapshot.files.map((entry) => entry.path)).toEqual(["/sessions/untrusted-watermark.jsonl"]);
+  for (let attempt = 0; attempt < 20 && scans < 2; attempt += 1) await Promise.resolve();
   expect(scans).toBe(2);
 
   const completed = await currentFileScan();
@@ -3525,6 +3558,8 @@ test("issue 1168: the seat's open bridge ask rides the files payload and clears 
   expect(asking.files.find((entry) => entry.path === seatPath)?.bridgeAsk).toEqual({
     id: "lane-4-blocked",
     at: filed!.at,
+    seq: filed!.seq,
+    body: filed!.body,
   });
   /* The ask belongs to the seat alone — no other scanned row carries it. */
   expect(asking.files.find((entry) => entry.path === "/sessions/worker.jsonl")?.bridgeAsk).toBeUndefined();
@@ -3588,6 +3623,49 @@ test("full and summary files representations never share ETags or cached bodies"
   expect((await summary.json()).readProjection).toBe("board-summary");
   const fullAgain = await GET(new Request("http://localhost/api/files"));
   expect((await fullAgain.json()).readProjection).toBeUndefined();
+});
+
+/* A task's prototype review belongs to its project, and this read has no
+   project fence: a caller that presents a capability gets the board without
+   the choice, the comment and the notices, whichever representation it asks
+   for and whatever the operator's poll left in the cache. */
+test("a capability caller's files read carries no prototype review: full, summary, cached or delta", async () => {
+  const media = { id: "a".repeat(64), mime: "image/png", bytes: 8 };
+  const round = (id: string, decided: boolean) => ({
+    id: `pr_${id.repeat(32)}`, title: "Private layout round", taskId: "task-a", project: "project-a", createdAt: "2026-10-06T10:00:00.000Z",
+    source: { conversationId: null }, publicationKey: `operator:${id}`, inputDigest: "d".repeat(64),
+    variants: [{ number: 1, name: "Private variant name", description: "Private.", frames: [{ image: media, caption: "Private caption" }], videos: [] }],
+    ...(decided ? { decision: { chosen: [1], comment: "Private project A decision", at: "2026-10-06T11:00:00.000Z",
+      delivery: { state: "sent", clientMessageId: `prototype-decision:${id}`, conversationId: "conversation_seat", text: "Private project A decision" } } } : {}),
+  });
+  const boardTask = (id: string, rounds: unknown[]) => ({ id, project: "project-a", status: "inbox", placement: "unplaced", text: `Task ${id}`, assignments: [], sources: [],
+    createdAt: "2026-10-06T09:00:00.000Z", updatedAt: "2026-10-06T09:00:00.000Z", prototypeReviews: rounds });
+  boardTasksStore = () => [boardTask("task-a", [round("1", true)]), boardTask("task-b", [round("2", false)])];
+  scannedFiles = [];
+  const agent = { "x-llv-spawn-capability": "b".repeat(43) };
+  const PRIVATE = /Private project A decision|Private variant name|Private layout round|prototypeReview/;
+  for (const view of ["", "?view=summary"]) {
+    const operator = await GET(new Request(`http://127.0.0.1/api/files${view}`));
+    const operatorTag = operator.headers.get("etag")!;
+    const seen = await operator.json();
+    expect(seen.tasks[0].prototypeReview.decision.comment).toBe("Private project A decision");
+    expect(seen.prototypeReviewNotices).toHaveLength(1);
+    /* The operator's body is cached under its scope by now. */
+    const cached = await GET(new Request(`http://127.0.0.1/api/files${view}`, { headers: agent }));
+    const body = await cached.text();
+    expect(cached.status).toBe(200);
+    expect(cached.headers.get("etag")).not.toBe(operatorTag);
+    expect(body).not.toMatch(PRIVATE);
+    expect(JSON.parse(body).tasks.map((task: { id: string }) => task.id)).toEqual(["task-a", "task-b"]);
+    /* Certifying the operator's representation earns no 304 and no delta from it. */
+    const conditional = await GET(new Request(`http://127.0.0.1/api/files${view}`, { headers: { ...agent, "if-none-match": operatorTag, "x-llv-files-delta": "1" } }));
+    expect(conditional.status).toBe(200);
+    expect(conditional.headers.get("x-llv-files-delta-base")).toBeNull();
+    expect(await conditional.text()).not.toMatch(PRIVATE);
+    const again = await GET(new Request(`http://127.0.0.1/api/files${view}`));
+    expect((await again.json()).tasks[0].prototypeReview.decision.comment).toBe("Private project A decision");
+  }
+  boardTasksStore = () => [];
 });
 
 /* #1814: every projection build costs a worker process of about a gigabyte on
@@ -3800,6 +3878,28 @@ test("the board carries each record's resolved PR and issue links, and leaves ou
   } finally {
     pipelinesStore = () => [];
     pipelineVisibility = () => [];
+    boardTasksStore = () => [];
+  }
+});
+
+test("files reconciles the frozen shared task list by copying the task it changes", async () => {
+  const deadPanePid = 2_147_483_646;
+  const stored = [
+    { id: "task-dead-pane", project: "repo", text: "Spawn that died", status: "assigned", placement: "unplaced",
+      assignments: [{ path: null, panePid: deadPanePid, state: "spawning", error: null, at: "2026-10-07T00:00:00Z" }],
+      createdAt: "2026-10-07T00:00:00Z", updatedAt: "2026-10-07T00:00:00Z" },
+    { id: "task-untouched", project: "repo", text: "Nothing to reconcile", status: "inbox", placement: "unplaced",
+      assignments: [], createdAt: "2026-10-07T00:00:00Z", updatedAt: "2026-10-07T00:00:00Z" },
+  ];
+  boardTasksStore = () => stored;
+  try {
+    const response = await GET(new Request("http://127.0.0.1/api/files"));
+    const body = await response.json() as { tasks: Array<{ id: string; assignments: Array<{ state: string }> }> };
+    expect(body.tasks.find((task) => task.id === "task-dead-pane")?.assignments[0]?.state).toBe("failed");
+    expect(body.tasks.find((task) => task.id === "task-untouched")).toBeDefined();
+    expect(Object.isFrozen(stored[0])).toBe(true);
+    expect(stored[0]!.assignments[0]!.state).toBe("spawning");
+  } finally {
     boardTasksStore = () => [];
   }
 });
@@ -4067,4 +4167,25 @@ test("storage health reads failure and recovery without scanning, projecting or 
   expect(scans).toBe(0);
   expect(fs.existsSync(path.join(stateDir, "files-response-results"))).toBe(false);
   expect(fs.existsSync(database) ? fs.readFileSync(database) : null).toEqual(before);
+});
+
+test("storage health exposes fresh preserved registry ids without an auto-update or a scan", async () => {
+  const healthy = buildPipeline({ id: "healthy-health", task: "Health fixture", project: "fixture", repoDir: "/repo", stages: [],
+    srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z", state: "draft" });
+  savePipelines([healthy]);
+  const future = { ...buildPipeline({ id: "future-health", task: healthy.task, project: "fixture", repoDir: "/repo", stages: [],
+    srcPath: null, srcConversationId: null, now: healthy.createdAt, state: "draft" }), state: "future-draft-state" };
+  const raw = JSON.stringify(future);
+  const db = new Database(path.join(stateDir, "state.sqlite"));
+  const url = "http://127.0.0.1/api/files?view=storage-health";
+  try {
+    db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines',?,?,1,1,1)").run(future.id, raw);
+    expect((await (await GET(new Request(url))).json()).registryIssues).toMatchObject([{ id: future.id, reason: "unknown-but-preserved" }]);
+    expect(db.query("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=?").get(future.id)).toEqual({ value_json: raw });
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?").run(JSON.stringify({ ...future, state: "draft" }), future.id);
+    expect((await (await GET(new Request(url))).json()).registryIssues).toEqual([]);
+    db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines' AND row_key=?").run(future.id);
+    await expect(GET(new Request(url))).rejects.toThrow("corrupt pipelines SQLite row");
+    expect(scans).toBe(0);
+  } finally { db.close(); }
 });

@@ -1,5 +1,10 @@
 # Self-update — design (#2007)
 
+The launcher replacement, recovery adoption, packaged release and one-click
+apply protocol now follow [Every install updates itself](self-update-every-install.md).
+The separate process restarts described below are the legacy protocol.
+
+
 ## Originating requirement
 
 Operator request, 2026-09-22, paraphrased into English from the pipeline
@@ -124,6 +129,35 @@ answers, and offers to reload once a different web process is healthy.
 /api/self-update/restart` (`{role, confirm}`, `confirm:true` required for the
 runtime host), `GET /api/self-update/steps/:step/log`. Every POST passes the
 operator gate above: only the operator may update or restart.
+
+**First state at once (#2594).** The installation, its revisions and its
+processes answer without waiting for the work in progress. That work (the
+turns and stages a restart would land on) is read by `probeQuiet`, which on a
+long-lived installation spends most of its time on the reviewers of rounds its
+flows moved past. `ObservedWork` (`src/lib/selfUpdate/workEvidence.ts`) runs
+one such reading at a time for every reader, begins it on a later turn of the
+event loop so its synchronous phases never delay the answer, shows a landed one
+again for five seconds, and says `pending` until one lands and `unavailable`
+when one fails or could not read the journal or the whole pipeline registry;
+the snapshot carries `resumeWork` only beside a `ready` reading, so unknown work
+never reads as none. `workEvidence.phases` names where the reading's time went.
+The reading gives the event loop back between the probe's awaited steps, and
+the probe's three synchronous reads (the registry health, the pipelines, the
+flows), which nothing on one thread can split, come from a worker process
+(`src/lib/selfUpdate/workReads.ts`, `src/lib/selfUpdateWork.worker.ts`): the
+Viewer's thread only waits for its answer, so a caller arriving inside a read
+that takes seconds is still answered at once. A worker that fails, or runs
+past thirty seconds, leaves the reading `unavailable` with that reason.
+That reading is display only: the automatic path, the launcher admission and
+every other decision still call `probeQuiet` themselves, at the moment they
+decide. The Viewer's background feed asks with `work=0` and never starts a
+reading. A snapshot that fails answers `503 {code: "snapshot-failed"}` on GET
+and a `snapshot-error` event first on the stream. The dialog then shows one
+line in the operator's language; the reason stays in the answer. A check whose available
+target is now installed and served by both the web and the runtime host reads
+as equal, so a deployment made outside the dialog no longer leaves its "N
+commits behind" up until the next hourly poll; while either process serves
+something else or does not answer, the badge stays.
 
 **Surface.** One dialog (full screen on the phone) mounted once in the Viewer,
 opened from the rail menu and from both phone board menus beside the setup

@@ -339,7 +339,7 @@ async function measureControls(page: import("playwright-core").Page, scheme: "li
     const rotate = document.querySelector("[data-orchestrator-rotate]");
     const draft = document.querySelector("[data-orchestrator-draft='rotate']");
     /* What the card leads on the board: the first conversation row under it. */
-    const firstRow = document.querySelector("[data-mobile2-row='conversation']");
+    const firstRow = document.querySelector("[data-phone-card-kind='conversation']");
     return {
       scrollWidth: document.documentElement.scrollWidth,
       cardBox: card ? box(card) : null,
@@ -416,8 +416,9 @@ test("issues 1347 + 1348: the phone's rename editor and orchestrator controls me
 
   /* ---- #1348: the rename editor over the shell bar --------------------- */
   const editorHtml = await renderFocusView([conversation({}), focused, orchestrator], focused.path, async (host) => {
-    /* The product's own route since lane 3: `⋯`, then the Rename row. */
+    /* The product's own route since lane 3: `⋯`, «Conversation», then the Rename row. */
     await click(host, "[data-mobile2-open='menu']");
+    await click(host, "[data-mobile2-menu-section='manage']");
     await click(host, "[data-testid='mobile-menu-rename']");
     expect(host.querySelector("[data-testid='mobile-rename-slot'] input[aria-label='Session title']")).not.toBeNull();
   });

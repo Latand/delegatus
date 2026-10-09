@@ -1,4 +1,36 @@
 import type { Pipeline, PipelineEdgeKind, PipelineFailEdge, PipelineFailEdgeExhaustion, PipelineStage, PipelineStageAttempt, StageVerdictStatus } from "./types";
+import { latestAttempt } from "./stageChip";
+import { verdictRoutesAsFail } from "./verdict";
+
+/** The engine's terminal-budget fence, shared with operator action models.
+    A blocked reviewer may retry its activation; skipping still spends it. */
+export function terminalReviewBudgetSpent(attempt: PipelineStageAttempt | null, allowBlockedRetry = false): boolean {
+  return Boolean(attempt?.activatedBy?.budgetRecheck && attempt.verdict
+    && ["failed", "needs_decision"].includes(attempt.state)
+    && verdictRoutesAsFail({ verdict: attempt.verdict, output: attempt.output ?? "" })
+    && !(allowBlockedRetry && attempt.verdict.blocked === true));
+}
+
+/** A current failed terminal re-check can receive a guarded grant. Derive
+    legacy parks from durable attempts, as continue-review does, and ignore
+    retained metadata belonging to an older park or a different head. */
+export function terminalReviewContinuationAvailable(pipeline: Pipeline): boolean {
+  if (pipeline.state !== "needs_decision" || !pipeline.cursor) return false;
+  const stage = pipeline.stages.find((entry) => entry.id === pipeline.cursor!.stageId);
+  const attempt = stage ? latestAttempt(pipeline, stage.id) : null;
+  const activation = attempt?.activatedBy;
+  if (!stage?.onFail || stage.next !== null || !attempt?.completedAt
+    || !terminalReviewBudgetSpent(attempt) || attempt.verdict?.blocked === true
+    || activation?.edge !== "pass") return false;
+  const fix = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
+    .find((entry) => entry.n === activation.attempt && !entry.historical);
+  if (fix?.state !== "passed") return false;
+  const pending = pipeline.reviewPending;
+  return !pending || (pending.terminalRecheck === true
+    && pending.stageId === stage.id && pending.attempt === attempt.n
+    && pending.fixStageId === activation.stageId && pending.fixAttempt === activation.attempt
+    && pending.currentHead === pipeline.lastPassedCommit);
+}
 
 /** What the record says when a spent fail edge handed its last findings on
     without asking the source again (#1868). */

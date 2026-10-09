@@ -4,6 +4,7 @@ import { validateLaunchModel } from "@/lib/agent/models";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
 import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "./defaults";
+import { roleEngineRefusal } from "./locks";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
 import { loadRoleDefinitions } from "./store";
@@ -94,11 +95,8 @@ function renderScaffold(definition: RoleDefinition, params: RoleParamValues): st
   return withoutLines(scoped, OPTIONAL_PARAMETER_LINES, true);
 }
 
-/** Added to a builder in a fix round (agent-prompt-contract.md §3 (a)): a light
-    fix row runs what names its place, an OVER-BUILT cut and a P0 included, and
-    hands back only what needs a new plan. A fix stage has no fail edge, so
-    that hand-back parks the lane for the seat, which the role table says. */
-export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: the brief is a list of findings. Fix each one at the place it names, add or adjust the check that shows it where the project has one, and change nothing else; an OVER-BUILT finding is a cut at the place it names, and a P0 is fixed like any other. A finding you judge wrong stays unfixed: give the evidence in your summary, which the next reviewer reads. A finding that names no place you can find, a WRONG-PREMISE finding, or one that asks for a new design is beyond a fix round: leave it, name it, and finish with fail so the orchestrator can re-plan.";
+/** Fix rounds repair discoveries within the spec; reviewers own the grade. */
+export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: Fix every handed finding and anything you notice yourself within the pinned specification, including OVER-BUILT cuts and P0 findings. Add or adjust focused checks where the project has them and report verification evidence. Do not grade your own work; reviewers evaluate it. Never return fail because of an issue you found yourself: fix it immediately, or list it under Notes if it is outside the specification. A finding you judge wrong stays unfixed with evidence in your summary for the reviewer. Return fail only when you are blocked: you cannot build, cannot run required checks, or a handed finding is impossible within the specification. Set blocked:true only when you cannot proceed, and give the reason in blockedReason. Use these structured fields in stage_report or the fallback fenced JSON verdict. Omit blocked or set it false when you can proceed; your verdict is pass unless blocked. An observation outside the specification belongs under Notes.";
 
 /**
  * The rendered scaffold body — parameter substitution plus any role-specific
@@ -113,7 +111,10 @@ export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamVa
     : "";
   const fixRound = definition.id === "builder" && params.mode === "apply-fixes";
   /* A fix round has one finish line, scoped to its findings. */
-  const rendered = fixRound ? renderScaffold(definition, params).replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE) : renderScaffold(definition, params);
+  const rendered = fixRound ? renderScaffold(definition, params)
+    .replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE)
+    .replace("Review your own diff before you finish and report the verification evidence.", "Report the verification evidence; fix any issue you notice within the specification before finishing.")
+    : renderScaffold(definition, params);
   return rendered + frontendGuidance + (fixRound ? `\n\n${APPLY_FIXES_GUIDANCE}` : "");
 }
 
@@ -160,6 +161,8 @@ export function configForParams(definition: RoleDefinition, params: RoleParamVal
 function resolveConfig(definition: RoleDefinition, params: RoleParamValues, explicit: ExplicitRoleConfig): { ok: true; value: RoleConfig } | { ok: false; error: string } {
   const config = { ...configForParams(definition, params), ...explicit };
   if (config.engine !== "claude" && config.engine !== "codex") return { ok: false, error: "engine must be claude or codex" };
+  const locked = roleEngineRefusal(definition.id, config.engine);
+  if (locked) return { ok: false, error: locked };
   const model = validateLaunchModel(config.engine, config.model);
   if ("error" in model) return { ok: false, error: model.error };
   config.model = model.model;

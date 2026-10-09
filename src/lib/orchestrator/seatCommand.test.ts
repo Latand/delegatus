@@ -3,12 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { AccountAdmissionChangedError, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
+import { procBackend } from "@/lib/proc";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
@@ -22,6 +25,7 @@ import {
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
+  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
@@ -34,6 +38,8 @@ import {
   executeOrchestratorRotation,
   executeOrchestratorSeatRequest,
   productionSeatCommandDependencies,
+  reconcileOrchestratorSeatLaunch,
+  SEAT_STORE_BUSY_REASON,
   type SeatCommandDependencies,
 } from "./seatCommand";
 import { activeOrchestratorSeats, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "./seats";
@@ -702,6 +708,38 @@ test("adoption refuses a conversation whose project, cwd, transcript, or lifecyc
   }
 });
 
+test("rotation reserves the successor on the incumbent's task without changing its launch parent", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+  saveTasks([]);
+  const registry = new AgentRegistry(path.join(sandbox, "rotation-membership.json"), undefined, undefined, { sqliteMode: "off" });
+  const launches: string[] = [];
+  const { deps } = dependencies({
+    spawn: async (body) => {
+      const result = registry.beginSpawnRequest({
+        engine: "claude", cwd: "/workspace", explicitProject: "proj-a",
+        role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+        clientAttemptId: String(body.clientAttemptId), requestDigest: spawnAdmissionBodyDigest(body),
+        launchProfile: emptyLaunchProfile({ cwd: "/workspace", title: String(body.title) }),
+      });
+      if (result.kind === "conflict") throw new Error("unexpected conflict");
+      expect(result.receipt.launchProfile.parentConversationId).toBeNull();
+      launches.push(result.receipt.conversationId);
+      return { status: 200, body: { ok: true, conversationId: result.receipt.conversationId, path: null } };
+    },
+  });
+  expect((await executeOrchestratorSeatRequest(spawnRequest(), deps)).status).toBe(200);
+  const original = loadTasks()[0]!;
+  saveTasks([{ ...original, text: "Keep the operator's seat title", details: "Keep these notes", board: "shown" }]);
+  for (const clientRequestId of ["rotation_membership_1", "rotation_membership_2"]) {
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId }, deps)).status).toBe(200);
+  }
+  const tasks = loadTasks();
+  expect(tasks).toHaveLength(1);
+  expect(tasks[0]).toMatchObject({ id: original.id, text: "Keep the operator's seat title", details: "Keep these notes", board: "shown" });
+  expect(tasks[0]!.assignments.map(a => a.conversationId)).toEqual(launches);
+});
+
 test("rotation composes a bounded handoff, switches designation atomically, and links both cards", async () => {
   const { deps } = dependencies();
   await executeOrchestratorSeatRequest(spawnRequest(), deps);
@@ -972,6 +1010,38 @@ test("HIGH 5: a spawn-mode designation for an ALREADY-SEATED project refuses ins
   /* Rotation remains the explicit way through (proven in the rotation test),
      and the internal replaceIncumbent opt-in it uses works: */
   const replaced = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000100"), replaceIncumbent: true }, deps);
+  expect(replaced.status).toBe(200);
+});
+
+test("replaceIncumbent bound to a stale seat epoch is refused and the live seat stays designated", async () => {
+  const { deps, recorded } = dependencies();
+  expect((await executeOrchestratorSeatRequest(spawnRequest("req_00000200"), deps)).status).toBe(200);
+  const vacated = orchestratorSeatFor("proj-a").active!;
+  /* Another designation lands after the create form read the seat. */
+  const live = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000201"), replaceIncumbent: true }, deps);
+  expect(live.status).toBe(200);
+  const seated = orchestratorSeatFor("proj-a").active!;
+  expect(seated.seatEpoch).toBeGreaterThan(vacated.seatEpoch);
+  const spawnsBefore = recorded.spawns.length;
+
+  const refused = await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000202"),
+    replaceIncumbent: true,
+    expectedIncumbentSeatEpoch: vacated.seatEpoch,
+  }, deps);
+  expect(refused.status).toBe(409);
+  expect(refused.body.code).toBe("incumbent_changed");
+  expect(recorded.spawns).toHaveLength(spawnsBefore);
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(seated.conversationId);
+  expect(orchestratorRevocations().some((revocation) => revocation.conversationId === seated.conversationId)).toBeFalse();
+
+  /* The epoch of the seat actually designated still replaces it. */
+  const replaced = await executeOrchestratorSeatRequest({
+    ...spawnRequest("req_00000203"),
+    replaceIncumbent: true,
+    expectedIncumbentSeatEpoch: seated.seatEpoch,
+  }, deps);
   expect(replaced.status).toBe(200);
 });
 
@@ -1624,12 +1694,10 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   expect(seeded.status).toBe(200);
 }
 
-/* docs/design/board-maintenance-report.md §5.5: the handoff's open-task list —
-   twelve rows of about 200 bytes on a busy board — went into the board
-   maintenance report, and the bytes it took are what a rotation of the default
-   mandate now keeps for its history. A 2 000-byte history beside a full task
-   list did not fit the envelope; beside the one pointer line it does. */
-test("a rotation of the default mandate keeps a history section the old task list pushed out", async () => {
+/* The task-list pointer leaves room for history. Required mandate rules
+   (#2518) consume the same bounded envelope: keep a fitting history and drop
+   an oversized one, while preserving both reporting and cross-project rules. */
+test.each([{ historyBytes: 900, dropped: false }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -1637,13 +1705,16 @@ test("a rotation of the default mandate keeps a history section the old task lis
       prompts.push(String(body.prompt));
       return { status: 200, body: { ok: true, conversationId: successorId(2301), path: "/tmp/successor.jsonl" } };
     },
-    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(2_000) }),
+    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(historyBytes) }),
   });
   const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00002302" }, deps);
 
   expect(rotated.status).toBe(200);
-  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(false);
-  expect(historySection(prompts[0]!)).toContain("d".repeat(2_000));
+  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(dropped);
+  if (dropped) expect(historySection(prompts[0]!)).toBe("");
+  else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
+  expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
+  expect(prompts[0]).toContain(`"conversationId":"${NEW_ID}"`);
   expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
@@ -2262,3 +2333,310 @@ for (const model of ["gpt-6-astra", "gpt-5.6-sol"]) {
     });
   }
 }
+
+/* ------------------------------------------------------------------------ */
+/* A short account write by another engine never fails a creation.           */
+/* ------------------------------------------------------------------------ */
+
+/** The account store's lock as ANOTHER writer holds it: the lock file the
+    account controller's «Codex login commit» leaves while it writes, owned by
+    a live process so nobody may reap it. Returns the release. */
+function holdAccountStoreAs(holder: string): () => void {
+  const lock = path.join(sandbox, "account-selection.lock");
+  let namespace: string | null = null;
+  try { namespace = fs.readlinkSync("/proc/self/ns/pid"); } catch { namespace = null; }
+  fs.writeFileSync(lock, JSON.stringify({
+    pid: process.pid,
+    startIdentity: procBackend.processIdentity(process.pid),
+    ns: namespace,
+    token: "another-writer",
+    holder,
+    acquiredAt: Date.now(),
+  }), { flag: "wx" });
+  return () => fs.rmSync(lock, { force: true });
+}
+
+test("REGRESSION: a Codex login commit that takes the lock while the launch is being accepted does not fail the creation", async () => {
+  const { deps } = dependencies({
+    /* The incident's order: the launch is accepted, and the account controller
+       takes the lock for a few milliseconds just as the seat is activated. */
+    spawn: async () => {
+      const release = holdAccountStoreAs("Codex login commit");
+      setTimeout(release, 120);
+      return { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "launch_busy_1" } };
+    },
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0001"), deps);
+
+  expect(result.status).toBe(202);
+  expect(result.body).toMatchObject({ accepted: true, conversationId: NEW_ID });
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
+  expect(active).toMatchObject({ conversationId: NEW_ID, state: "active", intent: { clientRequestId: "req_busy_0001", launchId: "launch_busy_1", error: null } });
+  expect(pending).toBeNull();
+  expect(history).toEqual([]);
+});
+
+test("REGRESSION: a lock held when the designation begins is waited out and the request replayed, with one launch", async () => {
+  const release = holdAccountStoreAs("Codex login commit");
+  setTimeout(release, 120);
+  const { deps, recorded } = dependencies();
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0002"), deps);
+
+  expect(result.status).toBe(200);
+  expect(recorded.spawns).toHaveLength(1);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+});
+
+test("a spawn route that answers its own busy store is replayed under the same attempt id", async () => {
+  let calls = 0;
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      calls += 1;
+      return calls === 1
+        ? { status: 500, body: { error: "account mutation is busy; held by Codex login commit (pid 4242, age 2 ms); retry shortly" } }
+        : { status: 200, body: { ok: true, state: "settled", conversationId: NEW_ID, path: "/tmp/new.jsonl", launchId: "launch_1" } };
+    },
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0003"), deps);
+
+  expect(result.status).toBe(200);
+  expect(recorded.spawns.map((body) => body.clientAttemptId)).toEqual(["req_busy_0003", "req_busy_0003"]);
+  expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+});
+
+test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {
+  seedLegacyActiveSeat("req_completed_holder");
+  const seatsFile = path.join(sandbox, "orchestrator-seats.json");
+  const file = JSON.parse(fs.readFileSync(seatsFile, "utf8"));
+  file.seats["proj-a"].path = null;
+  fs.writeFileSync(seatsFile, JSON.stringify(file));
+  const holder = await foreignAccountHolder();
+  let armed = false;
+  const { deps, recorded } = dependencies({
+    seatStoreWaitMs: 0,
+    resolvedConversation: () => null,
+    // Active-launch reconciliation calls this immediately before pending and
+    // completed replay reconciliation. Preparation cannot consume the hold.
+    launchSettlement: () => {
+      if (!armed) {
+        expect(fs.existsSync(path.join(sandbox, "account-selection.lock"))).toBe(true);
+        holder.releaseAfter(18);
+        armed = true;
+      }
+      return { kind: "unknown" };
+    },
+  });
+  try {
+    const result = await executeOrchestratorSeatRequest(spawnRequest("req_completed_holder"), deps);
+    expect(armed).toBe(true);
+    expect(result.status).toBe(200);
+    expect(recorded.spawns).toEqual([]);
+    expect(recorded.identityStamps).toHaveLength(1);
+  } finally { await holder.close(); }
+});
+
+test("rotation waits out a 120 ms foreign holder while confirming a provisional incumbent", async () => {
+  const { deps, recorded } = dependencies({ spawn: async () => ({ status: 202, body: { ok: true, conversationId: OLD_ID, path: null, launchId: "incumbent-launch" } }) });
+  await executeOrchestratorSeatRequest(spawnRequest("req_rotation_incumbent"), deps);
+  deps.spawn = async body => { recorded.spawns.push(body); return { status: 200, body: { ok: true, conversationId: NEW_ID, path: "/tmp/new.jsonl", launchId: "successor-launch" } }; };
+  const holder = await foreignAccountHolder();
+  let timerRan = false;
+  const timer = setTimeout(() => { timerRan = true; }, 40);
+  try {
+    holder.releaseAfter(120);
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotation_holder" }, deps);
+    expect(result.status).toBe(200);
+    expect(timerRan).toBe(true);
+    expect(recorded.spawns).toHaveLength(1);
+    expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+  } finally { clearTimeout(timer); await holder.close(); }
+});
+
+test("rotation preserves an accepted successor when activation exhausts its store wait", async () => {
+  const { deps } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest("req_rotation_predecessor"), deps);
+  let holder: Awaited<ReturnType<typeof foreignAccountHolder>> | undefined;
+  let launches = 0;
+  Object.assign(deps, {
+    seatStoreWaitMs: 80,
+    resolvedConversation: () => null,
+    spawn: async () => {
+      launches += 1;
+      holder = await foreignAccountHolder();
+      holder.releaseAfter(10);
+      return { status: 202, body: { ok: true, conversationId: OLD_ID, path: null, launchId: "accepted-successor" } };
+    },
+    launchSettlement: () => ({ kind: "settled", conversationId: OLD_ID, path: null, launchId: "accepted-successor" }),
+    stampRegistryIdentity: () => { throw new AccountMutationBusyError(); },
+  });
+  try {
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotation_accepted" }, deps);
+    expect(result.status).toBe(503);
+    expect(launches).toBe(1);
+    expect(orchestratorSeatFor("proj-a").active?.intent.clientRequestId).toBe("req_rotation_accepted");
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+    expect(String(result.body.error)).not.toMatch(/pid|Codex|held by|account mutation/i);
+  } finally { await holder?.close(); }
+});
+
+for (const answer of [
+  { code: "account_store_busy", error: "The account store is temporarily busy; try again shortly." },
+  { code: "account_admission_changed", error: "The account changed while preparing the launch; try again shortly." },
+  { error: "spawn account changed during admission" },
+]) {
+  test(`seat replays a pre-reservation refusal ${answer.code ?? "from an older admission"} under the same key`, async () => {
+    const { deps, recorded } = dependencies({ spawn: async body => {
+      recorded.spawns.push(body);
+      return recorded.spawns.length === 1 ? { status: 503, body: answer }
+        : { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "replayed-launch" } };
+    } });
+    const result = await executeOrchestratorSeatRequest(spawnRequest("req_admission_replay"), deps);
+    expect(result.status).toBe(202);
+    expect(recorded.spawns.map(body => body.clientAttemptId)).toEqual(["req_admission_replay", "req_admission_replay"]);
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+  });
+}
+
+test("a store that stays busy answers once, in plain words, and records no holder or pid", async () => {
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      throw new AccountMutationBusyError("account mutation is busy; held by Codex login commit (pid 4242, age 2 ms); retry shortly");
+    },
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0004"), deps);
+
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "seat_store_busy", retryable: true, error: SEAT_STORE_BUSY_REASON });
+  expect(String(result.body.error)).not.toMatch(/pid|Codex|held by/);
+  /* The first run and its bounded replays, and no more. */
+  expect(recorded.spawns).toHaveLength(4);
+  const { pending, history } = orchestratorSeatFor("proj-a");
+  expect(pending).toBeNull();
+  expect(history.at(-1)?.seat.intent.error).toBe(SEAT_STORE_BUSY_REASON);
+});
+
+test("a store that stays busy AFTER the launch was accepted leaves the intent for the read to seat", async () => {
+  let release = () => {};
+  const { deps } = dependencies({
+    seatStoreWaitMs: 150,
+    spawn: async () => {
+      release = holdAccountStoreAs("Codex login commit");
+      return { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "launch_busy_5" } };
+    },
+    launchSettlement: () => ({ kind: "settled", conversationId: NEW_ID, path: null, launchId: "launch_busy_5" }),
+    resolvedConversation: () => null,
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0005"), deps);
+  release();
+
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "seat_store_busy", retryable: true, seat: null });
+  /* An agent is starting under this intent: «failed» would be a lie, so it
+     stays pending and nothing is written to history. */
+  expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_busy_0005", error: null });
+  expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: NEW_ID, intent: { clientRequestId: "req_busy_0005" } });
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+});
+
+/* ------------------------------------------------------------------------ */
+/* The pane's read brings a designation up to date with its launch.          */
+/* ------------------------------------------------------------------------ */
+
+test("lost response, then the launch settles: the read seats the orchestrator with no further request", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0001", launchId: null, engine: "claude", model: "opus" });
+  const { deps, recorded } = dependencies({
+    launchSettlement: () => ({ kind: "settled", conversationId: NEW_ID, path: null, launchId: "launch_lost_1" }),
+    /* Not readable yet: the seat is provisional, and must stay seated. */
+    resolvedConversation: () => null,
+  });
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  const { active, pending } = orchestratorSeatFor("proj-a");
+  expect(pending).toBeNull();
+  expect(active).toMatchObject({ conversationId: NEW_ID, state: "active", intent: { clientRequestId: "req_lost_0001", launchId: "launch_lost_1" } });
+  expect(recorded.spawns).toEqual([]);
+});
+
+test("lost response, then the launch fails: the read records the failure and frees the project", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0002", launchId: null });
+  const { deps } = dependencies({
+    launchSettlement: () => ({ kind: "failed", error: "launch exited before a transcript materialized" }),
+    now: () => "2026-07-29T00:01:18.000Z",
+  });
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
+  expect(active).toBeNull();
+  expect(pending).toBeNull();
+  expect(history.at(-1)).toMatchObject({
+    reason: "terminal_error",
+    seat: { intent: { clientRequestId: "req_lost_0002", error: "launch exited before a transcript materialized" } },
+  });
+});
+
+test("a failed launch under an intent that only just began is left for the request that owns it", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0004", launchId: null });
+  const failed = { kind: "failed", error: "launch exited before a transcript materialized" } as const;
+
+  /* Five seconds after the intent began: a retry may be between its begin and
+     the spawn route's claim of this very launch. */
+  await reconcileOrchestratorSeatLaunch("proj-a", dependencies({ launchSettlement: () => failed, now: () => "2026-07-29T00:00:05.000Z" }).deps);
+  expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_lost_0004", error: null });
+
+  await reconcileOrchestratorSeatLaunch("proj-a", dependencies({ launchSettlement: () => failed, now: () => "2026-07-29T00:00:20.000Z" }).deps);
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe("launch exited before a transcript materialized");
+});
+
+test("launch timeout after activation: the read rolls the stillborn seat back instead of leaving it seated", async () => {
+  const { deps } = dependencies({
+    spawn: async () => ({ status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "launch_timeout_1" } }),
+    resolvedConversation: () => null,
+  });
+  expect((await executeOrchestratorSeatRequest(spawnRequest("req_timeout_001"), deps)).status).toBe(202);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+
+  await reconcileOrchestratorSeatLaunch("proj-a", {
+    ...deps,
+    launchSettlement: () => ({ kind: "failed", error: "structured spawn transport failed: runtime host request timed out" }),
+  });
+
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
+  expect(active).toBeNull();
+  expect(pending).toBeNull();
+  expect(history.at(-1)?.seat.intent.error).toContain("runtime host request timed out");
+});
+
+test("a launch that has not settled is left exactly where it is by the read", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0003", launchId: null });
+  const { deps } = dependencies();
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_lost_0003", error: null });
+});
+
+test("an exhausted admission revision replay keeps its own safe cause", async () => {
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0, spawn: async body => {
+    recorded.spawns.push(body);
+    throw new AccountAdmissionChangedError();
+  } });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_changed_exhausted"), deps);
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "account_admission_changed", retryable: true, error: new AccountAdmissionChangedError().message });
+  expect(recorded.spawns).toHaveLength(1);
+});

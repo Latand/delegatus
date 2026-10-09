@@ -121,7 +121,6 @@ function render(nodes: SchemeNode[], dormant = false): HTMLElement {
       multi={new Set()}
       session={false}
       focus={null}
-      attentionPaths={null}
       flowsByImpl={new Map()}
       flows={[]}
       pipelineStrips={new Map()}

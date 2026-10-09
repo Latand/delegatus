@@ -117,6 +117,7 @@ function task(id: string, status: TaskStatus, text: string, files: readonly File
     assignments: files.map((file) => ({ path: file.path, conversationId: file.conversationId, panePid: null, state: "handoff", error: null, at: "2026-09-14T10:00:00.000Z" })),
     createdAt: "2026-09-14T10:00:00.000Z",
     updatedAt: "2026-09-14T10:00:00.000Z",
+    ...(status === "done" ? { doneAt: new Date(NOW * 1_000).toISOString() } : {}),
     revision: REV(1),
   } as BoardTask;
 }
@@ -286,6 +287,7 @@ test("Unlink removes the assignment by its strongest handle and says nothing sto
   await tick();
   const unlink = () => {
     click(readerIn(view.host)!.querySelector("[data-reader-menu]"));
+    click(view.host.querySelector('.menu [data-cm-section="more"]'));
     const item = [...view.host.querySelectorAll('.menu [role="menuitem"]')].find((node) => node.textContent?.startsWith("Unlink from this task"));
     expect(item?.textContent).toContain("Nothing stops. With no other task it gets an untitled task of its own");
     click(item);
@@ -317,7 +319,7 @@ test("Link to another task lists the project's other tasks and records the link 
   click(view.host.querySelector(".tile"));
   await tick();
   click(readerIn(view.host)!.querySelector("[data-reader-menu]"));
-  click([...view.host.querySelectorAll('.menu [role="menuitem"]')].find((node) => node.textContent?.startsWith("Link to another task")));
+  click([...view.host.querySelectorAll('.menu .cm-quick [role="menuitem"]')].find((node) => node.getAttribute("aria-label")?.startsWith("Link to another task")));
   await tick();
   const picker = view.host.querySelector(".popover.link-picker");
   expect(picker?.textContent).toContain("Nothing is sent to the agent. If the task has no open pipeline, a draft pipeline that has not started is created for it.");
@@ -467,8 +469,10 @@ test("the reader header keeps its title: no PID or Stop host in it, and the full
   expect(head.textContent).not.toContain("Stop host");
   expect(head.querySelector("[data-reader-full-toggle]")).toBeTruthy();
   click(head.querySelector("[data-reader-menu]"));
+  /* The frequent actions are icon cells named by their full label; the rest is behind More. */
+  expect([...view.host.querySelectorAll('.menu .cm-quick [role="menuitem"]')].some((node) => node.getAttribute("aria-label") === "Open as a full pane")).toBe(true);
+  click(view.host.querySelector('.menu [data-cm-section="more"]'));
   const items = [...view.host.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? "");
-  expect(items.some((text) => text.startsWith("Open as a full pane"))).toBe(true);
   /* Without a host this surface can stop, the menu offers none; the rendered
      browser evidence opens the item on a live host. */
   expect(items.some((text) => text.startsWith("Stop host"))).toBe(false);
@@ -521,7 +525,7 @@ test("closed never-started launch is dismissible through the task reader's norma
   await tick();
   const reader = readerIn(view.host);
   expect(reader).toBeTruthy();
-  expect(reader?.textContent).toContain("never started");
+  expect(reader?.textContent).toContain("Launch failed");
   expect(Boolean(reader?.querySelector("[data-launch-retry]"))).toBe(false);
   expect(reader?.querySelector("textarea")).toBeNull();
   click(reader?.querySelector("[data-launch-dismiss]"));

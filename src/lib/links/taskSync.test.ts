@@ -21,6 +21,9 @@ import { applyTaskRows, resetRowBudgetsForTests } from "./taskApply";
 import { readLogPage, readScanPage, PAGE_BYTES } from "./taskFeed";
 import { encodeTask, decodeWireRow, MAX_WIRE_ROW_BYTES, type WireTask } from "./taskWire";
 import { tombstoneCollection } from "./tombstones";
+import { prototypeReviewReplica } from "@/lib/prototypeReview/model";
+import { readPrototypeReviews } from "@/lib/prototypeReview/read";
+import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
 
 const remote = "code.example.test/acme/widget";
 const key = projectIdentityFromRemote(`https://${remote}`, "/")!.project;
@@ -77,9 +80,34 @@ const wire = (task: BoardTask) => encodeTask(task, { id: SELF, prefix: installPr
 function peerRow(base: Partial<WireTask> & { id: string }, stampMs: number, prefix = installPrefix(PEER)): WireTask {
   const stamp = `${String(stampMs).padStart(13, "0")}.000.${prefix}`;
   return { project: key, text: "from peer", status: "inbox", placement: "unplaced", machine: PEER,
-    createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     s: { text: stamp, status: stamp, look: stamp, place: stamp, links: stamp, machine: stamp, handover: stamp }, ...base };
 }
+
+test("prototype metadata is stamped, replicated and preserved across an older peer's text edit", () => {
+  const { file } = linkedInstall();
+  const local = create(file, "Prototype task");
+  const round: PrototypeReviewRound = { id: `pr_${"a".repeat(32)}`, taskId: local.id, project: key, title: "Layout", createdAt: new Date().toISOString(),
+    source: { conversationId: null }, publicationKey: "private-key", inputDigest: "private-digest",
+    variants: [{ number: 1, name: "Compact", description: "Controls together", frames: [{ caption: "Controls", image: { id: "a".repeat(64), mime: "image/png", bytes: 8 } }], videos: [] }] };
+  mutateTasks(tasks => { tasks.find(t => t.id === local.id)!.prototypeReviews = [round]; return { tasks, result: undefined }; }, file);
+  const published = find(file, local.id)!;
+  expect(published.sync!.s.text! > local.sync!.s.text!).toBe(true);
+  const id = randomUUID();
+  const replica = prototypeReviewReplica(published)!;
+  replica.rounds[0]!.taskId = id;
+  const incoming = peerRow({ id, prototypeReviewReplica: replica }, Date.now());
+  expect(applyTaskRows([decodeWireRow(incoming)], peerLink, { filePath: file }).changed).toBe(1);
+  const received = find(file, id)!;
+  expect(received.sync!.o).toBe(peerLink.prefix);
+  expect(received.prototypeReviews).toBeUndefined();
+  expect(readPrototypeReviews(received)).toMatchObject({ unavailable: "another-installation", waitingReviewId: round.id });
+  expect(readPrototypeReviews(received).rounds[0]!.variants[0]!.frames[0]!.image.url).toBeNull();
+  expect(JSON.stringify(wire(published))).not.toContain("private-key");
+  const legacyEdit = peerRow({ id, text: "Older peer edited the title" }, Date.now() + 100);
+  applyTaskRows([legacyEdit], peerLink, { filePath: file });
+  expect(find(file, id)!.prototypeReviewReplica).toEqual(replica);
+});
 
 test("stamps keep their width and rise strictly: 1 000 quick edits after a stamp 7 minutes ahead roll the counter into ms", () => {
   const now = Date.parse("2026-09-28T10:00:00Z");

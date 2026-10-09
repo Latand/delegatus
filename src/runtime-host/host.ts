@@ -1,5 +1,5 @@
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -156,8 +156,13 @@ export class RuntimeHost {
         Number(request.params?.timeoutMs ?? 15_000),
         options.signal,
       );
-      else if (request.method === "append" || request.method === "operation") {
+      else if (request.method === "append" || request.method === "append-session-fenced" || request.method === "operation") {
         const event = request.params?.event as RuntimeEventInput;
+        if (request.method === "append-session-fenced" && (!event?.scope || parseRuntimeScope(event.scope).type !== "session"
+          || event.kind !== "session-status" || !Number.isSafeInteger(event.expectedSessionRevision)
+          || event.expectedSessionRevision! < 0)) {
+          throw new Error("a fenced session append requires a session-status event and its observed revision");
+        }
         const publishedBefore = this.journal.publishedSeq();
         const appended = this.journal.append(event);
         const newlyPublished = appended.seq > publishedBefore;
@@ -271,6 +276,14 @@ export class RuntimeHost {
         }
         const details = request.params?.details;
         const fromStatuses = request.params?.fromStatuses;
+        const retirementClaim = request.params?.retirementClaim as import("@/lib/runtime/contracts").RuntimeRetirementClaim | undefined;
+        if (retirementClaim !== undefined && (!retirementClaim || typeof retirementClaim.executorId !== "string"
+          || !retirementClaim.executorId || !retirementClaim.process
+          || !Number.isSafeInteger(retirementClaim.process.pid) || retirementClaim.process.pid <= 0
+          || typeof retirementClaim.process.startIdentity !== "string" || !retirementClaim.process.startIdentity
+          || typeof retirementClaim.process.bootEpoch !== "string" || !retirementClaim.process.bootEpoch)) {
+          throw new Error("runtime retirement claim is invalid");
+        }
         const awaitProjection = request.params?.awaitProjection;
         if (awaitProjection !== undefined && typeof awaitProjection !== "boolean") {
           throw new Error("runtime operation projection retention flag is invalid");
@@ -286,6 +299,7 @@ export class RuntimeHost {
           details && typeof details === "object" ? details as RuntimeTransitionDetails : {},
           {
             ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
+            ...(retirementClaim ? { retirementClaim } : {}),
             ...(awaitProjection === true ? { awaitProjection: true } : {}),
           },
         );

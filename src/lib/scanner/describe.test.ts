@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
-import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import { directoryProjectId, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 
 import { globalCache } from "./caches";
 import {
@@ -59,6 +59,29 @@ function useStateDirectory(name: string): string {
   resetProjectAliasesForTests();
   return state;
 }
+
+test("symlinked and physical sibling worktrees keep one project after deletion", () => {
+  useStateDirectory("symlink-worktree-state");
+  const disk = path.join(SANDBOX, "grouping-disk");
+  const repo = path.join(disk, "repository");
+  const identity = createRepository(repo);
+  const real = path.join(disk, "repository-pipeline");
+  fs.mkdirSync(real);
+  fs.writeFileSync(path.join(real, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane")}\n`);
+  const link = path.join(SANDBOX, "Projects");
+  fs.symlinkSync(disk, link, "junction");
+  const given = path.join(link, "repository-pipeline");
+  for (const cwd of [given, real]) {
+    expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, worktree: "lane", repo });
+  }
+  persistWorktreeMap();
+  fs.rmSync(real, { recursive: true });
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  for (const cwd of [given, real]) {
+    expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, worktree: "lane", repo });
+  }
+});
 
 afterAll(() => {
   if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
@@ -577,6 +600,19 @@ test("a wrong-HOME durable mapping is corrected by repository evidence after wor
   projectForCwd(worktree);
   process.env.LLV_STATE_DIR = state;
   expect(projectForCwd(worktree)).toBe(live);
+});
+
+test("deleted worktrees retain a trusted parent project after the parent checkout is gone", () => {
+  const base = path.join(SANDBOX, "absent-aliased-parent");
+  const state = path.join(base, "state"); process.env.LLV_STATE_DIR = state; fs.mkdirSync(state, { recursive: true }); resetProjectAliasesForTests();
+  const current = createRepository(path.join(base, "current"), "https://example.invalid/fixture/widgets.git");
+  const old = path.join(base, "previous"), sibling = path.join(base, "previous-pipeline");
+  fs.writeFileSync(path.join(state, "worktree-map.json"), JSON.stringify({ [sibling]: { repo: old, worktree: "lane" } }));
+  persistProjectAliases([{ source: directoryProjectId(old), target: current.project, displayName: current.displayName }]);
+  for (const cwd of [sibling, path.join(old, "worktrees", "nested"), path.join(old, ".worktrees", "nested", "src")]) {
+    expect(fs.existsSync(cwd)).toBe(false);
+    expect(projectInfoFromCwd(cwd)).toMatchObject({ project: current.project, repo: old });
+  }
 });
 
 test("a deleted worktree of a renamed repository still groups under the one project", () => {

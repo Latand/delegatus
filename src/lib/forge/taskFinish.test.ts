@@ -57,6 +57,7 @@ function harness(options: { lanes: Pipeline[]; setting?: boolean; pr?: boolean; 
   const ports = {
     now: () => T0,
     run: async () => { throw new Error("no gh here"); },
+    write: async () => { throw new Error("no gh here"); },
     loadPipelines: () => [...pipelines.values()].map((pipeline) => structuredClone(pipeline)),
     mutate: async (pipelineId: string, change: (pipeline: Pipeline) => boolean) => {
       const live = pipelines.get(pipelineId);

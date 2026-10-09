@@ -1,5 +1,6 @@
 "use client";
 
+import { Filter, GalleryHorizontalEnd } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ChevronDown, ChevronRight, X } from "@/components/icons";
@@ -8,6 +9,7 @@ import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardMode
 import { showReceipt } from "@/components/mobile/MobileReceipt";
 import { topScreen, useMobileNav, type MobileScreen } from "@/components/mobile/mobileNav";
 import { MobileSheet, MobileSheetSection } from "@/components/mobile/MobileSheet";
+import { BAR_PRESSED } from "@/components/ProjectBar";
 import type { AttentionNotice } from "@/lib/attention/types";
 import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
@@ -17,10 +19,14 @@ import type { FrameRole } from "@/lib/roleFrames";
 import type { AttentionItem } from "../attention";
 import { RoleTag } from "../RoleFrameMark";
 import { cleanTitle, fileModelLabel, fmtAgeSeconds } from "../utils";
+import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
+import { openSelfUpdate } from "../selfUpdate/openSelfUpdate";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
+import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -74,6 +80,8 @@ export interface MobileAttentionSheetProps {
   onOpenConversation: (item: AttentionItem) => void;
   /** The pipeline screen's opener (lane 7). Absent, pipeline rows are inert. */
   onOpenPipeline?: (row: MobileBoardPipelineRow) => void;
+  /** Takes the operator to a task's waiting prototype review. Absent, its rows are inert. */
+  onOpenPrototype?: (notice: PrototypeReviewNotice) => void;
   onClose: () => void;
   /** For the role each row names. */
   pipelines?: readonly Pipeline[];
@@ -93,6 +101,12 @@ export interface MobileAttentionSheetProps {
   onClearNotice?: (id: string) => void;
   /** Called with the notices the sheet showed, so the bar's dot goes out. */
   onNoticesSeen?: (ids: readonly string[]) => void;
+  /** The «show only those waiting on you» filter is on: the board dims every
+      card that does not wait. */
+  filterActive?: boolean;
+  /** Absent while nothing on the board waits, so no funnel is drawn (the
+      island's contract). */
+  onToggleFilter?: () => void;
 }
 
 const ROW = "flex min-h-11 w-full items-center gap-3 px-4 py-1.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
@@ -103,7 +117,7 @@ const NO_NOTICES: readonly MobileNoticeRow[] = [];
 const NO_PIPELINES: readonly Pipeline[] = [];
 const NO_NAMES: Readonly<Record<string, string>> = {};
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onOpenPrototype, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter }: MobileAttentionSheetProps) {
   const { t } = useLocale();
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
@@ -113,6 +127,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const navState = useMobileNav();
   const here = screen ?? topScreen(navState);
   const open = (entry: MobileAttentionEntry) => {
+    if (entry.kind === "update") { openSelfUpdate(); return; }
+    if (entry.kind === "prototype") { onOpenPrototype?.(entry.notice); return; }
     if (entry.kind === "conversation") onOpenConversation(entry.item);
     else onOpenPipeline?.(entry.row);
   };
@@ -120,6 +136,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const clear = (list: readonly MobileAttentionEntry[], text: string) => {
     if (!list.length) return;
     const { target, subjects } = needsYouDismissal(list);
+    if (!subjects.length) return;
     showReceipt(text, { kind: "undo", run: () => void dismiss(target, subjects, { undo: true, surface: "phone" }) });
     void dismiss(target, subjects, { surface: "phone" }).then((result) => {
       if (!result.ok) showReceipt(t("attention.dismissFailed", { error: result.error }), null, { error: true });
@@ -129,11 +146,23 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
     const since = needsYouEntrySince(entry);
     return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
   };
-  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
+  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "update" ? t("selfUpdate.auto.decision.title") : entry.kind === "prototype" ? entry.notice.title : entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
+  const dismissible = needsYouDismissibleCount(entries);
   const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
   const row = (entry: MobileAttentionEntry) => {
+    // The card keeps the sheet's content gutter; a bare card ran edge to edge.
+    if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
+    /* A prototype review leaves the list by its choice, so the row has no «Dismiss». */
+    /* Its chevron stands in the same column as theirs: an unseen «Dismiss»
+       holds the place the others give to the real one. */
+    if (entry.kind === "prototype") return (
+      <div key={entry.id} className="flex min-w-0 items-start">
+        <div className="min-w-0 flex-1"><PrototypeRow notice={entry.notice} age={laneAge(entry)} onOpen={onOpenPrototype ? () => open(entry) : undefined} /></div>
+        <span aria-hidden className="invisible inline-flex min-h-11 shrink-0 items-center px-3 text-label font-semibold">{t("needs.dismiss")}</span>
+      </div>
+    );
     const role = needsYouEntryRole(entry, pipelines);
     const body = entry.kind === "conversation" ? (
       <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
@@ -160,16 +189,33 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       name="attention"
       title={title}
       onClose={onClose}
-      extra={entries.length ? (
-        <button
-          type="button"
-          data-needs-you-dismiss-all=""
-          className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          title={t("attention.dismissAllTitle")}
-          onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: entries.length }) }))}
-        >
-          {t("attention.dismissAll", { count: entries.length })}
-        </button>
+      extra={dismissible || onToggleFilter ? (
+        <>
+          {onToggleFilter ? (
+            <button
+              type="button"
+              data-attention-filter=""
+              className={`inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-[8px] border active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${filterActive ? BAR_PRESSED : "border-transparent text-muted"}`}
+              aria-pressed={filterActive}
+              title={filterActive ? t("attention.filterOffTouch") : t("attention.filterOnTouch")}
+              aria-label={filterActive ? t("attention.filterOffTouch") : t("attention.filterOnTouch")}
+              onClick={onToggleFilter}
+            >
+              <Filter className="h-[18px] w-[18px]" aria-hidden />
+            </button>
+          ) : null}
+          {dismissible ? (
+            <button
+              type="button"
+              data-needs-you-dismiss-all=""
+              className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              title={t("attention.dismissAllTitle")}
+              onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: dismissible }) }))}
+            >
+              {t("attention.dismissAll", { count: dismissible })}
+            </button>
+          ) : null}
+        </>
       ) : null}
     >
       {notices.length ? (
@@ -215,15 +261,15 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
                       <span className="shrink-0 text-caption font-semibold tabular-nums text-muted" data-needs-you-section-count="">{section.entries.length}</span>
                     </MobileSheetSection>
                   </button>
-                  <button
+                  {needsYouDismissibleCount(section.entries) ? <button
                     type="button"
                     data-needs-you-dismiss-section={section.project}
                     aria-label={t("attention.dismissAllIn", { project: name })}
                     className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-3 text-label font-semibold text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
                     onClick={() => clear(section.entries, t("needs.dismissedReceipt", { title: name }))}
                   >
-                    {t("attention.dismissSection", { count: section.entries.length })}
-                  </button>
+                    {t("attention.dismissSection", { count: needsYouDismissibleCount(section.entries) })}
+                  </button> : null}
                 </div>
                 {isFolded ? null : section.entries.map(row)}
               </div>
@@ -333,6 +379,38 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       {row}
       <PermissionActions file={item.file} size="touch" />
     </div>
+  );
+}
+
+function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; age: number | null; onOpen?: () => void }) {
+  const { t } = useLocale();
+  const Tag = onOpen ? "button" : "div";
+  return (
+    <Tag
+      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t("proto.notice.openAria", { title: notice.title }) } : {})}
+      data-needs-you-row={notice.id}
+      data-attention-row={notice.id}
+      data-mobile2-row="prototype"
+      data-attention-prototype={notice.taskId}
+      className={ROW}
+    >
+      {/* Built as a role row: the mark and its word over the title. */}
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span data-attention-decision className="inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap text-caption font-bold uppercase leading-none tracking-[0.06em] text-accent">
+          <span aria-hidden className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-accent text-white">
+            <GalleryHorizontalEnd className="h-[11px] w-[11px]" />
+          </span>
+          <span className="min-w-0 truncate">{t("proto.notice.ready")}</span>
+        </span>
+        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
+        {age === null ? null : (
+          <span className={META}>
+            <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
+          </span>
+        )}
+      </span>
+      {onOpen ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
+    </Tag>
   );
 }
 

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ fs.mkdirSync(SESSIONS, { recursive: true });
 
 const { SEAT_TICK_NO_SELF_SCHEDULE } = await import("./report");
 const { reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, wakeReached } = await import("./seatTickController");
+const { writeDrain, drainFile, releaseDrain } = await import("@/lib/selfUpdate/drain");
 const { DEFAULT_SEAT_TICK_POLICY } = await import("./seatTick");
 const { seatMcpHealth } = await import("./seatMcpHealth");
 const { viewerMcpTransportForLaunch } = await import("@/lib/agent/spawnPolicy");
@@ -57,6 +58,7 @@ import type { SeatTickControllerDependencies } from "./seatTickController";
 import type { GithubRunner, OpenPullRequest, OpenPullRequestsUnavailable } from "./githubEvidence";
 import type { SeatTickWakeState, SeatTickWithdrawal } from "./seatTickSources";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { mcpLauncherImports } from "@/runtime-host/mcpRuntimeRelease";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import type { HostState } from "@/lib/runtime/engineHost";
 import {
@@ -75,8 +77,10 @@ const CONVERSATION = ["conversation", "0f4c21b7729fbc9e"].join("_");
 const SUCCESSOR = ["conversation", "5b7729fbc9e0f4c2"].join("_");
 const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 const MINUTE = 60_000;
+const WALL_DATE = Date;
 
 afterEach(() => {
+  globalThis.Date = WALL_DATE;
   stopSeatTick();
   setAgentRegistryForTests(null);
 });
@@ -112,7 +116,8 @@ type PipelineFixture = { id: string; state: string; createdAt: string; movedAt: 
       than a lane that completed. */
   attemptState?: string;
   /** What the lane parked on, for the cases that read it (#1799). */
-  stateDetail?: string | null };
+  stateDetail?: string | null;
+  attemptConversationId?: string };
 
 function pipelineRecord(entry: PipelineFixture) {
   return {
@@ -128,8 +133,8 @@ function pipelineRecord(entry: PipelineFixture) {
     baseRef: "main",
     lastPassedCommit: "",
     stages: [],
-    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt }] }] : [],
-    cursor: null,
+    runs: entry.movedAt ? [{ stageId: "build", attempts: [{ n: 1, state: entry.attemptState ?? "passed", startedAt: entry.movedAt, completedAt: entry.movedAt, ...(entry.attemptConversationId ? { conversationId: entry.attemptConversationId } : {}) }] }] : [],
+    cursor: entry.attemptConversationId ? { stageId: "build", state: entry.attemptState ?? "running" } : null,
     state: entry.state,
     pausedState: null,
     stateDetail: entry.stateDetail ?? null,
@@ -791,9 +796,9 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
-  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs"]) {
-    fs.copyFileSync(path.join(import.meta.dir, "../../../bin", name), path.join(bin, name));
-  }
+  // The module set the product publishes beside the stable launcher, and nothing else.
+  const sourceBin = path.join(import.meta.dir, "../../../bin");
+  for (const name of ["mcp-server.mjs", ...mcpLauncherImports(sourceBin)]) fs.copyFileSync(path.join(sourceBin, name), path.join(bin, name));
   const crashFlag = path.join(packageRoot, "crash.flag");
   fs.writeFileSync(crashFlag, "crash");
   fs.writeFileSync(path.join(dist, "mcp-server.mjs"), `
@@ -1120,17 +1125,12 @@ test("a rotation during the send is caught by the same check that made the wake"
     state: OVERDUE,
     delivery: { ok: true, target: null, outcome: "queued", operationId: "op-inflight", receipt: {} as never, structured: true },
   });
-  let reads = 0;
-  const seatFor = rig.deps.sources!.seatFor;
-  rig.deps.sources!.seatFor = ((project: string) => {
-    reads += 1;
-    /* The opening reconcile, the gather and the pre-send re-check all see the
-       incumbent; the read after the send sees the successor that landed
-       meanwhile. */
-    return reads > 4
-      ? { active: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } as never, pending: null, history: [] }
-      : seatFor(project);
-  }) as typeof seatFor;
+  const deliver = rig.deps.deliver!;
+  rig.deps.deliver = async (...args) => {
+    const result = await deliver(...args);
+    rig.deps.sources!.seatFor = () => ({ active: { conversationId: SUCCESSOR, seatEpoch: 8, path: null } as never, pending: null, history: [] });
+    return result;
+  };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.withdrawn.map((entry) => entry.wake.operationId)).toEqual(["op-inflight"]);
   expect(rig.written.at(-1)!.outstandingWake).toBeNull();
@@ -1286,7 +1286,7 @@ test("events belonging to a lane that has finished send nothing, and the check t
     state: { ...OVERDUE, eventsThrough: 12 },
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", delivery: null, detail: "nothing owed" });
+  expect(record).toMatchObject({ verdict: "quiet", delivery: null, detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(rig.sent).toEqual([]);
   /* And the backlog does not come back for a second, third and fourth wake:
      one look moved the cursor past all of it. */
@@ -1313,6 +1313,95 @@ test("a completed lane whose pull request is still open wakes the seat, naming t
   expect(record).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"], items: 1 });
   expect(rig.sent[0]!.text).toContain("pull request #1289 left open by a lane that finished");
   expect(rig.sent[0]!.text).toContain("[pull-request] #1289 — wake on a merge that is waiting");
+});
+
+test("legacy exhausted PR guard drains every page and then suppresses unchanged PRs", async () => {
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const stateDir = fs.mkdtempSync(path.join(SANDBOX, "legacy-pr-pagination-"));
+  process.env.LLV_STATE_DIR = stateDir;
+  const stateFile = path.join(stateDir, "seat-tick.json");
+  const branches = Array.from({ length: 22 }, (_, index) => `pipeline/legacy-pr-${index + 1}`);
+  const lanes = branches.map((branch, index) => ({
+    ...FINISHED_LANE[0]!, id: `pipeline_legacy_pr_${index + 1}`, branch,
+  }));
+  const openPullRequests = branches.map((headRefName, index) => ({
+    number: index + 1, title: `Completed lane ${index + 1}`, headRefName,
+    createdAt: FINISHED_PR_CREATED, updatedAt: "2026-08-28T11:30:00.000Z",
+  }));
+  const stateOptions = { stateFile, pipelines: lanes, openPullRequests };
+  let now = NOW;
+  try {
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+    /* Establish the current gathered fingerprint and a complete delivered
+       history, then create the already-present retry card with the real board
+       writer. The following write models a pre-upgrade SQLite row: all legacy
+       retry state survives and the newer showing-history column is absent. */
+    const alreadyDelivered = new Set<string>();
+    for (let page = 0; page < 5; page += 1) {
+      const rig = harness({ ...stateOptions, now });
+      const record = await runSeatTickCheck(PROJECT, rig.deps);
+      expect(record).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"], items: page < 4 ? 5 : 2 });
+      for (const match of rig.sent[0]!.text.matchAll(/\[pull-request\] (#[0-9]+)/g)) alreadyDelivered.add(match[1]!);
+      now += 61 * MINUTE;
+    }
+    expect(alreadyDelivered.size).toBe(22);
+    const delivered = readSeatTickState(PROJECT, stateFile);
+    expect(delivered.itemsShown).toHaveLength(22);
+
+    const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+    const { seatTickRetryGuardCardText, seatTickRetryGuardRef } = await import("./cards");
+    const tasksFile = path.join(stateDir, "tasks.json");
+    const retryRef = seatTickRetryGuardRef("unmerged-pr");
+    const retryCardText = seatTickRetryGuardCardText(PROJECT,
+      'Wakes for "unmerged-pr" stopped producing any board or pipeline change; the tick has stopped re-sending it until state moves',
+      retryRef, new Date(now).toISOString());
+    saveTasks([{
+      id: crypto.randomUUID(), project: PROJECT, status: "inbox", text: retryCardText,
+      placement: "unplaced", assignments: [], createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+    }], tasksFile);
+    const retryCard = loadTasks(tasksFile).find((task) => task.text.includes(retryRef));
+    expect(retryCard).toBeDefined();
+    const cardBefore = { text: retryCard!.text, status: retryCard!.status };
+
+    const legacy = readSeatTickState(PROJECT, stateFile);
+    const currentFingerprint = legacy.lastWakeFingerprint;
+    expect(currentFingerprint).toBeTruthy();
+    delete legacy.itemsShown;
+    legacy.lastWakeAt = new Date(now - 61 * MINUTE).toISOString();
+    legacy.wakesWithoutChange = { "unmerged-pr": DEFAULT_SEAT_TICK_POLICY.retryGuard };
+    writeSeatTickState(PROJECT, legacy, stateFile);
+    const persistedLegacy = readSeatTickState(PROJECT, stateFile);
+    expect(persistedLegacy.itemsShown).toBeUndefined();
+    expect(persistedLegacy.accounting).toBeDefined();
+    expect(persistedLegacy).toMatchObject({
+      lastWakeFingerprint: currentFingerprint,
+      wakesWithoutChange: { "unmerged-pr": DEFAULT_SEAT_TICK_POLICY.retryGuard },
+    });
+
+    const reached = new Set<string>();
+    let wakeCount = 0;
+    for (let page = 0; page < 6; page += 1) {
+      const rig = harness({ ...stateOptions, now });
+      const record = await runSeatTickCheck(PROJECT, { ...rig.deps, ensureCard: undefined });
+      if (record?.verdict !== "wake") break;
+      wakeCount += 1;
+      expect(record.reasons).toEqual(["unmerged-pr"]);
+      expect(record.items).toBeLessThanOrEqual(DEFAULT_SEAT_TICK_POLICY.itemsPerWake);
+      for (const match of rig.sent[0]!.text.matchAll(/\[pull-request\] (#[0-9]+)/g)) reached.add(match[1]!);
+      now += 61 * MINUTE;
+    }
+    expect(wakeCount).toBeLessThanOrEqual(5);
+    expect(wakeCount).toBeGreaterThan(0);
+    expect(reached.size).toBe(22);
+    expect(loadTasks(tasksFile).find((task) => task.id === retryCard!.id)).toMatchObject(cardBefore);
+
+    const repeat = harness({ ...stateOptions, now });
+    expect(await runSeatTickCheck(PROJECT, repeat.deps)).toMatchObject({ verdict: "quiet", items: 0 });
+    expect(repeat.sent).toEqual([]);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+  }
 });
 
 test("a completed lane's delivery branch identifies the pull request it left open (#2081)", async () => {
@@ -1345,8 +1434,8 @@ test("a pull request line announces its creator's completed lane only after deli
     openPullRequests: [{ number: 2076, title: "phone loading states", headRefName: "pipeline/skeletons-transitions", createdAt: FINISHED_PR_CREATED, updatedAt: new Date(NOW - MINUTE).toISOString() }],
   });
   const second = await runSeatTickCheck(PROJECT, later.deps);
-  expect(second!.reasons).toContain("unmerged-pr");
-  expect(second!.reasons).not.toContain("own-lane-settled");
+  expect(second!.verdict).toBe("quiet");
+  expect(later.sent).toHaveLength(0);
 });
 
 test("a PR opened after a finished lane released its delivery head belongs to the active lane (#2081)", async () => {
@@ -1403,7 +1492,7 @@ test("once the pull request is merged the same project owes nothing again", asyn
     openPullRequests: [],
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", detail: "nothing owed" });
+  expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(rig.sent).toEqual([]);
 
   /* And with the board empty behind it too — one finished lane and nothing
@@ -1804,7 +1893,7 @@ test("the empty array is the one gh answer that still earns quiet", async () => 
     githubRun: async () => "[]",
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", detail: "nothing owed" });
+  expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(rig.sent).toEqual([]);
   /* And the row records the quiet, which is the claim an error never makes. */
   expect(rig.written.at(-1)!.quietSince).toBe(new Date(NOW).toISOString());
@@ -1987,6 +2076,33 @@ test("open work with nobody seated raises the orchestrator card and wakes nothin
   expect(rig.sent).toEqual([]);
 });
 
+test("a drain beginning during proposal preparation holds the fresh wake until release", async () => {
+  const h = harness({});
+  let maintenanceLaunches = 0;
+  h.deps.maintenance = { reconcile: async () => null, launchIfDue: async () => { maintenanceLaunches++; return null; } };
+  let entered!: () => void;
+  let resume!: () => void;
+  const preparing = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  h.deps.proposalIssues = async () => { entered(); await gate; return [{ number: 1, title: "New work", labels: [], updatedAt: null }]; };
+  const check = runSeatTickCheck(PROJECT, h.deps);
+  await preparing;
+  writeDrain(drainFile(), { id: "inflight-seat", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    resume();
+    const held = await check;
+    expect(h.sent).toHaveLength(0);
+    expect(maintenanceLaunches).toBe(0);
+    expect(held?.delivery?.outcome).toBe("update-held");
+    releaseDrain(drainFile(), "inflight-seat");
+    await runSeatTickCheck(PROJECT, h.deps);
+    expect(h.sent).toHaveLength(1);
+    expect(maintenanceLaunches).toBeGreaterThan(0);
+    await runSeatTickCheck(PROJECT, h.deps);
+    expect(h.sent).toHaveLength(1);
+  } finally { resume(); releaseDrain(drainFile(), "inflight-seat"); }
+});
+
 test("the proactive slot delivers a proposal brief built from open issues", async () => {
   const rig = harness({});
   const record = await runSeatTickCheck(PROJECT, rig.deps);
@@ -2080,6 +2196,24 @@ test("the off switch keeps the clock unstarted and says so", () => {
   expect(refused[0]).toContain("LLV_SEAT_TICK_CHECK_MINUTES=0");
 });
 
+test("automatic drain holds seat sweeps and release resumes the next sweep", async () => {
+  stopSeatTick();
+  let held = true;
+  let fire = () => {};
+  let sweeps = 0;
+  startSeatTick({ drainHeld: () => held, handoffHeld: () => false,
+    scheduleInterval: (callback) => { fire = callback; return { unref() {} } as never; },
+    sweep: async () => { sweeps++; }, policy: DEFAULT_SEAT_TICK_POLICY, log: () => {},
+  });
+  fire();
+  expect(sweeps).toBe(0);
+  held = false;
+  fire();
+  await Bun.sleep(0);
+  expect(sweeps).toBe(1);
+  stopSeatTick();
+});
+
 test("a check that outran its interval drops the next tick rather than queueing it", async () => {
   let fire = () => {};
   let sweeps = 0;
@@ -2112,6 +2246,283 @@ test("a check that outran its interval drops the next tick rather than queueing 
 
 const MONITOR_PROMPT = "before the items, check whether last night's digest actually sent";
 const PROMPT_HEADING = "Standing monitor note for this project";
+
+test("a wake drops a lane closed during gathering and carries the current monitor note", async () => {
+  const rig = harness({ pipelines: [...OPEN_LANE, { ...OPEN_LANE[0]!, id: "current-lane" }], state: OVERDUE, settings: promptSettings() });
+  const pipelines = rig.deps.sources!.pipelines;
+  const liveness = rig.deps.sources!.liveness;
+  rig.deps.sources!.liveness = async (request) => {
+    if (!request.project) return liveness(request);
+    rig.deps.sources!.pipelines = () => pipelines().map((lane) => lane.id === OPEN_LANE[0]!.id ? { ...lane, state: "closed", closedAt: new Date(NOW).toISOString() } : lane);
+    rig.deps.sources!.settings = () => ({ ...promptSettings(), monitorPrompt: "Watch the current release.", updatedAt: new Date(NOW).toISOString() });
+    return liveness(request);
+  };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).not.toContain(OPEN_LANE[0]!.id);
+  expect(rig.sent[0]!.text).toContain("Watch the current release.");
+  expect(rig.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+});
+
+for (const change of ["enabled", "interval"] as const) {
+  test(`a ${change} change during gathering refreshes gated pull-request evidence`, async () => {
+    const rig = harness({
+      pipelines: [{ ...OPEN_LANE[0]!, createdAt: new Date(NOW - 120 * MINUTE).toISOString(), branch: "topic-pr" }],
+      state: change === "enabled" ? OVERDUE : { lastWakeAt: new Date(NOW - 31 * MINUTE).toISOString() },
+      settings: { ...defaultSeatTickSettings(PROJECT), enabled: change !== "enabled" },
+      openPullRequests: [{ number: 1289, title: "Existing work", headRefName: "topic-pr",
+        createdAt: new Date(NOW - 90 * MINUTE).toISOString(), updatedAt: new Date(NOW - MINUTE).toISOString() }],
+    });
+    const liveness = rig.deps.sources!.liveness;
+    const pipelines = rig.deps.sources!.pipelines;
+    rig.deps.sources!.liveness = async (request) => {
+      if (request.project) {
+        rig.deps.sources!.pipelines = () => pipelines().map(lane => ({ ...lane, state: "completed" }));
+        rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: change === "interval" ? 30 : 60 });
+      }
+      return liveness(request);
+    };
+    let reads = 0;
+    const openPullRequests = rig.deps.sources!.openPullRequests;
+    rig.deps.sources!.openPullRequests = async request => { reads++; return openPullRequests(request); };
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["unmerged-pr"] });
+    expect(reads).toBe(1);
+    expect(rig.sent[0]!.text).toContain("#1289");
+  });
+}
+
+test("a newly eligible failed PR read preserves its outage accounting", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    settings: { ...defaultSeatTickSettings(PROJECT), enabled: false } });
+  const liveness = rig.deps.sources!.liveness;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.liveness = async request => {
+    if (request.project) {
+      rig.deps.sources!.pipelines = () => pipelines().map(lane => ({ ...lane, state: "completed" }));
+      rig.deps.sources!.settings = () => defaultSeatTickSettings(PROJECT);
+    }
+    return liveness(request);
+  };
+  rig.deps.sources!.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(rig.written.at(-1)!.pullRequestGap).toMatchObject({ gap: "command-failed", attempts: 1 });
+});
+
+test("a second state change during PR refresh leaves the alarm unsent", async () => {
+  const rig = harness({ pipelines: [{ ...OPEN_LANE[0]!, branch: "topic-pr" }], state: OVERDUE,
+    settings: { ...defaultSeatTickSettings(PROJECT), enabled: false } });
+  const liveness = rig.deps.sources!.liveness;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.liveness = async request => {
+    if (request.project) {
+      rig.deps.sources!.pipelines = () => pipelines().map(lane => ({ ...lane, state: "completed" }));
+      rig.deps.sources!.settings = () => defaultSeatTickSettings(PROJECT);
+    }
+    return liveness(request);
+  };
+  rig.deps.sources!.openPullRequests = async () => {
+    rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT), enabled: false });
+    return { ok: true, pullRequests: [] };
+  };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(rig.written.every(state => state.lastWakeAt === OVERDUE.lastWakeAt)).toBe(true);
+});
+
+test("a canceled PR refresh keeps its outage run in durable state", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-gap-")), "state.json");
+  const running = { ...OPEN_LANE[0]!, id: "running-lane" };
+  const rig = harness({ stateFile, pipelines: [...FINISHED_LANE, running], state: OVERDUE });
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+
+  let attempt = 1;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.pipelines = () => {
+    /* Keep the running lane's attempt identity moving across every freshness
+       read, so each completed failure is canceled before it can be dispatched. */
+    attempt += 1;
+    return pipelines().map(lane => lane.id === running.id
+      ? { ...lane, runs: [{ stageId: "build", attempts: [{ n: attempt, state: "running", startedAt: new Date(NOW + attempt * MINUTE).toISOString() }] }] as never }
+      : lane);
+  };
+  rig.deps.sources!.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+
+  const first = await runSeatTickCheck(PROJECT, rig.deps);
+  const firstGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
+  expect(first).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(firstGap).toMatchObject({ gap: "command-failed", reported: false });
+  const since = firstGap!.since;
+
+  rig.deps.sources!.now = () => NOW + 65 * MINUTE;
+  const second = await runSeatTickCheck(PROJECT, rig.deps);
+  const secondGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
+  expect(second).toMatchObject({ verdict: "error", delivery: null });
+  expect(rig.sent).toEqual([]);
+  expect(secondGap).toMatchObject({ gap: "command-failed", reported: false, since });
+});
+
+test("a canceled successful PR refresh clears recovered outage accounting and starts the next run fresh", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-recovery-")), "state.json");
+  const running = { ...OPEN_LANE[0]!, id: "running-lane" };
+  const previousSince = new Date(NOW - 3 * 60 * MINUTE).toISOString();
+  const gap = standingGap({ since: previousSince, attempts: 24, reported: true });
+  const rig = harness({ stateFile, pipelines: [...FINISHED_LANE, running], state: { ...OVERDUE, pullRequestGap: gap } });
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, pullRequestGap: gap }, stateFile);
+
+  let attempt = 1;
+  let reads = 0;
+  const pipelines = rig.deps.sources!.pipelines;
+  rig.deps.sources!.openPullRequests = async () => {
+    reads++;
+    /* Both reads succeed, but the running lane advances during each one. The
+       second freshness fence cancels this wake after recovery was observed. */
+    const nextAttempt = ++attempt;
+    const current = pipelines();
+    rig.deps.sources!.pipelines = () => current.map(lane => lane.id === running.id
+      ? { ...lane, runs: [{ stageId: "build", attempts: [{ n: nextAttempt, state: "running", startedAt: new Date(NOW + nextAttempt * MINUTE).toISOString() }] }] as never }
+      : lane);
+    return { ok: true, pullRequests: [] };
+  };
+
+  const canceled = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(canceled).toMatchObject({ verdict: "error", delivery: null });
+  expect(reads).toBe(2);
+  expect(rig.sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toBeNull();
+
+  const firstFailure = harness({ stateFile, pipelines: [...FINISHED_LANE, running], now: NOW + 65 * MINUTE,
+    pullRequestsUnavailable: "command-failed" });
+  await runSeatTickCheck(PROJECT, firstFailure.deps);
+  const freshRun = readSeatTickState(PROJECT, stateFile).pullRequestGap;
+  expect(freshRun).toMatchObject({ gap: "command-failed", reported: false, attempts: 1 });
+  expect(freshRun!.since).toBe(new Date(NOW + 65 * MINUTE).toISOString());
+
+  const secondFailure = harness({ stateFile, pipelines: [...FINISHED_LANE, running], now: NOW + 130 * MINUTE,
+    pullRequestsUnavailable: "command-failed" });
+  await runSeatTickCheck(PROJECT, secondFailure.deps);
+  expect(secondFailure.cards.filter(entry => entry.card.kind === "source-unreadable")).toHaveLength(1);
+  expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toMatchObject({
+    gap: "command-failed", reported: true, attempts: 2, since: freshRun!.since,
+  });
+});
+
+test("a wake interrupted before dispatch refreshes its agenda and note before original-key replay", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "undispatched-alarm-")), "state.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE, settings: promptSettings() });
+  const beginDispatch = spyOn(SeatTickAccounting.prototype, "beginDispatch").mockImplementationOnce(() => {
+    throw new Error("interrupted after durable wake preparation");
+  });
+  try {
+    await runSeatTickCheck(PROJECT, first.deps);
+  } finally {
+    beginDispatch.mockRestore();
+  }
+  const prepared = readSeatTickState(PROJECT, stateFile).outstandingWake!;
+  expect(prepared).toBeTruthy();
+  expect(prepared.dispatch).toBeUndefined();
+  expect(first.sent).toEqual([]);
+
+  const replacement = "Use the release monitor note now.";
+  const retry = harness({ stateFile, pipelines: [{ ...OPEN_LANE[0]!, id: "current-lane" }], wakeState: "absent",
+    now: NOW + 5 * MINUTE, settings: { ...promptSettings(), monitorPrompt: replacement } });
+  await runSeatTickCheck(PROJECT, retry.deps);
+  expect(retry.sent).toHaveLength(1);
+  expect(retry.sent[0]!.clientMessageId).toBe(prepared.clientMessageId);
+  expect(retry.sent[0]!.text).not.toContain(OPEN_LANE[0]!.id);
+  expect(retry.sent[0]!.text).toContain("current-lane");
+  expect(retry.sent[0]!.text).toContain(replacement);
+  expect(retry.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+});
+
+test("an undispatched wake whose agenda settled is cleared without delivery credit", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "settled-undispatched-alarm-")), "state.json");
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() };
+  writeSeatTickState(PROJECT, initial, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE });
+  const beginDispatch = spyOn(SeatTickAccounting.prototype, "beginDispatch").mockImplementationOnce(() => {
+    throw new Error("interrupted after durable wake preparation");
+  });
+  try {
+    await runSeatTickCheck(PROJECT, first.deps);
+  } finally {
+    beginDispatch.mockRestore();
+  }
+  expect(readSeatTickState(PROJECT, stateFile).outstandingWake?.dispatch).toBeUndefined();
+
+  const retry = harness({ stateFile, pipelines: [], wakeState: "absent", now: NOW + 5 * MINUTE });
+  await runSeatTickCheck(PROJECT, retry.deps);
+  expect(retry.sent).toEqual([]);
+  expect(readSeatTickState(PROJECT, stateFile)).toMatchObject({
+    outstandingWake: null, lastWakeAt: OVERDUE.lastWakeAt, eventsThrough: 0,
+  });
+});
+
+test("an absent refused alarm refreshes its agenda and note under its original key", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "fresh-alarm-")), "state.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE, state: OVERDUE, settings: promptSettings(), wakeState: "absent",
+    delivery: { ok: false, outcome: "failed", error: "temporarily unavailable", status: 503 } });
+  await runSeatTickCheck(PROJECT, first.deps);
+  const original = readSeatTickState(PROJECT, stateFile).outstandingWake!;
+  const next = harness({ stateFile, pipelines: [{ ...OPEN_LANE[0]!, id: "current-lane" }], wakeState: "absent", now: NOW + 5 * MINUTE,
+    settings: { ...promptSettings(), monitorPrompt: REPLACEMENT_PROMPT } });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent).toHaveLength(1);
+  expect(next.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+  expect(next.sent[0]!.text).not.toContain(OPEN_LANE[0]!.id);
+  expect(next.sent[0]!.text).toContain(REPLACEMENT_PROMPT);
+  expect(next.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+  expect(readSeatTickState(PROJECT, stateFile).noteShown).toBe(seatTickNoteRevisionForTest(REPLACEMENT_PROMPT));
+});
+
+test("a refused alarm whose only lane settled is cleared unsent and credits nothing", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "settled-alarm-")), "state.json");
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() };
+  writeSeatTickState(PROJECT, initial, stateFile);
+  const first = harness({ stateFile, pipelines: OPEN_LANE, wakeState: "absent",
+    delivery: { ok: false, outcome: "failed", error: "temporarily unavailable", status: 503 } });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(readSeatTickState(PROJECT, stateFile).outstandingWake).not.toBeNull();
+  const next = harness({ stateFile, pipelines: [], wakeState: "absent", now: NOW + 5 * MINUTE });
+  expect(await runSeatTickCheck(PROJECT, next.deps)).toMatchObject({ verdict: "quiet" });
+  expect(next.sent).toEqual([]);
+  const settled = readSeatTickState(PROJECT, stateFile);
+  expect(settled).toMatchObject({ outstandingWake: null, lastWakeAt: initial.lastWakeAt, eventsThrough: 0 });
+  expect(settled.noteShown ?? null).toBeNull();
+});
+
+test("a wake retained by transport identifies its snapshot when delivery is delayed", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, delivery: HELD });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain(`Snapshot at ${new Date(NOW).toISOString()}`);
+  expect(rig.sent[0]!.text).toContain("seat_tick_settings");
+  expect(rig.written.at(-1)!.outstandingWake!.text).toBe(rig.sent[0]!.text);
+});
+
+test("a proposal refreshes the monitor note after awaiting issue lookup", async () => {
+  const rig = harness({ settings: promptSettings() });
+  rig.deps.proposalIssues = async () => {
+    rig.deps.sources!.settings = () => ({ ...promptSettings(), monitorPrompt: REPLACEMENT_PROMPT });
+    return [];
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain(REPLACEMENT_PROMPT);
+  expect(rig.sent[0]!.text).not.toContain(MONITOR_PROMPT);
+});
+
+test("a slow proposal lookup preserves the oldest evidence timestamp", async () => {
+  const rig = harness({ settings: promptSettings() });
+  rig.deps.proposalIssues = async () => {
+    rig.deps.sources!.now = () => NOW + 10 * MINUTE;
+    return [];
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain(`Snapshot at ${new Date(NOW).toISOString()}`);
+  expect(rig.sent[0]!.text).not.toContain(`Snapshot at ${new Date(NOW + 10 * MINUTE).toISOString()}`);
+});
 
 test("every scheduler wake carries the operator instructions alongside the seat note", async () => {
   const instruction = "Handle incoming tasks by priority; stop when the inbox is empty.";
@@ -2678,7 +3089,7 @@ test("a finished child is harvested by exactly one wake, across ticks, a fresh c
   const first = childRig(fixture);
   const record = await runSeatTickCheck(fixture.project, first.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
-  expect(record!.detail).toContain("a spawned child finished and its outcome is unharvested");
+  expect(record!.detail).toContain("a spawned child finished and its outcome is not yet announced by a delivered seat-tick wake");
   expect(first.sent[0]!.text).toContain(`[child] ${child.id}`);
   expect(first.sent[0]!.text).toContain("review the exporter");
   /* The landing wrote the cursor: this child is now the seat's business. */
@@ -2726,7 +3137,7 @@ test("a launch that failed before it ran is a terminal child with a failed outco
   const record = await runSeatTickCheck(fixture.project, rig.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
   expect(record!.detail).toContain("a spawned child failed");
-  expect(rig.sent[0]!.text).toContain(`[child] ${child.id} — build the exporter — spawned child failed, outcome unharvested`);
+  expect(rig.sent[0]!.text).toContain(`[child] ${child.id} — build the exporter — spawned child failed, outcome announcement owed`);
   expect(fixture.acknowledged()).toEqual([child.id]);
   const again = childRig(fixture, { now: fixture.now + 61 * MINUTE });
   expect(await runSeatTickCheck(fixture.project, again.deps)).toMatchObject({ verdict: "quiet" });
@@ -2787,7 +3198,7 @@ test("every owed child beyond the cursor cap is named once across landings and r
     expect(rig.snapshots).toBe(0);
     expect(rig.liveness.length).toBeLessThanOrEqual(60);
     for (const message of rig.sent) {
-      for (const match of message.text.matchAll(/\[child\] (\S+) /g)) named.push(match[1]!);
+      for (const match of message.text.matchAll(/^- \[child\] (\S+) .*outcome announcement owed$/gm)) named.push(match[1]!);
     }
   }
   const unique = new Set(named);
@@ -3242,17 +3653,16 @@ test("a child finishing while a wake is unresolved dispatches nothing, and is ha
   expect(second.sent).toEqual([]);
   expect(fixture.row()).toMatchObject({ outstandingWake: { operationId: "op-flight-1" }, harvestedChildren: [] });
 
-  /* The holder delivers the first wake: it lands, and it credited no harvest. */
+  /* Once the holder lands the interval wake, the newly owed outcome can
+     dispatch in this check; the prior wake credits no child outcome. */
   const third = childRig(fixture, { wakeState: "landed" });
-  expect(await runSeatTickCheck(fixture.project, third.deps)).toMatchObject({ verdict: "quiet" });
+  expect(await runSeatTickCheck(fixture.project, third.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"] });
   expect(third.journal[0]).toMatchObject({ verdict: "landed" });
-  expect(fixture.row()).toMatchObject({ outstandingWake: null, harvestedChildren: [] });
-
-  /* The next interval carries the child. */
-  const fourth = childRig(fixture, { now: fixture.now + 61 * MINUTE });
-  expect(await runSeatTickCheck(fixture.project, fourth.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"] });
-  expect(fourth.sent[0]!.text).toContain(`[child] ${child.id}`);
+  expect(third.sent[0]!.text).toContain(`[child] ${child.id}`);
   expect(fixture.acknowledged()).toEqual([child.id]);
+  const fourth = childRig(fixture, { now: fixture.now + 61 * MINUTE });
+  expect((await runSeatTickCheck(fixture.project, fourth.deps))!.reasons).not.toContain("child-terminal");
+  expect(fourth.sent).toEqual([]);
 });
 
 /* ------------------------------------------------------------------------- *
@@ -3302,7 +3712,7 @@ test("cross-project, pipeline-owned, engine-native and unrelated conversations a
 
   const rig = childRig(fixture);
   const record = await runSeatTickCheck(fixture.project, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", detail: "the board is done and the proposal slot is not due" });
+  expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due" });
   expect(rig.sent).toEqual([]);
   expect(rig.liveness).toEqual([]);
 });
@@ -3464,10 +3874,11 @@ test("a new turn discovered during an unknown send remains owed under the origin
     expect(fixture.row().outstandingWake!.clientMessageId).toBe(outstanding.clientMessageId);
     expect(fixture.acknowledged()).toEqual([]);
   }
-  await runSeatTickCheck(fixture.project, childRig(fixture, { now: fixture.now + 61 * MINUTE, wakeState: "landed" }).deps);
-  expect(fixture.acknowledged()).toEqual([child.id]);
+  const landed = childRig(fixture, { now: fixture.now + 61 * MINUTE, wakeState: "landed" });
+  expect(await runSeatTickCheck(fixture.project, landed.deps)).toMatchObject({ verdict: "wake", items: 1 });
+  expect(fixture.acknowledged()).toEqual([child.id, child.id]);
   const final = childRig(fixture, { now: fixture.now + 122 * MINUTE });
-  expect(await runSeatTickCheck(fixture.project, final.deps)).toMatchObject({ verdict: "wake", items: 1 });
+  expect((await runSeatTickCheck(fixture.project, final.deps))!.reasons).not.toContain("child-terminal");
   expect(fixture.acknowledged()).toEqual([child.id, child.id]);
 });
 
@@ -3887,6 +4298,30 @@ test("dead Viewer MCP withholds a recordless refusal retry under its original ke
   expect(fixture.row().outstandingWake).toBeNull();
 });
 
+test("a drain retains an unaccepted wake's original key until its retry is admitted", async () => {
+  const fixture = childFixture("drain-refused-retry");
+  setAgentRegistryForTests(fixture.registry);
+  const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
+  fixture.seed();
+  await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true, deliverWith: refuseBeforeReservation(503) }).deps);
+  const pending = fixture.row().outstandingWake!;
+  writeDrain(drainFile(), { id: "retry-seat", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    const held = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE });
+    await runSeatTickCheck(fixture.project, held.deps);
+    expect(held.sent).toEqual([]);
+    expect(fixture.row().outstandingWake).toEqual(pending);
+    expect(fixture.acknowledged()).toEqual([]);
+    releaseDrain(drainFile(), "retry-seat");
+    const resumed = childRig(fixture, { realWakeState: true, now: fixture.now + 10 * MINUTE });
+    await runSeatTickCheck(fixture.project, resumed.deps);
+    expect(resumed.sent).toHaveLength(1);
+    expect(resumed.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId, text: pending.text });
+    expect(fixture.acknowledged()).toEqual([child.id]);
+    expect(fixture.row().outstandingWake).toBeNull();
+  } finally { releaseDrain(drainFile(), "retry-seat"); }
+});
+
 test("a paused old lookup cannot dispatch after a successor replaces the refused wake (#1465)", async () => {
   const fixture = childFixture("old-lookup-interleaving");
   setAgentRegistryForTests(fixture.registry);
@@ -4036,7 +4471,7 @@ test("435 cold acknowledged children do not delay a new worker or its completion
   const named: string[] = [];
   for (let tick = 0; tick < 100 && fixture.acknowledged().length < cold.length; tick++) {
     const { rig } = await check();
-    for (const message of rig.sent) for (const match of message.text.matchAll(/\[child\] (\S+) /g)) named.push(match[1]!);
+    for (const message of rig.sent) for (const match of message.text.matchAll(/^- \[child\] (\S+) .*outcome announcement owed$/gm)) named.push(match[1]!);
   }
   expect(named.length).toBe(435);
   expect(new Set(named)).toEqual(new Set(cold.map((child) => child.id)));
@@ -5632,7 +6067,7 @@ test("one child with a failed and a finished turn is one line carrying its lates
   /* One line, and the failure is the one it carries: the wake describes the
      child by its latest state, not once per owed row. */
   expect(text.split(child.id)).toHaveLength(2);
-  expect(text).toContain(`${child.id} — iterative worker — spawned child failed, outcome unharvested`);
+  expect(text).toContain(`${child.id} — iterative worker — spawned child failed, outcome announcement owed`);
 
   /* The line stood for both rows, so the landing acknowledged both. */
   const outcomes = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project).collection.snapshot()
@@ -5685,7 +6120,7 @@ test("a child a delivered wake showed is not shown again until it ends another t
   ledger.append(generation, { kind: "turn-ended", turnId: "turn-three", status: "error", seq: 6 });
   const moved = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
   expect(await runSeatTickCheck(fixture.project, moved.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
-  expect(moved.sent[0]!.text).toContain(`${child.id} — worker — spawned child failed, outcome unharvested`);
+  expect(moved.sent[0]!.text).toContain(`${child.id} — worker — spawned child failed, outcome announcement owed`);
 });
 
 test("a failure this seat's own worker just had is listed beside the history that is not (#1783)", async () => {
@@ -5704,7 +6139,7 @@ test("a failure this seat's own worker just had is listed beside the history tha
   const record = await runSeatTickCheck(fixture.project, rig.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`${recent.id} — current worker — spawned child failed, outcome unharvested`);
+  expect(text).toContain(`${recent.id} — current worker — spawned child failed, outcome announcement owed`);
   expect(text).not.toContain(historical.id);
   expect(text).toContain("(1 spawned child(ren) not listed: their last activity predates this seat's designation");
 });
@@ -5842,7 +6277,7 @@ test("a failure this seat's own worker had an hour ago is listed, once (#1783)",
      child once, which is the half a seat works from. */
   const agenda = agendaOf(text);
   expect(agenda.filter((line) => line.includes(child.id))).toEqual([
-    `- [child] ${child.id} — current worker — spawned child failed, outcome unharvested`,
+    `- [child] ${child.id} — current worker — spawned child failed, outcome announcement owed`,
   ]);
   expect(fixture.acknowledged()).toEqual([child.id]);
 
@@ -6360,16 +6795,12 @@ test("a deploy the seat started wakes it once when it settles, with the lanes it
   expect(second!.reasons ?? []).not.toContain("deploy-settled");
   expect(again.sent).toHaveLength(0);
 
-  /* The lanes stay owed until they are resumed: the next wake the hour brings
-     lists them again, and still not the operator's. */
+  /* The lanes have been shown. An unchanged hour does not repeat them;
+     a later deploy settlement makes their resume instruction actionable again. */
   const hourly = harness({ pipelines, ...deploys, now: NOW + 70 * MINUTE, state: again.written.at(-1)! });
   const third = await runSeatTickCheck(PROJECT, hourly.deps);
-  expect(third).toMatchObject({ verdict: "wake" });
-  expect(third!.reasons ?? []).not.toContain("deploy-settled");
-  const hourlyText = hourly.sent[0]!.text;
-  for (const id of ["pipeline_s1", "pipeline_s2", "pipeline_s3"]) expect(hourlyText).toContain(`[pipeline] ${id} — lane ${id} — paused by you`);
-  expect(hourlyText).not.toContain("pipeline_op");
-  expect(hourlyText).not.toContain("[deploy]");
+  expect(third).toMatchObject({ verdict: "quiet" });
+  expect(hourly.sent).toHaveLength(0);
 });
 
 test("a lane the operator paused is not the seat's work: no stall, no interval wake (#2063)", async () => {
@@ -6408,6 +6839,255 @@ function reportPort(log: () => import("@/lib/bridge/types").BridgeReportV1[]) {
     suggestions: () => ({ sets: [], admissions: [] }),
   };
 }
+
+test("a chat-filed question owes a bridge question report, and only matching durable report evidence clears it", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const transcript = path.join(SESSIONS, "seat-question.jsonl");
+  const question = "Should the prepared release proceed?";
+  fs.writeFileSync(transcript, JSON.stringify({ type: "message", timestamp: new Date(NOW).toISOString(),
+    message: { role: "assistant", content: [{ type: "text", text: question }] },
+  }) + "\n");
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: transcript },
+    settings: { ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: 10 },
+    state: { lastWakeAt: new Date(NOW).toISOString(), lastProposalAt: new Date(NOW).toISOString() },
+  });
+  const setId = "rsg_chat_question";
+  const key = `ask:${setId}`;
+  const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  rig.deps.sources!.reports = { ...reportPort(() => log), suggestions: () => ({ admissions: [], sets: [{
+    conversationId: CONVERSATION, setId, at: new Date(NOW).toISOString(),
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+    replies: [{ label: "Proceed", text: "Proceed with the release" }],
+  }] }) };
+  const fileReport = (reportKey: string, seq: number) => log.push({
+    id: scopedReportId(PROJECT, reportKey), key: reportKey, seq, at: new Date(NOW + 16 * MINUTE).toISOString(),
+    class: "question", body: question, project: PROJECT,
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+  });
+  rig.deps.sources!.now = () => NOW + 15 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).not.toContain("Ask owed");
+  expect(rig.sent[0]!.text).toContain("Question report owed");
+  expect(rig.sent[0]!.text).toContain(`bridge_report with class: question, key ${key}`);
+  fileReport("ask:rsg_other", 1);
+  rig.deps.sources!.now = () => NOW + 30 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.written.at(-1)!.asksOwed!.map(ask => ask.key)).toEqual([key]);
+  fileReport(key, 2);
+  rig.deps.sources!.now = () => NOW + 45 * MINUTE;
+  expect((await runSeatTickCheck(PROJECT, rig.deps))!.verdict).toBe("quiet");
+  expect(rig.written.at(-1)!.asksOwed).toEqual([]);
+  expect(rig.sent).toHaveLength(2);
+});
+
+test.each([false, true])("five production-size settlements credit only complete rendered items and deliver the cropped remainder later (held: %s)", async (held) => {
+  const ids = Array.from({ length: 5 }, (_, index) => [String(index).padStart(8, "0"), "0000", "4000", "8000", "0".repeat(12)].join("-"));
+  const lanes = ids.map(id => ({
+    ...pipelineRecord({ ...settledLane, id }),
+    task: "Settlement title ".padEnd(119, "s"),
+    taskFinishWaits: [{ taskId: "waiting-task", open: ["other-lane-a", "other-lane-b"] }],
+  }));
+  const rig = harness({ ...(held ? { delivery: HELD } : {}), settings: { ...defaultSeatTickSettings(PROJECT),
+    monitorPrompt: "Standing monitor note ".padEnd(7_622, "n"), reason: "Operator instructions ".padEnd(500, "i"),
+  } });
+  rig.deps.sources!.pipelines = () => lanes as never;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const text = rig.sent[0]!.text;
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  const complete = ids.filter(id => agendaOf(text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
+  expect(complete).toHaveLength(4);
+  if (held) {
+    expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
+    expect(rig.written.at(-1)!.outstandingWake!.commit.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
+    rig.deps.sources!.wakeState = async () => "landed";
+    rig.deps.sources!.now = () => NOW + MINUTE;
+    await runSeatTickCheck(PROJECT, rig.deps);
+    rig.deps.deliver = async message => {
+      rig.sent.push(message);
+      return { ok: true, target: "structured", outcome: "delivered", structured: true };
+    };
+  }
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
+  const unseen = ids.filter(id => !complete.includes(id));
+  rig.deps.sources!.now = () => NOW + 70 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(2);
+  for (const id of unseen) expect(agendaOf(rig.sent[1]!.text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines"))).toBe(true);
+  expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
+});
+
+test("a legacy retained wake credits four complete settlements and delivers the unseen fifth later", async () => {
+  const { gatherSeatTickInput } = await import("./seatTickSources");
+  const { seatTickDecision, seatTickWakeCommitPlan } = await import("./seatTick");
+  const ids = Array.from({ length: 5 }, (_, index) => [String(index).padStart(8, "0"), "0000", "4000", "8000", "1".repeat(12)].join("-"));
+  const lanes = ids.map(id => ({ ...pipelineRecord({ ...settledLane, id }),
+    task: "Settlement title ".padEnd(119, "s"),
+    taskFinishWaits: [{ taskId: "waiting-task", open: ["other-lane-a", "other-lane-b"] }],
+  }));
+  const rig = harness({ delivery: HELD, settings: { ...defaultSeatTickSettings(PROJECT),
+    monitorPrompt: "Standing monitor note ".padEnd(7_622, "n"), reason: "Operator instructions ".padEnd(500, "i"),
+  } });
+  rig.deps.sources!.pipelines = () => lanes as never;
+  const initial = rig.deps.readState!(PROJECT);
+  const input = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, rig.deps.sources!);
+  const decision = seatTickDecision(input);
+  expect(decision.verdict.kind).toBe("wake");
+  const legacyCommit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: input.changeFingerprint, eventsThrough: 0 })!;
+  delete legacyCommit.itemLines;
+  delete legacyCommit.itemsShown;
+  delete legacyCommit.acknowledgmentLines;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const row = rig.deps.readState!(PROJECT);
+  const wake = { ...row.outstandingWake!, commit: legacyCommit };
+  const complete = ids.filter(id => agendaOf(wake.text!).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
+  expect(complete).toHaveLength(4);
+  expect(legacyCommit.announcedLanes).toHaveLength(5);
+  rig.deps.writeState!(PROJECT, { ...row, outstandingWake: wake });
+  rig.deps.sources!.wakeState = async observed => {
+    expect(observed.clientMessageId).toBe(wake.clientMessageId);
+    expect(observed.text).toBe(wake.text);
+    return "landed";
+  };
+  rig.deps.sources!.now = () => NOW + MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.written.at(-1)!.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
+  rig.deps.deliver = async message => { rig.sent.push(message); return { ok: true, target: "structured", outcome: "delivered", structured: true }; };
+  rig.deps.sources!.now = () => NOW + 70 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(2);
+  expect(agendaOf(rig.sent[1]!.text).some(line => line.includes(ids[4]!) && line.endsWith("task waits for 2 open pipelines"))).toBe(true);
+  expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
+});
+
+test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained %s credits only complete bullets through controller settlement", async kind => {
+  const { seatTickWakeMessage, seatTickBullet } = await import("./report");
+  const { seatTickWakeCommitPlan } = await import("./seatTick");
+  const ids = Array.from({ length: 5 }, (_, index) => kind === "child"
+    ? ["conversation", String(index).padStart(16, "0")].join("_") : `legacy-${kind}-${index}`);
+  const items: import("./types").SeatTickItem[] = ids.map(id => ({
+    id, kind: kind === "stall" ? "pipeline" : kind,
+    label: "Settlement ".padEnd(500, "s"),
+    ...(kind === "child" ? { outcomeId: id, stateTokens: [`${id}@one`] } : {}),
+    ...(kind === "deploy" ? { deploy: { deploymentId: id, phase: "succeeded", sha: "a".repeat(40), error: null } } : {}),
+    ...(kind === "maintenance" ? { maintenance: { runId: id } } : {}),
+    ...(kind === "stall" ? { stallToken: `${id}@one` } : {}),
+  }));
+  const verdict: Extract<import("./types").SeatTickVerdict, { kind: "wake" }> = {
+    kind: "wake", items, reasons: [{ kind: "interval", detail: "pending settlements" }], deferred: 0,
+    gaps: [], skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 },
+  };
+  const text = seatTickWakeMessage({ project: PROJECT, items, reasons: verdict.reasons, deferred: 0, signals: [],
+    operatorInstructions: "Instructions ".padEnd(500, "i"), monitorPrompt: "Note ".padEnd(7_622, "n"),
+  });
+  const complete = items.filter(item => text.includes(`\n${seatTickBullet(item)}\n`));
+  expect(complete.length).toBeGreaterThan(0);
+  expect(complete.length).toBeLessThan(items.length);
+  const commit = seatTickWakeCommitPlan(verdict, { fingerprint: "legacy", eventsThrough: 0, terminalChildren: ids })!;
+  delete commit.acknowledgmentLines;
+  delete commit.itemLines;
+  delete commit.itemsShown;
+  const outstandingWake = {
+    clientMessageId: `legacy-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
+    preparedAt: new Date(NOW - MINUTE).toISOString(), text, commit,
+  };
+  const rig = harness({ wakeState: "landed" });
+  let row: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, outstandingWake };
+  rig.deps.readState = () => row;
+  rig.deps.writeState = (_project, next) => { row = next; };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const ledger = (state: SeatTickProjectState) => kind === "child" ? state.harvestedChildren
+    : kind === "deploy" ? state.announcedDeploys : kind === "maintenance" ? state.announcedMaintenance : state.reportedStalls;
+  const keys = (entries: typeof items) => entries.map(item => kind === "stall" ? item.stallToken! : item.id);
+  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(keys(complete));
+  if (kind === "child") expect(rig.deps.readState!(PROJECT).childrenShown).toEqual(complete.map(item => `${item.id}@one`));
+
+  // A later bounded wake proves the remainder, including opaque identities
+  // that a pre-upgrade record could not bind to its displayed source id.
+  const remaining = items.filter(item => !complete.includes(item));
+  const next = { ...verdict, items: remaining };
+  const nextText = seatTickWakeMessage({ project: PROJECT, items: remaining, reasons: next.reasons, deferred: 0, signals: [] });
+  const nextCommit = seatTickWakeCommitPlan(next, { fingerprint: "new", eventsThrough: 0, terminalChildren: ids, frozenText: nextText })!;
+  rig.deps.writeState!(PROJECT, { ...rig.deps.readState!(PROJECT), outstandingWake: {
+    clientMessageId: `new-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
+    preparedAt: new Date(NOW + MINUTE).toISOString(), text: nextText, commit: nextCommit,
+  } });
+  rig.deps.sources!.now = () => NOW + 2 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(keys(items));
+});
+
+test.each([30, 200])("full report ledgers deliver a complete maintenance settlement within two wakes and retain unrelated debt (label chars: %s)", async labelChars => {
+  const { emptyMaintenanceCounts, emptyMaintenanceLog } = await import("@/lib/boardMaintenance/types");
+  const { maintenanceItemLabel, parseMaintenanceReport } = await import("@/lib/boardMaintenance/text");
+  const at = new Date(NOW).toISOString();
+  const reportsOwed = Array.from({ length: 64 }, (_, index) => ({
+    key: `lane:owed-${index}:completed`, label: `Genuine settlement ${index} `.padEnd(labelChars, "l"), receivedAt: at,
+  }));
+  const asksOwed = Array.from({ length: 16 }, (_, index) => ({
+    key: `ask:rsg_${String(index).padStart(32, "0")}`, setId: `rsg_${String(index).padStart(32, "0")}`,
+    conversationId: CONVERSATION, at,
+  }));
+  const attention = parseMaintenanceReport(Array.from({ length: 5 }, (_, index) =>
+    `attention: ${String(index).padStart(8, "0")} | ${"Attention ".padEnd(300, "a")} | ${"Option ".padEnd(300, "o")}`,
+  ).join("\n")).attention;
+  const run: import("@/lib/boardMaintenance/types").MaintenanceRun = {
+    kind: "run", runId: "maintenance-full-ledger", taskId: "maintenance-card", project: PROJECT,
+    slot: 1, intervalHours: 3, claimedAt: at, launchedAt: at, endedAt: at, state: "succeeded",
+    seat: { seatEpoch: 7, conversationId: CONVERSATION }, repoDir: null, clientAttemptId: "fixture-maintenance",
+    launchId: null, conversationId: null, transcriptPath: null, failure: null,
+    log: { ...emptyMaintenanceLog(), attention }, counts: emptyMaintenanceCounts(), changedTaskIds: [], supersededTaskIds: [],
+  };
+  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: "Custom older mandate", promptVersion: 20 },
+    settings: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Standing note ".padEnd(7_622, "n"), reason: "Instructions ".padEnd(500, "i") },
+    state: { reportsOwed, asksOwed },
+  });
+  rig.deps.sources!.maintenanceRuns = () => [run];
+  rig.deps.sources!.reports = { ...reportPort(() => []), suggestions: () => ({ admissions: [], sets: [{
+    conversationId: CONVERSATION, setId: asksOwed.at(-1)!.setId, at,
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+    replies: [{ label: "Proceed", text: "Proceed with the prepared work" }],
+  }] }) };
+  for (let round = 0; round < 2; round++) {
+    rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(4_000);
+    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
+    expect(rig.written.at(-1)!.asksOwed).toEqual(asksOwed);
+    for (const ask of asksOwed) expect(rig.sent.at(-1)!.text).toContain(ask.key);
+  }
+  const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
+  expect(bullet.length).toBeGreaterThan(1_200);
+  if (labelChars === 200) expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
+  else expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[summary; seat_tick_settings verbose:true holds the full item]")]);
+  expect(rig.written.at(-1)!.announcedMaintenance).toEqual([run.runId]);
+});
+
+test("the controller keeps unpaid report reminders after the delivered agenda drains, until its matching bridge report lands", async () => {
+  const { scopedReportId } = await import("@/lib/bridge/store");
+  const rig = harness({ pipelines: [settledLane, ...OPEN_LANE] });
+  const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  rig.deps.sources!.reports = reportPort(() => log);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  const key = `lane:${settledLane.id}:completed`;
+  for (let round = 1; round <= DEFAULT_SEAT_TICK_POLICY.retryGuard + 2; round++) {
+    rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent).toHaveLength(round + 1);
+    expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[pipeline]")]);
+    expect(rig.sent.at(-1)!.text).toContain(`key ${key}`);
+  }
+  log.push({ id: scopedReportId(PROJECT, key), key, seq: 1, at: new Date(NOW + 500 * MINUTE).toISOString(),
+    class: "completed", body: "Outcome reported", project: PROJECT,
+    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
+  });
+  rig.deps.sources!.now = () => NOW + 510 * MINUTE;
+  expect((await runSeatTickCheck(PROJECT, rig.deps))!.reasons).toEqual(["interval"]);
+  expect(rig.sent.at(-1)!.text).not.toContain(`key ${key}`);
+  expect(rig.written.at(-1)!.reportsOwed).toEqual([]);
+});
 
 test("deploy snapshots are taken in the pass before the decision and the send, whether or not a wake goes out", async () => {
   const order: string[] = [];
@@ -6527,4 +7207,1682 @@ test("maintenance settles before gather and launches after the wake; scratch che
   rig.deps.maintenance = { reconcile: async () => { order.push("settle"); return "maintenance: fixture settled"; }, launchIfDue: async () => { order.push("launch"); return "maintenance: fixture launched"; } };
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(order).toEqual(["settle", "wake", "launch"]); expect(record?.detail).toContain("maintenance: fixture settled"); expect(record?.detail).toContain("maintenance: fixture launched");
+});
+
+
+test("restart wakes a confirmed lane stall despite a missing MCP heartbeat, once per unchanged stall", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-stall-")), "seat-tick.json");
+  const options = { pipelines: [{ id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION }], state: OVERDUE, stateFile };
+  const before = harness(options);
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: "restart-lane", stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  before.deps.sources!.liveness = liveness;
+  before.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
+  await runSeatTickCheck(PROJECT, before.deps);
+  expect(before.sent).toHaveLength(0);
+  // A new controller reads the first observation from the isolated disk store.
+  const restarted = harness({ ...options, state: undefined });
+  restarted.deps.sources!.liveness = liveness;
+  restarted.deps.mcpHealth = before.deps.mcpHealth;
+  const record = await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(record?.delivery?.outcome).toBe("delivered");
+  expect(restarted.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, restarted.deps);
+  expect(restarted.sent).toHaveLength(1);
+});
+
+test("seat clock checks immediately after restart before its first interval", async () => {
+  let checks = 0;
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-clock-")), "seat-tick.json");
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, stateFile });
+  const ports = { policy: DEFAULT_SEAT_TICK_POLICY, handoffHeld: () => false,
+    recordSuccessions: () => [], scheduleInterval: () => ({ unref() {} }) as never,
+    sweep: async () => { checks += 1; await runSeatTickCheck(PROJECT, rig.deps); } };
+  startSeatTick(ports);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(checks).toBe(1);
+  stopSeatTick();
+  startSeatTick(ports);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(checks).toBe(2);
+});
+
+test("a second interruption parking an announced running stall wakes its seat despite unchanged movement", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "restart-park-wake-")), "seat-tick.json");
+  const lane = { id: "restart-lane", state: "running", createdAt: new Date(NOW - 60 * MINUTE).toISOString(), movedAt: new Date(NOW - 50 * MINUTE).toISOString(), attemptState: "running", attemptConversationId: "stage-conversation", src: CONVERSATION };
+  const first = harness({ pipelines: [lane], state: OVERDUE, stateFile });
+  const liveness = async () => [{ conversationId: "stage-conversation", pipeline: { pipelineId: lane.id, stageId: "build", attempt: 1 }, lifecycle: "stalled", reason: "turn_no_progress", turnState: "busy" } as unknown as AgentLivenessRecord];
+  first.deps.sources!.liveness = liveness;
+  first.deps.mcpHealth = () => ({ status: "dead", detail: "stdio MCP has no heartbeat" });
+  await runSeatTickCheck(PROJECT, first.deps);
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent).toHaveLength(1);
+  const parked = harness({ pipelines: [{ ...lane, state: "needs_decision", attemptState: "needs_decision" }], stateFile, now: NOW + 61 * MINUTE });
+  parked.deps.sources!.liveness = liveness;
+  parked.deps.mcpHealth = first.deps.mcpHealth;
+  expect((await runSeatTickCheck(PROJECT, parked.deps))?.delivery?.outcome).toBe("delivered");
+  expect(parked.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, parked.deps);
+  expect(parked.sent).toHaveLength(1);
+});
+
+
+// Authentication recovery drives the actual transcript, selector, seat command,
+// bridge and Telegram service. Only process launch and bot HTTP are replaced.
+describe("seat authentication recovery through production seams", () => {
+  const AUTH_AT = "2026-10-08T00:05:00.000Z";
+  const AUTH_TS = Date.parse(AUTH_AT);
+  const ERROR_TEXT = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+  async function authFixture(allowed: boolean, run: (fixture: Awaited<ReturnType<typeof makeAuthFixture>>) => Promise<void>, engine: "claude" | "codex" = "claude", history = false) {
+    const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME };
+    const dir = fs.mkdtempSync(path.join(SANDBOX, "auth-case-"));
+    process.env.LLV_STATE_DIR = path.join(dir, "state");
+    process.env.LLV_CLAUDE_HOME = path.join(dir, "legacy-claude");
+    process.env.LLV_CODEX_HOME = path.join(dir, "legacy-codex");
+    let fixture: Awaited<ReturnType<typeof makeAuthFixture>> | undefined;
+    try { fixture = await makeAuthFixture(dir, allowed, engine, history); await run(fixture); }
+    finally {
+      await fixture?.telegram.stopPoller();
+      setAgentRegistryForTests(null);
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  }
+
+  async function makeAuthFixture(dir: string, allowed: boolean, engine: "claude" | "codex", history: boolean) {
+    const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { seedAccountSource, persistedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+    const { executeOrchestratorRotation, productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");
+    const { defaultSeatTickSources } = await import("./seatTickSources");
+    const { setReportTelegram } = await import("@/lib/projects/settings");
+    const { writeSeatTickSettings, readSeatTickSettingsFile } = await import("./seatTickSettings");
+    const { readBridgeReportLog } = await import("@/lib/bridge/store");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
+    const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
+    const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const create = engine === "claude" ? createManagedClaudeAccount : createManagedCodexAccount;
+    const a = create("Account A");
+    const b = create("Account B");
+    const transcriptRoot = (account: typeof a) => "projectsDir" in account ? account.projectsDir : account.sessionsDir;
+    for (const account of [a, b]) {
+      const credentials = path.join(account.home, engine === "claude" ? ".credentials.json" : "auth.json");
+      fs.writeFileSync(credentials, "{}", { mode: 0o600 });
+      const beforeFailure = new Date(AUTH_TS - MINUTE);
+      fs.utimesSync(credentials, beforeFailure, beforeFailure);
+    }
+    const binding = { schemaVersion: 1, bindings: (allowed ? [a, b] : [a]).map((account) => ({ engine, accountId: account.id, project: PROJECT, createdAt: AUTH_AT })) };
+    seedAccountSource(BINDINGS_SOURCE, binding);
+    // The current account migration tombstones the legacy JSON path. Both
+    // that directory and the durable binding rows must remain untouched.
+    const bindingFile = statePath("account-project-bindings.json");
+    const bindingStat = fs.statSync(bindingFile);
+    expect(bindingStat.isDirectory()).toBe(true);
+    const bindingEntries = fs.readdirSync(bindingFile);
+    const storedBinding = JSON.stringify(persistedAccountSource(BINDINGS_SOURCE));
+    const transcript = path.join(transcriptRoot(a), "fixture", `${crypto.randomUUID()}.jsonl`);
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    function appendTurn(error: string | null = "authentication_failed", at = AUTH_AT, providerText = ERROR_TEXT) {
+      if (engine === "codex") {
+        fs.appendFileSync(transcript, JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "task_started" } }) + "\n"
+          + JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "error", message: providerText, error_type: error } }) + "\n"
+          + JSON.stringify({ type: "event_msg", timestamp: at, payload: { type: "task_complete", error: { message: providerText, codex_error_info: "authentication_failed" } } }) + "\n");
+        return;
+      }
+      fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, ...(error ? { error, isApiErrorMessage: true } : {}),
+          message: { model: error ? "<synthetic>" : "fixture-model", role: "assistant", ...(error === "authentication_failed" ? {} : { stop_reason: "end_turn" }),
+            content: [{ type: "text", text: error === "authentication_failed" ? providerText : error ? "You've hit your session limit" : "Work is complete." }] } }) + "\n");
+    }
+    appendTurn();
+    const registry = new AgentRegistry(path.join(dir, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    registry.setEngineRouting(engine, a.id);
+    const capacity = (accountId: string, usedPercent: number) => {
+      const now = Date.now();
+      registry.recordQuotaObservation({ engine, accountId, authenticated: true,
+        authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "auth-fixture",
+        limits: engine === "claude"
+          ? { session: { usedPercent, resetsAt: Math.floor(now / 1000) + 3600 }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1000) }
+          : { session: { usedPercent, resetsAt: Math.floor(now / 1000) + 3600, windowMinutes: 300 }, weekly: null, plan: "pro", capturedAt: Math.floor(now / 1000) },
+        provenance: { source: "live", reason: null, staleSince: null } });
+    };
+    capacity(a.id, 5); capacity(b.id, 20);
+    const conversation = registry.ensureConversation(engine, transcript, null);
+    registry.reconcileConversations([{ engine, path: transcript, accountId: a.id,
+      launchProfile: emptyLaunchProfile({ cwd: dir }), turn: { state: "idle", source: "assistant", terminalAt: AUTH_AT }, observedAt: AUTH_AT }]);
+    setAgentRegistryForTests(registry);
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results." + (history ? "\n\n## Rotation history\nPrior decisions" : ""), engine, model: engine === "claude" ? "opus" : "gpt-6-astra", clientRequestId: "seed_auth_fixture", mode: "spawn", now: "2026-10-08T00:00:00Z" });
+    completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "seed_auth_fixture", conversationId: conversation.id, path: transcript, now: "2026-10-08T00:00:00Z" });
+    const original = orchestratorSeatFor(PROJECT).active!;
+    const successorPath = path.join(transcriptRoot(b), "fixture", `${crypto.randomUUID()}.jsonl`);
+    fs.mkdirSync(path.dirname(successorPath), { recursive: true }); fs.writeFileSync(successorPath, "");
+    const successor = registry.ensureConversation(engine, successorPath, null);
+    const spawns: Record<string, unknown>[] = [];
+    const command: import("@/lib/orchestrator/seatCommand").SeatCommandDependencies = {
+      spawn: async (body) => {
+        spawns.push(body);
+        expect(body.accountId).toBe(b.id);
+        return { status: 200, body: { ok: true, conversationId: successor.id, path: successorPath } };
+      },
+      deliver: async () => ({ ok: true, outcome: "delivered" }),
+      conversationTarget: productionSeatCommandDependencies.conversationTarget,
+      resolvedConversation: productionSeatCommandDependencies.resolvedConversation,
+      summarizeHandoffs: productionSeatCommandDependencies.summarizeHandoffs,
+      launchSettlement: productionSeatCommandDependencies.launchSettlement,
+      stampRegistryIdentity: productionSeatCommandDependencies.stampRegistryIdentity,
+      runtimeIdentity: productionSeatCommandDependencies.runtimeIdentity,
+      now: () => "2026-10-08T00:06:00.000Z",
+    };
+    const transport = new FakeBotTransport();
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Fixture Bot", username: "fixture_bot", can_join_groups: true }));
+    let messageId = 1;
+    transport.handlers.sendMessage = () => ok({ message_id: messageId++, date: 1, chat: { id: -1000000000101, type: "supergroup", title: "Fixture" }, text: "sent" });
+    const telegram = new TelegramBotService({ ...productionTelegramBotDependencies(), transportFor: () => transport,
+      now: () => new Date(AUTH_AT), sleep: async () => {}, conversationTitle: () => null });
+    await telegram.connect(fakeBotToken()); await telegram.stopPoller();
+    transport.script("getUpdates", ok([{ update_id: 1, my_chat_member: { chat: { id: -1000000000101, type: "supergroup", title: "Fixture" }, date: 1, new_chat_member: { status: "member" } } }]));
+    await telegram.pollOnce(new AbortController().signal);
+    telegram.setChat("-1000000000101", "auth-fixture", true);
+    const chat = telegram.listChats().chats[0]!.alias!;
+    setReportTelegram(PROJECT, { chat, name: "Fixture" }, "fixture");
+    writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Keep reporting owed work" });
+    const noteBefore = JSON.stringify(readSeatTickSettingsFile());
+    let clock = AUTH_TS + 2 * 60 * MINUTE;
+    const rig = harness({ registry, now: clock });
+    rig.deps.sources!.seatFor = orchestratorSeatFor;
+    rig.deps.sources!.seatTurnOutcome = defaultSeatTickSources().seatTurnOutcome;
+    rig.deps.sources!.now = () => clock;
+    rig.deps.readState = readSeatTickState;
+    rig.deps.writeState = writeSeatTickState;
+    rig.deps.reconcileSeat = () => null;
+    delete rig.deps.ensureCard;
+    const sendRequests: string[] = [];
+    rig.deps.seatAuth = { rotate: (body, _dependencies, actor, admission) => executeOrchestratorRotation(body, command, actor, admission), telegram: async (input) => { sendRequests.push(String(input.clientRequestId)); return telegram.send(input); } };
+    function migrateAccount(accountId: string, targetPath: string, at: string) {
+      const id = original.conversationId! as Parameters<typeof registry.requestConversationReseat>[0];
+      const requested = registry.requestConversationReseat(id, accountId);
+      const revision = requested.migration!.revision;
+      registry.transitionConversationMigration(id, revision, ["requested"], { phase: "preparing" });
+      const starting = registry.transitionConversationMigration(id, revision, ["preparing"], { phase: "successor-starting" });
+      const receipt: import("@/lib/accounts/migration/contracts").ProviderReceipt = {
+        operationId: starting.migration!.operationId, nativeId: "fixture-manual-moved", path: targetPath, continuityPaths: [targetPath], historyHash: "fixture",
+        host: { kind: "claude-fork", identity: "fixture", epoch: 1, verifiedAt: at },
+      };
+      registry.persistMigrationProviderReceipt(id, revision, starting.migration!.operationId, receipt);
+      registry.commitSuccessor(id, { id: "fixture-manual-moved", path: targetPath, accountId }, revision, starting.migration!.operationId, receipt);
+    }
+    async function restartAuthentication(credentialReader?: string) {
+      const active = orchestratorSeatFor(PROJECT).active!;
+      const activeTranscript = registry.conversation(active.conversationId! as Parameters<typeof registry.conversation>[0])?.generations.at(-1)?.path ?? active.path ?? transcript;
+      const script = `
+        ${credentialReader ?? ""}
+        const { recoverSeatAuthentication } = await import("./src/lib/monitor/seatAuthRecovery");
+        const { readSeatTurnOutcome } = await import("./src/lib/monitor/seatAuthIncident");
+        const { readSeatTickState, writeSeatTickState } = await import("./src/lib/monitor/seatTickState");
+        const { defaultSeatTickSources } = await import("./src/lib/monitor/seatTickSources");
+        const project = ${JSON.stringify(PROJECT)};
+        const input = { project, now: ${clock}, state: readSeatTickState(project),
+          seat: ${JSON.stringify({ conversationId: active.conversationId, seatEpoch: active.seatEpoch, path: activeTranscript, designatedAt: active.designatedAt, turn: "idle", activity: null })} };
+        const unexpected = () => { throw new Error("restart attempted another authentication effect"); };
+        await recoverSeatAuthentication(input, { ...defaultSeatTickSources(), seatTurnOutcome: () => readSeatTurnOutcome(${JSON.stringify(engine)}, ${JSON.stringify(activeTranscript)}) },
+          readSeatTickState, writeSeatTickState, readSeatTickState(project).authCardsOwed?.length ? () => false : unexpected, { rotate: unexpected,
+            telegram: readSeatTickState(project).authTelegramOwed?.length ? async () => { throw Object.assign(new Error("fixture restart refusal"), { code: "bot_not_connected" }); } : unexpected });
+        writeSeatTickState(project, input.state);
+        console.log(JSON.stringify(readSeatTickState(project)));
+      `;
+      const child = Bun.spawn([process.execPath, "-e", script], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const output = await new Response(child.stdout).text();
+      const errors = await new Response(child.stderr).text();
+      expect({ status: await child.exited, errors }).toEqual({ status: 0, errors: "" });
+      return JSON.parse(output) as SeatTickProjectState;
+    }
+    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests, restartAuthentication, migrateAccount,
+      check: async () => { const result = await runSeatTickCheck(PROJECT, rig.deps); clock += 5 * MINUTE; return result; },
+      seat: () => orchestratorSeatFor(PROJECT).active!, row: () => readSeatTickState(PROJECT),
+      reports: () => readBridgeReportLog().reports, cards: () => loadTasks(statePath("tasks.json")).filter((task) => task.text.includes("monitor-ref: seat-auth-failed")),
+      unchangedBinding: () => { expect(fs.statSync(bindingFile).ino).toBe(bindingStat.ino); expect(fs.readdirSync(bindingFile)).toEqual(bindingEntries); expect(JSON.stringify(persistedAccountSource(BINDINGS_SOURCE))).toBe(storedBinding); },
+      unchangedNote: () => expect(JSON.stringify(readSeatTickSettingsFile())).toBe(noteBefore),
+    };
+  }
+
+  for (const engine of ["claude", "codex"] as const) {
+    test(`${engine}: touching unchanged credentials before first detection still reports and parks`, async () => {
+      await authFixture(false, async (f) => {
+        const file = path.join(f.a.home, engine === "claude" ? ".credentials.json" : "auth.json");
+        const touch = new Date("2026-10-08T00:06:00Z");
+        fs.utimesSync(file, touch, touch);
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        expect(f.reports()).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1);
+        expect(f.rig.sent).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.id).toBe(f.row().authIncident?.id);
+        fs.writeFileSync(file, '{"repaired":true}', { mode: 0o600 });
+        await f.check();
+        expect(f.row().authIncident).toBeUndefined();
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+      }, engine);
+    });
+  }
+
+  test("an empty Codex completion cannot promote an older assistant answer into recovery evidence", async () => {
+    await authFixture(false, async (f) => {
+      const oldAnswer = JSON.stringify({ type: "response_item", timestamp: "2026-10-08T00:01:00Z",
+        payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Earlier work completed." }] } }) + "\n";
+      fs.writeFileSync(f.transcript, oldAnswer + fs.readFileSync(f.transcript, "utf8"));
+      await f.check();
+      const id = f.row().authIncident!.id;
+      for (const type of ["task_started", "task_complete"]) fs.appendFileSync(f.transcript,
+        JSON.stringify({ type: "event_msg", timestamp: "2026-10-08T00:08:00Z", payload: { type } }) + "\n");
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.id).toBe(id);
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.id).toBe(id);
+    }, "codex");
+  });
+
+  test.each(["login", "migration"] as const)("a board capacity refusal retains the authentication notice through %s", async (recovery) => {
+    await authFixture(false, async (f) => {
+      const { BOARD_TASKS_PER_PROJECT_LIMIT, createTask } = await import("@/lib/tasks/commands");
+      const { mutateTasksFile } = await import("@/lib/tasks/store");
+      const tasksFile = statePath("tasks.json");
+      mutateTasksFile((loaded) => {
+        let tasks = loaded.tasks, receipts = loaded.recentCreates;
+        for (let index = 0; index < BOARD_TASKS_PER_PROJECT_LIMIT; index++) {
+          const created = createTask(tasks, { project: PROJECT, text: `Fixture capacity ${index}`, placement: "unplaced" }, receipts);
+          if (!created.ok) throw new Error(created.error);
+          tasks = created.tasks; receipts = created.recentCreates;
+        }
+        return { state: { tasks, recentCreates: receipts }, result: true };
+      }, tasksFile);
+      await f.check();
+      expect(f.cards()).toHaveLength(0);
+      expect(f.row().authIncident?.notice?.card).toBe(false);
+      expect(f.reports()).toHaveLength(1);
+      const id = f.row().authIncident!.id;
+      if (recovery === "login") fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+      else f.migrateAccount(f.b.id, f.registry.conversation(f.successor.id)!.generations.at(-1)!.path, "2026-10-08T02:10:00Z");
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.row().authCardsOwed?.map(notice => notice.id)).toEqual([id]);
+      expect((await f.restartAuthentication()).authCardsOwed?.map(notice => notice.id)).toEqual([id]);
+      mutateTasksFile((loaded) => ({ state: { ...loaded, tasks: loaded.tasks.map(task => ({ ...task, board: "hidden" as const })) }, result: true }), tasksFile);
+      await f.check(); await f.check();
+      expect(f.cards()).toHaveLength(1);
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.reports()).toHaveLength(1);
+      expect(f.sendRequests.every(key => key === id)).toBe(true);
+      expect(f.transport.calls.filter(call => call.method === "sendMessage")).toHaveLength(1);
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+    });
+  });
+
+  test("login before first detection consumes the failed turn across restart", async () => {
+    await authFixture(false, async (f) => {
+      const credentials = path.join(f.a.home, ".credentials.json");
+      fs.writeFileSync(credentials, '{"refreshed":true}', { mode: 0o600 });
+      const login = new Date("2026-10-08T00:06:00Z");
+      fs.utimesSync(credentials, login, login);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.row().authRecoveredThrough).toBe(AUTH_TS);
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.reports()).toHaveLength(0);
+      expect((await f.restartAuthentication()).authRecoveredThrough).toBe(AUTH_TS);
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      await f.check();
+      expect(f.row().authIncident?.firstFailedAt).toBe("2026-10-08T00:08:00.000Z");
+      expect(f.reports()).toHaveLength(1);
+    });
+  });
+
+  test("Keychain login clears the card and consumes the incident across restart", async () => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      try {
+        await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        const persisted = JSON.stringify(f.row());
+        expect(persisted).not.toContain(generation);
+        generation = "fixture-repaired-access";
+        await f.check(); await f.check();
+        expect(f.row().authIncident).toBeUndefined();
+        expect(f.cards()[0]?.status).toBe("done");
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+        expect(f.reports()).toHaveLength(1);
+        const afterRestart = await f.restartAuthentication(`
+          const { spyOn } = await import("bun:test");
+          const credentials = await import("./src/lib/accounts/claudeCredentials");
+          const generation = ${JSON.stringify(generation)};
+          spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+            state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+          }));
+        `);
+        expect(afterRestart.authIncident).toBeUndefined();
+        expect(afterRestart.authRecoveredThrough).toBe(AUTH_TS);
+        f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+        await f.check();
+        expect(f.reports()).toHaveLength(2);
+      } finally { read.mockRestore(); }
+    });
+  });
+
+  test.each([false, true])("Keychain metadata availability changes preserve unchanged credentials with initial metadata=%s", async (available) => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      let modifiedAt: number | null = available ? AUTH_TS - MINUTE : null;
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      const metadata = spyOn(credentials, "claudeKeychainCredentialChangedAt").mockImplementation(() => modifiedAt);
+      try {
+        await f.check();
+        modifiedAt = available ? null : AUTH_TS - MINUTE;
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        expect(f.rig.sent).toHaveLength(0); expect(f.cards()[0]?.status).toBe("inbox");
+        expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect((await f.restartAuthentication(`
+          const { spyOn } = await import("bun:test");
+          const credentials = await import("./src/lib/accounts/claudeCredentials");
+          const generation = ${JSON.stringify(generation)};
+          spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({ state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } } }));
+          spyOn(credentials, "claudeKeychainCredentialChangedAt").mockReturnValue(${modifiedAt});
+        `)).authIncident?.rotation.state).toBe("none-allowed");
+        generation = "fixture-repaired-access";
+        modifiedAt = AUTH_TS + MINUTE;
+        await f.check();
+        expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+        expect(f.rig.sent).toHaveLength(1);
+      } finally { read.mockRestore(); metadata.mockRestore(); }
+    });
+  });
+
+  test("a changed Keychain credential cannot hide an unobserved newer authentication failure", async () => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      try {
+        await f.check();
+        generation = "fixture-repaired-access";
+        f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+        await f.check();
+        expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse("2026-10-08T00:08:00Z"));
+        expect(f.reports()).toHaveLength(2);
+        expect(f.rig.sent).toHaveLength(0);
+        await f.check();
+        expect(f.reports()).toHaveLength(2);
+      } finally { read.mockRestore(); }
+    });
+  });
+
+  test.each([false, true])("Keychain repair consumes preceding failures with prior detection=%s", async (detected) => {
+    await authFixture(false, async (f) => {
+      fs.rmSync(path.join(f.a.home, ".credentials.json"));
+      const credentials = await import("@/lib/accounts/claudeCredentials");
+      let generation = "fixture-old-access";
+      let modifiedAt = AUTH_TS - MINUTE;
+      const read = spyOn(credentials, "readClaudeCredentials").mockImplementation(() => ({
+        state: "present", source: "keychain", document: { claudeAiOauth: { accessToken: generation } },
+      }));
+      const metadata = spyOn(credentials, "claudeKeychainCredentialChangedAt").mockImplementation(() => modifiedAt);
+      try {
+        if (detected) await f.check();
+        f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+        generation = "fixture-repaired-access";
+        modifiedAt = Date.parse("2026-10-08T00:10:00Z");
+        await f.check(); await f.check();
+        expect(f.row().authIncident).toBeUndefined();
+        expect(f.row().authRecoveredThrough).toBe(Date.parse("2026-10-08T00:08:00Z"));
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+        expect(f.reports()).toHaveLength(detected ? 1 : 0);
+        f.appendTurn("authentication_failed", "2026-10-08T00:12:00Z");
+        await f.check();
+        expect(f.reports()).toHaveLength(detected ? 2 : 1);
+      } finally { read.mockRestore(); metadata.mockRestore(); }
+    });
+  });
+
+  test("a verified healthy account migration releases the prior account's fence before its first turn", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const targetPath = path.join(path.dirname(f.registry.conversation(f.successor.id)!.generations.at(-1)!.path), `${crypto.randomUUID()}.jsonl`);
+      fs.writeFileSync(targetPath, "");
+      f.migrateAccount(f.b.id, targetPath, "2026-10-08T02:10:00.000Z");
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent).toHaveLength(1); expect(f.spawns).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+    });
+  });
+
+  test.each(["claude", "codex"] as const)("an aborted %s turn cannot clear an authentication incident", async (engine) => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const at = "2026-10-08T02:10:00.000Z";
+      const records = engine === "codex"
+        ? [{ type: "event_msg", timestamp: at, payload: { type: "task_started" } }, { type: "event_msg", timestamp: at, payload: { type: "turn_aborted", reason: "interrupted" } }]
+        : [{ type: "user", timestamp: at, message: { role: "user", content: "try again" } }, { type: "result", subtype: "interrupted", timestamp: at }];
+      fs.appendFileSync(f.transcript, records.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("none-allowed");
+    }, engine);
+  });
+
+  test("a terminal provider refusal cannot substitute for a successful authentication recovery turn", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      f.appendTurn("rate_limit", "2026-10-08T02:10:00.000Z");
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+    });
+  });
+
+  test.each(["claude", "codex"] as const)("touching unchanged %s credentials cannot clear authentication", async (engine) => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const file = path.join(f.a.home, engine === "claude" ? ".credentials.json" : "auth.json");
+      const touched = new Date("2026-10-08T02:10:00Z");
+      fs.utimesSync(file, touched, touched);
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("none-allowed");
+      fs.writeFileSync(file, "{\"repaired\":true}");
+      fs.utimesSync(file, touched, touched);
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent).toHaveLength(1);
+    }, engine);
+  });
+
+  test.each([[false, true], [true, true], [false, false]])("a known Telegram refusal retries independently with allowed=%s and bridge=%s", async (allowed, bridgeEnabled) => {
+    await authFixture(allowed, async (f) => {
+      if (!bridgeEnabled) (await import("@/lib/projects/settings")).setBridgeReports(PROJECT, false, "fixture");
+      f.telegram.setChat("-1000000000101", "auth-fixture", false);
+      await f.check();
+      expect(f.row().authIncident?.notice?.telegram).toBe("failed");
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(0); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
+      await f.check();
+      expect((await f.restartAuthentication()).authTelegramOwed).toHaveLength(1);
+      if (allowed) expect(f.rig.sent.length).toBeGreaterThan(0);
+      const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+      writeDrain(drainFile(), { id: "auth-telegram-retry-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+      try {
+        f.telegram.setChat("-1000000000101", "auth-fixture", true);
+        await f.check();
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.row().authTelegramOwed).toHaveLength(1);
+      } finally { releaseDrain(drainFile(), "auth-telegram-retry-drain"); }
+      await f.check(); await f.check();
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
+      expect(f.row().authTelegramOwed ?? []).toHaveLength(0);
+      if (!allowed) expect(f.row().authIncident?.notice?.telegram).toBe("sent");
+      expect(new Set(f.sendRequests).size).toBe(1);
+    });
+  });
+
+  test("an uncertain Telegram send keeps its original receipt and is never posted twice", async () => {
+    await authFixture(false, async (f) => {
+      const { unreachable } = await import("@/lib/telegram/bot/fakeTransport");
+      f.transport.handlers.sendMessage = () => unreachable("timed_out");
+      await f.check(); await f.check();
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.row().authTelegramOwed ?? []).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+    });
+  });
+
+  test("a migrated account's first authentication failure opens its own incident in the same seat epoch", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const first = f.row().authIncident!.id;
+      const targetPath = path.join(path.dirname(f.registry.conversation(f.successor.id)!.generations.at(-1)!.path), `${crypto.randomUUID()}.jsonl`);
+      const at = "2026-10-08T02:10:00.000Z";
+      fs.writeFileSync(targetPath, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "manual account switch" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+          message: { model: "<synthetic>", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+      f.migrateAccount(f.b.id, targetPath, at);
+      f.capacity(f.a.id, 100);
+      expect(f.seat().seatEpoch).toBe(f.original.seatEpoch);
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.accountId).toBe(f.b.id);
+      expect(f.row().authIncident?.id).not.toBe(first);
+      expect(f.reports()).toHaveLength(2); expect(f.reports()[1]?.body).toContain("Account B");
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(2); expect(f.rig.sent).toHaveLength(0);
+      expect(f.cards().filter((card) => card.status === "inbox")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.accountId).toBe(f.b.id);
+      await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("first failure rotates once to the allowed account with handoff and one independent notice", async () => {
+    await authFixture(true, async (f) => {
+      await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.spawns[0]!.accountId).toBe(f.b.id);
+      expect(f.spawns[0]!.prompt).toContain("Automatic rotation after authentication failure");
+      expect(f.seat().seatEpoch).toBe(f.original.seatEpoch + 1);
+      expect(f.seat().predecessorConversationId).toBe(f.original.conversationId);
+      f.unchangedNote(); f.unchangedBinding();
+      expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("status");
+      expect(f.reports()[0]!.origin).toMatchObject({ kind: "agent", role: "seat-tick", conversationId: null });
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      for (let n = 0; n < 3; n++) await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("none allowed parks once, names the outside account and resumes after re-login without stale reopening", async () => {
+    await authFixture(false, async (f) => {
+      expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
+      expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("blocked");
+      expect(f.reports()[0]!.body).toContain("Account B"); expect(f.reports()[0]!.body).toContain("увійдіть");
+      expect(f.cards()[0]!.status).toBe("inbox"); f.unchangedBinding();
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      for (let n = 0; n < 3; n++) expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
+      expect(f.rig.sent).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      const login = new Date("2026-10-08T00:10:00Z");
+      fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent.length).toBeGreaterThan(0); expect(f.cards()[0]!.status).toBe("done");
+      f.appendTurn("authentication_failed", "2026-10-08T00:30:00Z");
+      await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("login clears an unobserved failed turn and persists the recovery boundary across restart", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      const login = new Date("2026-10-08T00:10:00Z");
+      fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.row().authRecoveredThrough).toBe(Date.parse("2026-10-08T00:08:00Z"));
+      expect(f.cards()[0]!.status).toBe("done");
+      expect(f.rig.sent).toHaveLength(1);
+      const persisted = await f.restartAuthentication();
+      expect(persisted.authIncident).toBeUndefined();
+      expect(persisted.authRecoveredThrough).toBe(f.row().authRecoveredThrough);
+      await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      f.appendTurn("authentication_failed", "2026-10-08T00:30:00Z");
+      await f.check();
+      expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse("2026-10-08T00:30:00Z"));
+      expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("an authentication failure after login opens a new incident even before the next check", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const credentials = path.join(f.a.home, ".credentials.json");
+      fs.writeFileSync(credentials, "{\"refreshed\":true}", { mode: 0o600 });
+      const login = new Date("2026-10-08T00:07:00Z"); fs.utimesSync(credentials, login, login);
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      await f.check();
+      expect(f.row().authIncident?.firstFailedAt).toBe("2026-10-08T00:08:00.000Z");
+      expect(f.reports()).toHaveLength(2); expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+      expect(f.rig.sent).toHaveLength(0);
+      await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("an unreadable binding parks selection and still sends one independent authentication notice", async () => {
+    await authFixture(true, async (f) => {
+      const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+      const { seedAccountSource, persistedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: "damaged" });
+      const before = JSON.stringify(persistedAccountSource(BINDINGS_SOURCE));
+      await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()[0]!.body).toContain("не зміг автентифікуватися");
+      expect(f.reports()[0]!.body).toContain("account-project-bindings.json");
+      expect(f.reports()[0]!.body).not.toContain("Account B");
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect((await f.restartAuthentication()).authIncident?.notice?.card).toBe(true);
+      for (let n = 0; n < 3; n++) await f.check();
+      expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(JSON.stringify(persistedAccountSource(BINDINGS_SOURCE))).toBe(before);
+    });
+  });
+
+  test.each(["binding", "capacity"] as const)("automatic recovery refuses a target whose %s changes during handoff", async (race) => {
+    await authFixture(true, async (f) => {
+      const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+      const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+      const { resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+      f.command.summarizeHandoffs = async () => {
+        if (race === "binding") seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex", accountId: f.a.id, project: PROJECT, createdAt: AUTH_AT }] });
+        else f.capacity(f.b.id, 100);
+        return { kind: "fallback", reason: "unavailable" };
+      };
+      f.command.spawn = async (body) => {
+        const account = await resolveHealthySpawnAccount(body.engine as "codex", body.accountId as string, body.project as string, body.model as string);
+        f.spawns.push({ ...body, actualAccount: account.accountId });
+        return { status: 200, body: { ok: true, conversationId: f.successor.id, path: f.transcript } };
+      };
+      await f.check(); await f.check();
+      expect(f.spawns).toHaveLength(0);
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.seat().conversationId).toBe(f.original.conversationId);
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    }, "codex", true);
+  });
+
+  test("a drain beginning during handoff holds automatic helpers, successors and notices until release", async () => {
+    await authFixture(true, async (f) => {
+      const { summarizeHandoffsHeadless, productionDigestRuntime } = await import("@/lib/orchestrator/handoffDigest");
+      const { accountManager } = await import("@/lib/accounts/manager");
+      let startDrain = true, helpers = 0;
+      const lease = { id: "auth-handoff-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      f.command.summarizeHandoffs = (request) => summarizeHandoffsHeadless(request, {
+        ...productionDigestRuntime,
+        resolveAccount: async () => {
+          if (startDrain) { startDrain = false; writeDrain(drainFile(), lease); }
+          return { kind: "available", account: accountManager.resolveSpawn("codex", f.b.id) };
+        },
+        run: async () => { helpers++; throw new Error("fixture helper unavailable"); },
+      });
+      try {
+        await f.check(); await f.check();
+        expect(helpers).toBe(0); expect(f.spawns).toHaveLength(0);
+        expect(f.row().authIncident?.rotation.state).toBe("held");
+        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.rig.sent).toHaveLength(0);
+      } finally { releaseDrain(drainFile(), lease.id); }
+      await f.check(); await f.check();
+      expect(helpers).toBe(1); expect(f.spawns).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    }, "codex", true);
+  });
+
+  test("automatic recovery carries drain admission to a refused successor and resumes the same pending intent", async () => {
+    await authFixture(true, async (f) => {
+      const spawn = f.command.spawn;
+      const lease = { id: "auth-successor-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      let attempt: unknown;
+      f.command.spawn = async (body, autonomous, admission) => {
+        expect(autonomous).toBe(true); expect(admission?.autonomous).toBe(true);
+        attempt = body.clientAttemptId;
+        writeDrain(drainFile(), lease);
+        return { status: 503, body: { code: "AUTO_UPDATE_DRAIN", error: "held for update" } };
+      };
+      try {
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("held");
+        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+      } finally { releaseDrain(drainFile(), lease.id); }
+      f.command.spawn = spawn;
+      await f.check(); await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.spawns[0]!.clientAttemptId).toBe(attempt);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("the first terminal authentication failure fences an outstanding original-key wake retry", async () => {
+    await authFixture(false, async (f) => {
+      fs.writeFileSync(f.transcript, ""); f.appendTurn(null, "2026-10-08T02:04:00Z");
+      f.rig.deps.sources!.wakeState = async () => "absent";
+      f.rig.deps.deliver = async (message) => {
+        f.rig.sent.push(message);
+        return { ok: false, outcome: "failed", status: 503, error: "temporary connection refusal" };
+      };
+      await f.check();
+      const refused = f.row();
+      expect(refused.outstandingWake?.dispatch?.state).toBe("refused");
+      f.rig.sent.length = 0; f.appendTurn("authentication_failed", "2026-10-08T02:06:00Z");
+      f.rig.deps.deliver = async (message) => {
+        f.rig.sent.push(message);
+        return { ok: true, target: "structured", outcome: "delivered", structured: true };
+      };
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.row().lastWakeAt).toBe(refused.lastWakeAt);
+      expect(f.row().eventsThrough).toBe(refused.eventsThrough);
+      expect(f.row().outstandingWake?.clientMessageId).toBe(refused.outstandingWake?.clientMessageId);
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(1);
+      expect(f.rig.sent[0]!.clientMessageId).toBe(refused.outstandingWake?.clientMessageId);
+      expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(1);
+    });
+  });
+
+  test("a long provider diagnostic keeps the login action and outside-binding account in every notice", async () => {
+    await authFixture(false, async (f) => {
+      fs.writeFileSync(f.transcript, ""); f.appendTurn("authentication_failed", AUTH_AT, ERROR_TEXT + " detail".repeat(1000));
+      await f.check();
+      expect(f.reports()[0]!.body).toContain("увійдіть"); expect(f.reports()[0]!.body).toContain("Account B");
+      expect(f.cards()[0]!.text).toContain("увійдіть");
+      expect(String(f.transport.callsOf("sendMessage")[0]!.params.text)).toContain("увійдіть");
+    });
+  });
+
+  test("an allowed alternative without capacity parks without widening the binding", async () => {
+    await authFixture(true, async (f) => {
+      f.capacity(f.b.id, 100); await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); f.unchangedBinding();
+    });
+  });
+
+  test("a newer normal terminal turn clears the fence and resolves the notice card", async () => {
+    await authFixture(false, async (f) => {
+      await f.check(); f.appendTurn(null, "2026-10-08T00:10:00Z"); await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]!.status).toBe("done"); expect(f.rig.sent).toHaveLength(1);
+    });
+  });
+
+  test("usage limits, ordinary answers and pre-designation authentication failures keep ordinary wakes", async () => {
+    for (const error of ["rate_limit", null, "old-auth"] as const) await authFixture(false, async (f) => {
+      fs.writeFileSync(f.transcript, ""); f.appendTurn(error === "old-auth" ? "authentication_failed" : error, error === "old-auth" ? "2026-10-07T23:59:00Z" : AUTH_AT);
+      await f.check(); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.rig.sent).toHaveLength(1);
+    });
+  });
+
+  test("login during a drain preserves the unsent notice and resumes after release", async () => {
+    await authFixture(false, async (f) => {
+      const lease = { id: "auth-login-notice-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      writeDrain(drainFile(), lease);
+      try {
+        await f.check();
+        const id = f.row().authIncident!.id;
+        fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+        await f.check();
+        expect(f.reports()).toHaveLength(0); expect(f.cards()).toHaveLength(0);
+        expect(f.rig.sent).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.id).toBe(id);
+        releaseDrain(drainFile(), lease.id);
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(1);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
+        expect(f.row().authIncident).toBeUndefined(); expect(f.spawns).toHaveLength(0);
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+      } finally { releaseDrain(drainFile(), lease.id); }
+    });
+  });
+
+  test("a healthy native migration preserves its drain-held predecessor notice across restart", async () => {
+    await authFixture(true, async (f) => {
+      const lease = { id: "auth-migration-notice-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      writeDrain(drainFile(), lease);
+      try {
+        await f.check();
+        const id = f.row().authIncident!.id;
+        const targetPath = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        f.migrateAccount(f.b.id, targetPath, "2026-10-08T00:08:00Z");
+        await f.check();
+        await f.restartAuthentication();
+        expect(f.reports()).toHaveLength(0); expect(f.cards()).toHaveLength(0);
+        releaseDrain(drainFile(), lease.id);
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(1);
+        expect(f.sendRequests).toEqual([id]);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
+        expect(f.reports()[0]?.body).toContain("Account A");
+        expect(f.row().authIncident).toBeUndefined(); expect(f.spawns).toHaveLength(0);
+        expect(f.rig.sent.length).toBeGreaterThan(0);
+        await f.restartAuthentication(); await f.check();
+        expect(f.reports()).toHaveLength(1); expect(f.sendRequests).toEqual([id]);
+      } finally { releaseDrain(drainFile(), lease.id); }
+    });
+  });
+
+  test("a failing native migration retains both drain-held account notices and decides recovery independently", async () => {
+    await authFixture(true, async (f) => {
+      const lease = { id: "auth-failed-migration-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true };
+      writeDrain(drainFile(), lease);
+      try {
+        await f.check();
+        const predecessorId = f.row().authIncident!.id;
+        const targetPath = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        const at = "2026-10-08T00:08:00Z";
+        fs.writeFileSync(targetPath, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "try again" } }) + "\n"
+          + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+            message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+        f.migrateAccount(f.b.id, targetPath, at);
+        await f.check();
+        const successorId = f.row().authIncident!.id;
+        expect(successorId).not.toBe(predecessorId);
+        expect(f.row().authIncident?.accountId).toBe(f.b.id);
+        expect((await f.restartAuthentication()).authIncident?.id).toBe(successorId);
+        let decisions = 0;
+        f.rig.deps.seatAuth!.rotate = async (body) => {
+          decisions++;
+          expect(body.accountId).toBe(f.a.id);
+          return { status: 503, body: { error: "fixture migration recovery refused" } };
+        };
+        releaseDrain(drainFile(), lease.id);
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(2);
+        expect(f.sendRequests).toEqual([predecessorId, successorId]);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.cards()).toHaveLength(2);
+        expect(f.cards().map(card => card.status).sort()).toEqual(["done", "inbox"]);
+        expect(f.reports()[0]?.body).toContain("Account A"); expect(f.reports()[1]?.body).toContain("Account B");
+        expect(f.row().authIncident?.id).toBe(successorId);
+        expect(f.row().authIncident?.rotation.state).toBe("refused");
+        expect(f.rig.sent).toHaveLength(0); expect(decisions).toBe(1);
+        await f.restartAuthentication(); await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(2); expect(f.sendRequests).toEqual([predecessorId, successorId]);
+        expect(decisions).toBe(1);
+      } finally { releaseDrain(drainFile(), lease.id); }
+    });
+  });
+
+  test("a board storage exception preserves notice debt without fencing a repaired seat", async () => {
+    await authFixture(false, async (f) => {
+      f.rig.deps.ensureCard = () => { throw Object.assign(new Error("fixture board write refused"), { code: "EACCES" }); };
+      await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.row().authCardsOwed).toHaveLength(1);
+      expect((await f.restartAuthentication()).authCardsOwed).toHaveLength(1);
+      delete f.rig.deps.ensureCard;
+      await f.check(); await f.check();
+      expect(f.row().authCardsOwed).toEqual([]);
+      expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("an older owed card is delivered without replacing a newer incident's open card", async () => {
+    await authFixture(false, async (f) => {
+      f.rig.deps.ensureCard = () => false;
+      await f.check();
+      const oldId = f.row().authIncident!.id;
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
+      const login = new Date("2026-10-08T00:06:00Z"); fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
+      await f.check();
+      const older = f.row().authCardsOwed!;
+      writeSeatTickState(PROJECT, { ...f.row(), authCardsOwed: [] });
+      delete f.rig.deps.ensureCard;
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      await f.check();
+      const current = f.row().authIncident!.id;
+      expect(current).not.toBe(oldId); expect(f.cards()).toHaveLength(1);
+      writeSeatTickState(PROJECT, { ...f.row(), authCardsOwed: older });
+      await f.check(); await f.check();
+      expect(f.row().authCardsOwed).toEqual([]);
+      expect(f.row().authIncident?.id).toBe(current);
+      expect(f.cards()).toHaveLength(2);
+      expect(f.cards().filter(card => card.status === "inbox")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(2);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+    });
+  });
+
+  test("an update drain holds rotation and notice until the first check after release", async () => {
+    await authFixture(true, async (f) => {
+      const lease = { id: "auth-fixture-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 };
+      writeDrain(drainFile(), lease);
+      try { await f.check(); expect(f.row().authIncident?.rotation.state).toBe("held"); expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(0); expect(f.rig.sent).toHaveLength(0); }
+      finally { releaseDrain(drainFile(), lease.id); }
+      await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a drain starting after the rotation decision holds unsent authentication notices", async () => {
+    await authFixture(false, async (f) => {
+      let start = true;
+      f.rig.deps.writeState = (project, row) => {
+        writeSeatTickState(project, row);
+        if (start && row.authIncident?.rotation.state === "none-allowed" && !row.authIncident.notice) {
+          start = false;
+          writeDrain(drainFile(), { id: "auth-notice-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+        }
+      };
+      try {
+        await f.check(); await f.check();
+        expect(f.spawns).toHaveLength(0);
+        expect(f.rig.sent).toHaveLength(0);
+        expect(f.reports()).toHaveLength(0);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.cards()).toHaveLength(0);
+        releaseDrain(drainFile(), "auth-notice-drain");
+        await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(1);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.cards()).toHaveLength(1);
+      } finally { releaseDrain(drainFile(), "auth-notice-drain"); }
+    });
+  });
+
+  test.each(["full", "throws"] as const)("a readable authentication successor wakes while its predecessor's board notice %s", async (failure) => {
+    await authFixture(true, async (f) => {
+      f.rig.deps.ensureCard = () => {
+        if (failure === "throws") throw new Error("fixture board writer unavailable");
+        return false;
+      };
+      await f.check();
+      const id = f.row().authIncident!.id;
+      expect(f.seat().conversationId).toBe(f.successor.id);
+      expect(f.row().authCardsOwed?.map(card => card.id)).toEqual([id]);
+      if (failure === "full") expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.rig.sent.every(message => message.conversationId === f.successor.id)).toBe(true);
+      const restarted = await f.restartAuthentication();
+      expect(restarted.authIncident).toBeUndefined();
+      expect(restarted.authCardsOwed?.map(card => ({ id: card.id, state: card.state }))).toEqual([{ id, state: "resolved" }]);
+      expect(f.cards()).toHaveLength(0);
+      delete f.rig.deps.ensureCard;
+      await f.check(); await f.check();
+      expect(f.row().authCardsOwed).toEqual([]);
+      expect(f.cards()).toHaveLength(1);
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.reports()).toHaveLength(1);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.spawns).toHaveLength(1);
+    });
+  });
+
+  test.each(["reported", "drain-held"] as const)("a failed authentication successor gets its own notice while its predecessor's %s board card is owed", async (noticeState) => {
+    await authFixture(true, async (f) => {
+      f.rig.deps.ensureCard = () => false;
+      const rotate = f.rig.deps.seatAuth!.rotate!;
+      f.rig.deps.seatAuth!.rotate = async (...args) => {
+        const result = await rotate(...args);
+        if (noticeState === "drain-held") writeDrain(drainFile(), { id: "auth-board-debt-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+        return result;
+      };
+      try {
+        await f.check();
+        const predecessorId = f.row().authIncident!.id;
+        const transcript = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        const at = "2026-10-08T00:08:00Z";
+        fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "initial mandate" } }) + "\n"
+          + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+            message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+        releaseDrain(drainFile(), "auth-board-debt-drain");
+        let successorRotations = 0;
+        f.rig.deps.seatAuth!.rotate = async () => {
+          successorRotations++;
+          return { status: 503, body: { error: "fixture successor rotation refused" } };
+        };
+        await f.check();
+        expect(f.row().authIncident?.conversationId).toBe(f.successor.id);
+        const successorId = f.row().authIncident!.id;
+        expect(successorId).not.toBe(predecessorId);
+        await f.check();
+        const restarted = await f.restartAuthentication();
+        expect(restarted.authIncident?.id).toBe(successorId);
+        expect(restarted.authIncident?.lastFailedTs).toBe(Date.parse(at));
+        expect(restarted.authCardsOwed?.map(card => ({ id: card.id, state: card.state }))).toEqual([
+          { id: predecessorId, state: "resolved" }, { id: successorId, state: "open" },
+        ]);
+        expect(f.reports()).toHaveLength(2);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.rig.sent).toHaveLength(0);
+        expect(successorRotations).toBe(1);
+        delete f.rig.deps.ensureCard;
+        await f.check(); await f.check();
+        expect(f.row().authCardsOwed).toEqual([]);
+        expect(f.cards()).toHaveLength(2);
+        expect(f.cards().map(card => card.status).sort()).toEqual(["done", "inbox"]);
+        expect(f.row().authIncident?.id).toBe(successorId);
+        expect(f.reports()).toHaveLength(2);
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(successorRotations).toBe(1);
+      } finally { releaseDrain(drainFile(), "auth-board-debt-drain"); }
+    });
+  });
+
+  test("a successor authentication failure stays independent of its predecessor's held notice", async () => {
+    await authFixture(true, async (f) => {
+      const rotate = f.rig.deps.seatAuth!.rotate!;
+      f.rig.deps.seatAuth!.rotate = async (...args) => {
+        const result = await rotate(...args);
+        writeDrain(drainFile(), { id: "auth-successor-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
+        return result;
+      };
+      try {
+        await f.check();
+        const transcript = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+        const at = "2026-10-08T00:08:00Z";
+        fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "initial mandate" } }) + "\n"
+          + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+            message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+        await f.check();
+        expect(f.row().authIncident?.lastFailedTs).toBe(AUTH_TS);
+        expect(f.reports()).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.lastFailedTs).toBe(AUTH_TS);
+        releaseDrain(drainFile(), "auth-successor-drain");
+        // Refuse the successor's move independently of the completed first move.
+        f.rig.deps.seatAuth!.rotate = async () => ({ status: 503, body: { error: "fixture successor rotation refused" } });
+        await f.check(); await f.check(); await f.check();
+        expect(f.reports()).toHaveLength(2);
+        expect(f.row().authIncident?.conversationId).toBe(f.successor.id);
+        expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse(at));
+        expect(f.rig.sent).toHaveLength(0);
+        expect((await f.restartAuthentication()).authIncident?.lastFailedTs).toBe(Date.parse(at));
+      } finally { releaseDrain(drainFile(), "auth-successor-drain"); }
+    });
+  });
+
+  test("unreadable Codex credentials cannot clear an incident or suppress its notice", async () => {
+    await authFixture(false, async (f) => {
+      await f.check();
+      const credentials = path.join(f.a.home, "auth.json");
+      const openFile = fs.openSync;
+      const unreadable = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+        if (args[0] === credentials) {
+          throw Object.assign(new Error("fixture credential permission refused"), { code: "EACCES" });
+        }
+        return Reflect.apply(openFile, fs, args);
+      });
+      try {
+        fs.writeFileSync(credentials, '{"refreshed":true}', { mode: 0o600 });
+        await f.check(); await f.check();
+        expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+        expect(f.cards()[0]?.status).toBe("inbox");
+        expect(f.reports()).toHaveLength(1);
+        expect(f.rig.sent).toHaveLength(0);
+      } finally { unreadable.mockRestore(); }
+      const login = new Date("2026-10-08T00:10:00Z");
+      fs.utimesSync(credentials, login, login);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.reports()).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+    }, "codex");
+  });
+
+  test("unsafe credentials preserve first-failure attribution and the independent notice", async () => {
+    await authFixture(false, async (f) => {
+      fs.chmodSync(path.join(f.a.home, ".credentials.json"), 0o644);
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.accountId).toBe(f.a.id);
+      expect(f.reports()).toHaveLength(1);
+      expect(f.cards()).toHaveLength(1);
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.spawns).toHaveLength(0);
+    });
+  });
+
+  test("compatible-provider credential repair clears the incident across restart and retains later failures", async () => {
+    await authFixture(false, async (f) => {
+      const { createManagedClaudeAccount, updateProviderClaudeAccount } = await import("@/lib/accounts/claude");
+      const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+      const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+      const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+      const config = { baseUrl: "https://example.invalid/messages", model: "fixture-model", smallFastModel: null };
+      const provider = createManagedClaudeAccount("Account Provider", { config, token: crypto.randomUUID() });
+      const transcript = path.join(provider.projectsDir, "fixture", "provider-auth.jsonl");
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      const appendFailure = (at: string) => fs.appendFileSync(transcript,
+        JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+          message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+      // Provider metadata uses its real creation time. Put the failed turn
+      // after that creation, then repair only after the turn has ended.
+      const failureAt = new Date(Date.now() + 20).toISOString();
+      appendFailure(failureAt);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const conversation = f.registry.ensureConversation("claude", transcript, null);
+      f.registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: provider.id,
+        launchProfile: emptyLaunchProfile({ cwd: path.dirname(transcript) }),
+        turn: { state: "idle", source: "assistant", terminalAt: failureAt }, observedAt: failureAt }]);
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: provider.id, project: PROJECT, createdAt: AUTH_AT }] });
+      beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board", engine: "claude", model: "fixture-model", clientRequestId: "provider_auth_fixture", mode: "spawn", now: "2026-10-08T00:00:00Z" });
+      completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "provider_auth_fixture", conversationId: conversation.id, path: transcript, now: "2026-10-08T00:00:00Z" });
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      const tokenFile = path.join(provider.home, ".provider-token");
+      fs.utimesSync(tokenFile, new Date(), new Date());
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed"); expect(f.rig.sent).toHaveLength(0);
+      updateProviderClaudeAccount(provider.id, config, crypto.randomUUID());
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect(f.reports()).toHaveLength(1);
+      const afterRestart = await f.restartAuthentication();
+      expect(afterRestart.authIncident).toBeUndefined();
+      expect(afterRestart.authRecoveredThrough).toBe(Date.parse(failureAt));
+      appendFailure(new Date(Date.now() + 20).toISOString());
+      await f.check();
+      expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("a lost final state write replays the real bridge, bot and board receipts without another notice", async () => {
+    await authFixture(false, async (f) => {
+      let failOnce = true;
+      f.rig.deps.writeState = (project, row) => {
+        if (failOnce && row.authIncident?.notice?.card) { failOnce = false; throw new Error("lost state write"); }
+        writeSeatTickState(project, row);
+      };
+      await f.check(); await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.row().authIncident?.notice?.card).toBe(true);
+      expect(f.sendRequests).toHaveLength(2); expect(new Set(f.sendRequests).size).toBe(1);
+    });
+  });
+
+  test("a rotation that lands before its outcome write is recovered from the durable request identity", async () => {
+    await authFixture(true, async (f) => {
+      let failOnce = true;
+      f.rig.deps.writeState = (project, row) => {
+        if (failOnce && row.authIncident?.rotation.state === "rotated" && !row.authIncident.notice) {
+          failOnce = false; throw new Error("lost rotation outcome write");
+        }
+        writeSeatTickState(project, row);
+      };
+      await f.check(); await f.check(); await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.cards()[0]!.status).toBe("done");
+    });
+  });
+
+  test("a refused allowed-account rotation parks the seat and tells the operator the refusal", async () => {
+    await authFixture(true, async (f) => {
+      f.command.spawn = async () => ({ status: 503, body: { error: "fixture launch refused" } });
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.rig.sent).toHaveLength(0); expect(f.reports()).toHaveLength(1);
+      expect(f.reports()[0]!.body).toContain("fixture launch refused");
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a failed launch receipt returned with HTTP 200 cannot claim authentication recovery", async () => {
+    await authFixture(true, async (f) => {
+      f.command.spawn = async () => ({ status: 200, body: { ok: false, launched: false, state: "failed", error: "fixture terminal launch failure" } });
+      await f.check(); await f.check();
+      expect(f.seat().conversationId).toBe(f.original.conversationId);
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.reports()).toHaveLength(1);
+      expect(f.reports()[0]?.class).toBe("blocked");
+      expect(f.reports()[0]?.body).toContain("fixture terminal launch failure");
+      expect(f.cards()[0]?.status).toBe("inbox");
+      expect(f.rig.sent).toHaveLength(0);
+    });
+  });
+
+  test("login before provisional successor materialization uses its launch credential baseline", async () => {
+    await authFixture(true, async (f) => {
+      const { confirmOrchestratorSeatMaterialization } = await import("@/lib/orchestrator/seats");
+      f.command.spawn = async (_body, _autonomous, admission) => {
+        admission?.assertAccount?.(f.b.id);
+        return { status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted",
+          conversationId: f.successor.id, launchId: "launch_auth_baseline_pending" } };
+      };
+      await f.check();
+      const transcript = f.registry.conversation(f.successor.id)!.generations.at(-1)!.path;
+      const at = "2026-10-08T00:08:00Z";
+      fs.writeFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, error: "authentication_failed", isApiErrorMessage: true,
+          message: { model: "<synthetic>", content: [{ type: "text", text: ERROR_TEXT }] } }) + "\n");
+      const credentials = path.join(f.b.home, ".credentials.json");
+      fs.writeFileSync(credentials, '{"repaired":true}', { mode: 0o600 });
+      const login = new Date("2026-10-08T00:09:00Z"); fs.utimesSync(credentials, login, login);
+      confirmOrchestratorSeatMaterialization({ project: PROJECT, clientRequestId: f.seat().intent.clientRequestId,
+        conversationId: f.successor.id, path: transcript });
+      f.capacity(f.a.id, 100);
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined();
+      expect(f.row().authRecoveredThrough).toBe(Date.parse(at));
+      expect(f.reports()).toHaveLength(1);
+      expect(f.rig.sent.length).toBeGreaterThan(0);
+      expect((await f.restartAuthentication()).authIncident).toBeUndefined();
+    });
+  });
+
+  test("a provisional authentication rotation keeps the incident through rollback and restart", async () => {
+    for (const repair of ["login", "normal-turn"]) await authFixture(true, async (f) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      const pending = "conversation_auth_pending";
+      f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted", conversationId: pending, launchId: "launch_auth_pending" } });
+      f.command.launchSettlement = () => ({ kind: "unknown" });
+      await f.check();
+      expect(f.seat().conversationId).toBe(pending);
+      expect(f.row().authIncident?.rotation.state).toBe("rotated");
+      expect(f.cards()[0]?.status).toBe("inbox");
+      expect((await f.restartAuthentication()).authIncident?.conversationId).toBe(f.original.conversationId!);
+      f.command.launchSettlement = () => ({ kind: "failed", error: "fixture asynchronous launch failure" });
+      expect(reconcileActiveOrchestratorSeat(PROJECT, f.command)?.restored?.conversationId).toBe(f.original.conversationId);
+      expect(f.seat().seatEpoch).not.toBe(f.original.seatEpoch);
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(0);
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.row().authIncident?.seatEpoch).toBe(f.seat().seatEpoch);
+      expect(f.cards()[0]?.status).toBe("inbox");
+      expect(f.cards()[0]?.text).toContain("fixture asynchronous launch failure");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("refused");
+      if (repair === "login") {
+        fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"repaired\":true}");
+        fs.utimesSync(path.join(f.a.home, ".credentials.json"), new Date(AUTH_TS + MINUTE), new Date(AUTH_TS + MINUTE));
+      } else f.appendTurn(null, new Date(AUTH_TS + MINUTE).toISOString());
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.rig.sent).toHaveLength(1);
+    });
+  });
+
+  test("a lost rotation-outcome write cannot clear authentication when the accepted successor rolls back", async () => {
+    for (const trimHistory of [false, true]) await authFixture(true, async (f) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, state: "accepted", conversationId: "conversation_auth_pending", launchId: "launch_auth_pending" } });
+      let lost = false;
+      f.rig.deps.writeState = (project, row) => {
+        if (!lost && row.authIncident?.rotation.state === "rotated") { lost = true; throw new Error("fixture lost rotation-outcome write"); }
+        writeSeatTickState(project, row);
+      };
+      await f.check();
+      expect(lost).toBe(true); expect(f.row().authIncident?.rotation.state).toBe("pending");
+      f.command.launchSettlement = () => ({ kind: "failed", error: "fixture asynchronous launch failure" });
+      expect(reconcileActiveOrchestratorSeat(PROJECT, f.command)?.restored?.conversationId).toBe(f.original.conversationId);
+      if (trimHistory) {
+        const { beginOrchestratorSeatIntent, failOrchestratorSeatIntent, ORCHESTRATOR_SEAT_HISTORY_CAP } = await import("@/lib/orchestrator/seats");
+        for (let index = 0; index < ORCHESTRATOR_SEAT_HISTORY_CAP; index++) {
+          const clientRequestId = `unrelated_auth_failure_${index}`;
+          beginOrchestratorSeatIntent({ project: "auth-unrelated-fixture", mandate: "Fixture mandate", engine: "claude", clientRequestId, mode: "spawn" });
+          failOrchestratorSeatIntent("auth-unrelated-fixture", clientRequestId, "fixture unrelated terminal failure");
+        }
+      }
+      await f.check(); await f.check();
+      expect(f.rig.sent).toHaveLength(0); expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.row().authIncident?.seatEpoch).toBe(f.seat().seatEpoch);
+      expect(f.reports()).toHaveLength(1); expect(f.reports()[0]?.class).toBe("blocked");
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("refused");
+    });
+  });
+
+  test("a provisional authentication rotation resolves only after successor materialization", async () => {
+    await authFixture(true, async (f) => {
+      const { reconcileActiveOrchestratorSeat } = await import("@/lib/orchestrator/seatCommand");
+      const resolved = f.command.resolvedConversation;
+      f.command.resolvedConversation = (id) => id === f.successor.id ? null : resolved(id);
+      f.command.spawn = async () => ({ status: 202, body: { ok: true, accepted: true, state: "accepted", conversationId: f.successor.id, launchId: "launch_auth_pending" } });
+      await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("rotated"); expect(f.cards()[0]?.status).toBe("inbox");
+      f.command.resolvedConversation = resolved;
+      reconcileActiveOrchestratorSeat(PROJECT, f.command);
+      await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a concurrent manual designation fences automatic rotation before it can replace the new seat", async () => {
+    await authFixture(true, async (f) => {
+      const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+      const { executeOrchestratorRotation } = await import("@/lib/orchestrator/seatCommand");
+      f.rig.deps.seatAuth!.rotate = async (body) => {
+        beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Manual handoff", engine: "claude", model: "opus", clientRequestId: "manual_auth_fixture", mode: "spawn", now: "2026-10-08T00:06:00Z" });
+        completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "manual_auth_fixture", conversationId: f.successor.id, path: f.transcript, now: "2026-10-08T00:06:00Z" });
+        const result = await executeOrchestratorRotation(body, f.command, null);
+        expect(result.status).toBe(409); expect(result.body.code).toBe("incumbent_changed"); return result;
+      };
+      await f.check(); expect(f.spawns).toHaveLength(0); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+    });
+  });
+});
+
+// Controller regressions for idle-seat wakes (#2346).
+function idleWakeRig(f: ChildFixture, now: () => number) {
+  globalThis.Date = new Proxy(WALL_DATE, {
+    construct(target, args) { return Reflect.construct(target, args.length ? args : [now()]); },
+    get(target, key, receiver) { return key === "now" ? now : Reflect.get(target, key, receiver); },
+  });
+  f.registry.reconcileConversations([{
+    engine: "claude", path: f.seat.path!, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "seat" }),
+    turn: { state: "idle", source: "assistant", terminalAt: new Date(now()).toISOString() },
+    observedAt: new Date(now()).toISOString(),
+  }]);
+  expect(f.registry.conversation(f.seat.conversationId as never)!.turn.state).toBe("idle");
+  const rig = childRig(f, { settings: { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 5 } });
+  rig.deps.sources!.now = now;
+  rig.deps.maintenance = null;
+  return rig;
+}
+function finishIdleWorker(f: ChildFixture, child: { id: string; path: string }, now: number) {
+  f.registry.reconcileConversations([{
+    engine: "claude", path: child.path, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "worker" }),
+    turn: { state: "idle", source: "assistant", terminalAt: new Date(now).toISOString() },
+    observedAt: new Date(now).toISOString(),
+  }]);
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  const generation = f.registry.conversation(child.id as never)!.generations[0]!.id;
+  ledger.append(generation, { kind: "turn-started", turnId: "work", seq: 1 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "work", status: "completed", seq: 2 });
+}
+
+test("a new terminal child wakes an idle seat on its first check despite a recent wake (#2346)", async () => {
+  for (const checkMinutes of [5, 1]) {
+    const f = childFixture("first-check");
+    let clock = f.now;
+    const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+    f.seed({ lastWakeAt: new Date(clock + MINUTE).toISOString() });
+    clock += 2 * MINUTE;
+    finishIdleWorker(f, child, clock);
+    const finishedAt = clock;
+    clock += (checkMinutes === 5 ? 3 : 1) * MINUTE;
+    const rig = idleWakeRig(f, () => clock);
+    rig.deps.policy = { ...DEFAULT_SEAT_TICK_POLICY, checkIntervalMs: checkMinutes * MINUTE };
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.verdict).toBe("wake");
+    expect(record!.reasons).toContain("child-terminal");
+    expect(clock - finishedAt).toBeLessThanOrEqual(checkMinutes * MINUTE);
+    expect(f.acknowledged()).toEqual([child.id]);
+    clock += checkMinutes * MINUTE;
+    expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("child-terminal");
+  }
+});
+
+
+test("an idle seat keeps its five-minute cadence for unchanged running children and lanes (#2346)", async () => {
+  for (const work of ["child", "lane"] as const) {
+    const f = childFixture(`cadence-${work}`);
+    let clock = f.now;
+    const child = work === "child" ? f.spawn({ title: "worker", turn: "busy", host: "live" }) : null;
+    f.seed();
+    const rig = idleWakeRig(f, () => clock);
+    if (child) rig.deps.sources!.liveness = async ({ conversationId }) => conversationId === child.id
+      ? [{ conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as never] : [];
+    else rig.deps.sources!.pipelines = () => [pipelineRecord({ id: "running-lane", project: f.project,
+      state: "running", createdAt: new Date(f.now - MINUTE).toISOString(), movedAt: null })] as never;
+    for (let check = 0; check < 6; check++) {
+      const record = await runSeatTickCheck(f.project, rig.deps);
+      expect(record!.verdict).toBe("wake");
+      expect(record!.reasons).toContain("interval");
+      expect(rig.sent.at(-1)!.text).toContain(work === "child" ? "worker" : "running-lane");
+      expect(f.row().outstandingWake).toBeNull();
+      clock += 5 * MINUTE;
+    }
+    expect(rig.cards.filter(entry => entry.card.kind === "retry-guard")).toEqual([]);
+    expect(f.acknowledged()).toEqual([]);
+  }
+});
+
+
+test("quiet unparented and cold-inbox work explains interval eligibility in settings and the board (#2346)", async () => {
+  const { seatTickSettingsAnswer } = await import("./seatTickSettingsAnswer");
+  for (const work of ["unparented", "inbox"] as const) {
+    const f = childFixture(`excluded-${work}`);
+    const clock = f.now;
+    if (work === "unparented") f.spawn({ title: "unparented worker", turn: "busy", host: "live", parent: null });
+    f.seed();
+    const rig = idleWakeRig(f, () => clock);
+    const settings = { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 5, reason: "work check", updatedAt: new Date(clock).toISOString() };
+    rig.deps.sources!.settings = () => settings;
+    if (work === "inbox") rig.deps.sources!.tasks = () => [{ id: "cold-card", project: f.project, status: "inbox",
+      text: "operator triage", placement: "unplaced", assignments: [], createdAt: new Date(clock).toISOString(),
+      updatedAt: new Date(clock).toISOString() }] as never;
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.verdict).toBe("quiet");
+    expect(rig.sent).toEqual([]);
+    expect(record!.detail).toContain("no eligible interval agenda");
+    const answer = seatTickSettingsAnswer(f.project, false, { kind: "operator" } as never, {
+      now: () => clock, settings: () => settings, readState: () => f.row(), records: () => rig.journal,
+      policy: () => DEFAULT_SEAT_TICK_POLICY,
+    });
+    expect(JSON.stringify(answer)).toContain("unparented workers");
+    expect(answer.cardText).toMatch(/unparented workers|без батьківського зв’язку/);
+  }
+});
+
+
+test("a read and acted-on child is described by delivered-wake acknowledgement (#2346)", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const f = childFixture("handled-outcome");
+  let clock = f.now;
+  const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+  clock += MINUTE;
+  finishIdleWorker(f, child, clock);
+  f.seed();
+  setAgentRegistryForTests(f.registry);
+  fs.writeFileSync(child.path, JSON.stringify({ type: "assistant", timestamp: new Date(clock).toISOString(),
+    message: { role: "assistant", content: [{ type: "text", text: "Final: review passed." }] } }) + "\n");
+  const binding = viewerMcpBindings(undefined, undefined, {
+    selectedContext: {
+      selectedConversation: () => ({ resolve: () => ({ conversationId: child.id,
+        engine: "claude", path: child.path, project: f.project }) }),
+      pathAllowed: (candidate: string) => candidate === child.path,
+    },
+    pinnedTranscript: (candidate: string) => {
+      expect(candidate).toBe(child.path);
+      const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects",
+        root: SESSIONS, sameIdentity: () => true };
+    },
+  } as never);
+  const page = await binding.conversation_messages({ conversationId: child.id, roles: ["assistant"] });
+  expect(JSON.stringify(page.records)).toContain("Final: review passed.");
+  f.spawn({ title: "follow-up after passing review", turn: "busy", host: "live" });
+  expect(f.acknowledged()).toEqual([]);
+  const rig = idleWakeRig(f, () => clock);
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).toContain("child-terminal");
+  expect(rig.sent[0]!.text).not.toContain("outcome unharvested");
+  expect(rig.sent[0]!.text).toContain("not yet announced by a delivered seat-tick wake");
+  expect(rig.sent[0]!.text).toContain("Reading the transcript alone does not acknowledge");
+  expect(f.acknowledged()).toContain(child.id);
+  clock += 5 * MINUTE;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("child-terminal");
+});
+
+
+test("a deploy admitted before a lost reply still wakes its idle seat exactly once (#2346)", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { seatDeploymentsFor } = await import("@/lib/orchestrator/seatDeployments");
+  const f = childFixture("lost-deploy-reply");
+  let clock = f.now;
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  const revision = "a".repeat(40);
+  const key = `lost-reply-${crypto.randomUUID()}`;
+  let admissions = 0;
+  const status = { deploymentId: `deploy-${crypto.randomUUID()}`, idempotencyKey: key,
+    requestedRevision: revision, revision, phase: "building", terminal: false,
+    error: null, updatedAt: new Date(clock).toISOString() };
+  const binding = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    throw new Error("Viewer control did not reconnect after 2 attempts");
+  } }, {
+    callerAttribution: () => ({ kind: "manager", conversationId: f.seat.conversationId, role: null }),
+    callerProject: () => f.project, viewerProjects: () => [f.project],
+    authorizedSeats: () => [{ ...f.seat, project: f.project }],
+    findDeploymentByIdempotencyKey: async (originalKey: string) => {
+      expect(originalKey).toBe(key);
+      return status;
+    },
+  } as never);
+  await expect(binding.deploy_exact_sha({ revision, clientRequestId: key })).rejects.toThrow("Viewer control did not reconnect");
+  status.phase = "succeeded";
+  status.terminal = true;
+  clock += MINUTE;
+  rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+  rig.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+  const record = await runSeatTickCheck(f.project, rig.deps);
+  expect(record!.reasons).toContain("deploy-settled");
+  expect(rig.sent).toHaveLength(1);
+  clock += 5 * MINUTE;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("deploy-settled");
+  expect(admissions).toBe(1);
+});
+
+
+test("a fresh controller recovers pending original-key deployments without borrowing another admission (#2346)", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { seatDeploymentsFor } = await import("@/lib/orchestrator/seatDeployments");
+  for (const reply of ["lost", "busy", "refused"] as const) {
+    const f = childFixture(`pending-deploy-${reply}`);
+    let clock = f.now;
+    f.seed();
+    idleWakeRig(f, () => clock);
+    const revision = "b".repeat(40);
+    const key = `pending-${crypto.randomUUID()}`;
+    const status = { deploymentId: `deploy-${crypto.randomUUID()}`, idempotencyKey: key,
+      requestedRevision: revision, revision, phase: "succeeded", terminal: true,
+      error: null, updatedAt: new Date(clock).toISOString() };
+    let admissions = 0;
+    const binding = viewerMcpBindings(undefined, { post: async () => {
+      admissions++;
+      if (reply === "lost") throw new Error("Viewer control did not reconnect");
+      return { state: reply, deploymentId: status.deploymentId, revision };
+    } }, {
+      callerAttribution: () => ({ kind: "manager", conversationId: f.seat.conversationId, role: null }),
+      callerProject: () => f.project, viewerProjects: () => [f.project],
+      authorizedSeats: () => [{ ...f.seat, project: f.project }],
+      findDeploymentByIdempotencyKey: async () => { throw new Error("lookup unavailable"); },
+    } as never);
+    if (reply === "lost") await expect(binding.deploy_exact_sha({ revision, clientRequestId: key })).rejects.toThrow("did not reconnect");
+    else expect((await binding.deploy_exact_sha({ revision, clientRequestId: key })).wakeOnSettle).toBe(false);
+    expect(seatDeploymentsFor(f.seat.conversationId)).toEqual([]);
+    const fresh = idleWakeRig(f, () => clock);
+    fresh.deps.sources!.seatDeployments = seatDeploymentsFor;
+    fresh.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+    for (const lookup of ["unavailable", "unknown", "different-key", "different-sha", "accepted"] as const) {
+      fresh.deps.sources!.deploymentByKey = async originalKey => {
+        expect(originalKey).toBe(key);
+        if (lookup === "unavailable") throw new Error("ledger offline");
+        if (lookup === "unknown") return null;
+        return { ...status, idempotencyKey: lookup === "different-key" ? "another-request" : key,
+          requestedRevision: lookup === "different-sha" ? "c".repeat(40) : revision } as never;
+      };
+      const result = await runSeatTickCheck(f.project, fresh.deps);
+      if (reply === "lost" && lookup === "accepted") expect(result!.reasons).toContain("deploy-settled");
+      else expect(result!.reasons).not.toContain("deploy-settled");
+      clock += 5 * MINUTE;
+    }
+    const other = childFixture("foreign-seat");
+    other.seed();
+    const foreign = idleWakeRig(other, () => clock);
+    foreign.deps.sources!.seatDeployments = seatDeploymentsFor;
+    foreign.deps.sources!.deploymentByKey = async () => status as never;
+    foreign.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+    expect((await runSeatTickCheck(other.project, foreign.deps))!.reasons).not.toContain("deploy-settled");
+    const restarted = idleWakeRig(f, () => clock);
+    restarted.deps.sources!.seatDeployments = seatDeploymentsFor;
+    restarted.deps.sources!.deploymentByKey = async () => status as never;
+    restarted.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+    expect((await runSeatTickCheck(f.project, restarted.deps))!.reasons).not.toContain("deploy-settled");
+    expect(f.row().announcedDeploys ?? []).toEqual(reply === "lost" ? [status.deploymentId] : []);
+    expect(fresh.sent).toHaveLength(reply === "lost" ? 1 : 0);
+    expect(admissions).toBe(1);
+  }
+});
+
+
+test("the independent timer delivers a finished child while the seat has no operator turns (#2346)", async () => {
+  const { seatTickIdle } = await import("./seatTickController");
+  const f = childFixture("idle-timer");
+  let clock = f.now;
+  const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  rig.deps.sources!.activeSeats = () => [f.project];
+  rig.deps.ownsTraffic = () => true;
+  rig.deps.recordSuccessions = () => [];
+  rig.deps.sources!.liveness = async ({ conversationId }) => conversationId === child.id
+    ? [{ conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as never] : [];
+  let callback!: () => void;
+  let interval = 0;
+  const drainSweep = async () => {
+    for (let count = 0; !seatTickIdle() && count < 1000; count++) await new Promise<void>(resolve => setImmediate(resolve));
+    expect(seatTickIdle()).toBe(true);
+  };
+  expect(startSeatTick({ policy: DEFAULT_SEAT_TICK_POLICY, recordSuccessions: () => [],
+    handoffHeld: () => false, drainHeld: () => false,
+    scheduleInterval: (run, delay) => { callback = run; interval = delay; return setInterval(() => {}, 1_000_000_000); },
+    sweep: () => reconcileSeatTick(rig.deps), log: () => {},
+  })).toBe(true);
+  await drainSweep();
+  expect(rig.sent).toHaveLength(1);
+  const wakeAt = clock;
+  clock += MINUTE;
+  finishIdleWorker(f, child, clock);
+  clock = wakeAt + interval;
+  callback();
+  await drainSweep();
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.journal.at(-1)!.reasons).toContain("child-terminal");
+});
+
+
+test("delivered task obligations cannot hide a running child's recurring interval (#2346)", async () => {
+  const f = childFixture("mixed-cadence");
+  let clock = f.now;
+  const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  rig.deps.sources!.liveness = async ({ conversationId }) => conversationId === child.id
+    ? [{ conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as never] : [];
+  rig.deps.sources!.tasks = () => [{ id: "assigned-card", project: f.project, status: "assigned", text: "ready work",
+    placement: "unplaced", assignments: [], createdAt: new Date(f.now).toISOString(), updatedAt: new Date(f.now).toISOString() }] as never;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).toContain("unstarted-task");
+  for (let check = 0; check < 5; check++) {
+    clock += 5 * MINUTE;
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.reasons).toEqual(["interval"]);
+    expect(rig.sent.at(-1)!.text).toContain("worker");
+    expect(agendaOf(rig.sent.at(-1)!.text).join("\n")).not.toContain("assigned-card");
+  }
+});
+
+
+test("recurring lane reminders leave room for lanes not yet shown (#2346)", async () => {
+  const f = childFixture("cadence-pages");
+  let clock = f.now;
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  const lanes = Array.from({ length: 7 }, (_, i) => pipelineRecord({ id: `live-lane-${i}`, project: f.project,
+    state: "running", createdAt: new Date(f.now - MINUTE).toISOString(), movedAt: null }));
+  rig.deps.sources!.pipelines = () => lanes as never;
+  const shown = new Set<string>();
+  for (let check = 0; check < 2; check++) {
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.reasons).toEqual(["interval"]);
+    for (const item of agendaOf(rig.sent.at(-1)!.text)) {
+      const id = /\[pipeline\] (\S+)/.exec(item)?.[1];
+      if (id) shown.add(id);
+    }
+    clock += 5 * MINUTE;
+  }
+  expect(shown).toEqual(new Set(lanes.map(lane => lane.id)));
 });

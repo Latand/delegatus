@@ -61,6 +61,7 @@ export interface StructuredControlRequest {
   conversationId: string;
   action: string;
   operationId?: string;
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   reconfiguration?: Partial<AgentReconfiguration>;
   /** `permission` only (#2215): allow once or deny. */
   decision?: string;
@@ -439,7 +440,7 @@ export async function dispatchStructuredControl(
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
-      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey }
+      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}) }
       /* #862: a compact command carries a generation fence and nothing else.
          There is no text field to fill, so no caller's text can ride this
          control into the conversation — the Claude host's `/compact` is the

@@ -1,5 +1,7 @@
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -7,6 +9,7 @@ import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 import { resolveAttachCommand } from "./attachCommand";
 import { viewerMcpServerEnv } from "./spawnPolicy";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import type { FileEntry } from "@/lib/types";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cli-account-test-"));
@@ -14,6 +17,7 @@ const OLD_STATE = process.env.LLV_STATE_DIR;
 const OLD_HOME = process.env.LLV_CODEX_HOME;
 const OLD_CLAUDE_HOME = process.env.LLV_CLAUDE_HOME;
 const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
+const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\ndaemon_auto_start stable true\nfuture_worker stable true"));
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
@@ -23,8 +27,71 @@ const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
 
+test("fresh and resumed terminal launches deny all native agent routes and future features", () => {
+  const home = path.join(SANDBOX, "legacy");
+  fs.mkdirSync(path.join(home, "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(home, "config.toml"), "[mcp_servers]\n");
+  const sessionId = randomUUID();
+  const transcript = path.join(home, "sessions", `rollout-${sessionId}.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: SANDBOX } }) + "\n");
+  const binary = path.join(SANDBOX, "codex-policy-mcp-stub");
+  fs.writeFileSync(binary, "#!/bin/sh\nprintf '[{\"name\":\"viewer\"}]'\n");
+  fs.chmodSync(binary, 0o755);
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  try {
+  for (const allowed of [false, true]) {
+    for (const spec of [freshSpecFor("codex", SANDBOX, { codexHome: home, allowSubagents: allowed }), resumeSpecFor("codex-sessions", transcript, { allowSubagents: allowed })]) {
+      expect(spec?.command).toContain("--no-daemon");
+      expect(spec?.command).toContain(`agents.enabled=${allowed}`);
+      expect(spec?.command.includes('approvals_reviewer="user"')).toBe(!allowed);
+      for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
+        const normalized = spec?.command.replace(/'/g, "");
+        expect(normalized?.includes(`--disable ${feature}`)).toBe(!allowed);
+      }
+    }
+  }
+  } finally {
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousBinary;
+  }
+});
+
+for (const engine of ["claude", "codex"] as const) for (const mode of ["fresh", "resume"] as const) test(`admitted ${engine} ${mode} terminal installs separate memory context with the receipt capability`, async () => {
+  const previousCapability = process.env.LLV_SPAWN_CAPABILITY;
+  delete process.env.LLV_SPAWN_CAPABILITY;
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    expect(request.headers.get("x-llv-spawn-capability")).toBe("a".repeat(43));
+    const input = await request.json();
+    return Response.json({ block: input.delegatus_confirm ? "" : "Synthetic terminal memory context" });
+  } });
+  try {
+  const home = path.join(SANDBOX, `memory-${engine}-${mode}`); fs.mkdirSync(home, { recursive: true });
+  const native = engine === "claude" ? "CLAUDE.md" : "memory.md";
+  fs.writeFileSync(path.join(home, native), "Synthetic native memory stays intact.");
+  const { resumeSpecForSession } = await import("./cli");
+  const spec = mode === "fresh" ? freshSpecFor(engine, SANDBOX, { claudeConfigDir: home, codexHome: home, deferClaudeSpawnPolicy: true })
+    : resumeSpecForSession(engine, "12345678-1234-1234-1234-123456789abc", SANDBOX, home)!;
+  const admitted = withSpawnCapability(spec, "a".repeat(43), { ...process.env, LLV_VIEWER_PORT: String(server.port) });
+  const settings = engine === "codex" ? path.join(home, "hooks.json")
+    : (await import("./spawnPolicy")).claudeSpawnPolicyPaths(home, mode === "fresh" ? path.basename(spec.transcript!, ".jsonl") : "resume-12345678-1234-1234-1234-123456789abc").settingsPath;
+  expect(fs.existsSync(settings)).toBe(true);
+  const hook = JSON.parse(fs.readFileSync(settings, "utf8")).hooks.UserPromptSubmit.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks).find((h: { command: string }) => h.command.includes("shared-memory"));
+  expect(hook).toBeDefined();
+  expect(hook.additionalContextLimit).toBe(40000);
+  expect(admitted.command).toContain("LLV_SPAWN_CAPABILITY");
+  if (engine === "codex") expect(admitted.command).toContain("shared-memory-trust");
+  const proc = Bun.spawn(["bash", "-c", hook.command], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "a".repeat(43) } });
+  proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "synthetic-session", prompt: "Synthetic terminal operator prompt" })); proc.stdin.end();
+  expect(await proc.exited).toBe(0);
+  expect(JSON.parse(await new Response(proc.stdout).text())).toEqual({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "Synthetic terminal memory context" } });
+  expect(fs.readFileSync(path.join(home, native), "utf8")).toBe("Synthetic native memory stays intact.");
+  } finally { server.stop(true); if (previousCapability === undefined) delete process.env.LLV_SPAWN_CAPABILITY; else process.env.LLV_SPAWN_CAPABILITY = previousCapability; }
+});
+
 afterAll(() => {
   restorePolicyReader();
+  restoreFeatures();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = OLD_STATE;
   if (OLD_HOME === undefined) delete process.env.LLV_CODEX_HOME;
@@ -70,7 +137,7 @@ test("plain Codex launch flags preserve restrictive shell policy and pin the Git
     for (const [key, value] of Object.entries(controllerCommitIdentityEnv())) {
       expect(spec.command).toContain(`shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
     }
-    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify(["PATH", "HOME", ...Object.keys(controllerCommitIdentityEnv())])}`);
+    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])])}`);
   } finally {
     restore();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
@@ -474,7 +541,7 @@ test("Claude commands do not gain Codex environment assignments", () => {
   const spec = freshSpecFor("claude", "/repo", { codexHome: path.join(SANDBOX, "unused") });
 
   expect(spec.command).not.toContain("CODEX_HOME=");
-  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: controllerCommitIdentityEnv() })}'`);
+  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }).replaceAll("'", "'\\''")}'`);
 });
 
 test("fresh read-only Claude commands accept a non-interactive permission mode", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, GitMerge, Users, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -61,14 +61,8 @@ import { laneFocusId } from "./attention/attentionQueue";
 import { MobileFocusView } from "./mobile/MobileFocusView";
 import { MobileHostSheet } from "./mobile/MobileHostSheet";
 import { MobileSeatCard } from "./mobile/MobileSeatCard";
-import { activityMobileMenuEntry } from "./activity/menuEntry";
-import { teamMobileMenuEntry } from "./team/menuEntry";
-import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
-import { openTelemetrySettings } from "./telemetry/TelemetrySettings";
-import { openLinkedSettings } from "./links/openLinkedSettings";
-import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
-import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
-import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
+import { HeaderMenuSheet } from "./headerMenu/HeaderMenu";
+import type { MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
 import { MobileAccountsScreen, MobileBarTitle, MobileReportsScreen, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
@@ -83,6 +77,7 @@ import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { onTaskChipOpen } from "./orchestrator/taskChips";
+import { usePrototypeReviewJump, type PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
@@ -105,14 +100,13 @@ import {
 } from "./projectModel";
 import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
-import { KeepAwakeMenuRow } from "./KeepAwakeControl";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { SoundToggle } from "./SoundToggle";
-import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
+import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -123,6 +117,7 @@ const ACTIVE_DELIVERY_RECEIPTS = new Set(["pending", "delivering", "applying", "
 const EMPTY_MANUAL: FileEntry[] = [];
 const EMPTY_DRAFTS: string[] = [];
 const EMPTY_TASKS: BoardTask[] = [];
+const NO_READING_PATHS: readonly string[] = [];
 const EMPTY_LAUNCHED: ReadonlyMap<string, string> = new Map();
 
 interface Props {
@@ -166,8 +161,6 @@ interface Props {
       card only has to exist; arming the glide channel too would race that move
       with a second one. Same one-shot nonce discipline as `focusRequest`. */
   placeRequest?: { path: string; nonce: number } | null;
-  /** «Show only needs me»: non-null dims every scheme node not in the set. */
-  attentionPaths?: ReadonlySet<string> | null;
   /** The project is shelved: hidden from the rail and the overview. */
   archived: boolean;
   catalogKnown: boolean;
@@ -409,7 +402,6 @@ function ProjectDashboardView({
   openNonce,
   focusRequest,
   placeRequest,
-  attentionPaths,
   archived,
   catalogKnown,
   catalogConversationCount,
@@ -635,7 +627,18 @@ function ProjectDashboardView({
   );
   /* Only active execution cursors receive pipeline expansion protection.
      Completed prior stages remain reachable through compact history. */
-  const protectedCollapsePaths = useMemo(() => pipelineCursorStagePaths(pipelines, files), [pipelines, files]);
+  /* A conversation open as a reader on the kanban board stays in its card when
+     its work finishes: folding it would take the reader out from under the
+     operator. Closing the reader lets it fold as any finished conversation. */
+  const [readingPaths, setReadingPaths] = useState<readonly string[]>(NO_READING_PATHS);
+  const holdReaders = useCallback((paths: readonly string[]) => {
+    setReadingPaths((held) => (held.length === paths.length && held.every((path, index) => path === paths[index]) ? held : paths));
+  }, []);
+  const protectedCollapsePaths = useMemo(() => {
+    const paths = pipelineCursorStagePaths(pipelines, files);
+    for (const path of readingPaths) paths.add(path);
+    return paths;
+  }, [pipelines, files, readingPaths]);
   /* The subagent-tray projection measures transcript freshness and attention
      TTLs against `mtime`, which is SECONDS. It takes the seconds clock
      straight from the shared hook rather than a conversion of `nowMs` — the
@@ -1173,10 +1176,19 @@ function ProjectDashboardView({
      clicked: open or frame that task on this board, the way a task-panel row
      does. A task of another project is not this board's to open. */
   const openChipTask = useRef(openTaskOnBoard);
+  const projectTaskIds = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => { projectTaskIds.current = new Set(projectTasks.map((task) => task.id)); }, [projectTasks]);
   useEffect(() => { openChipTask.current = openTaskOnBoard; });
   useEffect(() => onTaskChipOpen((request) => {
     if (request.project === project) openChipTask.current(request.id);
   }), [project]);
+  /* The orchestrator's «Go to prototype» takes the operator to the task
+     first; the review itself opens over it from the page's host. A card's own
+     button asks for nothing here: the operator is already at the task. */
+  usePrototypeReviewJump(useCallback((target: PrototypeReviewTarget) => {
+    if (target.from === "card" || !projectTaskIds.current.has(target.taskId)) return;
+    openChipTask.current(target.taskId);
+  }, []));
 
   /* An attention jump rides the same channel as switchboard opens: the ref is
      set here and the every-render effect below flashes it, whether the node is
@@ -1888,8 +1900,8 @@ function ProjectDashboardView({
      back on its own; the paths closed from here are held until the board
      settles, so that return also gets a receipt. */
   const swipeClosesRef = useRef(new Map<string, string>());
-  /* Reopen from the board lifts the tombstone where the card stood and leaves
-     the operator on the board. The switchboard's open is the phone's OPEN
+  /* Reopen from a board row or the conversation menu lifts the tombstone
+     where the card stood. The switchboard's open is the phone's OPEN
      gesture — it pushes the conversation screen — so it is not used here; the
      placement it would have chosen is remembered at the close instead. Both
      halves read the latest render at the moment they run, as the undo keys
@@ -2047,16 +2059,18 @@ function ProjectDashboardView({
       {t("dash.pipelinesUnavailable")}
     </div>
   ) : null;
-  /* The board menu (README §3.1, §4.1): every former header control as a
-     labelled 44 px row, create actions first, the danger-free Archive last. No
-     row asks for confirmation; Archive answers with a receipt carrying Restore. */
+  /* The board menu (README §3.1, §4.1; the layout of docs/design/header-menu.md): the create
+     actions as cells, the places as labelled 44 px rows, the header's entries, and the project's
+     rules with the danger-free Archive last on a page of their own. No row asks for confirmation;
+     Archive answers with a receipt carrying Restore. */
   const archiveAllowed = (projectFiles.length > 0 || catalogKnown) && !projectFiles.some((file) => file.proc === "running" || file.activity === "live");
-  const mobileMenuEntries = (): MobileMenuEntry[] => {
-    const entries: MobileMenuEntry[] = [
+  const mobileMenuEntries = (): { create: MobileMenuEntry[]; board: MobileMenuEntry[]; rules: MobileMenuEntry[] } => {
+    const create: MobileMenuEntry[] = [
       { kind: "row", key: "new-agent", icon: <MessageSquarePlus className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newAgent"), disabled: !loaded, onSelect: () => { mobileNav.closeSheet(); addDraft(); } },
       { kind: "row", key: "new-task", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newTask"), onSelect: () => openMobileTasks("new") },
       { kind: "row", key: "new-pipeline", icon: <ListTree className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newPipeline"), onSelect: () => { mobileNav.closeSheet(); setTemplatePickerOpen(true); } },
-      { kind: "divider", key: "d1" },
+    ];
+    const entries: MobileMenuEntry[] = [
       { kind: "row", key: "tasks", icon: <ListTodo className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.tasks"), trailing: openTaskCount ? t("mobile2.menu.tasksOpen", { count: openTaskCount }) : undefined, onSelect: () => openMobileTasks("list") },
       /* Every pipeline of the project (§3.1): the columns carry each one on its
          task's card, and the board's old «N pipelines» row is gone. */
@@ -2088,47 +2102,26 @@ function ProjectDashboardView({
         trailing: (
           <>
             {mobileRuntime !== "live" ? <Badge tone={mobileRuntime === "offline" ? "danger" : "warning"} data-connection={mobileRuntime}>{t(`runtime.${mobileRuntime}`)}</Badge> : null}
-            {t("mobile2.menu.hostTasks", { count: hostBackgroundTasks.length })}
+            {hostBackgroundTasks.length ? t("mobile2.menu.hostTasks", { count: hostBackgroundTasks.length }) : null}
           </>
         ),
         onSelect: () => mobileNav.openSheet("host"),
       },
-      activityMobileMenuEntry(t, mobileNav),
-      teamMobileMenuEntry(t, mobileNav),
-      { kind: "divider", key: "d2" },
     );
-    entries.push(
-      {
-        kind: "custom",
-        key: "sound",
-        node: (
-          <div className="flex min-h-11 items-center gap-2 px-4">
-            <span className="min-w-0 flex-1 text-body font-semibold text-primary">{t("mobile2.menu.sound")}</span>
-            <SoundToggle />
-          </div>
-        ),
-      },
-      /* «Keep screen awake» (issue #712) reads the Viewer-level controller that
-         outlives this sheet; it renders nothing without one. */
-      { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
-      { kind: "divider", key: "d-setup" },
-      ...onboardingMobileMenuEntries(t, () => mobileNav.closeSheet()),
-      { kind: "row", key: "settings", icon: null, label: t("telemetry.settings"), onSelect: () => { mobileNav.closeSheet(); openTelemetrySettings(); } },
-      { kind: "row", key: "linked-settings", icon: null, label: t("links.title"), onSelect: () => { mobileNav.closeSheet(); openLinkedSettings(); } },
-      { kind: "row", key: "external-relay", icon: null, label: t("externalRelay.title"), onSelect: () => { mobileNav.closeSheet(); openExternalRelaySettings(); } },
-      selfUpdateMobileMenuEntry(t, () => mobileNav.closeSheet()),
+    /* The header's entries (activity, team, update, Settings, help) follow
+       these rows; `HeaderMenuSheet` draws them, then the rules' page row. */
+    const rules: MobileMenuEntry[] = [
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */
-      { kind: "divider", key: "d-merge" },
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
       /* "Asks you" is the installation's, not the project's; it sits here
          because this is where the operator looks for what reports to them. */
       { kind: "custom", key: "asks-you", node: <AsksYouRow variant="sheet" /> },
-    );
+    ];
     if (archived) {
-      entries.push({ kind: "divider", key: "d4" }, {
+      rules.push({ kind: "divider", key: "d4" }, {
         kind: "row",
         key: "unarchive",
         icon: <ArchiveRestore className="h-[18px] w-[18px]" aria-hidden />,
@@ -2140,7 +2133,7 @@ function ProjectDashboardView({
         },
       });
     } else if (archiveAllowed) {
-      entries.push({ kind: "divider", key: "d4" }, {
+      rules.push({ kind: "divider", key: "d4" }, {
         kind: "row",
         key: "archive",
         icon: <Archive className="h-[18px] w-[18px]" aria-hidden />,
@@ -2155,7 +2148,7 @@ function ProjectDashboardView({
         },
       });
     }
-    return entries;
+    return { create, board: entries, rules };
   };
 
   /* The header bar's two ends (#1801, docs/design/board-header.md), shared by the Board's bar and
@@ -2191,27 +2184,34 @@ function ProjectDashboardView({
                 </button>
               </BarMenuGroup>
             ) : null}
-            {wide ? null : (
-              <BarMenuGroup name="accounts">
-                <ProjectAccounts project={project} appearance="menu" />
-              </BarMenuGroup>
-            )}
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
-            <BarMenuGroup name="project">
-              <MergeOnReviewRow project={project} variant="menu" />
-              <ShareProjectRow project={project} variant="menu" />
-              <BridgeReportsRow project={project} variant="menu" />
-              <AsksYouRow variant="menu" />
-              {archived ? (
-                <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
-                  <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
-                </button>
-              ) : (
-                <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+            <BarMenuGroup name="sections">
+              {wide ? null : (
+                <BarMenuSection id="accounts" title={t("dash.menu.accounts")} icon={<Users className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
+                  <ProjectAccounts project={project} appearance="menu" />
+                </BarMenuSection>
               )}
-              <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
+              {/* The four project switches carry their explanations, so each pair is a page of its own. */}
+              <BarMenuSection id="merging" title={t("dash.menu.merging")} icon={<GitMerge className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
+                <MergeOnReviewRow project={project} variant="menu" />
+                <ShareProjectRow project={project} variant="menu" />
+              </BarMenuSection>
+              <BarMenuSection id="seat" title={t("dash.menu.seat")} icon={<Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
+                <BridgeReportsRow project={project} variant="menu" />
+                <AsksYouRow variant="menu" />
+              </BarMenuSection>
+              <BarMenuSection id="project" title={t("dash.menu.project")} icon={<Archive className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
+                {archived ? (
+                  <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
+                    <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
+                  </button>
+                ) : (
+                  <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+                )}
+                <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
+              </BarMenuSection>
             </BarMenuGroup>
           </>
         )}
@@ -2236,7 +2236,7 @@ function ProjectDashboardView({
   ) : null;
 
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
-    if (name === "menu") return <MobileMenuSheet title={projectName} entries={mobileMenuEntries()} onClose={close} />;
+    if (name === "menu") return <HeaderMenuSheet title={projectName} project={project} nav={mobileNav} {...mobileMenuEntries()} onClose={close} />;
     /* Host details (mobile v2 lane 2): the background processes with their PIDs
        and a Kill that acts on the tap, the runtime connection, and the quiet
        conversations — the one place any of it appears on the phone. */
@@ -2507,7 +2507,8 @@ function ProjectDashboardView({
                      other conversation's pane before replacing it. */
                   focus={mobileLaunchSuccessor?.path ?? mobileConversationKey ?? highlight}
                   onSelect={openSwitchboardFile}
-                  onClose={closeNode}
+                  onClose={(path) => swipeCardRef.current?.close(path)}
+                  onReopen={(path) => swipeCardRef.current?.reopen(path)}
                   onDraftClose={removeDraft}
                   onDraftSpawned={draftSpawned}
                   onConversationOpened={markPathSeen}
@@ -2582,6 +2583,7 @@ function ProjectDashboardView({
                 seatRefs={seatRefsForBoard}
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
+                onReadersChange={holdReaders}
                 seat={(boardId) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}

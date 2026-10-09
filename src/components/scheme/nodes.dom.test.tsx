@@ -208,7 +208,6 @@ function renderLayer(root: Root, next: SchemeLayout, options: { lite?: boolean; 
         multi={new Set()}
         session={false}
         focus={null}
-        attentionPaths={null}
         flowsByImpl={new Map()}
         flows={flows}
         pipelineStrips={new Map()}

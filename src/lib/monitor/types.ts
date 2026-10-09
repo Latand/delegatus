@@ -1,3 +1,5 @@
+import type { SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
+import type { SeatAuthIncident, SeatAuthTelegramNotice, SeatAuthCardNotice } from "./seatAuthIncident";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import type { LifecycleEventType, LifecycleState, LifecycleTurnState } from "@/lib/lifecycle/vocabulary";
 
@@ -206,7 +208,10 @@ export type SeatTickWakeReasonKind =
   /** A lane's stage or a spawned child holds a tool permission request nobody
       has answered (#2215). Unattended ones are denied at once, so one standing
       here is a request the automatic answer could not settle. */
-  | "permission-request";
+  | "permission-request"
+  /** Free space on a volume Delegatus writes to fell below the warning
+      threshold: once per pressure episode, without waiting for the interval. */
+  | "disk-pressure";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -219,6 +224,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "maintenance-settled",
   "deploy-settled",
   "permission-request",
+  "disk-pressure",
 ];
 
 export interface SeatTickWakeReason {
@@ -229,6 +235,9 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  diskPressureEpisode?: string;
+  /** Version credited only by delivery of this visible item. */
+  itemVersion?: string;
   outcomeId?: string;
   /** Every owed outcome this ONE line stands for (#1783). A child's outcome
       identity is a turn of a ledger generation, so a worker the seat spawned
@@ -474,11 +483,13 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /** Attempt identity observed with stage liveness; refreshed sources must match it. */
+  stageAttempt?: string | null;
   /**
    * Who paused the lane, read off its pause record (#2063); absent when it is
    * not paused. `seat` is the seat this check is about: a lane it paused, for a
-   * deploy or anything else, is owed work until it is resumed, so every wake
-   * lists it. `operator` is excluded from the seat's work altogether: the
+   * deploy or anything else, is owed work until it is resumed. Its first wake
+   * and each later deploy settlement list it. `operator` is excluded from the seat's work altogether: the
    * operator stopped it, and only the operator's resume starts it again.
    * `other` is anyone else, a predecessor seat among them, and is read as any
    * parked lane is.
@@ -784,6 +795,8 @@ export interface SeatTickChildInput {
 /** A durable log line the Viewer already writes: a deploy outcome, the host
     retirement report, a seat whose own turn stopped progressing. */
 export interface SeatTickSignalInput {
+  /** Stable pressure crossing; free-space changes do not create a new warning. */
+  episode?: string;
   id: string;
   label: string;
 }
@@ -826,6 +839,13 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  diskPressure?: { episode: string; version: string };
+  /** Versions of agenda items carried by this frozen delivery plan. */
+  itemsShown?: string[];
+  /** Complete redacted bullets used to verify visibility in the frozen text. */
+  itemLines?: { version: string; line: string }[];
+  /** Each settlement credit is bound to the complete frozen bullet that earns it. */
+  acknowledgmentLines?: { key: string; line: string }[];
   /** A proposal wake, which advances the 24-hour slot as well as the stamp. */
   proposal: boolean;
   reasons: SeatTickWakeReasonKind[];
@@ -1046,6 +1066,20 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  authIncident?: SeatAuthIncident;
+  /** Recovered credential scopes still owe their original operator notice. */
+  authNoticesOwed?: SeatAuthIncident[];
+  /** Proven pre-send refusals retry independently of credential recovery. */
+  authTelegramOwed?: SeatAuthTelegramNotice[];
+  /** Refused board writes survive recovery without keeping the seat parked. */
+  authCardsOwed?: SeatAuthCardNotice[];
+  /** Last failed turn cleared by a re-login; it cannot reopen on stale evidence. */
+  authRecoveredThrough?: number;
+  /** Latest readable credential observation, scoped to this seat activation. */
+  authCredentialObserved?: SeatAuthCredentialBaseline;
+  diskPressureShown?: string;
+  /** Latest delivered versions, bounded to 2000 recent agenda items. */
+  itemsShown?: string[];
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
@@ -1259,6 +1293,8 @@ export interface SeatTickCheckInput {
    * a {@link SeatTickEvidenceGap} naming what was unreadable.
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
+  /** Ephemeral provenance for the gates and lane associations of the PR read. */
+  pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
   /** Lanes the seat itself launched whose stage has settled (#1749). Empty for
       a seat that launched nothing and for lanes some other hand created: the
@@ -1308,7 +1344,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed";
   detail: string;
   /**
    * Whether the condition still holds.

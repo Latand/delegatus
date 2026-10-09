@@ -15,7 +15,9 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 const dom = new HappyWindow({ innerWidth: 390, innerHeight: 844 });
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 Object.assign(globalThis, {
-  window: dom, document: dom.document, navigator: dom.navigator,
+  window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom), document: dom.document, navigator: dom.navigator,
   Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
   Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
   sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
@@ -133,6 +135,7 @@ test("the focused successor keeps its composer and reaches its predecessor from 
   const more = host.querySelector('[data-mobile2-open="menu"]') as HTMLButtonElement;
   expect(more).not.toBeNull();
   flushSync(() => more.click());
+  flushSync(() => (host.querySelector('[data-mobile2-menu-section="manage"]') as HTMLButtonElement).click());
   const row = host.querySelector('[data-testid="mobile-menu-predecessor"]') as HTMLElement | null;
   expect(row).not.toBeNull();
   expect(row!.getAttribute("data-continues-conversation")).toBe("conversation_round_1");

@@ -14,6 +14,7 @@ import { runtimeImageCapability } from "./runtimeImageStore";
 import type { StructuredImageRef } from "./structuredContent";
 import { StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 
+import { sendReceiptFor } from "./sendSettlement";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 
 const artifactPath = "/sessions/native-source.jsonl";
@@ -509,6 +510,92 @@ test("a missing runtime session keeps a busy-turn reseat held through restart an
 
 test("a missing runtime session keeps an unknown-turn reseat held through restart and becomes cancelled evidence", async () => {
   await expectWaitingTurnReseatRestart("unknown", "missing-session");
+});
+
+/* 2026-10-06: a send to an idle seat whose account was being switched forced
+   the switch inside its own request, and the operator's request stayed open
+   for the whole fork, start and commit. Admission now answers at once and the
+   coordinator carries the held message to the successor, once. */
+test("a send during a pending reseat is admitted at once with its wait reason and delivered once on the successor", async () => {
+  const { registry, conversation } = registryWithConversation();
+  registry.setEngineRouting("codex", "seat-active");
+  const sourceGeneration = conversation.generations.at(-1)!;
+  let predecessorCommands = 0;
+  let drainRequests = 0;
+  const neverSettles = new Promise<void>(() => {});
+  const client = deliveredClient(conversation.id, () => { predecessorCommands += 1; });
+  const clientMessageId = "send-during-pending-reseat";
+
+  const sending = enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId, text: "continue after the switch" }, {
+    enabled: () => true, registry: () => registry, client: () => client,
+    /* A drain or switch that never finishes must not hold the answer back. */
+    kick: () => { drainRequests += 1; return neverSettles; },
+    requestMigrationTick: () => {},
+  });
+  const result = await Promise.race([sending, new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_000))]);
+  const operationId = (result as { operationId: string } | null)?.operationId ?? "";
+
+  expect(typeof operationId === "string" && operationId.length > 0).toBe(true);
+  expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id, outcome: "held" });
+  expect(drainRequests).toBe(1);
+  expect(registry.conversation(conversation.id)?.migration).toMatchObject({ targetId: "seat-active", phase: "requested" });
+  expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
+    clientMessageId, state: "held", attempts: 0, generationId: null, waitReason: "switching-accounts",
+  }]);
+  expect(sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId)).toMatchObject({
+    state: "in-flight", reason: "switching-accounts", resend: null,
+  });
+
+  const successorId = "native-successor-pending-reseat";
+  const successorPath = `/sessions/${successorId}.jsonl`;
+  const provider: SuccessorProviderPort = {
+    virtualSource: true,
+    async create(input) {
+      return {
+        operationId: input.operationId,
+        nativeId: successorId,
+        path: successorPath,
+        continuityPaths: [successorPath],
+        historyHash: "synthetic-history",
+        host: { kind: "codex-app-server", identity: successorId, epoch: 1, verifiedAt: "2026-07-21T00:01:00.000Z" },
+      };
+    },
+    async verify() {},
+  };
+  const successorDeliveries: string[] = [];
+  const delivery = {
+    async deliver(input: { path: string; clientMessageId: string }) {
+      if (input.path === sourceGeneration.path) predecessorCommands += 1;
+      else successorDeliveries.push(input.clientMessageId);
+      return "delivered" as const;
+    },
+  };
+  await advanceConversationMigration(conversation.id, registry, provider, { deferBoardRepair: true });
+  await drainHeldDeliveries(conversation.id, delivery, registry);
+  await drainHeldDeliveries(conversation.id, delivery, registry);
+
+  expect({ predecessorCommands, successorDeliveries }).toEqual({ predecessorCommands: 0, successorDeliveries: [clientMessageId] });
+  expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
+    clientMessageId, state: "delivered", generationId: successorId, attempts: 1, waitReason: null,
+  }]);
+  expect(sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId)).toMatchObject({ state: "delivered", resend: "not-needed" });
+});
+
+test("a send held behind a busy turn's reseat names the wait for the turn on its receipt", async () => {
+  const { registry, conversation } = registryWithConversation("seat-source", "codex", "busy");
+  registry.setEngineRouting("codex", "seat-active");
+  const client = deliveredClient(conversation.id, () => { throw new Error("source must stay fenced"); }, "running");
+  const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "send-behind-busy-reseat", text: "after this turn" }, {
+    enabled: () => true, registry: () => registry, client: () => client,
+    kick: () => {}, requestMigrationTick: () => {},
+  });
+
+  expect(result).toMatchObject({ ok: true, outcome: "held" });
+  expect(registry.conversation(conversation.id)?.migration?.phase).toBe("waiting-turn");
+  expect(sendReceiptFor(registry.deliverySnapshotForOperation((result as { operationId: string }).operationId), (result as { operationId: string }).operationId))
+    .toMatchObject({ state: "in-flight", reason: "switch-after-turn" });
 });
 
 test("a live structured send starts an active-account reseat and holds the operator message", async () => {

@@ -20,6 +20,7 @@ import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { runtimePresentationReceipt, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
 import { readEvidence, type Evidence } from "./evidence";
+import { confirmedSend } from "./confirmedSend";
 import { journalVerdict, resolveSendReceipt, runtimeReceiptForSend, SEND_DISCARDED_REASON, sendReceiptFor, type SendReceipt } from "./sendSettlement";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
@@ -347,6 +348,8 @@ async function dispatchRuntimeCommand(
         if (!admitted.ok) {
           return NextResponse.json({
             error: admitted.error,
+            ...(command.kind === "inject" && admitted.admission === "refused"
+              ? { delivery: "refused" satisfies AttachmentDeliveryOutcome } : {}),
             ...(admitted.code ? { code: admitted.code } : {}),
             ...(admitted.seatConversationId ? { seatConversationId: admitted.seatConversationId } : {}),
             ...(admitted.operationId ? { operationId: admitted.operationId } : {}),
@@ -360,7 +363,18 @@ async function dispatchRuntimeCommand(
            could never ask `message_receipt` about afterwards, which put
            `queued` back at the end of the story on the composer's own path. */
         if (admitted.outcome === "held") {
-          return NextResponse.json({ held: true, operationId: admitted.operationId }, { status: 202 });
+          /* The receipt says what the hold waits for, so the composer can
+             show it at once. The hold is already durable, so a failed read
+             leaves the answer without a receipt and never fails the send. */
+          let send: SendReceipt | null = null;
+          try {
+            send = sendReceiptFor((dependencies.registry ?? agentRegistry)().deliverySnapshotForOperation(admitted.operationId), admitted.operationId);
+          } catch {
+            send = null;
+          }
+          return NextResponse.json({ held: true, operationId: admitted.operationId,
+            ...(send ? { receipt: runtimeReceiptForSend(send) } : {}),
+          }, { status: 202 });
         }
         const status = admitted.receipt.status === "pending" || admitted.receipt.status === "queued" ? 202 : 200;
         return NextResponse.json({ operationId: admitted.operationId, receipt: admitted.receipt }, { status });
@@ -754,6 +768,13 @@ export async function handleRuntimeRetry(
     }
     const registry = (dependencies.registry ?? agentRegistry)();
     const deliverySnapshot = registry.deliverySnapshotForOperation(previous.operationId);
+    if (await confirmedSend(registry.readOnlySnapshot(), previous.operationId)) {
+      const confirmed = await resolveSendReceipt(previous.operationId, { registry, client });
+      if (confirmed?.state === "delivered") {
+        return NextResponse.json({ operationId: previous.operationId,
+          receipt: runtimeReceiptForSend(confirmed), send: confirmed });
+      }
+    }
     const deliveryRecord = sendReceiptFor(deliverySnapshot, previous.operationId);
     if (previous.operationId === operationId
       && previous.receipt.status !== "failed"

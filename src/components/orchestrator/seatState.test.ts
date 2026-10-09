@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { translate } from "@/lib/i18n";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
@@ -14,13 +15,20 @@ import {
   seatConversationsOf,
   resolveSeatFile,
   ROTATION_CONTEXT_PERCENT,
+  rotationBannerLines,
+  telegramActionLine,
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatDeputyPaths,
+  seatFailureCauseOf,
+  seatFailureCopy,
   seatRefsOf,
   seatRequestSettled,
+  seatVacated,
+  vacatedSeatReplacement,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
+  type RotationHint,
 } from "./seatState";
 
 function seat(overrides: Partial<OrchestratorSeat> = {}): OrchestratorSeat {
@@ -84,6 +92,21 @@ describe("the panel names every state in the map (#977)", () => {
     expect(deriveOrchestratorPanelState({ ...base, status: status() })).toEqual({ kind: "draft", vacated: false });
     expect(deriveOrchestratorPanelState({ ...base, status: status({ seat: seat(), exists: false }) }))
       .toEqual({ kind: "draft", vacated: true });
+  });
+
+  test("a seat is vacated only when its record stands and its conversation is gone — one predicate for both create forms", () => {
+    expect(seatVacated(null)).toBe(false);
+    expect(seatVacated(status())).toBe(false);
+    expect(seatVacated(status({ seat: seat(), exists: true }))).toBe(false);
+    expect(seatVacated(status({ seat: seat(), exists: false }))).toBe(true);
+    expect(seatVacated(status({ seat: null, exists: false }))).toBe(false);
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: false }))).toEqual({
+      replaceIncumbent: true,
+      expectedIncumbentSeatEpoch: 4,
+    });
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: true }))).toEqual({});
+    expect(vacatedSeatReplacement(status())).toEqual({});
+    expect(vacatedSeatReplacement(null)).toEqual({});
   });
 
   test("a POST on the wire and a durable pending intent are both creating", () => {
@@ -291,34 +314,74 @@ describe("the server's own rotation recommendation is what the panel says (#978)
     liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 },
     context: { tokens: 620_000, limit: 1_000_000, percent: 62, estimated: false, basis: "provider-reported usage" },
     transcriptFacts: { bytes: 1024, messageCount: 10, toolCount: 4, compactionCount: 0 },
-    rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    rotation: { recommended: false, level: "none", reasons: [], causes: [], thresholdUnknown: false },
     ...overrides,
   });
   const live = (over: Partial<Parameters<typeof deriveOrchestratorPanelState>[0]>) =>
     deriveOrchestratorPanelState({ ...base, status: status({ seat: seat() }), file: file(), surface: "live-root", ...over });
 
-  test("its reasons ride along verbatim, with the percentage it measured", () => {
+  const contextCause = { kind: "context" as const, tokens: 620_000, estimated: false, thresholdTokens: 500_000, windowTokens: 1_000_000 };
+
+  test("its causes ride along as data, with the percentage it measured", () => {
     const state = live({
       incumbent: incumbent({
         rotation: {
           recommended: true,
           level: "strongly_recommend",
           reasons: ["context usage 620,000 tokens has reached the rotation threshold of 500,000 tokens (claude-opus-1m: 50% of a 1,000,000-token window)"],
+          causes: [contextCause],
           thresholdUnknown: false,
         },
       }),
     });
     expect(state).toMatchObject({
       kind: "live",
-      rotation: { level: "strongly_recommend", contextPercent: 62, reasons: ["context"], source: "server" },
+      rotation: { level: "strongly_recommend", contextPercent: 62, reasons: ["context"], causes: [contextCause], source: "server" },
     });
-    expect((state as { rotation: { notes?: readonly string[] } }).rotation.notes?.[0]).toContain("rotation threshold");
   });
 
-  test("a recommendation the coded reasons cannot express still shows, carried by the server's words", () => {
+  test("the banner says each cause once, in the interface language, with what to do and no tool name", () => {
+    const hint: RotationHint = {
+      level: "strongly_recommend",
+      contextPercent: 62,
+      /* The client's own two readings name the same causes the server did. */
+      reasons: ["context", "dead"],
+      causes: [contextCause, { kind: "compactions", count: 3, threshold: 2 }, { kind: "transcript", megabytes: 9.4, thresholdMegabytes: 8 }, { kind: "host_gone" }],
+      source: "server",
+    };
+    for (const lang of ["en", "uk"] as const) {
+      const lines = rotationBannerLines((key, params) => translate(lang, key, params), lang, hint);
+      expect(lines).toHaveLength(4);
+      expect(new Set(lines).size).toBe(4);
+      expect(lines.at(-1)).toBe(translate(lang, "orchPanel.rotationDead"));
+      for (const line of lines) expect(line).not.toMatch(/send_message|rotate_orchestrator|_to_|designated conversation/);
+    }
+    const uk = rotationBannerLines((key, params) => translate("uk", key, params), "uk", hint);
+    expect(uk.join(" ")).not.toMatch(/[a-z]{4,}/);
+    expect(uk[0]).toContain("620\u00a0000");
+    const en = rotationBannerLines((key, params) => translate("en", key, params), "en", hint);
+    expect(en[0]).toContain("620,000");
+    expect(en[0]).toContain("500,000");
+  });
+
+  test("an estimate is said to be one, and a client reading fills in only what the server did not name", () => {
+    const en = (hint: RotationHint) => rotationBannerLines((key, params) => translate("en", key, params), "en", hint);
+    expect(en({ level: "recommend", contextPercent: 62, reasons: [], causes: [{ ...contextCause, estimated: true }], source: "server" }))
+      .toEqual([translate("en", "orchPanel.rotationContextTokensEstimated", { tokens: "620,000", threshold: "500,000" })]);
+    /* The board saw a gone host the server's reading had not caught up with. */
+    expect(en({ level: "recommend", contextPercent: null, reasons: ["dead"], causes: [], source: "server" }))
+      .toEqual([translate("en", "orchPanel.rotationDead")]);
+    expect(en({ level: "strongly_recommend", contextPercent: 71, reasons: ["context", "dead"], source: "client" }))
+      .toEqual([translate("en", "orchPanel.rotationContext", { percent: "71" }), translate("en", "orchPanel.rotationDead")]);
+  });
+
+  test("a recommendation the coded reasons cannot express still shows, carried by the server's cause", () => {
     const state = live({
       incumbent: incumbent({
-        rotation: { recommended: true, level: "recommend", reasons: ["3 compaction(s) recorded in the transcript, threshold 2"], thresholdUnknown: false },
+        rotation: {
+          recommended: true, level: "recommend", reasons: ["3 compaction(s) recorded in the transcript, threshold 2"],
+          causes: [{ kind: "compactions", count: 3, threshold: 2 }], thresholdUnknown: false,
+        },
       }),
     });
     expect(state).toMatchObject({ kind: "live", rotation: { level: "recommend", reasons: [], source: "server" } });
@@ -664,7 +727,7 @@ describe("a decision the operator owes outranks every word for «it is running»
     for (const [surface, overrides, liveness] of LIVENESSES) {
       const state = deriveOrchestratorPanelState({ ...seated, file: file(overrides), surface });
       expect(state).toMatchObject({ liveness, attention: null });
-      expect(badgeOf(state)).toBe(liveness);
+      expect(badgeOf(state)).toBe(liveness === "live" ? "working" : liveness);
     }
   });
 
@@ -678,13 +741,11 @@ describe("a decision the operator owes outranks every word for «it is running»
     expect(badgeOf(state)).toBe("needs-you");
   });
 
-  test("the attention read is the QUEUE's: an abandoned open turn with no live process owes nothing", () => {
+  test("the attention read follows the queue: stalled turns owe nothing", () => {
     const abandoned = file({ activity: "stalled", proc: "done", mtime: NOW - 60 });
     expect(deriveOrchestratorPanelState({ ...seated, file: abandoned, surface: "live-root" })).toMatchObject({ attention: null });
     const held = file({ activity: "stalled", proc: "running", mtime: NOW - 60 });
-    expect(deriveOrchestratorPanelState({ ...seated, file: held, surface: "live-root" })).toMatchObject({
-      attention: `/transcripts/orchestrator.jsonl:stalled:${NOW - 60}`,
-    });
+    expect(deriveOrchestratorPanelState({ ...seated, file: held, surface: "live-root" })).toMatchObject({ attention: null });
   });
 });
 
@@ -709,4 +770,81 @@ test("the seat refs carry every deputy the record names, and the phone hides the
   expect(seatDeputyPaths(status, [{ path: "/t/ghost-moved.jsonl", conversationId: "conversation_ghost" }, { path: "/t/w.jsonl", conversationId: "conversation_worker" }]).sort())
     .toEqual(["/t/ghost-moved.jsonl", "/t/ghost.jsonl"]);
   expect(seatDeputyPaths(null, [])).toEqual([]);
+});
+
+test("the seat's Telegram line says what happened and what to do, once, in the interface language", () => {
+  for (const lang of ["en", "uk"] as const) {
+    const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
+    const signIn = telegramActionLine(t, "sign_in")!;
+    const check = telegramActionLine(t, "check")!;
+    expect(signIn).toBe(translate(lang, "orchPanel.telegramSignIn"));
+    expect(check).toBe(translate(lang, "orchPanel.telegramCheck"));
+    const restart = telegramActionLine(t, "restart")!;
+    expect(restart).toBe(translate(lang, "orchPanel.telegramRestart"));
+    expect(new Set([signIn, check, restart]).size).toBe(3);
+    for (const line of [signIn, check, restart]) {
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line).not.toMatch(/MCP|connector|launch|grant|mcp__|_to_/i);
+    }
+    expect(telegramActionLine(t, null)).toBeNull();
+    expect(telegramActionLine(t, undefined)).toBeNull();
+  }
+  expect(translate("uk", "orchPanel.telegramSignIn").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
+  expect(translate("uk", "orchPanel.telegramCheck").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
+  expect(translate("uk", "orchPanel.telegramRestart").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
+});
+
+describe("a designation failure in the operator's words", () => {
+  test("the lock's diagnostic, old and new wording, is one cause", () => {
+    expect(seatFailureCauseOf("account mutation is busy; held by Codex login commit (pid 9559, age 2 ms); retry shortly")).toBe("store-busy");
+    expect(seatFailureCauseOf("the account store stayed busy, so the designation could not be recorded; try again")).toBe("store-busy");
+  });
+
+  test("the safe store sentence is localized when direct or wrapped", () => {
+    const message = "The account store is temporarily busy; try again shortly.";
+    for (const error of [message, `the accepted launch failed before its conversation became readable: ${message}`]) {
+      expect(seatFailureCauseOf(error)).toBe("store-busy");
+      expect(seatFailureCopy(error, "same")).toEqual({ text: "orchPanel.failureStoreBusy", hint: "orchPanel.failureRetrySameHint" });
+    }
+  });
+
+  test("a launch that timed out or found no runtime host is named, wherever the layer put the words", () => {
+    expect(seatFailureCauseOf("structured spawn transport failed: runtime host request timed out")).toBe("launch-timeout");
+    expect(seatFailureCauseOf("the accepted launch failed before its conversation became readable: structured spawn transport failed: runtime host timed out")).toBe("launch-timeout");
+    expect(seatFailureCauseOf("structured spawn runtime host is unavailable")).toBe("host-unavailable");
+  });
+
+  test("anything else keeps its recorded text", () => {
+    expect(seatFailureCauseOf("mandate is required")).toBeNull();
+    expect(seatFailureCopy("mandate is required", "fresh")).toBeNull();
+  });
+
+  test("a busy store whose outcome is unknown promises the replay; a recorded one only asks for a retry", () => {
+    const busy = "account mutation is busy; held by Codex login commit (pid 9559, age 2 ms); retry shortly";
+    expect(seatFailureCopy(busy, "same")).toEqual({ text: "orchPanel.failureStoreBusy", hint: "orchPanel.failureRetrySameHint" });
+    expect(seatFailureCopy(busy, "fresh")).toEqual({ text: "orchPanel.failureStoreBusy", hint: "orchPanel.failureRetryHint" });
+  });
+
+  test("a launch that failed after the reply was lost derives one error state with a fresh retry, never «creating»", () => {
+    const state = deriveOrchestratorPanelState({
+      status: parseSeatStatus({
+        seat: null,
+        pending: null,
+        exists: true,
+        lastFailure: {
+          error: "structured spawn transport failed: runtime host request timed out",
+          clientRequestId: "req-aaaaaaaa",
+          seatEpoch: 5,
+          designatedAt: "2026-10-05T09:00:00.000Z",
+          terminalizedAt: "2026-10-05T09:01:18.000Z",
+        },
+      }),
+      statusFailed: false,
+      submitting: false,
+      submitFailure: null,
+      file: null,
+      surface: null,
+    });
+    expect(state).toMatchObject({ kind: "intent-error", retry: "fresh" });
+  });
 });

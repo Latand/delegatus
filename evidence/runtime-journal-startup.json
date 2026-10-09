@@ -305,5 +305,510 @@
       "designated manager deployment with operator approval",
       "rendered browser and API verification after deployment"
     ]
+  },
+  "historicalSubject": "Original branch experiment on merge base e7185fec5 under Bun 1.3.3; retained for comparison",
+  "currentMainIntegration": {
+    "date": "2026-10-09",
+    "base": "08e85880b80d0b360719efbdccec89a8077015ca",
+    "runtime": "Bun 1.4.0, pinned in Dockerfile",
+    "isolation": "synthetic state, HOME and TMPDIR below OS temporary root; private runtime sockets; ephemeral loopback ports; closed Viewer control URL; Docker stub",
+    "bootProcess": "real runtime-host main.ts with a synthetic HTTP Viewer upstream",
+    "storage": "local temporary-root filesystem; WAL and synchronous=FULL; cold means first receipt migration, caches were not flushed",
+    "bootMeasurements": [
+      {
+        "label": "main-run",
+        "boot": "cold",
+        "process": "runtime-host main.ts + synthetic HTTP Viewer upstream",
+        "runtime": "1.4.0",
+        "spawnToFirst200Ms": 9861.881742,
+        "fenceToJournalOpenMs": 9560,
+        "fenceToReadyMs": 9591,
+        "polls": 380,
+        "refused": 378,
+        "afterFencePolls": 370,
+        "afterFenceRefused": 368,
+        "preOpenPolls": 368,
+        "preOpen200": 0,
+        "non200": 0,
+        "maxResponseMs": 34.6199059999999,
+        "ioDelta": {
+          "rchar": 2793509074,
+          "wchar": 552183220,
+          "syscr": 709208,
+          "syscw": 259847,
+          "read_bytes": 0,
+          "write_bytes": 584695808,
+          "cancelled_write_bytes": 16859136
+        }
+      },
+      {
+        "label": "main-run",
+        "boot": "warm",
+        "process": "runtime-host main.ts + synthetic HTTP Viewer upstream",
+        "runtime": "1.4.0",
+        "spawnToFirst200Ms": 3582.606761000001,
+        "fenceToJournalOpenMs": 3332,
+        "fenceToReadyMs": 3346,
+        "polls": 140,
+        "refused": 138,
+        "afterFencePolls": 131,
+        "afterFenceRefused": 129,
+        "preOpenPolls": 129,
+        "preOpen200": 0,
+        "non200": 0,
+        "maxResponseMs": 15.811626000000615,
+        "ioDelta": {
+          "rchar": 994755423,
+          "wchar": 52188532,
+          "syscr": 261299,
+          "syscw": 17043,
+          "read_bytes": 4096,
+          "write_bytes": 52256768,
+          "cancelled_write_bytes": 16863232
+        }
+      },
+      {
+        "label": "candidate-run",
+        "boot": "cold",
+        "process": "runtime-host main.ts + synthetic HTTP Viewer upstream",
+        "runtime": "1.4.0",
+        "spawnToFirst200Ms": 310.586766,
+        "fenceToJournalOpenMs": 4289,
+        "fenceToReadyMs": 4293,
+        "polls": 67,
+        "refused": 9,
+        "afterFencePolls": 58,
+        "afterFenceRefused": 0,
+        "preOpenPolls": 57,
+        "preOpen200": 57,
+        "non200": 0,
+        "maxResponseMs": 132.22252700000013,
+        "ioDelta": {
+          "rchar": 764366737,
+          "wchar": 105938,
+          "syscr": 205536,
+          "syscw": 77,
+          "read_bytes": 0,
+          "write_bytes": 266240,
+          "cancelled_write_bytes": 0
+        }
+      },
+      {
+        "label": "candidate-run",
+        "boot": "warm",
+        "process": "runtime-host main.ts + synthetic HTTP Viewer upstream",
+        "runtime": "1.4.0",
+        "spawnToFirst200Ms": 348.76748699999916,
+        "fenceToJournalOpenMs": 2994,
+        "fenceToReadyMs": 2998,
+        "polls": 34,
+        "refused": 7,
+        "afterFencePolls": 27,
+        "afterFenceRefused": 0,
+        "preOpenPolls": 26,
+        "preOpen200": 26,
+        "non200": 0,
+        "maxResponseMs": 165.7413889999998,
+        "ioDelta": {
+          "rchar": 713533674,
+          "wchar": 23282,
+          "syscr": 192883,
+          "syscw": 19,
+          "read_bytes": 0,
+          "write_bytes": 73728,
+          "cancelled_write_bytes": 0
+        }
+      }
+    ],
+    "constructorMeasurements": [
+      {
+        "boot": "cold-300k",
+        "durationMs": 4326.414862000001,
+        "wchar": 41152,
+        "syscw": 25,
+        "receiptsBefore": 10400,
+        "receiptsAfter": 10400
+      },
+      {
+        "boot": "repeated-300k",
+        "durationMs": 2860.8591190000006,
+        "wchar": 24688,
+        "syscw": 18
+      },
+      {
+        "boot": "medium.sqlite",
+        "durationMs": 306.0706080000018,
+        "wchar": 12392,
+        "syscw": 7,
+        "frames": 3,
+        "commits": 1
+      },
+      {
+        "boot": "small.sqlite",
+        "durationMs": 4.632939999999508,
+        "wchar": 12392,
+        "syscw": 7,
+        "frames": 3,
+        "commits": 1
+      },
+      {
+        "boot": "cold.sqlite",
+        "durationMs": 407.2328359999992,
+        "wchar": 20632,
+        "syscw": 11,
+        "frames": 5,
+        "commits": 2
+      },
+      {
+        "boot": "overhead.sqlite",
+        "durationMs": 4.180661999998847,
+        "wchar": 12392,
+        "syscw": 7,
+        "frames": 3,
+        "commits": 1
+      },
+      {
+        "boot": "interrupted",
+        "frames": 137,
+        "commits": 4
+      },
+      {
+        "boot": "interrupt.sqlite",
+        "durationMs": 770.8373619999984,
+        "wchar": 2064152,
+        "syscw": 1003,
+        "frames": 501,
+        "commits": 12
+      },
+      {
+        "boot": "copy-2.sqlite",
+        "durationMs": 534.1101479999998,
+        "wchar": 2616264,
+        "syscw": 1272,
+        "frames": 635,
+        "commits": 15
+      },
+      {
+        "boot": "interrupt-overhead.sqlite",
+        "durationMs": 5.557627999998658,
+        "wchar": 12392,
+        "syscw": 7,
+        "frames": 3,
+        "commits": 1
+      },
+      {
+        "boot": "legacy.sqlite",
+        "durationMs": 32.09384499999942,
+        "wchar": 12392,
+        "syscw": 7,
+        "frames": 3,
+        "commits": 1
+      }
+    ],
+    "journalStartupTests": {
+      "passed": 10,
+      "failed": 0
+    },
+    "slowStorage": {
+      "fixture": "300 migrated hash-valid events; a real SQLite BEGIN IMMEDIATE holds startup writes for at least one second",
+      "processes": "real runtime-host; independent child invoking real Viewer snapshot route and production socket client",
+      "main": "503 with generic runtime host is unavailable; regression fails on expected booting code/progress",
+      "candidate": "503 runtime-host-booting with schema progress while append is unavailable; 200 after lock release and ready",
+      "limit": "synchronous SQLite waits can occupy the host event loop; this verifies independent snapshot classification and mutation readiness, with no zero-latency storage guarantee"
+    },
+    "handoffBeforeRetryChange": [
+      {
+        "boot": "handoff-probes",
+        "polls": 75,
+        "refused": 9,
+        "journalProgressPolls": 39
+      },
+      {
+        "boot": "handoff-transfer",
+        "signalledAt": 1791505496781,
+        "predecessorExitedAt": 1791505497530,
+        "releasedAt": 1791505497519,
+        "acquiredAt": 1791505497749,
+        "releaseToAcquireMs": 230,
+        "firstRefusedAt": 1791505497528,
+        "lastRefusedAt": 1791505497742,
+        "refusedBeforeAcquire": 9,
+        "refusedAfterAcquire": 0,
+        "acquireAttempts": [
+          {
+            "startedAt": 1791505496738,
+            "endedAt": 1791505496739,
+            "success": false
+          },
+          {
+            "startedAt": 1791505497242,
+            "endedAt": 1791505497242,
+            "success": false
+          },
+          {
+            "startedAt": 1791505497744,
+            "endedAt": 1791505497749,
+            "success": true
+          }
+        ]
+      },
+      {
+        "boot": "handoff-300k",
+        "durationMs": 3835,
+        "pollsDuringJournal": 39,
+        "refusedAfterStableEntry": 0
+      }
+    ],
+    "handoffInitialResearchGap": [
+      {
+        "boot": "handoff-probes",
+        "polls": 94,
+        "refused": 19,
+        "journalProgressPolls": 39
+      },
+      {
+        "boot": "handoff-transfer",
+        "signalledAt": 1791505295497,
+        "predecessorExitedAt": 1791505296497,
+        "releasedAt": null,
+        "acquiredAt": 1791505296966,
+        "releaseToAcquireMs": null,
+        "firstRefusedAt": 1791505296494,
+        "lastRefusedAt": 1791505296965,
+        "refusedBeforeAcquire": 19,
+        "refusedAfterAcquire": 0
+      },
+      {
+        "boot": "handoff-300k",
+        "durationMs": 4268,
+        "pollsDuringJournal": 39,
+        "refusedAfterStableEntry": 0
+      },
+      {
+        "boot": "staged-generation",
+        "phase": "succeeded",
+        "untracked": false,
+        "dockerCalls": [
+          "container inspect llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+        ]
+      },
+      {
+        "boot": "slow-storage-snapshot",
+        "stalledStatus": 503,
+        "stalledCode": "runtime-host-booting",
+        "recoveredStatus": 200
+      }
+    ],
+    "retainedEvents": 300000,
+    "candidateReceipts": 10400,
+    "mainReceipts": 290000,
+    "integrity": "PRAGMA integrity_check = ok in all four measured boots",
+    "baselineFailure": {
+      "path": "src/runtime-host/deployment.test.ts",
+      "test": "managed auto retains a disconnected request through late admission and a newer main",
+      "main": {
+        "passed": 29,
+        "failed": 1
+      },
+      "candidate": {
+        "passed": 29,
+        "failed": 1
+      },
+      "reason": "managed auto record remains enabled at the same assertion on both sides; self-update lane is fenced and untouched"
+    },
+    "handoffAfterRetryChange": [
+      {
+        "boot": "handoff-probes",
+        "polls": 61,
+        "refused": 1,
+        "journalProgressPolls": 35
+      },
+      {
+        "boot": "handoff-transfer",
+        "signalledAt": 1791505702284,
+        "predecessorExitedAt": 1791505703023,
+        "releasedAt": 1791505703013,
+        "acquiredAt": 1791505703021,
+        "releaseToAcquireMs": 8,
+        "firstRefusedAt": 1791505703014,
+        "lastRefusedAt": 1791505703020,
+        "refusedBeforeAcquire": 1,
+        "refusedAfterAcquire": 0,
+        "acquireAttempts": [
+          {
+            "startedAt": 1791505702253,
+            "endedAt": 1791505702254,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702279,
+            "endedAt": 1791505702280,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702306,
+            "endedAt": 1791505702307,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702332,
+            "endedAt": 1791505702333,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702358,
+            "endedAt": 1791505702358,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702383,
+            "endedAt": 1791505702383,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702409,
+            "endedAt": 1791505702409,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702434,
+            "endedAt": 1791505702435,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702460,
+            "endedAt": 1791505702460,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702485,
+            "endedAt": 1791505702485,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702510,
+            "endedAt": 1791505702510,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702535,
+            "endedAt": 1791505702536,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702562,
+            "endedAt": 1791505702562,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702588,
+            "endedAt": 1791505702588,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702613,
+            "endedAt": 1791505702613,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702638,
+            "endedAt": 1791505702638,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702663,
+            "endedAt": 1791505702664,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702691,
+            "endedAt": 1791505702692,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702732,
+            "endedAt": 1791505702733,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702781,
+            "endedAt": 1791505702784,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702809,
+            "endedAt": 1791505702809,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702834,
+            "endedAt": 1791505702834,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702860,
+            "endedAt": 1791505702861,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702886,
+            "endedAt": 1791505702886,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702911,
+            "endedAt": 1791505702911,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702936,
+            "endedAt": 1791505702936,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702962,
+            "endedAt": 1791505702962,
+            "success": false
+          },
+          {
+            "startedAt": 1791505702987,
+            "endedAt": 1791505702987,
+            "success": false
+          },
+          {
+            "startedAt": 1791505703013,
+            "endedAt": 1791505703021,
+            "success": true
+          }
+        ]
+      },
+      {
+        "boot": "handoff-300k",
+        "durationMs": 3312,
+        "pollsDuringJournal": 35,
+        "refusedAfterStableEntry": 0
+      },
+      {
+        "boot": "staged-generation",
+        "phase": "succeeded",
+        "untracked": false,
+        "dockerCalls": [
+          "container inspect llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+        ]
+      },
+      {
+        "boot": "slow-storage-snapshot",
+        "stalledStatus": 503,
+        "stalledCode": "runtime-host-booting",
+        "recoveredStatus": 200
+      }
+    ],
+    "handoffNotes": [
+      "750 ms runtime drain with a committed-tail wait exercises a transfer between fence retries.",
+      "Test-only preload traces the actual lock calls; no production startup wire phase was added.",
+      "500 ms retry: release to acquire 230 ms, 9 refused probes before acquisition.",
+      "25 ms retry: release to acquire 8 ms, 1 refused probe before acquisition and 0 after binding.",
+      "Remaining TCP close/rebind interval is independent of journal size; absolute zero-refusal ownership transfer requires a persistent entry owner or descriptor transfer."
+    ]
   }
 }

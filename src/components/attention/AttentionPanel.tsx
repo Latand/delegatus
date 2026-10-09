@@ -1,12 +1,13 @@
 "use client";
 
-import { ChevronDown, ChevronRight, PanelRight, PictureInPicture2, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, GalleryHorizontalEnd, PanelRight, PictureInPicture2, Undo2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 
+import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
 import { RoleTag } from "../RoleFrameMark";
 import { cleanTitle, fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
@@ -15,6 +16,7 @@ import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay"
 import {
   isFocusedNeedsYouEntry,
   needsYouDismissal,
+  needsYouDismissibleCount,
   needsYouEntryRole,
   needsYouEntrySince,
   needsYouLaneLine,
@@ -127,6 +129,7 @@ export function AttentionPanel({
   const run = useCallback((entries: readonly MobileAttentionEntry[]) => {
     if (!entries.length) return;
     const { target, subjects } = needsYouDismissal(entries);
+    if (!subjects.length) return;
     setError(null);
     setLast({ target, subjects });
     void dismiss(target, subjects, { surface: "desktop" }).then((result: DismissalRequestOutcome) => {
@@ -147,6 +150,7 @@ export function AttentionPanel({
   }, [dismiss, last, t]);
 
   const docked = placement === "docked";
+  const dismissible = needsYouDismissibleCount(queue);
   const title = t("attention.panelTitle", { count: queue.length });
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
@@ -164,9 +168,9 @@ export function AttentionPanel({
           <Undo2 className="h-3.5 w-3.5" aria-hidden />
         </button>
       ) : null}
-      {queue.length ? (
+      {dismissible ? (
         <button type="button" className={QUIET} data-needs-you-dismiss-all="" title={t("attention.dismissAllTitle")} onClick={() => run(queue)}>
-          {t("attention.dismissAll", { count: queue.length })}
+          {t("attention.dismissAll", { count: dismissible })}
         </button>
       ) : null}
       {docked || canDock ? (
@@ -211,7 +215,7 @@ export function AttentionPanel({
                 <span className="min-w-0 truncate">{name}</span>
                 <span className="text-caption font-semibold tabular-nums text-muted" data-needs-you-section-count="">{section.entries.length}</span>
               </button>
-              <button
+              {needsYouDismissibleCount(section.entries) ? <button
                 type="button"
                 className={QUIET}
                 data-needs-you-dismiss-section={section.project}
@@ -219,8 +223,8 @@ export function AttentionPanel({
                 title={t("attention.dismissAllIn", { project: name })}
                 onClick={() => run(section.entries)}
               >
-                {t("attention.dismissSection", { count: section.entries.length })}
-              </button>
+                {t("attention.dismissSection", { count: needsYouDismissibleCount(section.entries) })}
+              </button> : null}
             </div>
             {isFolded ? null : section.entries.map((entry) => (
               <NeedsYouRow
@@ -274,6 +278,8 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   onDismiss: () => void;
 }) {
   const { t } = useLocale();
+  if (entry.kind === "update") return <AutoDrainDecision key={entry.decision.id} decision={entry.decision} />;
+  if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const title = entry.kind === "conversation" ? entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90) : entry.row.task;
@@ -314,6 +320,32 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
         </button>
       </div>
       {permission ? <PermissionActions file={permission} /> : null}
+    </div>
+  );
+}
+
+/** A prototype review that waits: the row opens the task's review, and the
+    choice saved there is what takes it off the list, so it has no «Dismiss». */
+function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, { kind: "prototype" }>; onOpen: () => void }) {
+  const { t } = useLocale();
+  const since = needsYouEntrySince(entry);
+  return (
+    <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
+      <button
+        type="button"
+        className="flex w-full min-w-0 flex-col gap-1 rounded-[8px] px-2.5 py-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        data-attention-prototype={entry.notice.taskId}
+        aria-label={t("proto.notice.openAria", { title: entry.notice.title })}
+        onClick={onOpen}
+      >
+        <span className="flex w-full min-w-0 items-center gap-1.5 text-[10.5px] font-semibold text-accent">
+          <GalleryHorizontalEnd className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">{t("proto.notice.ready")}</span>
+          {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
+        </span>
+        <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
+        <span data-attention-decision className="w-full text-[11px] text-muted">{t("proto.notice.open")}</span>
+      </button>
     </div>
   );
 }

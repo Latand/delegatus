@@ -89,6 +89,7 @@ const OVERRIDES: Record<string, unknown> = {
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   // The board store and draft panes fetch on mount; keep those inert.
   fetch: (async (input: string | URL | Request) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const body = String(input).startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
   }) as unknown as typeof fetch,
@@ -160,6 +161,9 @@ const readerAction = async (path: string, label: string): Promise<boolean> => {
   if (!(await waitFor(() => dom.document.querySelector("[data-reader-menu]") !== null))) return false;
   (dom.document.querySelector("[data-reader-menu]") as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   const item = () => [...dom.document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent?.includes(label)) as unknown as HTMLElement | undefined;
+  /* What is not an icon cell of the reader's menu is behind its More row. */
+  if (!(await waitFor(() => dom.document.querySelector(".menu") !== null))) return false;
+  if (!item()) (dom.document.querySelector('.menu [data-cm-section="more"]') as unknown as HTMLElement | null)?.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   if (!(await waitFor(() => item() !== undefined))) return false;
   item()!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   return true;
@@ -176,6 +180,7 @@ const serveBoardWrites = () => {
     prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
   });
   G.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     if (url.startsWith("/api/board")) {
       if ((init?.method ?? "GET") === "GET") {
@@ -377,6 +382,7 @@ test("a restored handoff draft shows its populated source cwd and never asks to 
   dom.sessionStorage.setItem(draftsKey(project), JSON.stringify([agentA]));
   dom.sessionStorage.setItem(agentField(agentA, "src"), sourcePath);
   G.fetch = (async (input: string | URL | Request) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (String(input).startsWith("/api/spawn?")) {
       return {
         ok: true,
@@ -422,6 +428,7 @@ test("a fresh handoff replaces its provisional project root with the resolved so
     waitingInput: null,
   };
   G.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     /* Opening the source's reader stamps it seen; this board store refuses the write and keeps nothing. */
     if (init?.method === "PATCH" && String(input) === "/api/board") return BOARD_WRITE_REFUSED;
     if (String(input).startsWith("/api/spawn?")) {
@@ -467,6 +474,7 @@ test("a fresh handoff shows a deleted source checkout's cwd without gating on it
     waitingInput: null,
   };
   G.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (init?.method === "PATCH" && String(input) === "/api/board") return BOARD_WRITE_REFUSED;
     if (String(input).startsWith("/api/spawn?")) {
       return {
@@ -499,6 +507,7 @@ test("a restored handoff waits for its out-of-snapshot source cwd before exposin
   dom.sessionStorage.setItem(draftsKey(project), JSON.stringify([agentA]));
   dom.sessionStorage.setItem(agentField(agentA, "src"), sourcePath);
   G.fetch = (async (input: string | URL | Request) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (String(input).startsWith("/api/spawn?")) {
       spawnRequested = true;
       await spawnGate;
@@ -523,6 +532,7 @@ test("a deleted source checkout's cwd launches with no confirmation in the way (
   dom.sessionStorage.setItem(draftsKey(project), JSON.stringify([agentA]));
   dom.sessionStorage.setItem(agentField(agentA, "src"), sourcePath);
   G.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (init?.method === "POST" && String(input) === "/api/spawn") {
       launchCalls += 1;
       return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
@@ -559,6 +569,7 @@ test("a restored handoff stays unresolved while source cwd lookup retries", asyn
   dom.sessionStorage.setItem(draftsKey(project), JSON.stringify([agentA]));
   dom.sessionStorage.setItem(agentField(agentA, "src"), sourcePath);
   G.fetch = (async (input: string | URL | Request) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (!String(input).startsWith("/api/spawn?")) {
       return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
     }
@@ -675,6 +686,7 @@ test("a missing restored handoff reaches an editable bounded recovery card", asy
   dom.sessionStorage.setItem(draftsKey(project), JSON.stringify([agentA]));
   dom.sessionStorage.setItem(agentField(agentA, "src"), sourcePath);
   G.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (init?.method === "POST" && String(input) === "/api/spawn") {
       launchCalls += 1;
       return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
@@ -705,7 +717,7 @@ test("a missing restored handoff reaches an editable bounded recovery card", asy
   expect(launchCalls).toBe(1);
 });
 
-test("a retried launch opens its draft on the Board, prefilled from the launch, and its receipt stays in launch history", async () => {
+test("a retried launch opens its draft on the Board, prefilled from the launch, and its receipt stays in the reader", async () => {
   const project = "retried-launch-project";
   const launchCwd = "/repos/retried-launch/.worktrees/lane";
   const pending: BoardTask = {
@@ -713,26 +725,25 @@ test("a retried launch opens its draft on the Board, prefilled from the launch, 
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   };
   const receipt = {
-    path: "spawn:launch-retry-fixture", root: "claude-projects", name: "spawn", project, title: "Builder launch", engine: "claude",
+    path: "spawn:launch-retry-fixture", conversationId: "conversation-retry-fixture", root: "claude-projects", name: "spawn", project, title: "Builder launch", engine: "claude",
     kind: "session", fmt: "claude", parent: null, mtime: Date.now() / 1000 - 3_600, size: 0, activity: "idle", proc: null, pid: null,
     pendingQuestion: null, waitingInput: null, cwd: launchCwd,
     goal: { objective: "Rebuild the search index without downtime", status: "active", tokensUsed: null, timeUsedSeconds: null },
     spawn: { launchId: "launch-retry-fixture", clientAttemptId: null, accountId: "default", state: "failed", initialMessage: "failed", retrySafe: true, error: "structured spawn failed before host binding" },
   } as unknown as FileEntry;
+  dom.localStorage.setItem(`llv:kanban-readers:v1:${project}`, JSON.stringify([{ key: receipt.conversationId, path: receipt.path, folded: false }]));
   /* The project's own root differs from the launch's directory, so the draft's directory says which one it came from. */
   roots.push(mount(<ProjectDashboard {...dashboardProps(project)} tasks={[pending]} files={[receipt]} projectCatalog={[{ project, projectRoot: "/repos/retried-launch", smt: 2, conversations: 1 }]} />));
 
-  expect(await waitFor(() => dom.document.querySelector('[aria-label="Terminal launch receipts"]') !== null)).toBe(true);
-  (dom.document.querySelector('[aria-label="Terminal launch receipts"]') as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
-  expect(await waitFor(() => dom.document.querySelector('[aria-label="Retry launch: Builder launch"]') !== null)).toBe(true);
-  (dom.document.querySelector('[aria-label="Retry launch: Builder launch"]') as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
+  expect(await waitFor(() => dom.document.querySelector('[data-reader-path="spawn:launch-retry-fixture"] [data-launch-retry]') !== null)).toBe(true);
+  (dom.document.querySelector('[data-reader-path="spawn:launch-retry-fixture"] [data-launch-retry]') as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
 
   expect(await waitFor(() => dom.document.querySelector(`.card[data-id^="draft:"] ${AGENT_PANE}`) !== null)).toBe(true);
   const prompt = dom.document.querySelector('.card[data-id^="draft:"] textarea[aria-label="First prompt text"]') as unknown as HTMLTextAreaElement | null;
   expect(prompt?.value).toBe("Rebuild the search index without downtime");
   expect(directoryValue()).toBe(launchCwd);
   /* Nothing launched, and the receipt is still the evidence. */
-  expect(dom.document.querySelector('[aria-label="Retry launch: Builder launch"]')).not.toBeNull();
+  expect(dom.document.querySelector('[data-reader-path="spawn:launch-retry-fixture"]')).not.toBeNull();
 });
 
 test("closing a conversation card reports its path to the dashboard owner", async () => {
@@ -740,6 +751,7 @@ test("closing a conversation card reports its path to the dashboard owner", asyn
   const path = "/sessions/close-me.jsonl";
   const closed: string[] = [];
   G.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if (String(_input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     if (init?.method === "PATCH") {
       return { ok: false, status: 400, json: async () => ({ error: "INVALID_REQUEST" }), text: async () => "" };
     }

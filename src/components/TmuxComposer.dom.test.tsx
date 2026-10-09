@@ -262,7 +262,7 @@ test("repeated identical attempts share one grouped row with counts and final st
   /* #1362: settled failures read as one compact notice — status word, terse
      cause, attempt counter — never as a count of pills. */
   expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
-    .toBe(`${translate("uk", "composer.receiptFailed")} — ${translate("uk", "receipt.human.deadHost")}`);
+    .toBe(`${translate("uk", "composer.deliveryNotDelivered")} — ${translate("uk", "receipt.human.deadHost")}`);
   expect(summary.querySelector("[data-delivery-notice-count]")?.textContent).toContain("×3");
 
   // One logical send consumes one row: the text appears once with an attempt
@@ -290,6 +290,41 @@ test("repeated identical attempts share one grouped row with counts and final st
   expect(status.textContent).toContain(translate("uk", "receipt.human.deadHost"));
   expect(status.textContent).toContain(`${translate("uk", "receipt.human.verbatim", { reason: "no-claim" })} ×2`);
   flushSync(() => root.unmount());
+});
+
+test("a Telegram refusal reads as a short cause on the row and the chip, and the action once in the detail", async () => {
+  /* One message refused twice, each attempt behind a different wrapper. */
+  const refused = (n: number, reason: string): RuntimeReceipt => ({
+    operationId: `op-telegram-${n}`, idempotencyKey: `key-telegram-${n}`, conversationId: "conversation_telegram_notice",
+    kind: "send", status: "failed", text: "are you there?", at: `2026-08-31T10:00:0${n}.000Z`, revision: 1, reason,
+  });
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    const { host, root } = await renderInto(<Receipts
+      receipts={[
+        refused(2, "structured host recovery failed: telegram MCP connector is not connected at launch"),
+        refused(1, "conversation host was reclaimed; automatic resume did not establish a deliverable host: telegram MCP connector is not connected at launch"),
+      ]}
+      session={{ host: "unhosted", turn: "unknown" }}
+      onRetry={() => {}} onEdit={() => {}} onDismiss={() => {}}
+    />);
+    const cause = translate(locale, "receipt.cause.telegramOff");
+    const remedy = translate(locale, "receipt.remedy.telegramOff");
+    expect(host.querySelector("[data-delivery-notice-cause]")?.textContent).toBe(`${translate(locale, "composer.deliveryFailed")} — ${cause}`);
+    expect(host.querySelector("[data-delivery-notice-count] [aria-hidden]")?.textContent).toBe("×2");
+    /* What to do is on the page, wrapped, where a phone reads it. */
+    expect(host.querySelector("[data-delivery-notice-sentence]")?.textContent).toBe(remedy);
+    expect(host.querySelectorAll("[data-delivery-notice-remediation]")).toHaveLength(0);
+    const chips = [...host.querySelectorAll("[data-receipt-status]")].map((chip) => chip.textContent);
+    expect(chips).toEqual([translate(locale, "receipt.human.verbatim", { reason: cause })]);
+    /* The earlier attempt ended the same way: the counter says so, no second line does. */
+    expect(host.querySelectorAll("[data-receipt-history]")).toHaveLength(0);
+    const text = host.textContent ?? "";
+    expect(text.split(remedy)).toHaveLength(2);
+    expect(text).not.toMatch(/MCP|connector|structured host|reclaimed/i);
+    await act(async () => root.unmount());
+    host.remove();
+  }
 });
 
 test("multiple delivery attempts collapse into one bounded accessible receipt stack", () => {
@@ -703,7 +738,7 @@ test("expanded active attempts retain localized lifecycle status and aggregate c
     /* #1362: the settled failure IS the notice beside the pending count — the
        red issue badge no longer counts it a second time. */
     expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
-      .toBe(`${translate(locale, "composer.receiptFailed")} — ${translate(locale, "receipt.human.deadHost")}`);
+      .toBe(`${translate(locale, "composer.deliveryNotDelivered")} — ${translate(locale, "receipt.human.deadHost")}`);
     expect(summary.querySelector("[data-receipt-problem-count]")).toBeNull();
     const details = host.querySelector("[data-runtime-receipt-details]")!;
     expect(details.querySelector('[data-receipt-status="pending"]')?.textContent)
@@ -714,7 +749,7 @@ test("expanded active attempts retain localized lifecycle status and aggregate c
     expect(details.querySelector('[data-receipt-status="queued"]')?.textContent)
       .toBe(translate(locale, "runtime.receipt.awaitingTurnPos", { position: 3, waited: waited(4) }));
     const unknown = details.querySelector(`[data-operation="${locale}-uncertain"]`)!;
-    expect(unknown.textContent).toContain(translate(locale, "orchPanel.errorUnknownTitle"));
+    expect(unknown.textContent).toContain(translate(locale, "composer.deliveryChecking"));
     expect(unknown.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
     expect(unknown.querySelector("[data-receipt-edit]")).toBeNull();
     expect(details.querySelector('[data-receipt-status="delivering"]')?.textContent)
@@ -1447,7 +1482,7 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
     const entry = readOutbox(conversationId).find((e) => e.text === prompt)!;
     expect(entry.state).toBe("delivering");
     expect(entry.deliveryUncertain).toBe(true);
-    expect(host.textContent).toContain("runtime host request timed out");
+    expect(host.textContent).toContain(translate(locale, "composer.deliveryCheckingDetail"));
 
     await settle(() => appendComposerDraft(conversationId, "later draft"));
     await settle(() => retryOutbox(conversationId, entry.id));
@@ -1465,7 +1500,7 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
     expect(admitted.deliveryUncertain).toBe(true);
     expect(admitted.deliveryReceipt).toMatchObject({ operationId: "op-timeout-terminal-0001",
       idempotencyKey: entry.id, status: "queued", revision: 2 });
-    expect(host.textContent).toContain("runtime host request timed out");
+    expect(host.textContent).toContain(translate(locale, "composer.deliveryCheckingDetail"));
     expect(host.textContent).not.toContain(translate(locale, "common.failedSend"));
     /* One pending recovery row retains the payload and announces uncertainty. */
     const stack = host.querySelector("details[data-runtime-receipt-stack]") as HTMLDetailsElement;
@@ -1483,7 +1518,7 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
     expect(status.getAttribute("role")).toBe("status");
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.textContent).toContain(translate(locale, "runtime.receipt.statusPending", { count: 1 }));
-    expect(status.textContent).toContain(translate(locale, "orchPanel.errorUnknownTitle"));
+    expect(status.textContent).toContain(translate(locale, "composer.deliveryChecking"));
     /* Mobile keeps the 44px summary row; desktop keeps the compact stack. */
     expect(summary.className.split(/\s+/)).toContain("min-h-11");
   } finally {

@@ -81,12 +81,41 @@ every clone shares a remote id.
 <!-- BEGIN:live-state-and-publication -->
 # Local hooks mirror the publication gate
 
-Run `git config core.hooksPath .githooks` once per clone (worktrees inherit it
-from their parent repo's config). `pre-push` runs the real
-`privacy-publication-gate` (sub-second) from the merge base with commit
-checking, and warns when the branch is behind `origin/main` — the state in
-which the hosted gate flags main-only commits. `LLV_SKIP_HOOKS=1` skips it
-for a false positive.
+Run `git config core.hooksPath .githooks` once per clone. Worktrees inherit
+that config and run the hooks from their own checkout. Pre-commit runs staged
+whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
+commit publication, types, changed-file lint, touched tests, and scoped Linux,
+pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
+isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
+Touched tests run one file per process on head and on the merge base with
+`origin/main`, each with fresh state, HOME and TMPDIR under the OS temp root.
+Only new failures block; output lists pre-existing and fixed failures by file,
+describe ancestry and test name, and retains between-tests errors. An incomplete
+baseline blocks as a gate error and an incomplete head names its file and blocks,
+unless both are broken the same way, which lists as pre-existing.
+Baseline results are cached by commit, sorted file set, origin URL, Bun version, dependency
+graph and execution environment under the private temp directory
+`delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). A SHA-256
+digest covers each cached baseline payload; missing or mismatched integrity
+rebuilds the baseline. Local dependencies, including relative directory paths
+and Bun lockfile directory resolutions, install independently in the baseline.
+Cache versions invalidate results from earlier dependency isolation rules.
+Deleting that cache is safe. Both runs report elapsed
+time; a warm baseline needs no checkout or test rerun. Budgets are five minutes per file and fifteen minutes
+per baseline/head test run. Privacy, types and ESLint retain their own checks.
+A push with no changed file against the merge base runs privacy with
+`--check-commits` and nothing else; a prose-only push (`.md`, `.mdx`, `.txt`)
+skips types; scoped Linux tests are compared against the merge base like touched
+tests. A pipeline's publication runs this hook without the Viewer's own
+settings (`pipelinePublicationHookEnv`): on 2026-10-04 the Viewer's `LLV_LANG`
+reached a CLI test through the hook and parked five lanes that had changed
+nothing. A refused publication of an unchanged head retries after 1, 5 and 15
+minutes, then parks with the cause on its first line. A push that was
+interrupted before it reached the remote (a signal, its time limit, a stopped
+Viewer) is counted the same way, whatever the stage changed.
+`LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
+the branch is behind `origin/main`. Missing local media tools defer named media
+files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.
 
 # Two ways to do real damage here (both happened, 2026-07-24)
 
@@ -130,10 +159,11 @@ the forge issues it so an account's own address is not what its commits carry.
 That reading is the merge boundary only — it changes nothing about what you may
 write into a message, a doc or a fixture, where the paragraph above still holds.
 
-`privacy-publication` on CI enforces this with a fingerprint list the repo does
-not carry, so it fails **after** you have pushed. Scrub before the push:
-`bun scripts/privacy-publication-gate.ts --base <merge-base>` locally catches the
-generic classes, and re-read every table and quote you lifted out of logs.
+`privacy-publication` on CI uses the committed
+`scripts/privacy-known-value-fingerprints.json` from its trusted checkout.
+The local hooks use the same fingerprints with `--require-known-values`.
+The required CI checks stay as enforcement for skipped hooks and media OCR.
+Scrub before the push, and re-read every table and quote lifted out of logs.
 <!-- END:live-state-and-publication -->
 
 <!-- BEGIN:runtime-host-verification -->
@@ -165,26 +195,16 @@ during `verify-candidate`, so a candidate whose host cannot boot, cannot take
 the fence, or cannot hold what it took is refused before promotion rather than
 after.
 
-**Both halves now run on CI**, in the `bun-runtime` job, at the pull request's
-own commit. `scripts/verify-viewer-runtime.ts` is the Viewer half: it loads
-every compiled server runtime the build produced — `app-page.runtime.prod.js`
-among them, the module whose load failure answered 500 on every route — and
-then serves the build and requires `GET /` to answer 200. The job reads its Bun
-version out of the `Dockerfile`, so moving the pin is itself what re-runs the
-verification, and a rehearsal or a load that fails ends the job. The job also
-proves each of those checks can go red rather than only reporting that it went
-green: the tests holding both verdicts run inside it, and then each half is
-handed a subject that does not hold — no build at all, the incident's own
-`app-page.runtime.prod.js` made unloadable on purpose, a root with no runtime
-host in it — and a check that stays green against one of those fails the job.
-A green check whose red path nobody has seen is the same unattributable claim
-one level up. Run both locally to find out early; the job is what a reviewer
-can point at, which three rounds of #1248 spent on a local claim nobody could
-reproduce. What the job deliberately leaves out is the image build — the
-runtime stage installs apt packages and a Python whisper environment and sets
-the setuid bit on nsenter, which is far heavier than a pull request check — so
-the in-image rehearsal under `bun-container` stays where it is, in
-`verify-candidate`, before any promotion.
+**Both halves run on scoped pre-push and by CI dispatch** under the pin read
+from the Dockerfile. `scripts/verify-viewer-runtime.ts` loads every compiled
+server runtime, then serves the build and requires `GET /` to answer 200.
+`scripts/verify-runtime-host.ts` drives two runtime-host generations through
+succession and holds both endpoints. Held verdict tests cover their red paths;
+the dispatch job also runs the induced end-to-end failure controls. A moved
+pin must exercise both processes locally before publication. The image's
+in-container rehearsal under `bun-container` remains in `verify-candidate`
+before promotion. Docker images still build and publish on main and v* tags;
+PRs build only when image install, build or runtime inputs change.
 
 Three consequences worth keeping:
 
@@ -206,6 +226,16 @@ Three consequences worth keeping:
   the image names `bun-container`, and the rehearsal passes that name down to
   the generations it starts.
 <!-- END:runtime-host-verification -->
+
+# Host deploy command and team authentication
+
+`scripts/rebuild.sh [full-commit-sha]` uses `scripts/rebuild-http.ts` for both
+admission and status polling. The client reads the existing host control key to
+authenticate as `controller`, plus the Viewer access key when required. It
+creates no key, sends no member cookie or agent identity, validates and pins a
+resolved loopback address, and refuses redirects. Keep secrets inside that
+process and out of arguments and output. Tests run the real command against an
+isolated port-0 server; never use a live installation for a regression test.
 
 # Rendered evidence: call the driver that exists, do not write a new one
 

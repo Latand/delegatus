@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
@@ -530,43 +531,113 @@ test("a carried-over host released mid-registration is released once and stays g
   await close();
 });
 
-test("a carried-over host terminated mid-registration is released once and stays gone (#1191)", async () => {
-  const { registry, journal, directory, client, close } = fixture("handover-terminate");
+test("releasing one conversation's host reads and republishes no other conversation's host", async () => {
+  /* 2026-10-07 on production: every release republished all 13 to 17
+     registered hosts one after another, which added 10.7 to 19.1 s to each
+     account switch and made a kill take 16 to 32 s. */
+  const { registry, journal, directory, client, close } = fixture("release-scope");
   await bindStructuredDeliveryQueue([], { registry, client });
-  const { conversationId, key } = seedConversation(registry, directory, "handover-terminate-session");
-  const { host, releases } = releaseCountingHost();
-  await publishStructuredDeliveryHost({ key, host });
+  const released = seedConversation(registry, directory, "release-scope-released");
+  const releasedHost = structuredHost();
+  await publishStructuredDeliveryHost({ key: released.key, host: releasedHost });
+  const reads = { count: 0 };
+  for (const name of ["release-scope-other-one", "release-scope-other-two"]) {
+    const { key } = seedConversation(registry, directory, name);
+    const host = structuredHost();
+    const health = host.health.bind(host);
+    await publishStructuredDeliveryHost({ key, host: Object.assign(host, {
+      health: async () => { reads.count += 1; return health(); },
+    }) });
+  }
+  const before = reads.count;
+  const sessionRevision = () => journal.snapshot().sessions
+    .find((session) => session.conversationId === released.conversationId)?.revision ?? 0;
+  const revisionBefore = sessionRevision();
 
-  const gate = producerCursorGate(client, journal);
-  const rebind = bindStructuredDeliveryQueue([], { registry, client: gate.client });
-  await Promise.race([gate.started, rebind]);
-  expect(hasStructuredDeliveryHost(key)).toBe(true);
+  expect(await releaseStructuredDeliveryHost(released.key)).toBe(true);
 
-  /* A kill effect drains through the controller's termination path while the
-     registration is still parked. */
-  journal.executeOperation({
-    kind: "kill",
-    operationId: "operation-handover-terminate",
-    idempotencyKey: "handover-terminate",
-    conversationId,
-    sessionKey: key,
-  });
-  await kickStructuredDeliveryQueue();
-  await settles(() => {
-    const status = journal.operationResult("operation-handover-terminate")?.receipt.status;
-    return status === "delivered" || status === "failed" || status === "rejected";
-  }, "the kill receipt");
-  expect(journal.operationResult("operation-handover-terminate")?.receipt.status).toBe("delivered");
-  expect(releases.count).toBe(1);
-  expect(hasStructuredDeliveryHost(key)).toBe(false);
-
-  gate.open();
-  await rebind;
-
-  expect(hasStructuredDeliveryHost(key)).toBe(false);
-  expect(releases.count).toBe(1);
+  expect(reads.count).toBe(before);
+  /* The released conversation's own projection is still rewritten. */
+  expect(sessionRevision()).toBeGreaterThan(revisionBefore);
 
   await close();
+});
+
+test("a settled operator message moves the files revision, so the board drops its stale delivery state", async () => {
+  /* 2026-10-07 on production: the card kept "message not delivered" for 7 to
+     15 s after the agent had answered, until the next poll. */
+  const { registry, journal, directory, client, close } = fixture("settled-delivery-revision");
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const { conversationId, key } = seedConversation(registry, directory, "settled-delivery-revision-session");
+  await publishStructuredDeliveryHost({ key, host: structuredHost() });
+  const reservation = registry.holdDelivery(conversationId as `conversation_${string}`, "Reply with the single word OK",
+    "settled-delivery", "text", [], null, { operationId: "operation-settled-delivery" });
+  expect(registry.beginDeliveryAttempt(reservation.id, key.sessionId)).toMatchObject({ state: "delivery-uncertain" });
+  const revisionBefore = journal.snapshot().filesRevision;
+
+  journal.executeOperation({
+    kind: "send",
+    operationId: "operation-settled-delivery",
+    idempotencyKey: "settled-delivery",
+    conversationId,
+    text: "Reply with the single word OK",
+    policy: "queue",
+  });
+  await kickStructuredDeliveryQueue();
+  await settles(() => registry.readOnlySnapshot().heldDeliveries[reservation.id]?.state !== "delivery-uncertain", "delivery record");
+  await settles(() => journal.snapshot().filesRevision > revisionBefore, "files revision");
+
+  await close();
+});
+
+test("an inactive carried-over host retired mid-registration is detached and stays gone (#1191)", async () => {
+  const { registry, journal, directory, client, close } = fixture("handover-terminate");
+  let gate: ReturnType<typeof producerCursorGate> | undefined;
+  let rebind: Promise<void> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client });
+    const { conversationId, key } = seedConversation(registry, directory, "handover-terminate-session");
+    const { host, releases } = releaseCountingHost();
+    await publishStructuredDeliveryHost({ key, host });
+
+    gate = producerCursorGate(client, journal);
+    rebind = bindStructuredDeliveryQueue([], { registry, client: gate.client });
+    await Promise.race([gate.started, rebind]);
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
+
+    /* A kill effect drains through the controller's termination path while the
+       registration is still parked. */
+    // This fake host has no process. Publish that fact so the registry's
+    // inactive-row termination fence can authorize its teardown.
+    registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!, status: "unhosted" });
+    journal.executeOperation({
+      kind: "kill",
+      operationId: "operation-handover-terminate",
+      idempotencyKey: "handover-terminate",
+      conversationId,
+      sessionKey: key,
+    });
+    await kickStructuredDeliveryQueue();
+    await settles(() => {
+      const status = journal.operationResult("operation-handover-terminate")?.receipt.status;
+      return status === "delivered" || status === "failed" || status === "rejected";
+    }, "the kill receipt");
+    expect(journal.operationResult("operation-handover-terminate")?.receipt.status).toBe("delivered");
+    // Inactive-row retirement detaches the transport. Without process identity
+    // it cannot authorize the transport's release callback to signal anything.
+    expect(releases.count).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+
+    gate.open();
+    await rebind;
+
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(releases.count).toBe(0);
+  } finally {
+    gate?.open();
+    try { await rebind; }
+    finally { await close(); }
+  }
 });
 
 test("a carried-over host whose registration fails is retried and delivers exactly once (#1191)", async () => {
@@ -620,3 +691,162 @@ test("a carried-over host whose registration fails is retried and delivers exact
 
   await close();
 });
+
+test.each(["health-failure", "deadline", "durable-read-loss", "claim-read-failure", "release-write-failure"])("retirement keeps its barrier across controller generations: %s", async (scenario) => {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { procBackend } = await import("@/lib/proc");
+  const { RuntimeHost } = await import("@/runtime-host/host");
+  const { serveRuntimeHost } = await import("@/runtime-host/socket");
+  const { runtimeHostClient } = await import("./client");
+  type HostState = import("./engineHost").HostState;
+  type Queue = import("./structuredDeliveryQueue").StructuredDeliveryQueue;
+  const root = fs.mkdtempSync(path.join(isolated, "retirement-overlap-"));
+  const ready = path.join(root, "ready");
+  const child = Bun.spawn([process.execPath, "-e",
+    `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready"); setInterval(() => {}, 1000);`],
+    { env: { NODE_ENV: "test", LLV_STATE_DIR: root }, stdout: "ignore", stderr: "ignore" });
+  const recordedPid = child.pid;
+  const originalKill = process.kill;
+  const oldSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const oldStructured = process.env.LLV_STRUCTURED_HOSTS;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
+  const runtime = new RuntimeHost(journal, undefined, undefined, true);
+  const socket = path.join(root, "runtime.sock");
+  const server = serveRuntimeHost(socket, { handle: (request, options) => runtime.handle(request, options) });
+  let replacement: Promise<void> | null = null;
+  let oldDrain: Promise<void> | null = null;
+  const signals: { signal: NodeJS.Signals | number; status: string | undefined }[] = [];
+  let rebindComplete = false;
+  let readLost = false;
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    await settles(() => fs.existsSync(ready), "TERM-resistant fixture startup");
+    const key: SessionKey = { engine: "codex", sessionId: crypto.randomUUID() };
+    const transcript = path.join(root, key.sessionId + ".jsonl");
+    fs.writeFileSync(transcript, "");
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", accountId: "account-a" });
+    if (begun.kind !== "created") throw new Error("fixture launch refused");
+    const conversationId = begun.receipt.conversationId;
+    const identity = captureProcessIdentity(recordedPid);
+    expect(registry.settleSpawn(begun.receipt.launchId, {
+      key, artifactPath: transcript, cwd: root, accountId: "account-a", status: "idle", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio", process: identity,
+        eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+    }).kind).toBe("settled");
+    setAgentRegistryForTests(registry);
+    process.env.LLV_RUNTIME_HOST_SOCKET = socket;
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    const client = runtimeHostClient()!;
+    const firstClient = Object.create(client) as RuntimeHostClient;
+    firstClient.operationStatus = async (operationId: string) => {
+      if (scenario === "claim-read-failure" && journal.operationResult(operationId)?.receipt.status === "delivering") readLost = true;
+      return readLost ? null : client.operationStatus(operationId);
+    };
+    firstClient.transitionOperation = async (operationId, status, details, options) => {
+      if (scenario === "release-write-failure" && operationId === "overlap-retire" && status !== "delivering") {
+        throw new RuntimeHostUnavailableError("fixture lost retirement release write");
+      }
+      return client.transitionOperation(operationId, status, details, options);
+    };
+    await bindStructuredDeliveryQueue([], { registry, client: firstClient, recover: async () => null });
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      attentionIds: [], provenance: "structured", artifactPath: transcript, writerClaim: "structured-host:fixture:1",
+      capabilities: { steer: true, structuredAttention: true },
+    } });
+    const session = journal.readSession({ conversationId })!;
+    await client.command({ kind: "kill", operationId: "overlap-retire", idempotencyKey: "overlap-retire",
+      conversationId, sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim! } });
+    const oldQueue = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: Queue } }).__llvStructuredDeliveryController.activeQueue;
+    const health: HostState = { sessionKey: key.sessionId, status: "idle", endpoint: "stdio", pid: recordedPid,
+      processStartIdentity: identity.startIdentity, protocolVersion: "v2", eventCursor: 1,
+      activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null };
+    let healthReads = 0;
+    const successorHost = Object.assign(structuredHost(), {
+      health: async () => {
+        if (++healthReads > 1) throw new Error("successor health unavailable");
+        return health;
+      },
+    });
+    const successorClient = Object.create(client) as RuntimeHostClient;
+    successorClient.operationStatus = async (operationId: string) => {
+      const result = await client.operationStatus(operationId);
+      return result && scenario === "deadline" ? { ...result, receipt: {
+        ...result.receipt, admittedAt: new Date(Date.now() - 180_000).toISOString(),
+      } } : result;
+    };
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (signal !== 0 && signal !== undefined) {
+        if (pid !== recordedPid) throw new Error("fixture refused an unrecorded signal");
+        signals.push({ signal, status: journal.operationResult("overlap-retire")?.receipt.status });
+        expect(rebindComplete).toBe(false);
+        if (signal === "SIGTERM" && signals.length === 1) {
+          readLost = scenario === "durable-read-loss";
+          replacement = (async () => {
+            await bindStructuredDeliveryQueue([{ key, host: successorHost }], { registry, client: successorClient, recover: async () => null });
+            rebindComplete = true;
+            // Force another successor pass while the predecessor is in grace.
+            await kickStructuredDeliveryQueue();
+            expect(journal.operationResult("overlap-retire")?.receipt.status).toBe("delivering");
+            await expect(client.transitionOperation("overlap-retire", "failed", { reason: "competing health failure" })).rejects.toThrow("another executor");
+            await expect(client.transitionOperation("overlap-retire", "uncertain", { reason: "competing deadline" })).rejects.toThrow("another executor");
+            const racing = await client.command({ kind: "send", operationId: "overlap-racing-work", idempotencyKey: "overlap-racing-work",
+              conversationId, policy: "queue", text: "work during teardown" });
+            expect(racing.receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-in-progress" });
+          })();
+        }
+      }
+      return originalKill.call(process, pid, signal);
+    }) as typeof process.kill;
+    oldDrain = oldQueue.drain();
+    if (scenario === "claim-read-failure") {
+      await oldDrain;
+      expect(signals).toEqual([]);
+      expect(journal.operationResult("overlap-retire")?.receipt.status).toBe("delivering");
+      const racing = await client.command({ kind: "send", operationId: "overlap-claim-racing-work", idempotencyKey: "overlap-claim-racing-work",
+        conversationId, policy: "queue", text: "work before claim recovery" });
+      expect(racing.receipt.reason).toBe("idle-retirement-in-progress");
+      await bindStructuredDeliveryQueue([{ key, host: successorHost }], { registry, client: successorClient, recover: async () => null });
+      rebindComplete = true;
+      await kickStructuredDeliveryQueue();
+    } else {
+      await settles(() => replacement !== null, "first retirement TERM");
+      await replacement;
+      await expect(oldDrain).rejects.toThrow(scenario === "release-write-failure"
+        ? "fixture lost retirement release write" : "idle-retirement-authority-lost");
+      if (scenario === "release-write-failure") {
+        expect(journal.operationResult("overlap-retire")?.receipt.status).toBe("delivering");
+        // The predecessor has returned without releasing its claim. A live
+        // Viewer PID can now be recovered using local executor completion.
+        await kickStructuredDeliveryQueue();
+        await kickStructuredDeliveryQueue();
+      }
+    }
+    expect(journal.operationResult("overlap-retire")?.receipt.status).not.toBe("delivering");
+    const next = await client.command({ kind: "send", operationId: "overlap-new-work", idempotencyKey: "overlap-new-work",
+      conversationId, policy: "queue", text: "work after the signal ladder stopped" });
+    expect(next.receipt.status).toBe("queued");
+    await Bun.sleep(650);
+    expect(signals).toEqual(scenario === "claim-read-failure" ? [] : [{ signal: "SIGTERM", status: "delivering" }]);
+    expect(procBackend.pidAlive(recordedPid)).toBe(true);
+  } finally {
+    await oldDrain?.catch(() => {});
+    await (replacement as Promise<void> | null)?.catch(() => {});
+    process.kill = originalKill;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    setAgentRegistryForTests(null);
+    if (oldSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = oldSocket;
+    if (oldStructured === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = oldStructured;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    if (child.exitCode === null) child.kill(9);
+    await child.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);

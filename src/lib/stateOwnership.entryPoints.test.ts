@@ -120,6 +120,10 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
          `src/lib/inbox.ts`, which resolves the operator's inbox at module
          scope and is where the late claim threw. */
       expect(result.status).toBe(0);
+      /* The bundle contains the GitHub App helper, whose command line entry
+         belongs to the helper's own file: started as the MCP server it must
+         not read this process's arguments as a credential request. */
+      expect(result.stderr).not.toContain("token|gh|git-credential");
       /* And it resolved the operator's directory rather than a throw-away
          one: this is where its receipts live. */
       expect(fs.existsSync(path.join(STATE_DIRECTORY, "mcp-receipts.sqlite"))).toBeTrue();
@@ -139,6 +143,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     ["scripts/runtime-host-viewer-adapter.ts", [], "deployment adapter protocol is required"],
     ["scripts/bootstrap-runtime-host.ts", ["--not-a-mode"], "unsupported option --not-a-mode"],
     ["scripts/export-human-input.ts", [], "--host is required"],
+    ["scripts/rebuild-http.ts", [], "Deployment HTTP request failed"],
   ] as const) {
     test(`${script} reaches its own body`, () => {
       const result = runEntryPoint([script, ...argv]);

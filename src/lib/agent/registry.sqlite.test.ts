@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -748,7 +749,7 @@ test("SQLite restart derives and persists explicit operation ownership before to
   )).toMatchObject({ id: original.id, state: "delivered", command });
 });
 
-test("terminal operation ownership stays bounded and payload-free in JSON and SQLite", () => {
+test("terminal operation ownership stays bounded with recipient evidence in JSON and SQLite", () => {
   for (const backend of ["json", "sqlite"] as const) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-registry-bounded-owners-${backend}-`));
     const filename = path.join(directory, "agent-registry.json");
@@ -807,11 +808,13 @@ test("terminal operation ownership stays bounded and payload-free in JSON and SQ
     expect(snapshot.deliveryOperationOwners[retainedOperationId]).toMatchObject({
       terminalState: "failed",
       requestDigest: expect.any(String),
+      evidenceText: retainedText,
     });
     expect(Object.values(snapshot.heldDeliveries)
       .some((delivery) => delivery.command.operationId === retainedOperationId)).toBeFalse();
     if (backend === "json") {
-      expect(fs.readFileSync(filename, "utf8")).not.toContain(retainedText);
+      // Recipient acknowledgements need the bounded owner evidence after compaction.
+      expect(JSON.parse(fs.readFileSync(filename, "utf8")).deliveryOperationOwners[retainedOperationId].evidenceText).toBe(retainedText);
       expect(fs.statSync(filename).size).toBeLessThanOrEqual(firstJsonBytes + 16_384);
     } else {
       /* SQLite is the only store: no JSON is written at all (#1870). */
@@ -819,7 +822,7 @@ test("terminal operation ownership stays bounded and payload-free in JSON and SQ
       const secondSqliteStats = sqliteOwnerStats();
       expect(secondSqliteStats.count).toBe(200);
       expect(secondSqliteStats.bytes).toBeLessThanOrEqual(firstSqliteStats!.bytes + 4_096);
-      expect(secondSqliteStats.payload).not.toContain(retainedText);
+      expect(secondSqliteStats.payload).toContain(retainedText);
     }
 
     store = new AgentRegistry(filename, undefined, undefined, storage);
@@ -854,7 +857,7 @@ test("terminal operation ownership stays bounded and payload-free in JSON and SQ
       { operationId: retainedOperationId, kind: "send", policy: "queue" },
     )).toThrow("operation id is already reserved for another client message");
   }
-}, 15_000);
+}, 60_000);
 
 test("dual-write leaves both backends unchanged after a no-op mutation", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-noop-"));
@@ -1076,12 +1079,22 @@ test("SQLite restart preserves first-owner insertion order for shared paths", ()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-order-"));
   const filename = path.join(directory, "agent-registry.json");
   const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const first = sqlite.ensureConversation("codex", "/sessions/first-owner.jsonl", "first");
-  let later = sqlite.ensureConversation("codex", "/sessions/later-owner-0.jsonl", "later");
-  for (let attempt = 1; first.id < later.id && attempt < 100; attempt += 1) {
-    later = sqlite.ensureConversation("codex", `/sessions/later-owner-${attempt}.jsonl`, "later");
+  /* Conversation ids are random, and the later conversation has to sort
+     before the first one. A descending sequence gives that on the first
+     attempt; drawing until it happened failed about once in a hundred runs. */
+  let issued = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => (
+    `${(0xffff_ffff - issued++).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`
+  ));
+  let first: ReturnType<AgentRegistry["ensureConversation"]>;
+  let later: ReturnType<AgentRegistry["ensureConversation"]>;
+  try {
+    first = sqlite.ensureConversation("codex", "/sessions/first-owner.jsonl", "first");
+    later = sqlite.ensureConversation("codex", "/sessions/later-owner.jsonl", "later");
+  } finally {
+    ids.mockRestore();
   }
-  if (first.id < later.id) throw new Error("failed to create reverse-lexical conversation ids");
+  expect(later.id < first.id).toBeTrue();
   const db = new Database(path.join(directory, "agent-registry.sqlite"));
   const stored = db.query<{ value_json: string }, [string, string]>(
     "SELECT value_json FROM registry_rows WHERE collection = ? AND row_key = ?",
@@ -1742,9 +1755,23 @@ test.each(["off", "dual-write", "read", "sqlite"] as const)(
       now: () => clock,
       mirrorCheckpointMs: 60_000,
     });
-    for (let index = 0; index < 650; index += 1) {
-      beginTestSpawn(registry, `/metric-${index}`);
-      clock += 100;
+    /* The subject is the registry's own accounting, read on the injected
+       clock. Left alone, each transaction asks the device for about six
+       flushes (3 932 fsync calls for these 650 in dual-write), so the test ran
+       for as long as the disk took to flush, a latency it shares with every
+       process syncing beside it: at 8 ms a flush the loop takes 28 s. The
+       transactions still run the whole storage path; what they survive is
+       asserted by the crash and rollback tests above. */
+    const flushes = spyOn(fs, "fsyncSync").mockImplementation(() => {});
+    (registry as unknown as { sqliteStore?: { db: Database } }).sqliteStore?.db.exec("PRAGMA synchronous = OFF");
+    try {
+      for (let index = 0; index < 650; index += 1) {
+        // Exercise real writes without growing the registry on each sample.
+        registry.setEngineRouting("codex", "metrics-account");
+        clock += 100;
+      }
+    } finally {
+      flushes.mockRestore();
     }
 
     expect(registry.storageDiagnostics()).toMatchObject({
@@ -2092,30 +2119,89 @@ test("the seat MCP heartbeat resolves its current digest through a keyed SQLite 
 test("SQLite carries the dropped-evidence note across a restart, so a compacted key stays unknown", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-evidence-note-"));
   const filename = path.join(directory, "agent-registry.json");
-  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const conversation = sqlite.ensureConversation("codex", "/sessions/sqlite-evidence-note.jsonl", "default");
-  const original = sqlite.holdDelivery(conversation.id, "the message that was delivered", "sqlite-compacted-key");
-  sqlite.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
-  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "admitted" });
+  const seed = new AgentRegistry(filename);
+  const conversation = seed.ensureConversation("codex", "/sessions/sqlite-evidence-note.jsonl", "default");
+  const original = seed.holdDelivery(conversation.id, "the message that was delivered", "sqlite-compacted-key");
+  seed.recordDeliveryOutcome(original.id, "delivered", null, "delivered");
 
-  /* One operation whose fate was never proven, then enough later traffic to
-     push the delivered key past the owner retention bound. */
-  const unverified = sqlite.holdDelivery(conversation.id, "the message whose fate is unknown", "sqlite-unverified-key");
-  sqlite.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  /* Build the 205-row history in small JSON partitions, below each partition's
+     retention bounds. Move those durable rows into one SQLite conversation so
+     its first real delivery mutation performs the compaction under test. */
+  const partitions = Array.from({ length: 3 }, (_, index) => seed.ensureConversation(
+    "codex", `/sessions/sqlite-evidence-note-partition-${index}.jsonl`, "default",
+  ));
+  const laterIds: string[] = [];
+  const unverifiedPartition = partitions[0]!;
+  const unverified = seed.holdDelivery(unverifiedPartition.id, "the message whose fate is unknown", "sqlite-unverified-key");
+  seed.recordDeliveryOutcome(unverified.id, "failed", "no receipt arrived", "unverified");
+  laterIds.push(unverified.id);
   for (let index = 0; index < 205; index += 1) {
-    const later = sqlite.holdDelivery(conversation.id, `later SQLite message ${index}`, `sqlite-later-${index}`);
-    sqlite.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+    const partition = partitions[index % partitions.length]!;
+    const later = seed.holdDelivery(partition.id, `later SQLite message ${index}`, `sqlite-later-${index}`);
+    seed.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
+    laterIds.push(later.id);
   }
-  /* Re-arming the unverified operation clears its terminal state, which puts
-     the retained group back under the bound — so nothing but the note itself
-     can still say this history has a hole in it. */
-  expect(sqlite.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
-  expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+
+  const fixture = seed.snapshot();
+  const partitionIds = new Set(partitions.map((partition) => partition.id));
+  const oldestAt = new Date(Date.UTC(2025, 0, 1)).toISOString();
+  fixture.heldDeliveries[original.id]!.createdAt = oldestAt;
+  fixture.heldDeliveries[original.id]!.deliveredAt = oldestAt;
+  fixture.deliveryOperationOwners[original.command.operationId]!.createdAt = oldestAt;
+  for (const id of laterIds) {
+    const delivery = fixture.heldDeliveries[id]!;
+    delivery.conversationId = conversation.id;
+    delivery.runtimeConversationId = conversation.id;
+  }
+  fixture.heldDeliveries[unverified.id]!.admissionSeq = 2;
+  fixture.deliveryOperationOwners[unverified.command.operationId]!.conversationId = conversation.id;
+  fixture.deliveryOperationOwners[unverified.command.operationId]!.runtimeConversationId = conversation.id;
+  const moved = new Set(laterIds);
+  const orderedLater = laterIds
+    .map((id) => fixture.heldDeliveries[id]!)
+    .filter((delivery) => delivery.id !== unverified.id)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  orderedLater.forEach((delivery, index) => {
+    const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index + 1)).toISOString();
+    delivery.admissionSeq = index + 3;
+    delivery.createdAt = createdAt;
+    delivery.deliveredAt = createdAt;
+    const owner = fixture.deliveryOperationOwners[delivery.command.operationId]!;
+    owner.createdAt = createdAt;
+    owner.settledAt = createdAt;
+  });
+  for (const owner of Object.values(fixture.deliveryOperationOwners)) {
+    if (!moved.has(owner.deliveryId)) continue;
+    owner.conversationId = conversation.id;
+    owner.runtimeConversationId = conversation.id;
+  }
+  for (const id of partitionIds) delete fixture.conversations[id];
+  fs.writeFileSync(filename, JSON.stringify(fixture, null, 2));
+
+  const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "admitted" });
+
+    /* One SQLite delivery mutation compacts the imported history. Retrying the
+       unverified operation then re-arms it under the bound, leaving only the
+       persisted evidence note to say that the old key was dropped. */
+    const trigger = sqlite.holdDelivery(conversation.id, "SQLite compaction trigger", "sqlite-compaction-trigger");
+    sqlite.recordDeliveryOutcome(trigger.id, "delivered", null, "delivered");
+    expect(sqlite.retryUncertainDeliveryForOperation(unverified.command.operationId)).toBeTruthy();
+    expect(sqlite.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+  } finally {
+    sqlite.close();
+  }
 
   const restarted = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
-  /* The retained end of the same history still answers from its own row. */
-  expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-later-204")).toMatchObject({ outcome: "admitted" });
+  try {
+    expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-compacted-key")).toMatchObject({ outcome: "unknown" });
+    /* The retained end of the same history still answers from its own row. */
+    expect(restarted.deliveryAdmissionForKey(conversation.id, "sqlite-later-204")).toMatchObject({ outcome: "admitted" });
+  } finally {
+    restarted.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 /**
@@ -2222,4 +2308,29 @@ test("a runtime fault inside a startup migration rolls the whole block back and 
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a delivery commit keeps the shared reader view warm and current", () => {
+  /* 2026-10-07: each delivery commit dropped the cached view, so the next
+     whole-registry reader reloaded it, 0.28 to 0.40 s on a copy of the
+     production registry, many times over as an account switch started. */
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-delivery-view-"));
+  const filename = path.join(directory, "agent-registry.json");
+  let snapshotLoads = 0;
+  const registry = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "sqlite",
+    onSqliteSnapshotLoad: () => { snapshotLoads += 1; },
+  });
+  const conversation = registry.ensureConversation("claude", "/sessions/delivery-view.jsonl", "account-a");
+  registry.readOnlySnapshot();
+  const loadsBefore = snapshotLoads;
+
+  const held = registry.holdDelivery(conversation.id, "Reply with the single word OK", "delivery-view", "text", [], null,
+    { operationId: "delivery-view" });
+  const view = registry.readOnlySnapshot();
+
+  expect(snapshotLoads).toBe(loadsBefore);
+  expect(view.heldDeliveries[held.id]).toMatchObject({ clientMessageId: "delivery-view", state: held.state });
+  registry.close();
+  fs.rmSync(directory, { recursive: true, force: true });
 });

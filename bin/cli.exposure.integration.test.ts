@@ -182,9 +182,19 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/appDir.mjs"), path.join(bin, "appDir.mjs")),
     copyFile(path.resolve("bin/envAlias.mjs"), path.join(bin, "envAlias.mjs")),
     copyFile(path.resolve("bin/self-update-supervisor.mjs"), path.join(bin, "self-update-supervisor.mjs")),
+    copyFile(path.resolve("bin/launcher-relaunch.mjs"), path.join(bin, "launcher-relaunch.mjs")),
+    copyFile(path.resolve("bin/launcher-credentials.mjs"), path.join(bin, "launcher-credentials.mjs")),
+    copyFile(path.resolve("bin/launcher-adoption.mjs"), path.join(bin, "launcher-adoption.mjs")),
+    copyFile(path.resolve("bin/launcher-lock.mjs"), path.join(bin, "launcher-lock.mjs")),
+    copyFile(path.resolve("bin/launcher-service-proof.mjs"), path.join(bin, "launcher-service-proof.mjs")),
     copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
+    copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),
     copyFile(path.resolve("bin/internalService.mjs"), path.join(bin, "internalService.mjs")),
     copyFile(path.resolve("bin/skillLinks.mjs"), path.join(bin, "skillLinks.mjs")),
+    copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),
+    copyFile(path.resolve("bin/viewerGateKey.mjs"), path.join(bin, "viewerGateKey.mjs")),
+    copyFile(path.resolve("bin/windows-process-identity.mjs"), path.join(bin, "windows-process-identity.mjs")),
+    copyFile(path.resolve("bin/darwin-process-identity.mjs"), path.join(bin, "darwin-process-identity.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `${options.startupChatter ? STARTUP_CHATTER : ""}
 const hostnameIndex = process.argv.indexOf("--hostname");
@@ -325,12 +335,13 @@ test("the CLI rejects a checkout server that binds beyond the requested loopback
   const port = await availablePort();
   const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
     cwd: path.dirname(path.dirname(fixture.cli)),
-    env: fixture.env,
+    env: { ...fixture.env, LLV_LANG: "en" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.add(child);
-
-  await waitForStatus("127.0.0.1", port, 200);
+  const output = captureOutput(child);
+  // The exposure guard may stop the server before a polling client sees it.
+  await output.waitFor("loopback was requested", 10_000);
   const exitCode = await waitForExit(child, 2_000);
   expect(exitCode).toBe(1);
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);

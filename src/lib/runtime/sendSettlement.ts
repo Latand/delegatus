@@ -7,9 +7,11 @@ import {
   type DeliveryTerminalDisposition,
   type RegistryFile,
 } from "@/lib/agent/registry";
+import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
+import { confirmedSend } from "./confirmedSend";
 import { admittedMessageTextForms } from "./admittedMessageText";
 import { sameMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { structuredContentDigest } from "./structuredContent";
@@ -343,7 +345,7 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     clientMessageId,
     state: "in-flight",
     reason: delivery?.state === "held"
-      ? "held behind an account migration"
+      ? heldWaitReason(file, delivery)
       : "accepted for delivery and not settled yet",
     acceptedAt,
     settledAt: null,
@@ -351,6 +353,24 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     resend: null,
     evidence: "delivery-record",
   };
+}
+
+/**
+ * What a held send is waiting on, as a reason code the composer translates.
+ *
+ * Only an account switch holds a reservation, and the record names it when
+ * the hold is placed. While the switch itself still waits for the running turn
+ * to end, the code says that, so the operator learns the message goes out once
+ * the turn is over and the switch has landed. A failed switch instead names
+ * the explicit retry or cancellation it needs before delivery can resume.
+ */
+export function heldWaitReason(file: RegistryFile, delivery: HeldDelivery): "switching-accounts" | "switch-after-turn" | "switch-failed" {
+  const migration = file.conversations[delivery.conversationId]?.migration;
+  if (delivery.fencedBy === migration?.operationId) {
+    if (migration?.phase === "failed-recoverable") return "switch-failed";
+    if (migration?.phase === "waiting-turn") return "switch-after-turn";
+  }
+  return delivery.waitReason ?? "switching-accounts";
 }
 
 /**
@@ -463,8 +483,21 @@ async function fenceOperation(
     }
     return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
   }
-  await client.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON });
-  return { state: "failed", disposition: "lost", reason: SEND_LOST_REASON };
+  try {
+    await client.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON },
+      { fromStatuses: ["pending", "queued"] });
+    return { state: "failed", disposition: "lost", reason: SEND_LOST_REASON };
+  } catch (error) {
+    // Acceptance can win between the read and the fence. Its actual outcome
+    // must answer the operator before a stale read can call a resend safe.
+    const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
+    const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason);
+    if (verdict) return verdict;
+    if (current && !OPEN_RECEIPT_STATUSES.has(current.receipt.status)) {
+      return fenceOperation(client, current.operationId, current.receipt.status);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -587,8 +620,20 @@ export async function resolveSendReceipt(
   ports: SendSettlementPorts = {},
 ): Promise<SendReceipt | null> {
   const registry = ports.registry ?? agentRegistry();
-  const projected = sendReceiptFor(registry.readOnlySnapshot(), operationId);
-  if (!projected || projected.state !== "in-flight") return projected;
+  const snapshot = registry.readOnlySnapshot();
+  const projected = sendReceiptFor(snapshot, operationId);
+  if (!projected || projected.state === "delivered") return projected;
+  // A terminal unknown is a fence against replay, not a denial of a later
+  // canonical acknowledgement. Keep explicit cancellation and proven loss.
+  const mayConfirm = projected.state === "in-flight"
+    || (projected.duplicateRisk && projected.reason !== SEND_DISCARDED_REASON
+      && !projected.reason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+  if (mayConfirm && await confirmedSend(snapshot, operationId, true)) {
+    return settleProjection(registry, operationId, projected, {
+      state: "delivered", disposition: "delivered", reason: null,
+    }, "delivery-record");
+  }
+  if (projected.state !== "in-flight") return projected;
   const client = ports.client === undefined ? runtimeHostClient() : ports.client;
   /* The journal read, keeping whether it happened at all. A socket that is not
      there is the runtime host being unreachable, which is the same answer as a
@@ -678,12 +723,24 @@ function settleProjection(
     if (reconciled) return { ...reconciled, evidence };
   }
   const delivery = deliveryForOperation(file, operationId);
-  if (delivery && SETTLEABLE_DELIVERY_STATES.has(delivery.state)) {
-    registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route);
+  if (delivery && (SETTLEABLE_DELIVERY_STATES.has(delivery.state)
+    || (delivery.state === "failed" && verdict.state === "delivered"))) {
+    if (delivery.state === "failed") {
+      registry.recordDeliveryOutcomeForOperation(delivery.conversationId, operationId,
+        verdict.state, verdict.reason, verdict.disposition, route);
+    } else {
+      registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route);
+    }
     const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.state === "delivered") {
+    if (projected.conversationId?.startsWith("conversation_")) {
+      registry.recordDeliveryOutcomeForOperation(projected.conversationId as ViewerConversationId,
+        operationId, "delivered", null, "delivered", route);
+      const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
+      if (reconciled) return { ...reconciled, evidence };
+    }
     return { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence, ...routeFields(route) };
   }
   return {
@@ -799,7 +856,8 @@ export type OriginalSendEvidence =
   | { kind: "contradictory" };
 
 /**
- * The CURRENT answer for one found operation, projected without writing.
+ * The CURRENT answer for one found operation, without changing its reservation
+ * or journal. Canonical recipient evidence is durably allocated before reporting.
  *
  * A durable record that is already terminal is the answer. One still in flight
  * is checked against the journal's current retry leaf, and a terminal verdict
@@ -813,6 +871,13 @@ async function projectCurrentSend(
   operationId: string,
   ports: SendSettlementPorts,
 ): Promise<Evidence<SendReceipt>> {
+  const registry = ports.registry ?? agentRegistry();
+  if (projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
+    && (projected.state === "in-flight" || projected.duplicateRisk)
+    && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
+    return { readable: true, value: { ...projected, state: "delivered", reason: null,
+      duplicateRisk: false, resend: "not-needed", evidence: "delivery-record" } };
+  }
   if (projected.state !== "in-flight") return { readable: true, value: projected };
   const client = ports.client === undefined ? runtimeHostClient() : ports.client;
   if (!client) return { readable: true, value: { ...projected, evidence: "delivery-record" } };
@@ -835,8 +900,9 @@ async function projectCurrentSend(
 
 /**
  * The lookup above, then the current answer for the one operation it found.
- * Read-only end to end: the registry snapshot and the journal row are read,
- * and neither is changed. A journal or registry that cannot be read keeps the
+ * The registry snapshot and journal row stay unchanged; canonical recipient
+ * evidence is allocated in its ledger before reporting delivery.
+ * A journal or registry that cannot be read keeps the
  * identity the durable record established and marks the current answer
  * unreadable; it never turns into an absence.
  */

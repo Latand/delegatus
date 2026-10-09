@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1594,7 +1594,7 @@ describe("durable account migration coordinator", () => {
       [sourcePath]: targetPath,
       [sourceForkPath]: targetPath,
     });
-    expect(afterScan.board.prefs.hidden).toEqual([targetPath]);
+    expect(afterScan.board.prefs.hidden).toEqual([sourcePath, targetPath]);
     expect(afterScan.board.prefs.manual).toEqual([]);
   });
 
@@ -1679,7 +1679,7 @@ describe("durable account migration coordinator", () => {
 
     expect(reconciled.ok).toBeTrue();
     expect(reconciled.board.pathAliases).toEqual({ [sourcePath]: successorPath });
-    expect(reconciled.board.prefs.hidden).toEqual([successorPath]);
+    expect(reconciled.board.prefs.hidden).toEqual([sourcePath, successorPath]);
     expect(reconciled.board.prefs.manual).toEqual([]);
   });
 
@@ -1723,14 +1723,13 @@ describe("durable account migration coordinator", () => {
 
     expect(reconciled.ok).toBeTrue();
     expect(reconciled.board.pathAliases).toEqual({ [sourcePath]: successorPath });
-    expect(reconciled.board.prefs.hidden).toEqual([successorPath]);
+    expect(reconciled.board.prefs.hidden).toEqual([sourcePath, successorPath]);
     expect(reconciled.board.prefs.manual).toEqual([]);
-    expect(delivered).toEqual([]);
+    expect(delivered).toEqual(["repair-client"]);
     expect(restarted.snapshot().heldDeliveries[old.id]).toMatchObject({
-      state: "failed",
-      attempts: 0,
-      generationId: null,
-      error: expect.stringContaining("fresh delivery action"),
+      state: "delivered",
+      attempts: 1,
+      error: null,
     });
   });
 
@@ -1918,7 +1917,8 @@ describe("durable account migration coordinator", () => {
 
     expect(afterScan.ok).toBeTrue();
     expect(afterScan.board.prefs.manual).toEqual(visible);
-    expect(afterScan.board.prefs.hidden).toEqual(successors);
+    // Archive retains every concrete generation even after its alias advances.
+    expect(afterScan.board.prefs.hidden).toEqual([...sources, ...successors]);
     expect(Object.keys(afterScan.board.pathAliases ?? {})).toHaveLength(102);
     expect(Object.values(store.snapshot().conversations).every((conversation) => conversation.migration?.boardProject === project)).toBeTrue();
   });
@@ -2016,7 +2016,7 @@ describe("durable account migration coordinator", () => {
 
     expect(boardFor(project)).toMatchObject({
       pathAliases: { "/a.jsonl": "/c.jsonl", "/b.jsonl": "/c.jsonl" },
-      prefs: { hidden: ["/c.jsonl"], manual: [] },
+      prefs: { hidden: ["/a.jsonl", "/c.jsonl"], manual: [] },
     });
   });
 
@@ -2071,7 +2071,7 @@ describe("durable account migration coordinator", () => {
       await reconcileMigrations(provider([]), { async deliver() { return "delivered"; } }, store);
 
       expect(boardFor(oldProject).prefs[placement]).toEqual([]);
-      expect(boardFor(newProject).prefs[placement]).toEqual([targetPath]);
+      expect(boardFor(newProject).prefs[placement]).toEqual(placement === "hidden" ? [sourcePath, targetPath] : [targetPath]);
     }
   });
 
@@ -2128,7 +2128,7 @@ describe("durable account migration coordinator", () => {
       expectedRevision: store.engineRouting("codex").revision,
     });
     await advanceConversationMigration(conversation.id, store, provider(["/project-target.jsonl"]));
-    expect(boardFor("stale-project").prefs.hidden).toEqual(["/project-target.jsonl"]);
+    expect(boardFor("stale-project").prefs.hidden).toEqual(["/project-source.jsonl", "/project-target.jsonl"]);
     expect(store.conversation(conversation.id)?.migration?.boardProject).toBe("stale-project");
     store.reconcileConversations([
       observation("/stays-in-source.jsonl", "a", "idle", "worker", "stale-project"),
@@ -2147,7 +2147,7 @@ describe("durable account migration coordinator", () => {
       store,
       { remapBoardPaths() { throw new Error("alias storage unavailable"); } },
     );
-    expect(boardFor("canonical-project").prefs.hidden).toEqual(["/project-target.jsonl"]);
+    expect(boardFor("canonical-project").prefs.hidden).toEqual(["/project-source.jsonl", "/project-target.jsonl"]);
     expect(store.conversation(conversation.id)?.migration?.boardProject).toBe("stale-project");
     store.reconcileConversations([
       observation("/project-target.jsonl", "b", "idle", "worker", "final-project"),
@@ -2159,7 +2159,7 @@ describe("durable account migration coordinator", () => {
     expect(boardFor("canonical-project").prefs.hidden).toEqual([]);
     expect(boardFor("final-project")).toMatchObject({
       pathAliases: { "/project-source.jsonl": "/project-target.jsonl" },
-      prefs: { hidden: ["/project-target.jsonl"], manual: [] },
+      prefs: { hidden: ["/project-source.jsonl", "/project-target.jsonl"], manual: [] },
     });
     expect(store.conversation(conversation.id)?.migration?.boardProject).toBe("final-project");
   });
@@ -2199,7 +2199,7 @@ describe("durable account migration coordinator", () => {
       await advanceConversationMigration(conversation.id, store, provider([targetPath]));
 
       expect(boardFor(oldProject).prefs[placement]).toEqual([]);
-      expect(boardFor(newProject).prefs[placement]).toEqual([targetPath]);
+      expect(boardFor(newProject).prefs[placement]).toEqual(placement === "hidden" ? [sourcePath, middlePath, targetPath] : [targetPath]);
     }
   });
 
@@ -2431,7 +2431,7 @@ describe("durable account migration coordinator", () => {
     expect(final.generations.at(-1)?.path).toBe("/b.jsonl");
     expect(boardFor(project)).toMatchObject({
       pathAliases: { "/source.jsonl": "/b.jsonl", [sourceForkPath]: "/b.jsonl" },
-      prefs: { hidden: ["/b.jsonl"], manual: [] },
+      prefs: { hidden: ["/source.jsonl", "/b.jsonl"], manual: [] },
     });
   });
 
@@ -4283,7 +4283,7 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
     };
   }
 
-  test("five recoverable failures in a row leave one fork artifact and one operation identity", async () => {
+  test.each(["filesystem", "fractional"] as const)("five recoverable failures in a row leave one fork artifact and one operation identity (%s mtime)", async (mtime) => {
     const store = registry();
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-708-multi-failure-"));
     roots.push(base);
@@ -4291,7 +4291,25 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
     const target = accountRoot(base, "b");
     const sourcePath = path.join(source.transcriptRoot, `rollout-${SOURCE_THREAD}.jsonl`);
     fs.writeFileSync(sourcePath, sessionMeta(SOURCE_THREAD), { mode: 0o600 });
-    await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+    if (mtime === "fractional") {
+      const inventoryTime = Date.now();
+      const modifiedAt = (inventoryTime + 1_000.5) / 1000;
+      fs.utimesSync(sourcePath, modifiedAt, modifiedAt);
+      const mtimeMs = fs.statSync(sourcePath).mtimeMs;
+      expect(mtimeMs % 1).toBeGreaterThan(0);
+      const clock = spyOn(Date, "now").mockReturnValue(inventoryTime);
+      try {
+        await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+        const observedAt = store.conversationForPath(sourcePath)!.turn.observedAt!;
+        expect(Date.parse(observedAt)).toBeGreaterThanOrEqual(mtimeMs);
+        await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+        expect(store.conversationForPath(sourcePath)!.turn.observedAt).toBe(observedAt);
+      } finally {
+        clock.mockRestore();
+      }
+    } else {
+      await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+    }
     store.reconcileConversations([observation(sourcePath, "a", "idle")]);
     const conversation = store.conversationForPath(sourcePath)!;
     store.commitMigrationIntent({
@@ -4649,4 +4667,52 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
       fs.closeSync = originalCloseSync;
     }
   });
+});
+
+test("a target the caller no longer authorizes is neither created nor published", async () => {
+  for (const refuseAt of ["create", "publish"] as const) {
+    const store = registry();
+    const source = `/source-authorize-${refuseAt}.jsonl`;
+    store.reconcileConversations([observation(source, "a", "idle")]);
+    const conversation = store.conversationForPath(source)!;
+    store.requestConversationReseat(conversation.id, "b");
+    const calls: string[] = [];
+    const cleaned: string[] = [];
+    let asked = 0;
+    const successorProvider: SuccessorProviderPort = {
+      virtualSource: true,
+      async create(input) {
+        calls.push("create");
+        return {
+          operationId: input.operationId,
+          nativeId: "successor-b",
+          path: "/successor-b.jsonl",
+          continuityPaths: [],
+          historyHash: "successor-b",
+          host: { kind: "codex-app-server", identity: "successor-b", epoch: 1, verifiedAt: "2026-07-19T12:00:00.000Z" },
+        };
+      },
+      async verify() { calls.push("verify"); },
+      async publishHost() { calls.push("publish"); },
+      async cleanup(receipt) { cleaned.push(receipt.nativeId); },
+    };
+
+    const settled = await advanceConversationMigration(conversation.id, store, successorProvider, {
+      authorizeTarget: () => {
+        asked += 1;
+        if (refuseAt === "create" || asked === 2) throw new Error("target account is no longer allowed on this project");
+      },
+    });
+
+    expect(calls).toEqual(refuseAt === "create" ? [] : ["create", "verify"]);
+    expect(cleaned).toEqual(refuseAt === "create" ? [] : ["successor-b"]);
+    expect(settled.migration).toMatchObject({
+      phase: "failed-recoverable",
+      targetId: "b",
+      errorCode: "target-account-unavailable",
+      error: "target account is no longer allowed on this project; the conversation stays on its account",
+    });
+    expect(settled.generations).toHaveLength(1);
+    expect(settled.generations.at(-1)?.accountId).toBe("a");
+  }
 });

@@ -1,14 +1,16 @@
+import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { currentConversationFile } from "@/lib/accounts/identity";
-import type { MessageKey } from "@/lib/i18n";
+import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { parseSeatDeputyViews, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
+import { taskMotion } from "@/lib/tasks/motion";
 import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
 import { attentionId } from "../attention";
-import type { OrchestratorIncumbent } from "./incumbent";
+import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncumbent } from "./incumbent";
 
 /*
  * The orchestrator panel's state machine, as a pure module (PRD #976 slice A).
@@ -335,13 +337,57 @@ export interface RotationHint {
   /** Context usage percent behind a `strongly_recommend`, when it is known. */
   contextPercent: number | null;
   reasons: ("context" | "dead")[];
-  /** Slice B: the SERVER's own reasons, verbatim — each names the threshold it
-      crossed and whether the number behind it is an estimate. Never re-worded
-      here, because re-wording a threshold is how two surfaces start disagreeing
-      about the same seat. Absent on a client-derived hint. */
-  notes?: readonly string[];
+  /** Slice B: the SERVER's own reasons, as data. Each carries the number it
+      crossed and whether that number is an estimate, so the banner words the
+      same threshold `get_orchestrator` reports, in the operator's language.
+      Absent on a client-derived hint. */
+  causes?: readonly IncumbentRotationCause[];
   /** Where the advisory came from. Absent means client-derived (slice A). */
   source?: "server" | "client";
+}
+
+/**
+ * What the rotation banner says under its title: one line per cause, each in
+ * the operator's language with the action to take. A cause is said once. A cause the server reported as data is worded from that data; the
+ * client's own two readings fill in only what the server did not name.
+ */
+export function rotationBannerLines(t: TFunction, locale: Locale, rotation: RotationHint): string[] {
+  const number = (value: number) => value.toLocaleString(locale === "uk" ? "uk-UA" : "en-US");
+  const lines: string[] = [];
+  const named = new Set<IncumbentRotationCause["kind"]>();
+  for (const cause of rotation.causes ?? []) {
+    if (named.has(cause.kind)) continue;
+    named.add(cause.kind);
+    if (cause.kind === "context") {
+      lines.push(t(cause.estimated ? "orchPanel.rotationContextTokensEstimated" : "orchPanel.rotationContextTokens", {
+        tokens: number(cause.tokens),
+        threshold: number(cause.thresholdTokens),
+      }));
+    } else if (cause.kind === "compactions") {
+      lines.push(t("orchPanel.rotationCompactions", { count: number(cause.count), threshold: number(cause.threshold) }));
+    } else if (cause.kind === "transcript") {
+      lines.push(t("orchPanel.rotationTranscript", { size: number(cause.megabytes), threshold: number(cause.thresholdMegabytes) }));
+    } else {
+      lines.push(t("orchPanel.rotationDead"));
+    }
+  }
+  if (rotation.reasons.includes("context") && !named.has("context")) {
+    lines.push(t("orchPanel.rotationContext", { percent: String(rotation.contextPercent ?? 0) }));
+  }
+  if (rotation.reasons.includes("dead") && !named.has("host_gone")) lines.push(t("orchPanel.rotationDead"));
+  return [...new Set(lines)];
+}
+
+/**
+ * The one line the seat shows while its Telegram tool waits on the operator:
+ * what happened and what to do, in the interface language. Null when nothing
+ * is asked of them.
+ */
+export function telegramActionLine(t: TFunction, action: IncumbentTelegramAction | null | undefined): string | null {
+  if (action === "sign_in") return t("orchPanel.telegramSignIn");
+  if (action === "check") return t("orchPanel.telegramCheck");
+  if (action === "restart") return t("orchPanel.telegramRestart");
+  return null;
 }
 
 /** `ROTATION_THRESHOLD_FRACTION` (`@/lib/orchestrator/contextPolicy`) as a
@@ -399,26 +445,16 @@ export function mandateSummaryOf(
  */
 export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resumable" | "dead";
 
-/**
- * What the dock's badge NAMES, which is not always the liveness (issue #1167).
- *
- * A seat that is running and a seat that is holding a question up at the
- * operator both read «live», and the second one is the only one that needs
- * anything. So a pending decision is ranked ahead of the liveness, and the
- * badge says «needs you» in the warning tone the rest of the app already uses
- * for a wait.
- */
-export type SeatBadge = "needs-you" | SeatLiveness;
+/** What the dock's badge says from shared task motion, while retaining stronger
+    lifecycle words for stalled, resumable, dead and unresolved seats. */
+export type SeatBadge = "needs-you" | "working" | Exclude<SeatLiveness, "live">;
 
 /**
- * The badge a live seat wears: the decision it owes the operator, or — with
- * nothing owed — its liveness.
+ * The badge a live seat wears: shared task motion for work and attention, or
+ * its lifecycle word when recovery state carries more useful information.
  *
- * A non-null attention id outranks EVERY liveness word, `dead` and `resumable`
- * included, because the queue counting a conversation and the dock badging it
- * have to be the same reading: a seat the island lists as waiting and the dock
- * calls «finished» is one signal described two ways, which is the whole defect
- * this issue names.
+ * Attention and a running turn are projected by `taskMotion`; lifecycle
+ * recovery states remain available when neither motion applies.
  *
  * Nothing is hidden by that. The badge was never the carrier of recovery — the
  * rotation advisory, the «finished, resume it here» notice and the re-bind each
@@ -427,7 +463,15 @@ export type SeatBadge = "needs-you" | SeatLiveness;
  * OPERATOR owes it.
  */
 export function seatBadgeOf(state: OrchestratorLiveState): SeatBadge {
-  return state.attention ? "needs-you" : state.liveness;
+  const motion = taskMotion({
+    status: "assigned",
+    needsYou: Boolean(state.attention),
+    working: state.liveness === "live" ? 1 : 0,
+    inFlight: false,
+    pipelines: [],
+  }, 0);
+  if (motion.key === "needs-you" || motion.key === "working") return motion.key;
+  return state.liveness === "live" ? "working" : state.liveness;
 }
 
 /**
@@ -626,7 +670,37 @@ export function deriveOrchestratorPanelState(input: {
     };
   }
   if (!status) return input.statusFailed ? { kind: "unavailable" } : { kind: "loading" };
-  return { kind: "draft", vacated: Boolean(status.seat) && !status.exists };
+  return { kind: "draft", vacated: seatVacated(status) };
+}
+
+/**
+ * The seat is vacated: its record still stands, its conversation is gone from
+ * disk. Both create forms (the dock's panel and the phone's sheet) ask this of
+ * the status READ, never of the panel state a failed attempt has moved to, so
+ * they cannot disagree about it and a retry sees the same answer as the first
+ * attempt.
+ */
+export function seatVacated(status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null): boolean {
+  return status !== null && Boolean(status.seat) && !status.exists;
+}
+
+/**
+ * The create body's fragment for a vacated seat. The seat command refuses a
+ * spawn over a designated seat as an accidental rotation unless the body says
+ * `replaceIncumbent`; over a vacated seat that is exactly what the operator
+ * means. The flag is bound to the seat the read showed: the status behind it
+ * can be old (a failed re-read keeps the last answer), and without the epoch
+ * the flag would replace whatever orchestrator is designated when the POST
+ * lands. `expectedIncumbentSeatEpoch` makes the command refuse the replacement
+ * when another seat has been designated since. Empty for a live seat and for no
+ * seat: replacing a live orchestrator is the rotate flow's job, never a create
+ * form's.
+ */
+export function vacatedSeatReplacement(
+  status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null,
+): { replaceIncumbent: true; expectedIncumbentSeatEpoch: number } | Record<string, never> {
+  if (!status || !status.seat || status.exists) return {};
+  return { replaceIncumbent: true, expectedIncumbentSeatEpoch: status.seat.seatEpoch };
 }
 
 /** The warning is eligible only after the mandate has produced a visible
@@ -814,7 +888,7 @@ function rotationHintOf(file: FileEntry | null, liveness: SeatLiveness, incumben
       level: server.level === "strongly_recommend" ? "strongly_recommend" : "recommend",
       contextPercent: incumbent?.context?.percent ?? null,
       reasons,
-      notes: server.reasons,
+      causes: server.causes,
       source: "server",
     };
   }
@@ -887,4 +961,37 @@ export function classifySeatFailure(
      the one delivered. A 5xx or a thrown fetch leaves worker existence unknown. */
   if (status >= 400 && status < 500) return { kind: "terminal", error, clientRequestId };
   return { kind: "ambiguous", error, clientRequestId };
+}
+
+/**
+ * A designation failure the operator can be told about in their own words.
+ *
+ * The reason a failed designation carries is whatever the layer that failed
+ * wrote: a lock's own diagnostic, a socket timeout. One of them reached an
+ * operator as «account mutation is busy; held by Codex login commit (pid …)»
+ * over an orchestrator they had asked to run on Claude. The causes below are
+ * the ones with a plain sentence and one thing to press; anything else is
+ * shown as it was recorded. Matched on the recorded text because that text is
+ * what survives a reload, and records written before this carry the old
+ * wording.
+ */
+export type SeatFailureCause = "store-busy" | "launch-timeout" | "host-unavailable";
+
+export function seatFailureCauseOf(error: string): SeatFailureCause | null {
+  if (isAccountMutationContention(error)) return "store-busy";
+  if (/runtime host (request )?timed out/.test(error)) return "launch-timeout";
+  if (error.includes("runtime host is unavailable")) return "host-unavailable";
+  return null;
+}
+
+/** The sentence and the instruction for a known cause; null leaves the caller
+    on the recorded text and its own hint. */
+export function seatFailureCopy(error: string, retry: "fresh" | "same"): { text: MessageKey; hint: MessageKey } | null {
+  const cause = seatFailureCauseOf(error);
+  if (cause === "store-busy") {
+    return { text: "orchPanel.failureStoreBusy", hint: retry === "same" ? "orchPanel.failureRetrySameHint" : "orchPanel.failureRetryHint" };
+  }
+  if (cause === "launch-timeout") return { text: "orchPanel.failureLaunchTimeout", hint: "orchPanel.failureLaunchHint" };
+  if (cause === "host-unavailable") return { text: "orchPanel.failureHostUnavailable", hint: "orchPanel.failureLaunchHint" };
+  return null;
 }

@@ -2,7 +2,7 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, conversationLookupFromSnapshot, readOnlyConversationLookupFromSnapshot, type AgentRegistry } from "@/lib/agent/registry";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
@@ -60,7 +60,7 @@ export async function reconcileAccountMigrationCycle(
 
 // Compatibility routing reads persisted membership only. Neither getter nor
 // setter may resolve a provider catalog or credentials inside this lease.
-export function syncCompatibilityRouting(registry: AgentRegistry): void {
+export async function syncCompatibilityRouting(registry: AgentRegistry): Promise<void> {
   const current = registry.readOnlySnapshot().engineRouting;
   const claudeNeedsSync = (() => {
     try { return Boolean(current.claude.activeAccountId && current.claude.activeAccountId !== activeClaudeAccountId()); }
@@ -71,25 +71,29 @@ export function syncCompatibilityRouting(registry: AgentRegistry): void {
     catch { return true; }
   })();
   if (!claudeNeedsSync && !codexNeedsSync) return;
-  withAccountMutationLock(() => {
+  await withAccountMutationLockAsync(() => {
     const snapshot = registry.readOnlySnapshot();
     const claude = snapshot.engineRouting.claude.activeAccountId;
     const codex = snapshot.engineRouting.codex.activeAccountId;
     try { if (claude && claude !== activeClaudeAccountId()) setActiveClaudeAccount(claude); } catch { /* registry routing stays authoritative */ }
     try { if (codex && codex !== activeCodexAccountId()) setActiveCodexAccount(codex); } catch { /* registry routing stays authoritative */ }
-  });
+  }, { caller: "compatibility routing" });
 }
 
-async function reconcileAccountLogins(): Promise<void> {
+/** Settles the device logins that still have a transition ahead of them. A
+    completed one is left alone: observing it started an app-server child and
+    took the account lock every minute for nothing. */
+export async function reconcileAccountLogins(): Promise<void> {
   const mutationLocked = codexAccountsMutationLocked();
+  const runtime = managedCodexRuntime();
   await Promise.all(listCodexAccounts().map(async (account) => {
     if (account.kind === "managed") {
       if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
-      if (managedCodexRuntime().peekLogin(account).attemptState) await managedCodexRuntime().loginSnapshot(account);
+      if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
       return;
     }
     /* Main's own device login (#2166) settles the way a managed one does. */
-    if (managedCodexRuntime().peekLogin(account).attemptState) await managedCodexRuntime().loginSnapshot(account);
+    if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
     if (!account.loginPane) return;
     const pane = await paneInfo(account.loginPane.paneId);
     const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);

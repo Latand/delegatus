@@ -148,6 +148,9 @@ const rollbackResumed = rollbackGeneration
 await acquireRuntimeHostFence({
   acquire: () => fence.acquire(),
   plan: runtimeHostFenceWaitPlan(process.env),
+  // A staged successor takes over an entry its predecessor has just closed.
+  // Bound the retry contribution to that transfer independently of history.
+  pollMs: 25,
   container: process.env[RUNTIME_HOST_CONTAINER_ENV],
   report: (line) => console.error(line),
 });

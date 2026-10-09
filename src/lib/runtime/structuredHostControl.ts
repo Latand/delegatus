@@ -334,6 +334,15 @@ export interface StructuredHostTerminationDependencies {
   /** Persist every verified identity in the captured tree before any runtime
       release or process signal can make a child disappear from observation. */
   persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean;
+  /** Undo that capture. Called once, and only when the termination was refused
+      before its first effect: the runtime released nothing and nothing was
+      signalled, so the row owes the capture nothing. */
+  withdrawCapturedTree?(): void;
+  /** Told once, the moment this termination has had an effect: the runtime
+      released the host, or the first signal is about to be sent. From here the
+      row and the transcript change because of this termination, so a caller
+      comparing them against what it observed beforehand stops comparing. */
+  onFirstEffect?(): void;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void;
   /** Previously captured descendants whose root may have exited between retries. */
@@ -346,6 +355,8 @@ export interface StructuredHostTerminationDependencies {
       follows. Returning a refusal ends the termination with nothing further
       sent. */
   authorize?(): { status: 403 | 409; error: string } | null;
+  /** Durable authority, read before the synchronous signal/identity fences. */
+  authorizeAsync?(): Promise<{ status: 403 | 409; error: string } | null>;
   sleep?(ms: number): Promise<void>;
   graceMs?: number;
   deadlineMs?: number;
@@ -536,6 +547,15 @@ export async function terminateStructuredHostTree(
     };
   }
   let terminationStarted = false;
+  let completed = false;
+  /* Asking the runtime is not an effect: an answer of false means it holds
+     nothing of this host and ended nothing, so a refusal that follows still
+     owes the row its capture back. */
+  const markStarted = () => {
+    if (terminationStarted) return;
+    terminationStarted = true;
+    dependencies.onFirstEffect?.();
+  };
   const partialEvidence = () => {
     if (!terminationStarted) return { survivors: [] as ProcessIdentity[] };
     const survivors = [...identities.values()].filter((identity) => {
@@ -573,6 +593,10 @@ export async function terminateStructuredHostTree(
     if (!refused) return null;
     return { ok: false, status: refused.status, error: refused.error, remaining: survivors(), ...partialEvidence() };
   };
+  const readAuthority = async (): Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null> => {
+    const refused = await dependencies.authorizeAsync?.() ?? null;
+    return refused ? { ok: false, status: refused.status, error: refused.error, remaining: survivors(), ...partialEvidence() } : null;
+  };
   const survivors = () => tree.filter((candidate) => alive(candidate));
   /* Ownership is asked at kill time, never read off the snapshot: the seat may
      have been given up since it was taken, or given to a replacement host —
@@ -580,15 +604,19 @@ export async function terminateStructuredHostTree(
      False means nothing the runtime holds is ours to end through it: the
      released/orphaned case, which only the process group reaches. */
   try {
-    const refusedBeforeRuntime = authorityRefusal();
+    const refusedBeforeRuntime = await readAuthority() ?? authorityRefusal();
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
     let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
-      terminationStarted = true;
       try {
-        if (await terminateOwned(key, expected)) via = "runtime";
+        if (await terminateOwned(key, expected)) {
+          via = "runtime";
+          markStarted();
+        }
       } catch {
+        /* A release that threw may have ended the host before it failed. */
+        markStarted();
         runtimeFailure = true;
         const changed = identityRefusal();
         if (changed) return changed;
@@ -599,14 +627,14 @@ export async function terminateStructuredHostTree(
        kernel identity fence again after that boundary: a session key may have
        been rebound while we waited, and a recycled group leader must never
        receive the fallback signal. The caller's authority crosses it too. */
+    const refusedAfterRuntime = await readAuthority() ?? authorityRefusal();
+    if (refusedAfterRuntime) return refusedAfterRuntime;
     const changedAfterRuntime = identityRefusal();
     if (changedAfterRuntime) return changedAfterRuntime;
-    const refusedAfterRuntime = authorityRefusal();
-    if (refusedAfterRuntime) return refusedAfterRuntime;
 
     const refusals: string[] = [];
     const signalOnce = (target: number, value: NodeJS.Signals) => {
-      terminationStarted = true;
+      markStarted();
       try {
         signal(target, value);
       } catch (error) {
@@ -618,27 +646,27 @@ export async function terminateStructuredHostTree(
     /* Exactly one signal per process: the group signal already reaches every
        member, so only the descendants that left it (a child that called
        setsid, a reparented grandchild) are signalled individually. */
-    const sweep = (value: NodeJS.Signals): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
+    const sweep = async (value: NodeJS.Signals): Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null> => {
+      const refused = await readAuthority() ?? authorityRefusal();
+      if (refused) return refused;
       const changed = identityRefusal();
       if (changed) return changed;
-      const refused = authorityRefusal();
-      if (refused) return refused;
       const standing = survivors();
       if (groupLeader !== null && standing.some((candidate) => groupOf(candidate) === groupLeader)) {
         signalOnce(-groupLeader, value);
       }
       for (const candidate of standing) {
         if (groupLeader !== null && groupOf(candidate) === groupLeader) continue;
+        const refused = await readAuthority() ?? authorityRefusal();
+        if (refused) return refused;
         const changed = identityRefusal();
         if (changed) return changed;
-        const refused = authorityRefusal();
-        if (refused) return refused;
         signalOnce(candidate, value);
       }
       return null;
     };
 
-    const changedBeforeTerm = sweep("SIGTERM");
+    const changedBeforeTerm = await sweep("SIGTERM");
     if (changedBeforeTerm) return changedBeforeTerm;
     const startedAt = Date.now();
     let escalated = false;
@@ -647,7 +675,7 @@ export async function terminateStructuredHostTree(
       if (elapsed >= deadlineMs) break;
       if (!escalated && elapsed >= graceMs) {
         escalated = true;
-        const changedBeforeKill = sweep("SIGKILL");
+        const changedBeforeKill = await sweep("SIGKILL");
         if (changedBeforeKill) return changedBeforeKill;
       }
       await sleep(TERMINATION_POLL_MS);
@@ -677,6 +705,7 @@ export async function terminateStructuredHostTree(
     if (key && retire(key, expected, [...identities.values()]) === false) {
       return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
     }
+    completed = true;
     return { ok: true, via, pids: tree };
   } catch (error) {
     const evidence = partialEvidence();
@@ -687,5 +716,9 @@ export async function terminateStructuredHostTree(
       remaining: evidence.survivors.map((identity) => identity.pid),
       ...evidence,
     };
+  } finally {
+    if (!terminationStarted && !completed) {
+      try { dependencies.withdrawCapturedTree?.(); } catch { /* the capture stays; a retry reads it as retained evidence */ }
+    }
   }
 }

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { captureSeatAuthCredentialBaseline, normalizeSeatAuthCredentialBaseline, seatAuthCredentialStamp, type SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -83,6 +84,8 @@ export interface OrchestratorSeat {
   model?: string | null;
   /** False only for persisted rows written before runtime identity freezing. */
   runtimeIdentityFrozen?: boolean;
+  /** Content proof for recognizing login before the first authentication check. */
+  authCredentialBaseline?: SeatAuthCredentialBaseline;
   /** Connector selection frozen with this spawn intent for idempotent replay. */
   telegramGrant?: boolean;
   /** The mandate text delivered (active) or to be delivered (pending). */
@@ -171,6 +174,9 @@ interface OrchestratorSeatFile {
   nextSeatEpoch: number;
   /** Active seat per project. */
   seats: Record<string, OrchestratorSeat>;
+  /** Seat conversations and epochs retained when aliases collapse independent
+      project rows onto one canonical key. */
+  seatLineage?: { project: string; conversationId: string; seatEpoch: number }[];
   /** Pending designate-and-inject intents per project. */
   pending: Record<string, OrchestratorSeat>;
   revocations: OrchestratorRevocation[];
@@ -203,7 +209,7 @@ export function canonicalOrchestratorProject(project: string): string {
 }
 
 function emptyFile(): OrchestratorSeatFile {
-  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, pending: {}, revocations: [], history: [], rollbacks: {} };
+  return { schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, nextSeatEpoch: 1, seats: {}, seatLineage: [], pending: {}, revocations: [], history: [], rollbacks: {} };
 }
 
 function atomicWriteJson(filePath: string, value: unknown): void {
@@ -253,6 +259,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     engine,
     model,
     runtimeIdentityFrozen,
+    authCredentialBaseline: normalizeSeatAuthCredentialBaseline(seat.authCredentialBaseline),
     ...(typeof seat.telegramGrant === "boolean" ? { telegramGrant: seat.telegramGrant } : {}),
     mandate: seat.mandate,
     ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
@@ -311,15 +318,30 @@ export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
     const parsed = JSON.parse(raw) as Partial<OrchestratorSeatFile>;
     if (parsed.schemaVersion !== ORCHESTRATOR_SEATS_SCHEMA_VERSION) return null;
     const file = emptyFile();
+    const seatLineage = file.seatLineage ?? [];
+    file.seatLineage = seatLineage;
     file.nextSeatEpoch = typeof parsed.nextSeatEpoch === "number" && Number.isInteger(parsed.nextSeatEpoch) && parsed.nextSeatEpoch >= 1
       ? parsed.nextSeatEpoch
       : 1;
     for (const [project, candidate] of Object.entries(parsed.seats ?? {})) {
       const seat = normalizeSeat(candidate);
       if (seat && seat.project === project && seat.state === "active" && seat.conversationId) {
-        retainNewestSeat(file.seats, { ...seat, project: canonicalOrchestratorProject(project) });
+        const canonical = canonicalOrchestratorProject(project);
+        seatLineage.push({ project: canonical, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
+        retainNewestSeat(file.seats, { ...seat, project: canonical });
       }
     }
+    for (const candidate of Array.isArray(parsed.seatLineage) ? parsed.seatLineage : []) {
+      if (candidate && typeof candidate === "object") {
+        const lineage = candidate as { project?: unknown; conversationId?: unknown; seatEpoch?: unknown };
+        if (typeof lineage.project === "string" && lineage.project
+          && typeof lineage.conversationId === "string" && lineage.conversationId
+          && typeof lineage.seatEpoch === "number" && Number.isInteger(lineage.seatEpoch) && lineage.seatEpoch >= 1) {
+          seatLineage.push({ project: canonicalOrchestratorProject(lineage.project), conversationId: lineage.conversationId, seatEpoch: lineage.seatEpoch });
+        }
+      }
+    }
+    file.seatLineage = [...new Map(seatLineage.map((entry) => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
     for (const [project, candidate] of Object.entries(parsed.pending ?? {})) {
       const seat = normalizeSeat(candidate);
       if (seat && seat.project === project && seat.state === "pending") {
@@ -364,6 +386,7 @@ export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
        covers and be born dead. */
     const highest = Math.max(0,
       ...Object.values(file.seats).map((seat) => seat.seatEpoch),
+      ...file.seatLineage.map((seat) => seat.seatEpoch),
       ...Object.values(file.pending).map((seat) => seat.seatEpoch),
       ...Object.values(file.rollbacks).map((seat) => seat.seatEpoch),
       ...file.revocations.map((revocation) => revocation.seatEpoch),
@@ -408,7 +431,7 @@ function arrayEvidence(value: unknown, field: string): unknown[] {
   return value;
 }
 
-/** Strict, lossless read used only by the one-time identity wave. Runtime
+/** Strict, lossless read shared by the identity wave and retirement guard. Runtime
     authority keeps its fail-closed tolerant reader, while this path refuses to
     publish a rewritten file when any sibling evidence would be discarded. */
 function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvidence {
@@ -436,6 +459,8 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
   }
 
   const normalized = emptyFile();
+  const seatLineage = normalized.seatLineage ?? [];
+  normalized.seatLineage = seatLineage;
   normalized.nextSeatEpoch = raw.nextSeatEpoch;
   for (const [project, candidate] of Object.entries(recordEvidence(raw.seats, "seats"))) {
     const seat = normalizeSeat(candidate);
@@ -443,7 +468,16 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
     const canonical = canonicalOrchestratorProject(project);
     if (normalized.seats[canonical]) throw migrationEvidenceError();
     normalized.seats[canonical] = { ...seat, project: canonical };
+    if (seat.conversationId) seatLineage.push({ project: canonical, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
   }
+  for (const candidate of arrayEvidence(raw.seatLineage, "seatLineage")) {
+    const lineage = candidate as { project?: unknown; conversationId?: unknown; seatEpoch?: unknown } | null;
+    if (!lineage || typeof lineage.project !== "string" || !lineage.project
+      || typeof lineage.conversationId !== "string" || !lineage.conversationId
+      || typeof lineage.seatEpoch !== "number" || !Number.isInteger(lineage.seatEpoch) || lineage.seatEpoch < 1) throw migrationEvidenceError();
+    seatLineage.push({ project: canonicalOrchestratorProject(lineage.project), conversationId: lineage.conversationId, seatEpoch: lineage.seatEpoch });
+  }
+  normalized.seatLineage = [...new Map(seatLineage.map((entry) => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
   for (const [project, candidate] of Object.entries(recordEvidence(raw.pending, "pending"))) {
     const seat = normalizeSeat(candidate);
     if (!seat || seat.project !== project || seat.state !== "pending") throw migrationEvidenceError();
@@ -490,6 +524,17 @@ function readOrchestratorSeatMigrationEvidence(): OrchestratorSeatMigrationEvide
     });
   }
   return { raw, normalized };
+}
+
+/** Automatic retirement must retain malformed evidence. The tolerant authority
+    reader can drop a damaged row to deny authority, but that cannot prove a
+    host seat-free. Reuse the lossless read; any incomplete record defers signals. */
+export function readOrchestratorSeatRetirementEvidenceOrNull(): OrchestratorSeatFile | null {
+  try {
+    return readOrchestratorSeatMigrationEvidence().normalized;
+  } catch {
+    return null;
+  }
 }
 
 function writeSeatFile(file: OrchestratorSeatFile): void {
@@ -795,6 +840,22 @@ export function beginOrchestratorSeatIntent(input: {
   });
 }
 
+/** Freeze the actual account's contents before a new seat launch is admitted. */
+export function recordOrchestratorSeatAuthCredentialBaseline(projectInput: string, clientRequestId: string, seatEpoch: number, engine: string, accountId: string): void {
+  if (engine !== "claude" && engine !== "codex") return;
+  withAccountMutationLock(() => {
+    const file = readOrchestratorSeatFile();
+    const project = canonicalOrchestratorProject(projectInput);
+    const pending = file.pending[project];
+    if (!pending || pending.intent.clientRequestId !== clientRequestId || pending.seatEpoch !== seatEpoch) throw new Error("seat intent changed before credential admission");
+    const scope = `seat-auth-baseline:${project}:${seatEpoch}`;
+    const stamp = seatAuthCredentialStamp(engine, accountId, scope);
+    if (!stamp) return;
+    pending.authCredentialBaseline = { engine, accountId, stamp, scope };
+    writeSeatFile(file);
+  });
+}
+
 export type CompleteSeatIntentResult =
   | { kind: "activated"; seat: OrchestratorSeat; revoked: OrchestratorRevocation | null }
   | { kind: "replay"; seat: OrchestratorSeat }
@@ -871,6 +932,7 @@ export function completeOrchestratorSeatIntent(input: {
       state: "active",
       intent: { ...pending.intent, launchId: input.launchId ?? pending.intent.launchId, error: null },
       activatedAt: now,
+      authCredentialBaseline: pending.authCredentialBaseline ?? captureSeatAuthCredentialBaseline(pending.engine ?? input.engine, input.path, `seat-auth-baseline:${project}:${pending.seatEpoch}`),
     };
     delete file.pending[project];
     file.seats[project] = seat;
@@ -1081,7 +1143,8 @@ export function confirmOrchestratorSeatMaterialization(input: {
     if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
     if (active.conversationId !== input.conversationId) return null;
     if (active.path === input.path && !file.rollbacks[project]) return active;
-    const confirmed: OrchestratorSeat = { ...active, path: input.path };
+    const confirmed: OrchestratorSeat = { ...active, path: input.path,
+      authCredentialBaseline: active.authCredentialBaseline ?? captureSeatAuthCredentialBaseline(active.engine, input.path, `seat-auth-baseline:${project}:${active.seatEpoch}`) };
     file.seats[project] = confirmed;
     delete file.rollbacks[project];
     writeSeatFile(file);

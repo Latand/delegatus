@@ -1,0 +1,75 @@
+{
+  "basis": "This audit covers changes in the current fix round after the pre-pressure commit 926a3524a (15:11 UTC). Functional failures and controlled-clock regressions are separate from timing measured under deliberate host stress.",
+  "changes": [
+    {
+      "change": "Gentler easing and a clock released after the inverse paint",
+      "decision": "keep",
+      "evidence": "The easing curve travels 38 percent in 17 ms independent of host load; the paused-inverse regression verifies paint before clock release."
+    },
+    {
+      "change": "Real-node FLIP with batched reads and temporary layers",
+      "decision": "keep",
+      "evidence": "Implements the requested transform-only layout contract and removes redundant staged wrapping machinery."
+    },
+    {
+      "change": "Native grid prelude, per-column handover and additional activation phase",
+      "decision": "revert",
+      "evidence": "Introduced to move frame-time numbers under host pressure; the final implementation uses one destination read and inverse release."
+    },
+    {
+      "change": "Additional containment tuning, nine-keyframe counters, two-node batches and 600 ms warm lead",
+      "decision": "revert",
+      "evidence": "No quiet-machine causal performance evidence for the new tuning. Reverted the new card/frame/text-group containment rules and restored the pre-pressure settings: 13 keyframes, four-node batches and 150 ms warm lead. Existing pre-pressure board/column/body containment remains."
+    },
+    {
+      "change": "Committed native inverse ownership through release",
+      "decision": "keep",
+      "evidence": "Controlled RAF regression: canceling pointer warm-up must retain an already committed paused inverse until release; removing its active ownership cancels the effects."
+    },
+    {
+      "change": "Idle watchdog cancellation of an authorized width control",
+      "decision": "keep",
+      "evidence": "Controlled RAF and elapsed-time regression: the width button must still commit after the idle preparation deadline. Removing the fix drops the update."
+    },
+    {
+      "change": "Latest width control owns its promotion queue",
+      "decision": "keep",
+      "evidence": "The previous implementation commits an older longer queue after a later control; the public regression preserves the latest choice."
+    },
+    {
+      "change": "Warmed source origins and live-content invalidation",
+      "decision": "keep",
+      "evidence": "Moving an ancestor by 40 pixels before commit produced a spurious inverse offset; the public regression requires zero offset. New or changed cards refresh their source."
+    },
+    {
+      "change": "Retarget glyph anchors and form-safe neutral groups",
+      "decision": "keep",
+      "evidence": "Retargets preserve leading glyph positions at natural font size. Native forms cannot host a ShadowRoot; shared browser coverage checks usable task forms during width changes."
+    },
+    {
+      "change": "Header mutation ownership and stable Board measurement/rendering",
+      "decision": "keep",
+      "evidence": "Header controls from the width commit must not trigger a second FLIP; card measurement waits for the layout-end event and width-only changes render no cards."
+    },
+    {
+      "change": "Horizontal overflow clipping",
+      "decision": "keep",
+      "evidence": "Prevents transformed content from creating horizontal scroll displacement; shared scroll/reader cases cover the behavior."
+    },
+    {
+      "change": "Retarget at the same painted width but different natural wrapping",
+      "decision": "keep",
+      "evidence": "On a quiet host, the shared rapid-retarget case failed with a 6.684 pixel glyph jump. Including changed natural widths in the FLIP fixes all five phases; both scroll and retarget cases pass with 1491 assertions."
+    },
+    {
+      "change": "Reader reveal before an asynchronous navigation scroll event",
+      "decision": "keep",
+      "evidence": "The keyboard browser case failed twice on a quiet host: an inverse returned the revealed reader offscreen. Navigation now retires its pending inverse when React already changed the scroll position; the existing browser case and a controlled DOM regression pass without an additional RAF phase."
+    },
+    {
+      "change": "Warm source retained before promotion completion",
+      "decision": "keep",
+      "evidence": "Two quiet-host activation stalls of 66.6 and 66.7 ms reproduced. A controlled regression showed three card-rect reads when the commit overtook promotion, instead of the required source/destination pair. Retaining the initial source removes the duplicate read and two trailing warm-up RAFs. The 150 ms lead, four-node batches and 13 keyframes are unchanged."
+    }
+  ]
+}

@@ -1,10 +1,12 @@
 import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
+import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
+import { codexSubagentArgs } from "./codexSpawnPolicy";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -344,17 +346,20 @@ export function reviewerCommand(
   /* --json turns stdout into a JSONL event stream whose first events carry
      the session/thread id — a structured contract instead of parsing the
      human banner. The verdict itself still arrives via --output-last-message. */
-  const args = ["--disable", "multi_agent", "exec", "--ignore-user-config", "-", "--json", "--output-last-message", outputPath,
+  const binary = resolveBinary("codex");
+  // Keep every clap global option at the exec level. An occurrence after
+  // the subcommand replaces occurrences of the same option before it.
+  const args = ["exec", ...codexSubagentArgs(binary), "--ignore-user-config", "-", "--json", "--output-last-message", outputPath,
     ...(options.sandbox === "read-only" ? ["-s", "read-only", "--skip-git-repo-check"] : ["--dangerously-bypass-approvals-and-sandbox"])];
   const baseEnv = codexAccount?.home
     ? { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: codexAccount.home } : process.env;
   args.push(...agentCodexPublicationArgs({}, baseEnv));
-  if (codexAccount?.managed) args.unshift("-c", "cli_auth_credentials_store=file");
+  if (codexAccount?.managed) args.push("-c", "cli_auth_credentials_store=file");
   if (role.model) args.push("-m", role.model);
   if (role.effort) args.push("-c", `model_reasoning_effort=${role.effort}`);
   if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
   return {
-    command: resolveBinary("codex"),
+    command: binary,
     codexPublication: true,
     args,
     env: reviewerEnvironment(baseEnv, spawnCapability),
@@ -391,7 +396,8 @@ export function launchDetached(input: {
   const stderrFd = fs.openSync(input.stderrPath, "w");
   let child: ChildProcess;
   try {
-    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1 });
+    // Reviews, relays and digests run unattended: they are work.
+    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, cpu: planAgentCpu("work") });
     const wrapped = wrapAgentCommand(plan, input.runtime?.command ?? input.built.command, input.built.args);
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     child = spawn(wrapped.command, wrapped.args, {
@@ -444,6 +450,8 @@ export function launchDetached(input: {
 }
 
 export interface HeadlessCodexRunRequest {
+  /** Autonomous callers carry their admission fence through publication waits. */
+  autonomousAdmissionHeld?: () => boolean;
   /** `runs` map key; a duplicate while a run is live resolves `failed`. */
   key: string;
   /** The child's working directory, created if it does not exist. */
@@ -467,6 +475,7 @@ export interface HeadlessCodexRunRequest {
  * the detached child finishes its own turn and exits.
  */
 export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Promise<HeadlessRunResult> {
+  if (request.autonomousAdmissionHeld?.()) return { status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null };
   const outputPath = path.join(request.artifactDir, "last-message.md");
   const stdoutPath = path.join(request.artifactDir, "stdout.log");
   const stderrPath = path.join(request.artifactDir, "stderr.txt");
@@ -519,6 +528,10 @@ export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Pr
         signal: exit?.signal ?? null,
       });
     };
+    if (request.autonomousAdmissionHeld?.()) {
+      resolve({ status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null });
+      return;
+    }
     const launched = launchDetached({
       key: request.key,
       built,

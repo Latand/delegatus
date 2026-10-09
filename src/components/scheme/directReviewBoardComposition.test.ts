@@ -122,7 +122,7 @@ describe("direct review board composition (#289 + #325)", () => {
       files,
       project: "demo",
       flows: deckFlows,
-      pinnedPaths: new Set(),
+      pinnedPaths: new Set([builder2.path]),
     });
     const stacks = groupWorkerStacks(collapsible, deckFlows, deckReviewerPaths as ReadonlySet<string>);
     expect(stacks).toHaveLength(0);
@@ -149,10 +149,10 @@ describe("direct review board composition (#289 + #325)", () => {
     });
     const stacks = groupWorkerStacks(collapsible, deckFlows, deckReviewerPaths as ReadonlySet<string>);
     /* One stack for the WHOLE terminal group — keyed by the durable group id —
-       holding both of its rounds; one minimap dot for it. */
+       holding its implementer and both rounds; one minimap dot for it. */
     expect(stacks).toHaveLength(1);
     expect(stacks[0]!.key).toBe("wstack::flow::direct-review::task::task-two");
-    expect(stacks[0]!.items.map((file) => file.path).sort()).toEqual(["/reviewer-2", "/reviewer-3"]);
+    expect(stacks[0]!.items.map((file) => file.path).sort()).toEqual(["/builder-2", "/reviewer-2", "/reviewer-3"]);
     expect(stackDotsFor(stacks)).toHaveLength(1);
   });
 

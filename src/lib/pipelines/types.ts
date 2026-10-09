@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -38,11 +38,12 @@ export type PipelineRoleId =
   | "cleaner"
   | "prod-auditor"
   | "deployer"
-  | "merger";
+  | "merger"
+  | "visual-critic";
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
- * `confirm: "deploy"` gate (resolveSpawnRole / DraftAgentPane) that a pipeline —
+ * `confirm: "deploy"` gate (resolveSpawnRole) that a pipeline —
  * which spawns its stages automatically, without a per-stage confirmation — has
  * no way to honor, so it is excluded from the builder and rejected by the API.
  */
@@ -136,6 +137,10 @@ export type StageFinding = { severity: StageFindingSeverity | null; text: string
 
 export type StageVerdict = {
   status: StageVerdictStatus;
+  /** Explicit inability to proceed. Prose never classifies this state. */
+  blocked?: boolean;
+  /** Required when blocked is true; bounded independently of the output relay. */
+  blockedReason?: string;
   /** Findings in severity order, most severe first, each rendered as
       `<severity> — <text>` when it carries one. This is what every reader of
       a verdict shows, and what the fail edge relays. */
@@ -156,6 +161,12 @@ export type PipelineAttemptState =
   | "failed"
   | "needs_decision"
   | "skipped";
+
+/** Who launched an activation by hand: the actor of the `start`, retry,
+    decision answer, review grant, accepted head or skip that put the cursor
+    where it is. The cursor carries it until the next attempt is made, which
+    takes it, so an attempt the engine makes on its own carries none. */
+export type PipelineHandLaunch = { actor: PauseResumeActor; at: string };
 
 /** Durable provenance for a cursor activation / attempt: which stage's attempt
     advanced here, along which verdict edge. Loop budgets are derived from these
@@ -256,6 +267,7 @@ export type PipelineGraphEdit = {
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
   summary: string;
+  runtimeSwitch?: { attempt: number; id: string };
 };
 
 /** What the server itself observed about a stage attempt's work at the moment
@@ -264,6 +276,9 @@ export type PipelineGraphEdit = {
     else. A field the server could not read is `null`, which states what the
     read found and says nothing about the work itself. */
 export type PipelineStageProvenance = {
+  /** Absent on older records. Pending reads survive a Viewer restart. */
+  state?: "pending" | "complete" | "unknown";
+  pullRequestState?: "pending" | "observed" | "absent" | "unknown";
   /** The worktree's checked-out commit, dirty tree included. */
   head: string | null;
   branch: string;
@@ -275,7 +290,7 @@ export type PipelineStageProvenance = {
   pullRequest: { url: string; number: number; state: string } | null;
   /** The stage's declared outputs, and whether the server found each in the
       worktree. Empty when the stage declares none. */
-  outputs: Array<{ path: string; present: boolean }>;
+  outputs: Array<{ path: string; present: boolean | null }>;
 };
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
@@ -291,6 +306,8 @@ export type PipelineStageReport = {
   verdict: StageVerdict;
   summary: string | null;
   provenance: PipelineStageProvenance;
+  /** Exact admitted lane authority for the deferred observation. */
+  provenanceFence?: string;
   /** Accepted calls this attempt has made, replacements included. */
   calls: number;
 };
@@ -308,6 +325,8 @@ export type PipelineStageReportEntry = {
   findings: number;
   /** The `seq` of the report this call replaced before settlement, or null. */
   replaces: number | null;
+  provenanceState?: "pending" | "complete" | "unknown";
+  provenanceAt?: string;
   summary: string | null;
 };
 
@@ -326,8 +345,32 @@ export type PipelineDecisionAnswer = {
   at: string;
 };
 
+export type PipelineRuntimeSeat = {
+  engine: FlowEngine; model: string | null; effort: string | null;
+  serviceTier: string | null; accountId: string | null;
+};
+export type PipelineRuntimeSwitch = {
+  id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
+  mode: "fork" | "handoff";
+  from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
+  to: PipelineRuntimeSeat & { accountPinned: boolean };
+  phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
+  cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  rollback?: boolean;
+  reconfigureNoop?: boolean;
+  continuationKey?: string;
+  continuationDispatch?: { key: string; at: string };
+  launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
+  handoff?: { prompt: string; digest: string; bytes: number };
+};
+
 export type PipelineStageAttempt = {
   n: number;
+  runtimeSwitches?: PipelineRuntimeSwitch[];
+  /** Monotonic verdict fence survives bounded switch-history retention. */
+  runtimeEvidenceSince?: string;
+  /** Explicit account policy for the live attempt after an apply-now edit. */
+  runtimeAccountPin?: string | null;
   /** Answer that created this continuation; forces lease-free activation. */
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
@@ -347,6 +390,8 @@ export type PipelineStageAttempt = {
     fence: string;
     owner?: import("@/lib/processIdentity").ProcessIdentity;
     replay?: boolean;
+    /** The reserved prompt still needs asynchronous artifact preparation. */
+    prepareInput?: boolean;
     closeRequested?: boolean;
     cancelRequested?: boolean;
   };
@@ -394,6 +439,13 @@ export type PipelineStageAttempt = {
   expectedReviewHeadSha?: string | null;
   /** Exact clean SHA captured by the first launched reviewer round. */
   reviewHeadSha?: string | null;
+  /** Publication accepted only clean main integrations after this passed SHA.
+      The review's exact-head fields continue to name what was reviewed. */
+  publicationIntegration?: { passedSha: string; acceptedSha: string; mainSha: string };
+  /** Automatic retries of a publication the stage cannot have caused to fail:
+      a refusal of an unchanged head, or a push interrupted before it landed.
+      Each failed operation is counted once; `exhausted` waits for retry-stage. */
+  publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */
@@ -438,6 +490,32 @@ export type PipelineStageAttempt = {
       witness the controller has that a deploy cut its turn. Absent on attempts
       recorded before the field existed and on pane-hosted ones. */
   hostEpoch?: number;
+  /** One durable automatic replacement attempt per interrupted attempt and boot. */
+  restartRecovery?: {
+    bootId: string;
+    requestedAt: string;
+    /** Present only on compatibility records written by the continuation implementation. */
+    clientMessageId?: string;
+    lastRecordAt: number | null;
+    replacementAttempt?: number;
+    replacedAttempt?: number;
+    /** Set once a stop this recovery issued ended a live host: the evidence
+        that stop was decided on, and the newest transcript record read after
+        the host was gone. The cause is named from this while that record is
+        still the newest, because the host's exit moves the evidence a later
+        tick would read. */
+    stopped?: { kind: "idle" | "dead" | "stalled"; restarted: boolean; lastRecordAt: number | null };
+  };
+  /** Prompt context for a fresh attempt created after this attempt was interrupted.
+      `cause` is absent on records written before causes were told apart. */
+  restartContext?: {
+    previousAttempt: number;
+    /** Null when the attempt was cut before its transcript was discovered. */
+    transcriptPath: string | null;
+    cause?: PipelineStageInterruptionCause;
+    /** The interrupted attempt's newest message, bounded, for the replacement's first message. */
+    lastReport?: string;
+  };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
@@ -469,6 +547,32 @@ export type PipelineStageAttempt = {
     requestedAt?: string;
     clientMessageId?: string;
   };
+  /** The one repair the controller asked this attempt for after a repository
+      hook refused the commit of its passed work; the stage repairs its files
+      or reports a blocked verdict, which parks. `detail` is the park text that refusal would have produced and
+      `messageTs` the stage's last message when it was refused, so the repair
+      is over on the first completed turn after it. `sendingAt` is stored
+      before a request leaves and kept until the delivery surface answers, so a
+      replay after a crash keeps it; only an outright refusal clears it, and
+      never after `sendUncertain` recorded an answer that may have followed an
+      admission; `requestedAt` takes that moment once the
+      surface accepted the request. `outcome` and `settledAt` checkpoint the
+      accepted or rejected repair before final settlement, so a rejected repair
+      replays as parked with its reason. `refusedAt` bounds the whole wait. A
+      refusal that finds this record already written parks. */
+  commitRepair?: {
+    refusedAt: string;
+    detail: string;
+    paths: string[];
+    messageTs: number | null;
+    sendingAt?: string;
+    sendUncertain?: true;
+    requestedAt?: string;
+    clientMessageId?: string;
+    /** Missing on older settled repairs, which already permitted a commit. */
+    outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
+    settledAt?: string;
+  };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -493,12 +597,21 @@ export type PipelineStageAttempt = {
       legacy positional scan. */
   input: string | null;
   activatedBy: PipelineEdgeActivation | null;
+  /** The hand that launched this attempt, taken from the cursor; absent when
+      the engine made it on its own. */
+  launchedBy?: PipelineHandLaunch;
   output: string | null;
   verdict: StageVerdict | null;
+  /** A committed fixer self-fail accepted for independent review. Keeps the
+      original verdict while publication recovery retries the accepted head. */
+  acceptedForReview?: true;
   /** The completion the attempt reported for itself (graph slice 2), standing
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Persisted before switching away from a stage-created branch, so a
+      controller restart must finish adopting this head before acceptance. */
+  branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
   error: string | null;
   /** Set when a `needs_decision` verdict that carried findings was routed along
       this stage's fail edge as a fail (#1785). The verdict keeps the status the
@@ -557,9 +670,11 @@ export type PipelineCursorState = "pending" | "spawning" | "running" | "reviewin
     was never reviewed. Not terminal: `continue-review` grants more rounds. */
 export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
 
-/** Why a pipeline stopped in `needs_review` (#1938): the review whose budget
-    ran out, the fix that followed it, and the two heads they left behind. */
+/** Why review budget stopped this lane: an unreviewed fix in needs_review
+    (#1938), or a failed terminal re-check in needs_decision. */
 export type PipelineReviewPending = {
+  /** A terminal budget re-check judged the current head and failed: fix first. */
+  terminalRecheck?: true;
   /** The review stage whose fail-edge budget is spent, and its last attempt. */
   stageId: string;
   attempt: number;
@@ -569,7 +684,7 @@ export type PipelineReviewPending = {
   /** The head the last review judged; null on a handoff recorded before
       reviewed heads were captured. */
   reviewedHead: string | null;
-  /** The head the fix wrote, which nobody has reviewed. */
+  /** The head the fix wrote; terminalRecheck marks a failed review of it. */
   currentHead: string;
   /** The last review's verdict and how many findings it carried. */
   verdict: StageVerdictStatus;
@@ -583,6 +698,8 @@ export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;
   stageId: string;
+  /** Failed terminal attempt whose granted fixes must return to this reviewer. */
+  terminalAttempt?: number;
   rounds: number;
   reviewedHead: string | null;
   currentHead: string;
@@ -685,6 +802,30 @@ export type PipelineDeliveryTarget = {
   rejectedHead?: string;
 };
 
+export type PipelinePublicationFailure = {
+  step: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  outputTail: string;
+  /** Tracked files the accepted head changes against its base branch; absent
+      when that could not be read. Zero means the stage cannot have caused it. */
+  changedFiles?: number;
+  /** The command budget the step ran past, when that is what ended it. */
+  timedOutMs?: number;
+  /** The push budget at which the repository hook stopped a check that was
+      still running, so the push carries no verdict. */
+  hookBudgetMs?: number;
+  /** The check the hook named as stopped without a verdict. */
+  hookStoppedCheck?: string;
+};
+
+export type PipelinePublicationResult = (
+  | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
+  | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
+  | { ok: false; error: string }
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" };
+
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;
   disposition: "owner" | "comparison";
@@ -700,9 +841,14 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
+    /** This reservation continues the committing pass, rather than an unrelated park. */
+    passedStage?: boolean;
+    /** Admission snapshot, checked before an asynchronous publisher starts. */
+    fence?: string;
     state: "pending" | "running" | "settled";
-    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
-    result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
+    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      result?: PipelinePublicationResult };
+    result?: PipelinePublicationResult;
   };
   journal: Array<{ at: string; kind: "claim" | "comparison" | "release" | "takeover" | "denied" | "recovery"; ownerId: string; epoch: number; conversationId: string | null; reason: string }>;
 };
@@ -781,6 +927,19 @@ export function pipelineActivitySettled(
   return true;
 }
 
+export type PipelineRemoteAction = {
+  id: string;
+  action: "retry-stage" | "takeover" | "skip-stage";
+  state: "pending" | "settled";
+  fence: string;
+  at: string;
+  settledAt?: string;
+  error?: string;
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
+  takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
+};
+
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
@@ -788,6 +947,9 @@ export type Pipeline = {
   activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
   delivery?: PipelineDelivery;
+  remoteAction?: PipelineRemoteAction;
+  /** Legacy lanes observe their repository identity before claiming delivery. */
+  publicationAdmission?: { id: string; sha: string; fence: string; state: "pending" | "settled"; error?: string };
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
@@ -820,7 +982,7 @@ export type Pipeline = {
       the activating edge are persisted in the same atomic write as the verdict
       that advanced here, so a crash between advance and spawn replays the
       identical prompt. */
-  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null } | null;
+  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
   state: PipelineState;
   pausedState: Exclude<PipelineState, "paused" | "draft"> | null;
   /** When the pipeline was last paused, and when it was last resumed. Durable
@@ -830,6 +992,8 @@ export type Pipeline = {
       after a resume be a genuinely new event instead of a replay of the first. */
   pausedAt?: string | null;
   resumedAt?: string | null;
+  /** Durable control token: even same-clock pause/resume cancels old work. */
+  controlGeneration?: string;
   stateDetail: string | null;
   /** The bounded backoff a lane in `provisioning` is waiting out after a
       transient Git or network failure (#2115, #2176, #2220). Cleared when
@@ -1046,6 +1210,7 @@ export type PatchPipelineRequest = {
   acceptedSha?: string;
   reason?: string;
   action: PipelineAction;
+  applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.
@@ -1086,8 +1251,13 @@ export type PatchPipelineRequest = {
   /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
       attempt the caller saw, or `0` when it saw none yet (a provisioning park).
       A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
-      non-integers are malformed. */
+      non-integers are malformed. On override-stage with `applyNow` it stands
+      alone and names the running attempt the caller saw. */
   expectedAttempt?: number;
+  /** for override-stage with `applyNow`: the conversation the caller saw
+      running the attempt. An attempt another conversation runs by then answers
+      409 `STAGE_CHANGED` before any runtime or definition is changed. */
+  expectedConversationId?: string;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;
@@ -1132,3 +1302,7 @@ export type PatchPipelineRequest = {
 export type PipelinesResponse = {
   pipelines: Pipeline[];
 };
+
+/** Why a running stage attempt was replaced: the service restarted under it,
+    its host was found gone, or Delegatus stopped a host whose turn went silent. */
+export type PipelineStageInterruptionCause = "restart" | "host-lost" | "engine-stop";

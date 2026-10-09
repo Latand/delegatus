@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { readClaudeCredentials, replaceClaudeCredentials } from "./claudeCredentials";
 import type { ClaudeAccount } from "./claude";
+import { AccountAdmissionChangedError, claudeProbeCredentialIdentity } from "./accountMutation";
 
 const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const APPROVED_CUSTOM_OAUTH_ORIGINS = new Set([
@@ -120,7 +121,8 @@ async function rejectedRefreshResult(response: Response): Promise<ClaudeOauthRef
   try {
     const payload = await response.json() as { error?: unknown };
     return payload?.error === "invalid_grant" ? "invalid" : "unknown";
-  } catch {
+  } catch (error) {
+    if (error instanceof AccountAdmissionChangedError) throw error;
     return "unknown";
   }
 }
@@ -139,11 +141,14 @@ async function isInvalidScopeResponse(response: Response): Promise<boolean> {
 export async function refreshClaudeOauth(
   account: ClaudeAccount,
   dependencies: ClaudeOauthRefreshDependencies = productionDependencies,
+  /** Pinned admission refuses external rotation, while ordinary refresh callers
+      can continue using another refresh worker's current credential. */
+  expectedCredentialIdentity?: string,
 ): Promise<ClaudeOauthRefreshResult> {
   const release = await acquireRefreshLocks(account, dependencies.lockWaitMs ?? REFRESH_LOCK_WAIT_MS);
   if (!release) return "unknown";
   try {
-    return await refreshClaudeOauthLocked(account, dependencies);
+    return await refreshClaudeOauthLocked(account, dependencies, expectedCredentialIdentity);
   } finally {
     release();
   }
@@ -152,8 +157,11 @@ export async function refreshClaudeOauth(
 async function refreshClaudeOauthLocked(
   account: ClaudeAccount,
   dependencies: ClaudeOauthRefreshDependencies,
+  expectedCredentialIdentity?: string,
 ): Promise<ClaudeOauthRefreshResult> {
   const originalRead = readClaudeCredentials(account.home);
+  if (expectedCredentialIdentity !== undefined
+    && claudeProbeCredentialIdentity(account.home, () => originalRead) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
   if (originalRead.state !== "present") return originalRead.state === "absent" ? "invalid" : "unknown";
   const original = originalRead.document;
   const oauth = original?.claudeAiOauth;
@@ -208,8 +216,13 @@ async function refreshClaudeOauthLocked(
       response = await requestRefresh(storedScopes);
     }
   } catch {
+    if (expectedCredentialIdentity !== undefined
+      && claudeProbeCredentialIdentity(account.home) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
     return "unknown";
   }
+
+  if (expectedCredentialIdentity !== undefined
+    && claudeProbeCredentialIdentity(account.home) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
 
   if (response.status === 400 || response.status === 401) {
     if (concurrentRotationIsCurrent(account, accessBefore, dependencies.now())) return "refreshed";
@@ -228,7 +241,10 @@ async function refreshClaudeOauthLocked(
   if (typeof payload.access_token !== "string" || payload.access_token.length === 0
     || typeof payload.expires_in !== "number" || !Number.isFinite(payload.expires_in) || payload.expires_in <= 0) return "unknown";
 
-  const current = readCredentialDocument(account);
+  const currentRead = readClaudeCredentials(account.home);
+  if (expectedCredentialIdentity !== undefined
+    && claudeProbeCredentialIdentity(account.home, () => currentRead) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
+  const current = currentRead.state === "present" ? currentRead.document : null;
   const currentOauth = current?.claudeAiOauth;
   if (!current || !currentOauth) return "unknown";
   if (currentOauth.accessToken !== accessBefore) {
@@ -250,8 +266,11 @@ async function refreshClaudeOauthLocked(
   }
 
   try {
-    return replaceClaudeCredentials(account.home, originalRead, { ...current, claudeAiOauth: nextOauth }) ? "refreshed" : "unknown";
-  } catch {
+    if (replaceClaudeCredentials(account.home, originalRead, { ...current, claudeAiOauth: nextOauth })) return "refreshed";
+    if (expectedCredentialIdentity !== undefined) throw new AccountAdmissionChangedError();
+    return "unknown";
+  } catch (error) {
+    if (error instanceof AccountAdmissionChangedError) throw error;
     return "unknown";
   }
 }

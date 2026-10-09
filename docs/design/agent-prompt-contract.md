@@ -1080,7 +1080,7 @@ Role table notes (`:422-425`) **[a] [c2]**:
 ```text
 - Runtime overrides go on the stage beside role, never inside it. A reviewer stage is read-only by its role. override-stage binds from the NEXT attempt: a running one keeps its runtime.
 - Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium for routine work. design (options, architecture, proposals, issues from design work): an architect stage first.
-- Fix stages: builder mode=apply-fixes with the implementer's domain and size; the builder row above lists what each combination runs. A light fix row takes only findings that name their place; its fixer hands back anything else as fail.
+- Fix stages: builder mode=apply-fixes with the implementer's domain and size; the builder row above lists what each combination runs. The fixer repairs every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It fails only when blocked, setting blocked:true and a non-empty blockedReason in stage_report or the fallback JSON; outside-spec observations go under Notes. Blocked means it cannot build, cannot run required checks, or a handed finding is impossible within the specification. A self-fail without blocked:true and with a new head proceeds to review with findings as reviewer notes; blocked:true parks at fix with its reason and preserves lastPassedCommit. A fail without a new head parks. Prose never classifies blocked state.
 - size=trivial needs a brief written by a large model: Claude Opus or Fable, or a large Codex model. Sonnet and Haiku never run orchestrator, architect, reviewer or verifier work, and run a builder whose model you set by hand only at size=trivial. README, docs, public text: builder domain=docs.
 - create_pipeline answers each stage's runtime and a runtimeLine (spawn_agent: runtime): fix a wrong one before attempt 1 (draft, or pause, override-stage, start), and quote it with the size you chose and why.
 ```
@@ -1520,3 +1520,7 @@ Choose review rounds from risk = consequences × probability: low risk 1;
 normal risk 2; high risk (data loss, security, production, runtime host,
 migrations) 3. The default is 3. More than 3 only when the operator asks;
 state the reason in the brief. Stored limits remain unchanged.
+
+## Task prototype publication
+
+Design and UI stages publish variants through `publish_prototype_review`, using a directory of driver frames or the full frames, originals, captions and videos form; the pipeline binds publication to its task automatically, and agents read the saved choice through `read_prototype_review`.

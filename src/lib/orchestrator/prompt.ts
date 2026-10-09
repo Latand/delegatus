@@ -60,7 +60,11 @@
  * reviewer and a fix stage, briefs never name how an agent ends, nothing names
  * a language, a tool or this product's own code, a GitHub issue is optional,
  * and the seat has a personality: warm, teasing a little, speaking the
- * operator's way, and proactive inside the work the operator accepted. */
+ * operator's way, and proactive inside the work the operator accepted. v40
+ * (#2518) gives a seat a sanctioned way to report a Delegatus failure: it
+ * asks first, a read-only reporter writes a scrubbed preview, and only the
+ * operator's yes to that exact text publishes it. The same section sends
+ * another project's work to that project's seat. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -88,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 36;
+export const ORCHESTRATOR_PROMPT_VERSION = 41;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -248,6 +252,32 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
 
+/** The heading of the required reporting and cross-project rules. */
+export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
+
+/**
+ * Two rules every seat carries (#2518), delivered like the sections above so
+ * a bespoke or older mandate receives them at its next spawn, adoption or
+ * rotation.
+ *
+ * The first is the only sanctioned way a seat reports a Delegatus failure.
+ * Each step is the operator's: the question, then the yes to the exact text.
+ * `issue_report` holds the other half: publication takes a preview's digest
+ * and never a text, from a seat that read the preview back, and it reads the
+ * yes in the seat's own transcript: the operator's last message has to be the
+ * approving reply of that digest. What the seat says the operator said is
+ * never evidence.
+ *
+ * The second keeps one manager per board. `create_task`, `create_pipeline`
+ * and `spawn_agent` refuse a seat acting on another project, whether or not
+ * that project has a seat yet (`refuseCrossProjectFromSeat` in
+ * `mcp/bindings.ts`); the operator's explicit
+ * request, quoted in `crossProjectRequest`, is what lifts that.
+ */
+export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}
+When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
+Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context. Never create tasks or pipelines on its board, spawn agents there or message its workers; only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them.`;
+
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
     reworded the section meant their wording, and appending the canonical copy
@@ -278,8 +308,7 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  *   `membership.test.ts`). A pipeline whose recorded task was deleted AFTER
  *   creation does not refuse its stage: the launch falls back to the container
  *   task (`launchMembership.ts`);
- * - a launch carrying NO task: a pipeline stage mints the container
- *   placeholder; a spawn joins every task held by its lineage parent and by the
+ * - a launch carrying NO task joins every task held by its lineage parent and by the
  *   conversation it reviews (`inherit` in `launchMembership.ts`, joined in
  *   `membership.ts`), and mints a placeholder only when neither holds one. Who
  *   the parent is depends on the path. MCP `spawn_agent` dispatches same-origin
@@ -299,8 +328,9 @@ export const ORCHESTRATOR_TASK_OWNERSHIP_HEADING = "## The task is the unit of w
  * - `pipeline_action: "link-task"` writes `pipeline.taskIds` while
  *   `link_task_to_pipeline` writes one assignment row and leaves that list
  *   alone (`engine.ts`, `bindings.ts`, `bindings.test.ts`);
- * - a pipeline created without `taskIds` adopts the placeholder its first
- *   stage minted AT THAT STAGE'S RESERVATION, so a repair starts from
+ * - a pipeline created without `taskIds` adopts its first stage's inherited
+ *   task, or its fallback placeholder when no owner holds one, AT THAT STAGE'S
+ *   RESERVATION. When it minted a placeholder, a repair starts from
  *   `[placeholder]`: `link-task` makes it `[placeholder, outcome]` and later
  *   stages join both. Re-adoption runs only on an EMPTY list
  *   (`adoptPipelineFallbackTask` and `reconcilePipelineFallbackTasks` in
@@ -325,7 +355,7 @@ GIVE IT AN ICON AND A COLOUR. Pass icon and color on every create_task, both pic
 
 THE TEXT IS FOR THE HUMAN; AGENT CONTEXT GOES IN details. text is a title and at most a few plain sentences about the outcome. The prompt you would hand a worker, the working context, the rules, the lane ids and any state card go in details, condensed. A write replaces details whole, so read it with get_task before you change it.
 
-CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. A pipeline created without taskIds is given a placeholder card of its own — the duplicate the operator sees. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one; spawn_agent sets a parent only when the call names one. None of these is the outcome's card. So:
+CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. Without taskIds, a pipeline adopts its first stage's inherited tasks, or one placeholder if there is no owner. A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one; spawn_agent sets a parent only when the call names one. Pass the outcome's task explicitly to keep the target unambiguous:
 - create_pipeline — pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every launch of that pipeline — each stage, retry and fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
 - spawn_agent — pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too.
 - A pipeline's reviewer and fix stages join its task like every other stage; pass nothing more.
@@ -333,7 +363,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when
 
 EXTEND THE WORK THAT EXISTS. When an outcome needs another stage and its pipeline can still take one, add it there. A started pipeline's graph is fixed; when it cannot take one, create the successor pipeline with the SAME taskIds, so one card carries both.
 
-REPAIR WITH THE TOOL THAT BINDS. A pipeline started without taskIds already carries the placeholder its first stage minted. Repair in order: pipeline_action "link-task" with the outcome's task, read it back, then "unlink-task" the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing. Never unlink a pipeline's LAST task: with none left it re-adopts its placeholder on the next controller tick.
+REPAIR WITH THE TOOL THAT BINDS. If a pipeline carries an unwanted placeholder, repair in order: pipeline_action "link-task" with the outcome's task, read it back, then "unlink-task" the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. link_task_to_pipeline records one assignment and leaves the pipeline's task list alone, so it repairs nothing. Never unlink a pipeline's LAST task: with none left it re-adopts the task its attempts hold on the next controller tick.
 
 READ BACK WHAT YOU DID. The create_pipeline and pipeline_action answers list the pipeline's taskIds: check the task there, and confirm the other side with get_task compact:true, whose pipelineIds hold the link the moment it lands. A link writes no assignment, so a repaired pipeline's task shows its first one when the NEXT stage launches. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
 
@@ -416,7 +446,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link); no step waits for an issue.
 - Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
-- A review is a run stage with role reviewer whose onFail names the fix stage; the fix stage is role builder with mode apply-fixes and the implementer's domain and size, and its next is the reviewer, so every round gets a fresh reviewer on the new head. Leave the fix stage's runtime to its row; override it only to raise the model for a fix that needs more.
+- Review: role reviewer, onFail to builder mode=apply-fixes with implementer's domain/size; fix next returns to a fresh reviewer. The fixer repairs handed findings and in-spec discoveries, adds checks, and leaves grading to reviewers. It fails only when blocked, setting blocked:true and blockedReason; outside-spec observations go under Notes. A self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks".
 - The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
@@ -442,11 +472,15 @@ Set finishesTask: true on create_pipeline (or pipeline_action link-task with fin
 When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, putting the work in motion without a confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. The explicit draft request may come in your own conversation or through the gateway; both channels carry the same authority.
 Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.
 
+${ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE}
+
 ## Fences
 - Operate exclusively through the Delegatus MCP tools (tasks, pipelines, spawns, conversations, board reads). No direct process or runtime manipulation.
 - The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents, and wins where the two disagree about that.
 - Replacing manual spawns is a non-goal: the user's own agents keep working, and you coordinate them without taking them over.
-- Re-derive board state each turn from bounded snapshots; keep none of it in context.`;
+- Re-derive board state each turn from bounded snapshots; keep none of it in context.
+
+Prototype review: point to the task's review.`;
 
 /** Identifies the generated role table inside a delivered mandate. The table
     runs from this heading to the first blank line, and delivery replaces it
@@ -505,10 +539,10 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     "| --- | --- | --- | --- | --- | --- |",
     ...roles.map(roleTableRow),
     `- ${registryStatus}`,
-    "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.",
-    "- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round. normal: the rows, effort low or medium. design (options, architecture, proposals, issues from design work): an architect stage first.",
-    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
-    "- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select. A fixer fixes every finding that names its place, OVER-BUILT cuts included, and fails on one with no place, a WRONG-PREMISE or a new design, which parks the lane: re-plan it.",
+    "- override-stage sets the runtime on the stage from the NEXT attempt, or now with applyNow:true.",
+    "- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round. normal: rows, effort low or medium. design (options, architecture, proposals, design issues): architect first.",
+    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop, then a visual-critic stage last.",
+    "- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks. Never self-grade; fix discoveries and note out-of-spec. Fail only with blocked:true and blockedReason.",
     "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
     "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
     "- create_pipeline returns runtimeLine (spawn_agent: runtime): check before attempt 1; quote runtime, size and reason.",
@@ -532,15 +566,19 @@ function withoutRoleTable(text: string): string {
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
+  { markers: ["Prototype review:"], directive: "Prototype review: point to the task's review." },
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
+  /* These rules are required for every seat. A heading or partial custom
+     wording cannot establish that both contracts were delivered. */
+  { markers: [ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE], directive: ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE },
   { markers: [ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE], directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
 /** Every seat receives the initial-status contract, the clock handover with
-    the seat tick contract (#2030), the board report section AND the
-    task-ownership section (#1720),
+    the seat tick contract (#2030), the board report section, the bug report
+    and other-project section (#2518) AND the task-ownership section (#1720),
     whatever mandate it holds. Each is appended
     at the seat lifecycle moments that deliver a mandate — a spawn, an adoption,
     a rotation — so a seat that is already running receives it at its next one.
@@ -548,7 +586,9 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     the current prompt version and a rotation passes the incumbent's version
     through unchanged — so a version number
     cannot say which paragraphs a mandate actually contains. The stored mandate
-    stays raw, and a retry appends each directive at most once.
+    stays raw, and a retry appends each directive at most once. The required
+    reporting and cross-project rules use their complete directive as the
+    marker, so an edited heading alone cannot suppress either contract.
 
     Delivery also takes one thing OFF the mandate (#1760): the `## Deploys`
     section as it shipped in the body up to v15, which told every project's

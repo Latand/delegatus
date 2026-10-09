@@ -9,10 +9,16 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
  * reducer, and every write is recorded on `window.evidence`, so the driver
  * reads what a gesture really sent. All data is invented.
  */
+import { useEffect, useState } from "react";
+import { LogFeed } from "@/components/LogFeed";
+import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
+import type { LogTailState } from "@/hooks/useLogTail";
 import { createRoot } from "react-dom/client";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
+import { ReceiptChip } from "@/components/runtime/ReceiptChip";
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { Viewer } from "@/components/Viewer";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
@@ -141,6 +147,12 @@ const reviewerLineage = deckRequested
   ? { durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation_done-0", reviewsConversationId: "conversation_done-0", memberships: [] } }
   : {};
 const AGENT_LABEL = new URLSearchParams(location.search).has("agent-label");
+/* `?chrome=<n>`: the phone conversation with `n` background shell tasks behind its ⋯ menu and, unless `nopin`,
+   a pinned message (a board task assigned to it). Used with `seatnoise=ii&runtime=structured` for the seat's
+   report button. */
+const CHROME_PARAM = new URLSearchParams(location.search).get("chrome");
+const CHROME = CHROME_PARAM === null ? null : Number(CHROME_PARAM);
+const CHROME_PIN = CHROME !== null && !new URLSearchParams(location.search).has("nopin");
 
 const files: FileEntry[] = [
   conversation(RUNNING_PATH, AGENT_LABEL ? "Orchestrator" : "Rebuild the board status projection", {
@@ -171,6 +183,19 @@ const files: FileEntry[] = [
   )),
 ];
 
+if (CHROME !== null && CHROME > 0) {
+  const CHROME_COMMANDS = ["gh run watch 18234519922 --exit-status", "bun test src/components/mobile/MobileChromeSheets.dom.test.tsx", "bun scripts/verify-runtime-host.ts --runtime /usr/local/bin/bun-1.4.0-candidate"];
+  for (let index = 0; index < CHROME; index++) {
+    const id = ["bbto8z3y0", "b4xq0m2lk7ns", "b9fz1rkp3w", "bk2m8q1d4x", "bq7v5n0c9z", "bw3j6t2h8y", "bz1a4s7e5u", "bd8f2g9k6m"][index % 8]!;
+    files.push({
+      path: `/tmp/claude-1000/atlas/session/tasks/${id}.output`, root: "claude-tasks", name: `${id}.output`, project: PROJECT,
+      title: `Background task ${id}`, engine: "shell", kind: "bash", fmt: "text", parent: RUNNING_PATH,
+      mtime: now - 40 - index * 95, size: 2_048, activity: "live", proc: "running", pid: 2_145_666 + index * 436,
+      cmd: CHROME_COMMANDS[index % 3]!, cmdDesc: ["Watch the CI run", "Run the touched test file", "Rehearse the runtime host"][index % 3]!,
+      pendingQuestion: null, waitingInput: null, conversationId: null,
+    } as unknown as FileEntry);
+  }
+}
 /* The launch facts are what the board's projection hands the pane: a launch the runtime is still recovering
    carries no reason, a stopped one carries it with `recoveryStopped`. The raw recovery envelope rides in
    `error` on the pending case on purpose: the chip must not print it whatever the projection did. */
@@ -344,6 +369,10 @@ let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
 } as unknown as BoardProjectStateV1;
+/* Close-card receipt coverage can begin with an explicitly placed manual card. */
+if (new URLSearchParams(location.search).get("reopen") === "manual") {
+  board = { ...board, explicitManual: ["/repo/done-0.jsonl"], prefs: { ...board.prefs, manual: ["/repo/done-0.jsonl"] } };
+}
 
 const evidence = {
   presenceReplies: 0,
@@ -368,6 +397,10 @@ const evidence = {
   closesAnswered: [] as string[],
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
+  boardReads: 0,
+  boardSnapshot: () => board,
+  /* Make the next ordinary board poll adopt a newer authoritative snapshot. */
+  advanceBoardRevision() { board = { ...board, revision: board.revision + 1 }; },
   /* Case iv: the Codex seat's operator-chosen profile is stored, then the seat rotates to a Claude seat launched opus/high.
      The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session. */
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
@@ -477,7 +510,13 @@ const TOOL_RUN = [
 const FAST_TTS = new URLSearchParams(location.search).has("fast-tts");
 const FAST_TTS_FEED = JSON.stringify({ type: "assistant", timestamp: iso(10), message: { role: "assistant", content: [{ type: "text", text: "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken." }] } }) + "\n";
 const FEED = FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
-const tasks = TOOLCARD ? [{
+const CHROME_PINNED_TASK = {
+  id: "task-pinned", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
+  text: "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
+  assignments: [{ path: RUNNING_PATH, conversationId: "conversation_running", panePid: null, state: "delivered", error: null, at: iso(1_800), engine: "claude" }],
+  createdAt: iso(3_600), updatedAt: iso(1_800),
+};
+const tasks = CHROME_PIN ? [CHROME_PINNED_TASK] : TOOLCARD ? [{
   id: "task-projection", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "Rebuild the board status projection\nReplay every band from the snapshot.",
   assignments: [{ path: RUNNING_PATH, conversationId: "conversation_running", panePid: null, state: "delivered", error: null, at: iso(1_800), engine: "claude" }],
@@ -592,6 +631,21 @@ const LONG_TITLE = [
 ].join(" ");
 const kanbanPipelines: Pipeline[] = [];
 const kanbanTasks: unknown[] = [];
+/* `?cards=N` (the whole-card drag's smoothness gate): N more tasks in Assigned, each with a long
+   title, a lane with a stage at work and a working conversation, so the phone board has the
+   weight of a busy afternoon. */
+const MANY_CARDS = Number(new URLSearchParams(location.search).get("cards") ?? "0");
+if (KANBAN && MANY_CARDS > 0) {
+  for (let index = 0; index < MANY_CARDS; index += 1) {
+    const id = `t-bulk-${index}`;
+    const title = `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`;
+    const worker = kanbanConversation(`${title.slice(0, 60)} · build`, index % 2 === 0 ? "working" : "settled", 300 + index * 20);
+    kanbanPipelines.push(kanbanLane(`lane-bulk-${index}`, title, [id], "running", [
+      { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 240 + index, role: "reviewer" }, { id: "verify" },
+    ]));
+    kanbanTasks.push(kanbanTask(id, "assigned", title, { assignments: [kanbanAssign(worker)], updatedAt: iso(600 + index * 60) }));
+  }
+}
 if (KANBAN) {
   /* Assigned */
   kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
@@ -1416,6 +1470,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    evidence.boardReads++;
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/conversations") {
@@ -1453,7 +1508,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     // A lost optional read must never strand the composer's local wire fence.
     if (queueRecovery) return new Promise<Response>(() => {});
-    if (FAST_TTS && SEAT_NOISE) {
+    if ((FAST_TTS || CHROME !== null) && SEAT_NOISE) {
       const file = files[0]!;
       if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [file.conversationId], paths: [file.path], previous: { conversationIds: [], paths: [] } } });
       return json({ seat: { project: PROJECT, seatEpoch: 1, conversationId: file.conversationId, path: file.path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(86_400), intent: { clientRequestId: "seat-fast-tts", mode: "existing", launchId: null, error: null } }, pending: null, exists: true });
@@ -1603,4 +1658,67 @@ if (OVERVIEW_SCENE) {
   localStorage.setItem("llvProject", PROJECT);
   if (!location.hash) location.hash = `#p=${PROJECT}`;
 }
-createRoot(document.getElementById("root")!).render(<Viewer />);
+/** Long-history scene uses the real parser, rows, scroll controller and CSS.
+ * Only the transport is synthetic; the driver resolves an in-flight page. */
+/** `?long-operator=1` lengthens the operator's messages past the 500
+ * characters at which the feed folds one into a `<details>`; the default scene
+ * sits exactly on that limit. */
+const LONG_OPERATOR = new URLSearchParams(location.search).has("long-operator");
+const historyMessage = (n: number) => JSON.stringify({ type: "response_item", payload: {
+  type: "message", id: `history-${n}`, role: n % 2 ? "assistant" : "user",
+  content: [{ type: n % 2 ? "output_text" : "input_text", text: `Message ${n}\n\n` +
+    (n % 3 === 0 && !(LONG_OPERATOR && n % 2 === 0)
+      ? "```ts\n" + "const value = 42;\n".repeat(12) + "```"
+      : "A synthetic paragraph with enough words to wrap on a phone.\n\n".repeat(LONG_OPERATOR && n % 2 === 0 ? 14 : 8)) }],
+}});
+const historyLines = Array.from({ length: 180 }, (_, n) => historyMessage(n));
+let finishHistory: ((count: number) => void) | undefined;
+function ScrollHistoryFixture() {
+  const [tail, setTail] = useState<LogTailState>(() => ({ lines: historyLines.slice(60), linesStart: 60,
+    size: 10000, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: true, loadingOlder: false, prependGen: 0,
+    loadOlder: async () => 0,
+  }));
+  const [follow, setFollow] = useState(true);
+  const control = window as unknown as { historyFixture: { prepend(): void; append(): void; pending: boolean } };
+  const [pending, setPending] = useState(false);
+  setLogFeedDependenciesForTests({ useLogTail: () => ({ ...tail, loadOlder: () => {
+    setPending(true);
+    setTail((value) => ({ ...value, loadingOlder: true }));
+    return new Promise<number>((resolve) => { finishHistory = resolve; });
+  } }) });
+  useEffect(() => {
+    control.historyFixture = {
+      pending,
+      prepend: () => {
+        setTail((value) => ({ ...value, lines: [...historyLines.slice(0, 60), ...value.lines], linesStart: 0,
+          prependGen: value.prependGen + 1, hasMore: false, loadingOlder: false }));
+        setPending(false);
+        finishHistory?.(60);
+      },
+      append: () => setTail((value) => ({ ...value, lines: [...value.lines, historyMessage(180 + value.lines.length)] })),
+    };
+  }, [control, pending]);
+  return <>
+    <header className="sticky top-0 shrink-0 border-b border-border px-3 py-2">Synthetic conversation</header>
+    <LogFeed file={conversation("/fixtures/scroll-history.jsonl", "Long synthetic history", { fmt: "codex", engine: "codex" })}
+      compact={new URLSearchParams(location.search).has("compact")} showSvc={false} lineFilter=""
+      onStatus={() => {}} paused={false} follow={follow} setFollow={setFollow} />
+  </>;
+}
+/** Receipt-only seat panels and messages without a feed row share this chip. */
+function SwitchReceiptFixture() {
+  return <main className="flex min-w-0 flex-col gap-4 p-2">
+    {["switching-accounts", "switch-after-turn", "switch-failed"].map(reason =>
+      [374, 280].map(width => <section key={reason + width} data-switch-receipt-row={reason} data-panel-width={width}
+        style={{ width, maxWidth: "100%" }} className="flex min-w-0 flex-col gap-2 rounded-control border border-border p-2">
+        <ReceiptChip receipt={{ operationId: reason + width, idempotencyKey: reason + width,
+          conversationId: "conversation_receipt_geometry", kind: "send", status: "queued",
+          reason, at: new Date().toISOString(), revision: 1 } as RuntimeReceipt}
+          wait={{ phase: width === 280 ? "uncertain" : "awaiting-handover", waitedMs: 120000, cause: "unknown" }} onRetry={() => {}} />
+      </section>))}
+  </main>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("switch-receipts")
+  ? <SwitchReceiptFixture /> : new URLSearchParams(location.search).has("scroll-history")
+  ? <ScrollHistoryFixture /> : <Viewer />);

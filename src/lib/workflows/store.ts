@@ -1,3 +1,4 @@
+import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import fs from "node:fs";
 import path from "node:path";
@@ -109,8 +110,8 @@ export const SEEDED_TEMPLATES: WorkflowTemplate[] = seededTemplatesFromRoles();
 type WorkflowFile = { workflows?: unknown };
 type TemplateFile = { templates?: unknown };
 
-function atomicWriteJson(filePath: string, value: unknown): void {
-  atomicWriteText(filePath, JSON.stringify(value, null, 2) + "\n");
+function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
+  atomicWriteText(filePath, stringifyRegistryDocument(value));
 }
 
 function readJson(filePath: string): unknown {
@@ -121,7 +122,7 @@ function readJson(filePath: string): unknown {
   }
 }
 
-function readWorkflowStateJson(): unknown | null {
+function readWorkflowStateJson(): { raw: unknown; source: string } | null {
   let source: string;
   try {
     source = fs.readFileSync(workflowsFile(), "utf8");
@@ -130,7 +131,7 @@ function readWorkflowStateJson(): unknown | null {
     throw new Error("could not read legacy workflow state", { cause: error });
   }
   try {
-    return JSON.parse(source) as unknown;
+    return { raw: JSON.parse(source) as unknown, source };
   } catch (error) {
     throw new Error("legacy workflow state contains malformed JSON", { cause: error });
   }
@@ -259,15 +260,23 @@ export function normalizeTemplate(value: unknown): WorkflowTemplate | null {
 }
 
 function isWorkflow(value: unknown): value is Workflow {
+  try { return isWorkflowShape(value); }
+  catch { return false; }
+}
+
+function isWorkflowShape(value: unknown): value is Workflow {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const wf = value as Partial<Workflow>;
   return (
     typeof wf.id === "string" &&
+    (wf.project == null || typeof wf.project === "string") &&
     typeof wf.task === "string" &&
     typeof wf.repoDir === "string" &&
     typeof wf.worktreeDir === "string" &&
     typeof wf.branch === "string" &&
+    (wf.controlGeneration === undefined || typeof wf.controlGeneration === "string") &&
     Array.isArray(wf.stageRuns) &&
+    wf.stageRuns.every((run) => run !== null && typeof run === "object" && !Array.isArray(run)) &&
     typeof wf.stageIndex === "number" &&
     normalizeTemplate(wf.template) !== null
   );
@@ -284,23 +293,30 @@ export function loadWorkflows(): Workflow[] {
   return rememberWorkflowSnapshot(workflowStore().snapshot());
 }
 
-function parseWorkflowsFromDisk(): Workflow[] {
-  const raw = readWorkflowStateJson();
+function parseWorkflowsFromDisk(): unknown[] {
+  const document = readWorkflowStateJson();
+  if (document === null) return [];
+  const raw = document.raw;
   if (raw === null) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("legacy workflow state must be an object");
   }
   const file = raw as WorkflowFile;
-  if (!Array.isArray(file.workflows) || !file.workflows.every(isWorkflow)) {
+  if (!Array.isArray(file.workflows)) {
     throw new Error("legacy workflow state contains malformed records");
   }
   const workflows = file.workflows;
-  return workflows.map(reviveWorkflow);
+  const records = workflows.map((value) => {
+    if (!isWorkflow(value)) { reportRegistryRecord("workflows", value); return value; }
+    return reviveWorkflow(value);
+  });
+  rememberRecordBytes(records, jsonArrayRecordBytes(document.source, "workflows"), isWorkflow);
+  return records;
 }
 
 export function planWorkflowStateMigration(): { records: number; keys: string[] } {
   const records = parseWorkflowsFromDisk();
-  return { records: records.length, keys: records.map((workflow) => workflow.id) };
+  return { records: records.length, keys: records.map(registryRecordKey) };
 }
 
 function reviveWorkflow(wf: Workflow): Workflow {
@@ -321,13 +337,14 @@ function reviveWorkflow(wf: Workflow): Workflow {
 
 const workflowStores = new Map<string, SqliteStateCollection<Workflow>>();
 
-export function workflowStateCollectionSeed(): StateCollectionSeed<Workflow> {
+export function workflowStateCollectionSeed(): StateCollectionSeed<unknown> {
   return {
     collection: "workflows",
     schemaVersion: 1,
     migrationId: "workflows-json-v1",
     loadRecords: parseWorkflowsFromDisk,
-    key: (workflow: Workflow) => workflow.id,
+    key: registryRecordKey,
+    recordJson: preservedRecordJson,
   };
 }
 
@@ -341,9 +358,13 @@ function workflowStore(): SqliteStateCollection<Workflow> {
     schemaVersion: 1,
     busyMessage: "workflow state is busy",
     key: (workflow) => workflow.id,
-    decode: (value) => isWorkflow(value) ? reviveWorkflow(value) : null,
+    decode: (value) => {
+      if (!isWorkflow(value)) { reportRegistryRecord("workflows", value); return null; }
+      return reviveWorkflow(value);
+    },
     clone: (workflow) => reviveWorkflow(structuredClone(workflow)),
     strictDecode: true,
+    preserveRejectedRecords: true,
     decodeError: (error) => new Error("workflow SQLite state contains a malformed row", { cause: error }),
     validate: (workflow) => {
       if (!isWorkflow(workflow)) throw new Error("refusing to persist a malformed workflow record");

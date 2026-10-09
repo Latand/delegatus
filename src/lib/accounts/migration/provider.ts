@@ -26,10 +26,12 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEnabled } from "@/lib/runtime/registry";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy, structuredHostCell } from "@/lib/runtime/structuredSpawn";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
+import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
-import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
+import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
 import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
 
 interface StructuredHostPublicationInput {
@@ -275,6 +277,25 @@ function successorCapability(input: StructuredHostPublicationInput): { capabilit
   };
 }
 
+/**
+ * What a recovery relaunch re-checks before its engine starts, for the
+ * successor: the profile it was handed was read when the migration began, and
+ * the conversation's own record is the grant. A grant withdrawn since then
+ * refuses the launch, and so does a seat child whose seat has moved on.
+ */
+function successorTelegramGrantCheck(input: StructuredHostPublicationInput): (() => void) | undefined {
+  if (!input.profile.mcpServers.includes("telegram")) return undefined;
+  return () => {
+    const profile = input.conversationId
+      ? input.registry.conversation(input.conversationId as ViewerConversationId)?.generations.at(-1)?.launchProfile
+      : null;
+    if (!profile?.mcpServers.includes("telegram")) throw new Error(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+    if (profile.parentConversationId && !isCurrentOperatorSeat(profile.parentConversationId, input.registry)) {
+      throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
+    }
+  };
+}
+
 async function publishCodexSuccessorHost(input: StructuredHostPublicationInput): Promise<() => Promise<void>> {
   if (input.ownsOperation && !await input.ownsOperation()) return async () => {};
   if (!structuredHostsEnabled()) return async () => {};
@@ -287,6 +308,9 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
      so nothing is started and the predecessor keeps serving. */
   const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
   if (refused) throw new Error(refused.error);
+  /* The successor runs in the cell a fresh launch of this conversation gets;
+     work that cannot be contained is refused here, before anything starts. */
+  const memoryCell = structuredHostCell(input.registry, "codex", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
   const entry = input.registry.upsert({
     ...(existing ?? {
@@ -356,6 +380,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       approvalPolicy,
       initialEventCursor: claimed.structuredHost?.eventCursor,
       env: access.env,
+      ...(memoryCell ? { memoryCell } : {}),
     });
     stopPersistence = await bindCodexHostPersistence(
       input.registry,
@@ -416,6 +441,9 @@ async function publishClaudeSuccessorHost(
      so nothing is started and the predecessor keeps serving. */
   const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
   if (refused) throw new Error(refused.error);
+  /* The successor runs in the cell a fresh launch of this conversation gets;
+     work that cannot be contained is refused here, before anything starts. */
+  const memoryCell = structuredHostCell(input.registry, "claude", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
   const entry = input.registry.upsert({
     ...(existing ?? {
@@ -462,6 +490,12 @@ async function publishClaudeSuccessorHost(
       if (!cleanupConfirmed(cancelled)) throw new Error("successor Claude host transition is still pending");
       await forgetResumePaneIfMatches(input.receipt.path, tmuxHost);
     }
+    // Retirement awaits external cleanup. The operation and its account grant
+    // must still own this successor before any native process can start.
+    if (input.ownsOperation && !await input.ownsOperation()) {
+      input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+      return async () => {};
+    }
     identity = successorCapability(input);
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
@@ -479,6 +513,9 @@ async function publishClaudeSuccessorHost(
          bound, and widening native sub-agents is not a re-host's decision. */
       ...claudeHostLaunchPaths(input.target),
       mcpServers: input.profile.mcpServers,
+      /* The Telegram tool is optional, so with Telegram disconnected the
+         successor starts without the tool for this run, as any launch does. */
+      validateTelegramGrant: successorTelegramGrantCheck(input),
       env: access.env,
       /* Transcripts keep dated provider ids the CLI may refuse as a launch
          argument; the launcher that used to project them is gone, so the
@@ -490,6 +527,7 @@ async function publishClaudeSuccessorHost(
       permissionMode: input.profile.permissionMode ?? undefined,
       initialEventCursor: claimed.structuredHost?.eventCursor,
       ...access.host,
+      ...(memoryCell ? { memoryCell } : {}),
     });
     stopPersistence = await bindClaudeHostPersistence(
       input.registry,

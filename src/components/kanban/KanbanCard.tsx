@@ -8,9 +8,9 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
-import type { TaskStatus } from "@/lib/tasks/types";
+import type { TaskStatus, TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
-import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
+import { workLinkUrl, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
 import { taskChipTitle } from "@/lib/selection/selectedContext";
@@ -21,11 +21,15 @@ import { clearedLine, needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
 
 import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
+import { CardPrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TASK_COLOR_HEX } from "@/components/tasks/taskColorHex";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 
+import { TaskHoldEditor } from "./TaskHoldEditor";
+import { TaskMotionLine } from "./TaskMotionLine";
+import { TaskStepsLine } from "./TaskStepsLine";
 import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
 import { useSeatSignal } from "./kanbanSeatStore";
 import { useTaskChipAttached, useTaskChipsFull, type TaskChip } from "@/components/orchestrator/taskChips";
@@ -169,6 +173,9 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
 });
 
 export interface KanbanCardProps {
+  holdEditing?: boolean;
+  onSaveHold?: (card: KanbanCardModel, hold: Partial<TaskHold> | null) => void;
+  onCancelHold?: () => void;
   remoteAgents?: readonly RemoteAgentView[];
   /** The task runs on another linked machine: the card takes the remote
       look, draws that machine's lanes, and says where to manage it. */
@@ -404,7 +411,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      the tile's place. */
   const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
-  const reasons = card.needsYou ? reasonsText(t, card.reasons) : "";
+  /* A card that waits with no reason of its own waits on its prototype
+     review: its review button says so in words, and the card's label names
+     it for assistive tech. The choice clears it, so there is no dismissal. */
+  const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t("proto.notice.ready");
   const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
   const remote = card.task ? props.remote ?? null : null;
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
@@ -413,7 +423,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   /* The card's one status hue is its edge (§3.4): amber while it owes the
      operator an answer, which the foot names. A stalled member keeps its red
      state word on its tile and no longer colours the card. */
-  const attention = card.needsYou ? "needs" : undefined;
+  const attention = card.motion.key === "needs-you" ? "needs" : undefined;
   const onDismiss = props.onDismiss;
   const onUndoDismiss = props.onUndoDismiss;
   /* What is happening now, never a status, at the foot of the card: why it
@@ -421,12 +431,12 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      conversations it holds or that nothing is on it. */
   const footMeta = (
     <>
-      {card.needsYou ? (
+      {card.needsYou && card.reasons.length ? (
         <span className="foot-meta needs" data-foot-needs={card.reasons.length} title={card.reasons.map((need) => needLabel(t, need)).join("\n")}>
           <span className="clamp">{reasons}</span>
         </span>
       ) : null}
-      {card.needsYou && onDismiss ? (
+      {card.needsYou && card.reasons.length && onDismiss ? (
         <button
           type="button"
           className="icon-btn dismiss"
@@ -446,7 +456,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           {t("needs.undo")}
         </button>
       ) : null}
-      {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
+      {card.working && !(card.motion.key === "working" && card.working > 0) ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
         : card.pipelines.length === 0 && !remote ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}
@@ -622,6 +632,17 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
+      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs}
+        taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
+        onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
+        referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)
+          ? taskLinks?.links.find(link => String(link.number) === card.task!.hold!.ref && link.kind === card.task!.hold!.kind)?.url
+            ?? (taskLinks?.repository && /^\d+$/.test(card.task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(card.task.hold.ref), card.task.hold.kind as "pr" | "issue") : null)
+          : null}
+      />
+      <TaskStepsLine summary={card.stepSummary} />
+      {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
+      {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
       <TaskStatusNote note={card.task?.note} nowMs={nowMs} />
       {/* #2059: the task's own links and every pipeline's, deduplicated, and
@@ -807,9 +828,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {!collapsed ? <CardDrafts ids={card.drafts} /> : null}
 
-      {!collapsed && card.past.length ? (
+      {!collapsed && (card.past.length || card.notLoadedRefs.length) ? (
         <PastAttempts
           rows={card.past}
+          elsewhere={card.notLoadedRefs}
           names={new Map(card.pipelines.map((summary) => [summary.pipeline.id, stageNames(t, summary.pipeline)] as const))}
           nowMs={nowMs}
           onOpen={props.onOpenAttempt}
@@ -820,18 +842,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <UnstartedLaunches card={card} title={title} nowMs={nowMs} onOpen={props.onOpenMember} onDismiss={props.onDismissLaunch} />
       ) : null}
 
-      {!collapsed && (card.mirrors.length || card.notLoadedRefs.length || card.otherSurfaces) ? (
+      {!collapsed && (card.mirrors.length || card.otherSurfaces) ? (
         <div className="refs">
           {card.mirrors.map((mirror) => (
             <button key={mirror.key} type="button" className="ref" onClick={() => props.onFocusCard(mirror.primaryCardId)}>
               {t("kanban.alsoOn", { title: cleanTitle(mirror.file.title ?? "", 48) || t("kanban.untitledConversation"), card: mirror.primaryTitle })}
-            </button>
-          ))}
-          {/* Each conversation the card lists opens on its own, loaded here or
-              not; a stage's opens from its pipeline's chips and Past attempts. */}
-          {card.notLoadedRefs.map((ref) => (
-            <button key={ref.key} type="button" className="ref quiet" data-not-loaded={ref.key} onClick={() => props.onOpenAttempt({ path: ref.path, conversationId: ref.conversationId })}>
-              {t("kanban.notLoadedOpen")}
             </button>
           ))}
           {card.otherSurfaces ? (
@@ -855,6 +870,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
           {footMeta}
           <span className="spacer" />
+          {/* The task's prototype review: highlighted while a round waits. */}
+          <CardPrototypeButton task={card.task} title={title} />
           {/* The task's album: every picture its agents made or looked at. */}
           <CardAlbumButton
             taskId={card.task.id}
@@ -865,12 +882,18 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           {/* The orchestrator's composer takes a reference to this task as a chip
               (never text in the input). Not on the Overview, where cards of
               several projects stand and no seat is on screen to take it. */}
-          {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
-          {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
-            <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
-              <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
-            </button>
+          {/* «Ask» and «+ Agent» wrap together: neither is left alone on a line. */}
+          {!props.projectNames || (!remote && props.onAddAgent) ? (
+            <span className="foot-acts">
+              {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
+              {!remote && props.onAddAgent ? (
+                <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
+                  <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
+                </button>
+              ) : null}
+            </span>
           ) : null}
+          {remote ? <HostChip remote={remote} /> : null}
         </div>
       ) : (
         <div className="foot">

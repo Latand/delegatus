@@ -1,26 +1,66 @@
 import crypto from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
+import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
+import { writeJsonDurably } from "@/lib/state/durableJson";
+import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import type { Pipeline } from "./types";
+import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
   preservedLocalRef?: PreservedProvisionRef;
+  /** The controller must retry this committing attempt after collecting fresh evidence. */
+  deferred?: true;
+  /** Set only when `git commit` itself answered no for a passed stage. */
+  commitRefusal?: StageCommitRefusal;
 };
+/** A refused stage commit, handed back to the stage that wrote it. The
+    controller does not judge what the hook printed: the stage reads it, repairs
+    its files or reports why it cannot. `paths` are the files the refused commit
+    held, for the message to name. */
+export type StageCommitRefusal = { paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
+
+async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
+  if (staged) return { paths: [...staged] };
+  const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
+  return { paths: index.code === 0 ? index.stdout.split("\0").filter(Boolean) : [] };
+}
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
   return { ok: false, error: `${step}: ${(result.stderr || result.stdout || "no output").trim()}` };
+}
+
+/** Acceptance must inspect the immutable objects Git actually pushes.
+    Replacement refs and legacy grafts otherwise change the local view. */
+export function pipelineLiteralGitEnv(env?: Partial<NodeJS.ProcessEnv>): Partial<NodeJS.ProcessEnv> {
+  const count = Number(env?.GIT_CONFIG_COUNT ?? process.env.GIT_CONFIG_COUNT ?? "0");
+  return {
+    ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: os.devNull,
+    // Git emits graft deprecation advice even for this empty graft input.
+    // A surviving push must not write that advice into its dead Viewer's pipe.
+    // Append to inherited command configuration so unrelated hook settings survive.
+    GIT_CONFIG_COUNT: String(count + 1),
+    [`GIT_CONFIG_KEY_${count}`]: "advice.graftFileDeprecated",
+    [`GIT_CONFIG_VALUE_${count}`]: "false",
+  };
+}
+
+function withLiteralGitObjects(exec: ExecPort): ExecPort {
+  return (command, args, cwd, env, options) => exec(command, args, cwd,
+    pipelineLiteralGitEnv(env), options);
 }
 
 /** The cheap half of {@link resolvePipelineBase}: the branch-name shape, with
@@ -74,41 +114,41 @@ function killedAtBound(result: ExecResult): boolean {
     Since #1799 the fetching form runs only in the controller, outside the
     registry lease; a request path that still calls this passes a pinned
     `baseRef`. */
-export function resolvePipelineBase(
+export async function resolvePipelineBase(
   repoDir: string,
   input: { baseBranch?: string; baseRef?: string },
   exec: ExecPort,
-): PipelineBaseResult {
+): Promise<PipelineBaseResult> {
   const baseBranch = input.baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH;
   if (!validBaseBranch(baseBranch)) return { ok: false, error: INVALID_BASE_BRANCH };
   const requestedRef = input.baseRef?.trim();
   if (!requestedRef) {
-    const fetch = exec(
+    const fetch = (await exec(
       "timeout",
       ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`],
       repoDir,
-    );
+    ));
     if (killedAtBound(fetch)) return { ok: false, error: `fetching origin/${baseBranch}: git fetch timed out after ${BASE_FETCH_TIMEOUT}` };
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
   }
   const ref = requestedRef || `origin/${baseBranch}`;
-  const resolved = exec("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repoDir);
+  const resolved = (await exec("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repoDir));
   if (resolved.code !== 0) return failure(`resolving pipeline base ${ref}`, resolved);
   const baseRef = resolved.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(baseRef)) return { ok: false, error: `resolving pipeline base ${ref}: expected an exact commit SHA` };
   return { ok: true, baseBranch, baseRef };
 }
 
-export function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
+export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
   if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) {
     return { ok: false, error: "the pipeline base is unresolved" };
   }
-  const add = exec("git", ["worktree", "add", "-b", pipeline.branch, pipeline.worktreeDir, pipeline.baseRef], pipeline.repoDir);
+  const add = (await exec("git", ["worktree", "add", "-b", pipeline.branch, pipeline.worktreeDir, pipeline.baseRef], pipeline.repoDir));
   if (add.code !== 0) {
-    const probe = exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir);
+    const probe = (await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir));
     if (probe.code !== 0 || probe.stdout.trim() !== pipeline.branch) return failure("git worktree add", add);
   }
-  const base = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  const base = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
@@ -122,42 +162,10 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
   catch { return false; } // A missing path cannot prove this is the lane's checkout.
 }
 
-/** Provisioning alone uses this asynchronous port; stage Git keeps ExecPort. */
+/** Provisioning uses the same bounded executor with a cancellation signal. */
 export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
-
-/** Bound every child, including checkout and revision probes. A private process
- * group lets cancellation end Git's transport children as well as Git itself.
- * Settlement waits for close, so a replacement cannot overlap a dying child. */
-export const realProvisionExec: ProvisionExecPort = (command, args, cwd, signal) => new Promise((resolve) => {
-  if (signal?.aborted) { resolve({ code: null, stdout: "", stderr: "pipeline provisioning cancelled" }); return; }
-  let stdout = "";
-  let stderr = "";
-  let stopped: string | null = null;
-  const child = spawn(command, args, {
-    cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-  });
-  const stop = (reason: string) => {
-    if (stopped) return;
-    stopped = reason;
-    if (child.pid) {
-      try { process.kill(-child.pid, "SIGKILL"); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") stderr += String(error); }
-    }
-  };
-  const abort = () => stop("pipeline provisioning cancelled");
-  const timer = setTimeout(() => stop("git command timed out after 60s"), 60_000);
-  signal?.addEventListener("abort", abort, { once: true });
-  child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
-  child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
-  child.on("error", (error) => { stderr += error.message; });
-  child.on("close", (code, childSignal) => {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
-    resolve({ code: stopped ? null : code, stdout, stderr: stopped ?? stderr, signal: childSignal });
-  });
-  if (signal?.aborted) abort();
-});
+export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal) =>
+  await realExec(command, args, cwd, undefined, { signal });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -526,22 +534,22 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   return { ok: true, sha: start };
 }
 
-function changedWorktreePaths(
+async function changedWorktreePaths(
   exec: ExecPort,
   cwd: string,
   declaredOutputs: readonly string[] = [],
-): { ok: true; paths: string[] } | { ok: false; error: string } {
-  const tracked = exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
+): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
+  const tracked = (await exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd));
   if (tracked.code !== 0) return failure("checking tracked stage output paths", tracked);
-  const untracked = exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd);
+  const untracked = (await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd));
   if (untracked.code !== 0) return failure("checking untracked stage output paths", untracked);
   let ignoredOutputs = "";
   if (declaredOutputs.length > 0) {
-    const ignored = exec(
+    const ignored = (await exec(
       "git",
       ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...declaredOutputs, ...CONTROLLER_ARTIFACT_PATHSPECS],
       cwd,
-    );
+    ));
     if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
     // A directory declaration does not opt every ignored descendant into a
     // commit. Only a file named exactly by the stage may bypass .gitignore.
@@ -553,24 +561,76 @@ function changedWorktreePaths(
   return { ok: true, paths: [...new Set(paths)] };
 }
 
-export function commitPipelineStage(
+type StageCommitReceipt = { version: 1; id: string; parent: string; tree: string; paths: string[] };
+
+/** The controller flushes ownership before Git writes. Recovery must prove the
+    exact parent, tree, nonce and declared paths; a familiar commit title alone
+    never grants a read-only stage permission to have created a commit. */
+async function recoverStageCommit(
+  receiptFile: string,
+  parent: string,
+  head: string,
+  declaredOutputs: readonly string[],
+  exec: ExecPort,
+  cwd: string,
+): Promise<PipelineGitResult | null> {
+  let receipt: StageCommitReceipt;
+  try {
+    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
+    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    if (!value || typeof value !== "object") throw new Error("invalid receipt");
+    receipt = value as StageCommitReceipt;
+    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
+      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
+      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
+      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
+      throw new Error("invalid receipt");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
+  }
+  const proof = await exec("git", ["show", "-s", "--format=%P%x00%T%x00%B", head], cwd);
+  if (proof.code !== 0) return failure("verifying the owned stage commit", proof);
+  const [parents, tree, body] = proof.stdout.split("\0");
+  if (parents !== receipt.parent || tree !== receipt.tree
+    || !body?.split("\n").includes(`Delegatus-Stage-Commit: ${receipt.id}`)) return null;
+  const committed = await exec("git", ["diff", "--name-only", "--no-renames", "-z", parent, head, "--"], cwd);
+  if (committed.code !== 0) return failure("verifying owned stage output paths", committed);
+  const paths = committed.stdout.split("\0").filter(Boolean);
+  if (paths.length !== new Set(receipt.paths).size
+    || paths.some((file) => !receipt.paths.includes(file) || !pathIsDeclaredOutput(file, declaredOutputs))) return null;
+  const remaining = await changedWorktreePaths(exec, cwd, declaredOutputs);
+  if (!remaining.ok) return remaining;
+  if (remaining.paths.length) return { ok: false, error: "the owned stage commit has newer worktree changes; preserve them before recovery" };
+  const unstage = await unstageControllerArtifacts(exec, cwd);
+  if (unstage) return unstage;
+  return { ok: true, sha: head };
+}
+
+export async function commitPipelineStage(
   pipeline: Pipeline,
   stageId: string,
   allowCommit: boolean,
   exec: ExecPort,
   declaredOutputs: readonly string[] = [],
   protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
-): PipelineGitResult {
-  const status = exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
+  receiptFile?: string,
+): Promise<PipelineGitResult> {
+  const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
-  const initialHead = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (initialHead.code !== 0 || !initialHead.stdout.trim()) return failure("recording the passed stage commit", initialHead);
   if (protectedHead !== null && initialHead.stdout.trim() !== protectedHead) {
+    if (!allowCommit && receiptFile && declaredOutputs.length) {
+      const recovered = await recoverStageCommit(receiptFile, protectedHead, initialHead.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir);
+      if (recovered) return recovered;
+    }
     return { ok: false, error: `read-only stage ${stageId} created a commit` };
   }
   const sha = initialHead.stdout.trim();
-  const settleWithoutCommit = (): PipelineGitResult => {
-    const unstage = unstageControllerArtifacts(exec, pipeline.worktreeDir);
+  const settleWithoutCommit = async (): Promise<PipelineGitResult> => {
+    const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
     return unstage ?? { ok: true, sha };
   };
   let changedOutputPaths: string[] = [];
@@ -579,7 +639,7 @@ export function commitPipelineStage(
       if (!status.stdout.trim()) return settleWithoutCommit();
       return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
     }
-    const changed = changedWorktreePaths(exec, pipeline.worktreeDir, declaredOutputs);
+    const changed = (await changedWorktreePaths(exec, pipeline.worktreeDir, declaredOutputs));
     if (!changed.ok) return changed;
     const refused = changed.paths.filter((candidate) => !pathIsDeclaredOutput(candidate, declaredOutputs));
     if (refused.length > 0) {
@@ -590,35 +650,50 @@ export function commitPipelineStage(
   } else if (!status.stdout.trim()) {
     return settleWithoutCommit();
   }
-  const add = exec(
+  const add = (await exec(
     "git",
     ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
     pipeline.worktreeDir,
-  );
+  ));
   if (add.code !== 0) return failure("staging the passed stage", add);
   if (!allowCommit) {
-    const staged = exec(
+    const staged = (await exec(
       "git",
       ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--", ...declaredOutputs],
       pipeline.worktreeDir,
-    );
+    ));
     if (staged.code !== 0) return failure("verifying staged declared output paths", staged);
     const stagedPaths = new Set(staged.stdout.split("\0").filter(Boolean));
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
     if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
   }
-  const unstage = unstageControllerArtifacts(exec, pipeline.worktreeDir);
+  const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
   if (unstage) return unstage;
-  const commit = exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`], pipeline.worktreeDir, controllerCommitIdentityEnv());
-  if (commit.code !== 0) return failure("committing the passed stage", commit);
-  const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  let receipt: StageCommitReceipt | undefined;
+  if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
+    const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
+    if (tree.code !== 0 || !/^[0-9a-f]{40}$/.test(tree.stdout.trim())) return failure("recording the stage commit tree", tree);
+    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
+    writeJsonDurably(receiptFile, receipt);
+  }
+  const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
+    ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
+  if (commit.code !== 0) {
+    return { ...failure("committing the passed stage", commit),
+      commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
+  }
+  const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
+  if (receipt && receiptFile) {
+    return await recoverStageCommit(receiptFile, receipt.parent, head.stdout.trim(), declaredOutputs, exec, pipeline.worktreeDir)
+      ?? { ok: false, error: "the stage commit differs from its durable ownership receipt; preserve the checkout and receipt" };
+  }
   if (!allowCommit) {
-    const committed = exec(
+    const committed = (await exec(
       "git",
       ["diff", "--name-only", "--no-renames", "-z", initialHead.stdout.trim(), head.stdout.trim(), "--", ...declaredOutputs],
       pipeline.worktreeDir,
-    );
+    ));
     if (committed.code !== 0) return failure("verifying committed declared output paths", committed);
     const committedPaths = new Set(committed.stdout.split("\0").filter(Boolean));
     const missing = changedOutputPaths.find((candidate) => !committedPaths.has(candidate));
@@ -627,13 +702,13 @@ export function commitPipelineStage(
   return { ok: true, sha: head.stdout.trim() };
 }
 
-function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): PipelineGitResult | null {
+async function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): Promise<PipelineGitResult | null> {
   try {
-    protectExistingControllerArtifacts(worktreeDir);
+    await protectExistingControllerArtifacts(worktreeDir, exec);
   } catch (error) {
     return { ok: false, error: `protecting controller pipeline artifacts: ${error instanceof Error ? error.message : "unknown error"}` };
   }
-  const result = exec(
+  const result = await exec(
     "git",
     ["reset", "--quiet", "HEAD", "--", ...CONTROLLER_ARTIFACT_GIT_PATHS],
     worktreeDir,
@@ -648,12 +723,12 @@ export type PipelineWorktreeChanges =
 /** Lists the uncommitted paths a pipeline worktree still holds. Closing a
     pipeline (#670) must never discard stage work, so the close only reads this
     — it reports what it left behind instead of resetting or cleaning. */
-export function pipelineWorktreeChanges(
+export async function pipelineWorktreeChanges(
   pipeline: Pick<Pipeline, "worktreeDir">,
   exec: ExecPort,
   limit = 20,
-): PipelineWorktreeChanges {
-  const status = exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
+): Promise<PipelineWorktreeChanges> {
+  const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const paths = status.stdout
     .split("\n")
@@ -668,9 +743,9 @@ export function pipelineWorktreeChanges(
 /** Controlled attributes prove containment independently of repository merge
     drivers. Shadow all merge attributes in a private bare repository that can
     read the lane's objects but writes only its own temporary proof objects. */
-function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, exec: ExecPort,
-  options: { parents?: string[]; resolvedTree?: string; resolvedCommit?: string; candidate?: string } = {}): ExecResult & { resolutionPaths?: string[]; resolutionPreserved?: boolean } {
-  const objects = exec("git", ["rev-parse", "--git-path", "objects"], pipeline.worktreeDir);
+async function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, exec: ExecPort,
+  options: { parents?: string[]; resolvedTree?: string; resolvedCommit?: string; candidate?: string } = {}): Promise<ExecResult & { resolutionPaths?: string[]; resolutionPreserved?: boolean }> {
+  const objects = (await exec("git", ["rev-parse", "--git-path", "objects"], pipeline.worktreeDir));
   if (objects.code !== 0) return objects;
   let proof: string | undefined;
   try {
@@ -688,10 +763,10 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
       GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined,
       GIT_OBJECT_DIRECTORY: undefined, GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
     };
-    const compare = (left: string, right: string) => exec("git", [`--git-dir=${proof}`, "merge-tree", "--write-tree", "--name-only", "-z", "--no-messages",
-      left, right], pipeline.worktreeDir, env);
+    const compare = async (left: string, right: string) => (await exec("git", [`--git-dir=${proof}`, "merge-tree", "--write-tree", "--name-only", "-z", "--no-messages",
+      left, right], pipeline.worktreeDir, env));
     let left = head, right = accepted;
-    let result = compare(left, right);
+    let result = (await compare(left, right));
     const conflicts = new Set<string>();
     const collectConflicts = () => {
       if (result.code === 1) result.stdout.split("\0").slice(1).filter(Boolean).forEach((file) => conflicts.add(file));
@@ -700,17 +775,17 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
     for (const parent of options.parents ?? []) {
       if (result.code !== 0 && result.code !== 1) return result;
       // Intermediate commits and trees remain entirely inside the proof repo.
-      const checkpoint = exec("git", [`--git-dir=${proof}`, "commit-tree", result.stdout.split("\0")[0].trim(),
-        "-p", left, "-p", right, "-m", "accepted merge proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+      const checkpoint = (await exec("git", [`--git-dir=${proof}`, "commit-tree", result.stdout.split("\0")[0].trim(),
+        "-p", left, "-p", right, "-m", "accepted merge proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() }));
       if (checkpoint.code !== 0) return checkpoint;
       left = checkpoint.stdout.trim();
       right = parent;
-      result = compare(left, right);
+      result = (await compare(left, right));
       collectConflicts();
     }
     if (options.resolvedTree && (result.code === 0 || result.code === 1)) {
-      const changed = exec("git", [`--git-dir=${proof}`, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z",
-        "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", result.stdout.split("\0")[0].trim(), options.resolvedTree], pipeline.worktreeDir, env);
+      const changed = (await exec("git", [`--git-dir=${proof}`, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z",
+        "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", result.stdout.split("\0")[0].trim(), options.resolvedTree], pipeline.worktreeDir, env));
       if (changed.code !== 0) return changed;
       const resolutionPaths = [...new Set([...conflicts, ...changed.stdout.split("\0").filter(Boolean)])];
       let resolutionPreserved = false;
@@ -719,35 +794,35 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
         const diff = ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none"];
         let comparable = true;
         for (const file of conflicts) {
-          const delta = exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
-            automaticTree, options.resolvedCommit, "--", file], pipeline.worktreeDir, env);
+          const delta = (await exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
+            automaticTree, options.resolvedCommit, "--", file], pipeline.worktreeDir, env));
           if (delta.code !== 0 && delta.code !== 1) return delta;
           // A binary/conflict choice can equal Git's provisional tree. It
           // needs exact evidence, since that tree encodes no resolution delta.
           if (delta.code === 0) {
-            const exact = exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
-              options.candidate, options.resolvedCommit, "--", file], pipeline.worktreeDir, env);
+            const exact = (await exec("git", [`--git-dir=${proof}`, "--literal-pathspecs", ...diff,
+              options.candidate, options.resolvedCommit, "--", file], pipeline.worktreeDir, env));
             if (exact.code !== 0 && exact.code !== 1) return exact;
             if (exact.code === 1) { comparable = false; break; }
           }
         }
         if (comparable) {
-          const base = exec("git", [`--git-dir=${proof}`, "commit-tree", automaticTree, "-p", left, "-p", right,
-            "-m", "accepted resolution baseline"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          const base = (await exec("git", [`--git-dir=${proof}`, "commit-tree", automaticTree, "-p", left, "-p", right,
+            "-m", "accepted resolution baseline"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() }));
           if (base.code !== 0) return base;
-          const candidateTree = exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.candidate}^{tree}`], pipeline.worktreeDir, env);
+          const candidateTree = (await exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.candidate}^{tree}`], pipeline.worktreeDir, env));
           if (candidateTree.code !== 0) return candidateTree;
-          const resolvedTree = exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.resolvedCommit}^{tree}`], pipeline.worktreeDir, env);
+          const resolvedTree = (await exec("git", [`--git-dir=${proof}`, "rev-parse", `${options.resolvedCommit}^{tree}`], pipeline.worktreeDir, env));
           if (resolvedTree.code !== 0) return resolvedTree;
           // Graft both trees onto the private baseline. This also works with
           // Git 2.39, whose merge-tree has no explicit merge-base option.
-          const candidateProof = exec("git", [`--git-dir=${proof}`, "commit-tree", candidateTree.stdout.trim(), "-p", base.stdout.trim(),
-            "-m", "candidate resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          const candidateProof = (await exec("git", [`--git-dir=${proof}`, "commit-tree", candidateTree.stdout.trim(), "-p", base.stdout.trim(),
+            "-m", "candidate resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() }));
           if (candidateProof.code !== 0) return candidateProof;
-          const resolvedProof = exec("git", [`--git-dir=${proof}`, "commit-tree", resolvedTree.stdout.trim(), "-p", base.stdout.trim(),
-            "-m", "accepted resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() });
+          const resolvedProof = (await exec("git", [`--git-dir=${proof}`, "commit-tree", resolvedTree.stdout.trim(), "-p", base.stdout.trim(),
+            "-m", "accepted resolution proof"], pipeline.worktreeDir, { ...env, ...controllerCommitIdentityEnv() }));
           if (resolvedProof.code !== 0) return resolvedProof;
-          const contained = compare(candidateProof.stdout.trim(), resolvedProof.stdout.trim());
+          const contained = (await compare(candidateProof.stdout.trim(), resolvedProof.stdout.trim()));
           if (contained.code !== 0 && contained.code !== 1) return contained;
           resolutionPreserved = contained.code === 0 && contained.stdout.split("\0")[0].trim() === candidateTree.stdout.trim();
         }
@@ -762,6 +837,42 @@ function compareStageTrees(pipeline: Pipeline, head: string, accepted: string, e
   }
 }
 
+/** Transfer a pass only across clean main integrations. Ancestry alone also
+    admits new lane work. Reconstruct every non-main merge with controlled
+    attributes, so an amended merge or a custom driver cannot hide that work. */
+export async function verifyPassedHeadIntegration(pipeline: Pipeline, passed: string, accepted: string, exec: ExecPort): Promise<
+  { ok: true; passedSha: string; acceptedSha: string; mainSha: string } | { ok: false; error: string }
+> {
+  const literalExec = withLiteralGitObjects(exec);
+  const refuse = (reason: string) => ({ ok: false as const, error: `${reason}; a fresh review is required before accepting this head` });
+  const ancestor = await literalExec("git", ["merge-base", "--is-ancestor", passed, accepted], pipeline.worktreeDir);
+  if (ancestor.code !== 0) return refuse(ancestor.code === 1
+    ? "the previously passed commit is not an ancestor of acceptedSha"
+    : "could not verify the previously passed commit is an ancestor of acceptedSha");
+  const baseBranch = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+  if (!validBaseBranch(baseBranch)) return refuse("could not verify the configured main branch");
+  const main = await literalExec("git", ["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`], pipeline.worktreeDir);
+  const mainSha = main.stdout.trim();
+  if (main.code !== 0 || !/^[0-9a-f]{40}$/i.test(mainSha)) return refuse(`could not verify origin/${baseBranch}`);
+  const introduced = await literalExec("git", ["rev-list", "--parents", accepted, `^${passed}`, `^${mainSha}`], pipeline.worktreeDir);
+  if (introduced.code !== 0) return refuse("could not enumerate changes after the passed head");
+  for (const line of introduced.stdout.trim().split("\n").filter(Boolean)) {
+    const [commit, firstParent, mainParent, ...extra] = line.split(" ");
+    if (extra.length || ![commit, firstParent, mainParent].every((sha) => typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))) {
+      return refuse("acceptedSha contains additional lane work beyond clean main merges");
+    }
+    const fromMain = await literalExec("git", ["merge-base", "--is-ancestor", mainParent, mainSha], pipeline.worktreeDir);
+    if (fromMain.code !== 0) return refuse("acceptedSha contains a merge from outside the configured main branch");
+    const automatic = await compareStageTrees(pipeline, firstParent, mainParent, literalExec);
+    if (automatic.code !== 0) return refuse("acceptedSha contains a merge that cannot be proven clean");
+    const tree = await literalExec("git", ["rev-parse", `${commit}^{tree}`], pipeline.worktreeDir);
+    if (tree.code !== 0 || tree.stdout.trim() !== automatic.stdout.split("\0")[0].trim()) {
+      return refuse("acceptedSha contains additional content or resolutions in a main merge");
+    }
+  }
+  return { ok: true, passedSha: passed, acceptedSha: accepted, mainSha };
+}
+
 /** `git cherry` strips whitespace before comparing patch IDs. Keep its fast
     history scan, then require the changed file paths, modes, hunk section and
     exact added / removed lines and context to agree before treating a
@@ -773,17 +884,17 @@ interface ExactCommitPatch {
   locations: Array<{ path: string; start: number }>;
 }
 
-function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): ExactCommitPatch | null | { error: string } {
+async function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): Promise<ExactCommitPatch | null | { error: string }> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-patch-"));
   const patchPath = path.join(scratch, "patch.diff");
   try {
-    // Keep arbitrarily large binary patches off spawnSync's bounded stdout
+    // Keep arbitrarily large binary patches off the executor's bounded stdout
     // buffer. The comparison needs the full patch, so read Git's file output
     // only after Git has completed successfully.
-    const patch = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
-      "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", `--output=${patchPath}`, commit], pipeline.worktreeDir);
+    const patch = (await exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "--no-renames",
+      "--ignore-submodules=none", "--binary", "--full-index", "--unified=3", `--output=${patchPath}`, commit], pipeline.worktreeDir));
     if (patch.code !== 0) return { error: failure("reading accepted replay patch", patch).error };
-    const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", commit], pipeline.worktreeDir);
+    const names = (await exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", commit], pipeline.worktreeDir));
     if (names.code !== 0) return { error: failure("reading accepted replay paths", names).error };
     const paths = names.stdout.split("\0").filter(Boolean);
     const evidence: string[] = [];
@@ -826,19 +937,19 @@ function exactCommitPatch(pipeline: Pipeline, commit: string, exec: ExecPort): E
 /** Map a replay hunk's parent-side line to the accepted commit's parent.
     Changes before the hunk shift its coordinate; a change overlapping the
     hunk start makes the location unprovable and must fail closed. */
-export function mapReplayPatchLocation(
+export async function mapReplayPatchLocation(
   pipeline: Pipeline,
   acceptedCommit: string,
   replayCommit: string,
   location: ExactCommitPatch["locations"][number],
   exec: ExecPort,
-): number | null | { error: string } {
-  const acceptedParent = exec("git", ["rev-parse", `${acceptedCommit}^`], pipeline.worktreeDir);
+): Promise<number | null | { error: string }> {
+  const acceptedParent = (await exec("git", ["rev-parse", `${acceptedCommit}^`], pipeline.worktreeDir));
   if (acceptedParent.code !== 0) return { error: failure("reading accepted patch parent", acceptedParent).error };
-  const replayParent = exec("git", ["rev-parse", `${replayCommit}^`], pipeline.worktreeDir);
+  const replayParent = (await exec("git", ["rev-parse", `${replayCommit}^`], pipeline.worktreeDir));
   if (replayParent.code !== 0) return { error: failure("reading replay patch parent", replayParent).error };
-  const diff = exec("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
-    acceptedParent.stdout.trim(), replayParent.stdout.trim(), "--", location.path], pipeline.worktreeDir);
+  const diff = (await exec("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0",
+    acceptedParent.stdout.trim(), replayParent.stdout.trim(), "--", location.path], pipeline.worktreeDir));
   if (diff.code !== 0) return { error: failure("mapping replay hunk location", diff).error };
   let delta = 0;
   for (const line of diff.stdout.split("\n")) {
@@ -858,42 +969,43 @@ export function mapReplayPatchLocation(
     ancestry does. Merge commits have no cherry patch-id; unique merge content
     therefore needs the controlled tree proof. Record the builder's unchanged
     tree with both parents, then CAS the ref. Delivery still owns publication. */
-export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort): PipelineGitResult {
+export async function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exec: ExecPort,
+  destination?: { branch: string; head: string; prepared: (sha: string) => void | Promise<void> }): Promise<PipelineGitResult> {
   const accepted = pipeline.lastPassedCommit;
   if (!/^[0-9a-f]{40}$/i.test(head) || !/^[0-9a-f]{40}$/i.test(accepted)) {
     return { ok: false, error: "reconciling stage history requires exact commit SHAs" };
   }
-  const local = currentPipelineBranchHead(pipeline, exec);
+  const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
-  const branch = exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir);
+  const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
   if (branch.code !== 0) return failure("pinning the reconciliation branch", branch);
   const ref = branch.stdout.trim();
-  const tree = exec("git", ["rev-parse", `${head}^{tree}`], pipeline.worktreeDir);
+  const tree = (await exec("git", ["rev-parse", `${head}^{tree}`], pipeline.worktreeDir));
   if (tree.code !== 0) return failure("reading the stage tree", tree);
-  const cherry = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", head, accepted], pipeline.worktreeDir);
+  const cherry = (await exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", head, accepted], pipeline.worktreeDir));
   if (cherry.code !== 0) return failure("checking accepted patch history", cherry);
   const cherryLines = cherry.stdout.split("\n").filter((line) => line.startsWith("+ ") || line.startsWith("- "));
   const retainedByCherry = cherryLines.filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
   const replayedPatches: Array<{ commit: string; patch: ExactCommitPatch }> = [];
   const acceptedPatches = new Map<string, ExactCommitPatch>();
   for (const acceptedCommit of retainedByCherry) {
-    const patch = exactCommitPatch(pipeline, acceptedCommit, exec);
+    const patch = (await exactCommitPatch(pipeline, acceptedCommit, exec));
     if (patch && "error" in patch) return { ok: false, error: patch.error };
     if (patch) acceptedPatches.set(acceptedCommit, patch);
   }
   if (retainedByCherry.length) {
-    const candidates = exec("git", ["rev-list", "--no-merges", `${accepted}..${head}`], pipeline.worktreeDir);
+    const candidates = (await exec("git", ["rev-list", "--no-merges", `${accepted}..${head}`], pipeline.worktreeDir));
     if (candidates.code !== 0) return failure("checking replayed commit patches", candidates);
     for (const candidate of candidates.stdout.split("\n").filter(Boolean)) {
       // Main-only commits can contain large unrelated assets. Read their small
       // path list first and avoid constructing a full patch unless it could
       // contain one of the accepted changes.
-      const names = exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", candidate], pipeline.worktreeDir);
+      const names = (await exec("git", ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--name-only", "-r", "-z", candidate], pipeline.worktreeDir));
       if (names.code !== 0) return failure("reading replay candidate paths", names);
       const candidatePaths = new Set(names.stdout.split("\0").filter(Boolean));
       if (![...acceptedPatches.values()].some((patch) => patch.paths.some((file) => candidatePaths.has(file)))) continue;
-      const patch = exactCommitPatch(pipeline, candidate, exec);
+      const patch = (await exactCommitPatch(pipeline, candidate, exec));
       if (patch && "error" in patch) return { ok: false, error: patch.error };
       if (patch) replayedPatches.push({ commit: candidate, patch });
     }
@@ -916,7 +1028,7 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
           sameLocation = false;
           break;
         }
-        const mapped = mapReplayPatchLocation(pipeline, acceptedCommit, replay.commit, replayLocation, exec);
+        const mapped = (await mapReplayPatchLocation(pipeline, acceptedCommit, replay.commit, replayLocation, exec));
         if (mapped && typeof mapped === "object") return { ok: false, error: mapped.error };
         if (mapped === null || mapped !== acceptedPatch.locations[hunk].start) {
           sameLocation = false;
@@ -931,19 +1043,19 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
     if (matched === -1) dropped.push(acceptedCommit);
     else replayedPatches.splice(matched, 1);
   }
-  const merges = exec("git", ["rev-list", "--min-parents=2", "--parents", `${head}..${accepted}`], pipeline.worktreeDir);
+  const merges = (await exec("git", ["rev-list", "--min-parents=2", "--parents", `${head}..${accepted}`], pipeline.worktreeDir));
   if (merges.code !== 0) return failure("checking accepted merge history", merges);
   let replayedCheckpoints: string[] | undefined;
   const droppedMerges: string[] = [];
   for (const line of merges.stdout.trim().split("\n").filter(Boolean)) {
     const [merge, firstParent, ...otherParents] = line.split(" ");
-    const trees = exec("git", ["rev-parse", `${merge}^{tree}`], pipeline.worktreeDir);
+    const trees = (await exec("git", ["rev-parse", `${merge}^{tree}`], pipeline.worktreeDir));
     if (trees.code !== 0) return failure("checking accepted merge content", trees);
     const mergeTree = trees.stdout.trim().split("\n")[0];
     // Compare against all automatically merged parents: a first-parent-only
     // baseline misses resolutions that exclude side-parent changes.
-    const reconstructed = compareStageTrees(pipeline, firstParent, otherParents[0], exec,
-      { parents: otherParents.slice(1), resolvedTree: mergeTree, resolvedCommit: accepted, candidate: head });
+    const reconstructed = (await compareStageTrees(pipeline, firstParent, otherParents[0], exec,
+      { parents: otherParents.slice(1), resolvedTree: mergeTree, resolvedCommit: accepted, candidate: head }));
     if (reconstructed.code !== 0 && reconstructed.code !== 1) return failure("reconstructing accepted merge content", reconstructed);
     const resolutionPaths = reconstructed.resolutionPaths;
     if (!resolutionPaths || resolutionPaths.some((file) => file.includes("\uFFFD"))) {
@@ -951,7 +1063,7 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
     }
     if (resolutionPaths.length === 0 || reconstructed.resolutionPreserved) continue;
     if (!replayedCheckpoints) {
-      const candidates = exec("git", ["rev-list", `${accepted}..${head}`], pipeline.worktreeDir);
+      const candidates = (await exec("git", ["rev-list", `${accepted}..${head}`], pipeline.worktreeDir));
       if (candidates.code !== 0) return failure("checking replayed merge history", candidates);
       replayedCheckpoints = candidates.stdout.trim().split("\n").filter((sha) => sha && sha !== head);
     }
@@ -960,12 +1072,12 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
     // an older main revision can coincidentally match a later resolution.
     let preserved = false;
     for (const replay of [head, ...replayedCheckpoints]) {
-      const compared = exec("git", ["--literal-pathspecs", "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none",
-        replay, accepted, "--", ...resolutionPaths], pipeline.worktreeDir);
+      const compared = (await exec("git", ["--literal-pathspecs", "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none",
+        replay, accepted, "--", ...resolutionPaths], pipeline.worktreeDir));
       if (compared.code !== 0 && compared.code !== 1) return failure("comparing replayed merge resolutions", compared);
       if (compared.code === 0) {
         if (replay !== head) {
-          const parents = exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", replay, merge], pipeline.worktreeDir);
+          const parents = (await exec("git", ["-c", "diff.ignoreSubmodules=none", "cherry", replay, merge], pipeline.worktreeDir));
           if (parents.code !== 0) return failure("checking resolution checkpoint ancestry", parents);
           if (parents.stdout.split("\n").some((line) => line.startsWith("+ "))) continue;
         }
@@ -979,47 +1091,51 @@ export function reconcilePipelineStageHead(pipeline: Pipeline, head: string, exe
   if (dropped.length > 0) {
     // Squashed patches may still be preserved in the final tree. Unique merge
     // resolutions were checked separately, including exclusions and conflicts.
-    const merged = compareStageTrees(pipeline, head, accepted, exec);
+    const merged = (await compareStageTrees(pipeline, head, accepted, exec));
     if (merged.code !== 0 && merged.code !== 1) return failure("comparing accepted stage content", merged);
     missing ||= merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim();
   }
   if (missing) {
     return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${[...dropped, ...droppedMerges].join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
-  const commit = exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
-    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv());
+  const commit = (await exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
+    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
   if (commit.code !== 0) return failure("recording the stage reconciliation merge", commit);
   const sha = commit.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "reconciliation did not produce an exact commit SHA" };
-  const current = currentPipelineBranchHead(pipeline, exec);
+  const current = (await currentPipelineBranchHead(pipeline, exec));
   if (!current.ok) return current;
   if (current.sha !== head) return { ok: false, error: "the stage head moved during history reconciliation" };
-  const currentBranch = exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir);
+  const currentBranch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
   if (currentBranch.code !== 0 || currentBranch.stdout.trim() !== ref) {
     return { ok: false, error: "the stage branch moved during history reconciliation" };
   }
-  const update = exec("git", ["update-ref", "-m", "pipeline: reconcile rebased stage", ref, sha, head], pipeline.worktreeDir);
+  // Branch adoption preserves the stage's own ref. Its caller owns and fences
+  // the destination, and durably records this merge before changing that ref.
+  await destination?.prepared(sha);
+  const update = await exec("git", ["update-ref", "-m", "pipeline: reconcile rebased stage", destination ? `refs/heads/${destination.branch}` : ref, sha, destination?.head ?? head], pipeline.worktreeDir);
   if (update.code !== 0) return failure("fencing the stage reconciliation merge", update);
   return { ok: true, sha };
 }
 
-export function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
+export async function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
   if (!pipeline.lastPassedCommit) return { ok: false, error: "the pipeline has no passed-stage commit" };
-  const reset = exec("git", ["reset", "--hard", pipeline.lastPassedCommit], pipeline.worktreeDir);
+  const reset = (await exec("git", ["reset", "--hard", pipeline.lastPassedCommit], pipeline.worktreeDir));
   if (reset.code !== 0) return failure("resetting the pipeline stage", reset);
-  const clean = exec("git", ["clean", "-fd"], pipeline.worktreeDir);
+  const clean = (await exec("git", ["clean", "-fd"], pipeline.worktreeDir));
   if (clean.code !== 0) return failure("cleaning the pipeline stage", clean);
   return { ok: true, sha: pipeline.lastPassedCommit };
 }
 
 /** Returns the clean checked-out SHA only when this worktree still owns its
     persisted branch. Review evidence must name this exact revision. */
-export function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
+export async function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
+  const literalExec = withLiteralGitObjects(exec);
   if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid" };
-  const status = exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
+  const status = (await literalExec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   if (status.stdout.trim()) return { ok: false, error: "the pipeline worktree has uncommitted changes; choose whether to commit or discard them before retrying review" };
-  const branch = exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
+  const branch = (await literalExec("git", ["branch", "--show-current"], pipeline.worktreeDir));
   if (branch.code !== 0) return failure("checking the pipeline branch", branch);
   const checkedOut = branch.stdout.trim();
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
@@ -1027,7 +1143,7 @@ export function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): P
   if (checkedOut !== pipeline.branch && checkedOut !== deliveryBranch) {
     return { ok: false, error: "the pipeline worktree is not checked out on its pipeline or delivery branch" };
   }
-  const head = exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+  const head = (await literalExec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0) return failure("resolving the pipeline branch HEAD", head);
   const sha = head.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "resolving the pipeline branch HEAD: expected an exact commit SHA" };
@@ -1043,18 +1159,128 @@ export type PipelineRemoteHeadResult =
     read is time-bounded like the publication read: an unbounded `ls-remote`
     waited out a two-minute SSH connect timeout while holding the pipeline
     mutation (#1692). */
-export function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): PipelineRemoteHeadResult {
+export async function currentPipelineRemoteBranchHead(pipeline: Pipeline, exec: ExecPort): Promise<PipelineRemoteHeadResult> {
   if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid", transient: false };
-  const remote = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
+  const remote = (await readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch"));
   if (!remote.ok) return { ok: false, error: remote.error, transient: networkFailureIsTransient(remote.error) };
   if (!/^[0-9a-f]{40}$/i.test(remote.sha)) return { ok: false, error: "the remote pipeline branch has no exact commit SHA", transient: false };
   return { ok: true, sha: remote.sha };
 }
 
-export type PipelinePublishResult =
-  | { ok: true; sha: string; remote: "published" | "unavailable" }
-  | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
-  | { ok: false; error: string };
+export type PipelinePublishResult = PipelinePublicationResult;
+
+/** A captured stream can end before PEM's footer. Consume an opened block
+    through EOF before the shared redactor and before any output bounding. */
+function redactPublicationText(text: string): string {
+  return redactMonitorText(text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+    "[redacted-private-key]"));
+}
+
+function redactPublicationOutput(stdout: string, stderr: string): string {
+  const streams = [stdout, stderr];
+  const openers = streams.map((stream) => stream.search(/-----BEGIN [A-Z ]*PRIVATE KEY-----/));
+  // Captured streams have no shared ordering. Even a complete armor block
+  // can have its body on the other stream. Once a key opens, only its own
+  // prefix is proven safe; the footer cannot prove the other bytes safe.
+  // With openers on both streams, either prefix can contain the other key's
+  // body. No captured prefix is safe to retain in that case.
+  if (openers.every((index) => index !== -1)) return "[redacted-private-key]";
+  if (openers.some((index) => index !== -1)) return streams.map((stream, i) => openers[i] === -1 ? ""
+    : redactPublicationText(`${stream.slice(0, openers[i])}[redacted-private-key]`)).join("\n").trim();
+  return redactPublicationText(`${stdout}\n${stderr}`).trim();
+}
+
+function publicationFailureDetail(failure: PipelinePublicationFailure): string {
+  const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
+  return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
+}
+
+/** The hook's verdict for one member of a group it runs at once (a native
+    Codex version), `pre-push: <check>: failed (<code>) after <n> s`. */
+const HOOK_MEMBER_FAILED = /^pre-push: ([^;:]{1,60}): failed \(/;
+/** The last phase the hook announced with its own `pre-push: <phase>` marker,
+    or the group member it last named as failed after that. A member that
+    passed is never a phase. */
+export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
+  for (const line of failure.outputTail.split("\n").map((line) => line.trim()).reverse()) {
+    const member = HOOK_MEMBER_FAILED.exec(line);
+    if (member) return member[1]!;
+    if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
+  }
+  return null;
+}
+
+/** What stopped a publication, in one line a person can act on. The hook's
+    phase markers name the phase; `(fail)` lines name tests. */
+export function publicationFailureCause(failure: PipelinePublicationFailure): string {
+  const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
+  if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
+  const lines = failure.outputTail.split("\n").map((line) => line.trim());
+  const phase = publicationFailurePhase(failure);
+  const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ")).map((line) => line.slice(7).replace(/ \[[\d.]+m?s\]$/, "")))];
+  const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
+  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
+  const last = lines.filter(Boolean).at(-1);
+  return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
+}
+
+/** What a publication's push may take, its repository hook included. */
+const PUBLICATION_PUSH_TIMEOUT_MS = 900_000;
+/** Left after the hook's deadline for git to send the pack. */
+const PUBLICATION_PACK_MARGIN_MS = 60_000;
+
+/** The hook's line for a decisive check its push budget stopped before a
+    verdict (NO_VERDICT_PREFIX in scripts/local-gate.ts): the push was
+    interrupted, it was not refused. */
+const HOOK_NO_VERDICT = /^pre-push: no verdict within the push budget of (\d+) s: "([^"\n]{1,80})"/m;
+/** The budget and the check the hook stopped, from its own no-verdict line. */
+export function hookBudgetStop(output: string): { ms: number; check: string } | null {
+  const match = HOOK_NO_VERDICT.exec(output);
+  return match ? { ms: Number(match[1]) * 1000, check: match[2]! } : null;
+}
+
+/** A push that was stopped before it reached the remote, in one line: what
+    ended it and which phase the hook had announced. Evidence is absent when
+    the Viewer itself died with the push. */
+export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
+  const phase = failure ? publicationFailurePhase(failure) : null;
+  if (failure?.hookBudgetMs) {
+    const budget = `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out`;
+    // The check the hook named is exact; the last phase marker is a group at best.
+    if (failure.hookStoppedCheck) return `${budget} before its "${failure.hookStoppedCheck}" check reached a verdict, and the push did not reach the remote`;
+    return `${budget}${phase ? ` while its "${phase}" phase was still running` : ""}; it stopped without a verdict and the push did not reach the remote`;
+  }
+  const ended = failure?.timedOutMs ? `the push ran past its ${Math.round(failure.timedOutMs / 60_000)}-minute limit`
+    : failure?.signal ? `the push was ended by ${failure.signal}` : "the push was interrupted";
+  return `${ended}${phase ? ` in the hook's "${phase}" phase` : ""} and did not reach the remote`;
+}
+
+/** A repository hook is the project's own gate and runs as it would from a
+    person's shell. The Viewer's private settings (its interface language, its
+    launcher handoff, its token, its state owner) are no part of that: a test
+    the hook runs reads them and fails for a reason no branch can fix. Gate
+    slot and privacy settings are the hook's own inputs and stay, and so does
+    a publication identity or commit guard handed to this process. Anything
+    else a publication command needs (forge credentials, say) is spread over
+    this result, so the Viewer's settings are removed first. */
+export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.env): Partial<NodeJS.ProcessEnv> {
+  const env: Partial<NodeJS.ProcessEnv> = {};
+  for (const key of Object.keys(source)) {
+    if (key === "NODE_ENV" || key === "NEXT_PHASE" || key === "NEXT_RUNTIME" || /^__NEXT_/.test(key)
+      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$|(?:LLV|DELEGATUS)_(?:AGENT_CPU$|CPU_PRESSURE|WORK_(?:SCOPE_)?CPU_QUOTA$))/.test(key))) env[key] = undefined;
+  }
+  return env;
+}
+
+/** Tracked files the accepted head changes against the base branch as this
+    worktree last fetched it. Null when the comparison cannot be made. */
+async function publicationChangedFiles(pipeline: Pipeline, acceptedSha: string, exec: ExecPort): Promise<number | null> {
+  const base = await exec("git", ["merge-base", acceptedSha, `refs/remotes/origin/${pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH}`], pipeline.worktreeDir);
+  const from = base.code === 0 && /^[0-9a-f]{40}$/i.test(base.stdout.trim()) ? base.stdout.trim() : null;
+  if (!from) return null;
+  const diff = await exec("git", ["diff", "--no-renames", "--name-only", from, acceptedSha], pipeline.worktreeDir);
+  return diff.code === 0 ? diff.stdout.split("\n").filter(Boolean).length : null;
+}
 
 const REMOTE_READ_TIMEOUT = "5s";
 
@@ -1081,17 +1307,17 @@ export function pipelinePublicationInFlight(pipeline: Pipeline): PipelinePublish
     the retry loop, so retrying or sleeping inside this synchronous adapter only
     multiplies event-loop stalls. `timeout` exists in both the runtime image and
     the Linux host namespace used by agent shims. */
-function readRemotePipelineBranch(
+async function readRemotePipelineBranch(
   pipeline: Pipeline,
   exec: ExecPort,
   step: string,
-): { ok: true; sha: string } | { ok: false; error: string } {
+): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
   if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
-  const result = exec(
+  const result = (await exec(
     "timeout",
     ["--signal=KILL", REMOTE_READ_TIMEOUT, "git", "ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
     pipeline.worktreeDir,
-  );
+  ));
   if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
   if (killedAtBound(result)) {
     return { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` };
@@ -1111,16 +1337,32 @@ export interface PipelinePublishRequest {
 /** Acquire a kernel lock on the parent's open file description BEFORE any
     publisher child exists. Descriptor 3 is inherited explicitly by each Git
     child, so parent death cannot open a pre-lock launch window. */
-function acquirePublicationFileLock(lock: string): number | null {
+export function assertInheritedPipelineLockSupport(platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") throw new Error("Pipeline Git requires inherited kernel locks; run Delegatus under WSL 2 on Windows");
+}
+
+export async function acquirePublicationFileLock(lock: string): Promise<number | null> {
+  assertInheritedPipelineLockSupport();
   let descriptor: number;
   try { descriptor = fs.openSync(lock, "a", 0o600); }
-  catch { return null; }
+  catch (error) { throw new Error(`Pipeline publication lock could not be opened: ${(error as NodeJS.ErrnoException).code ?? "unknown error"}`); }
   try {
-    const result = spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] });
-    if (result.status === 0) return descriptor;
-  } catch { /* Unsupported locking fails closed. */ }
+    const held = tryLockFenceExclusive({ fd: descriptor, filename: lock });
+    if (held) {
+      // POSIX locks follow the inherited open file description. Closing the
+      // parent's descriptor leaves any still-owned child holding the fence.
+      return descriptor;
+    }
+  } catch {
+    fs.closeSync(descriptor);
+    throw new Error("Pipeline kernel locking is unavailable in this runtime");
+  }
   fs.closeSync(descriptor);
   return null;
+}
+
+export function releasePublicationFileLock(descriptor: number): void {
+  fs.closeSync(descriptor);
 }
 
 function publicationLockIdentity(descriptor: number): string {
@@ -1129,13 +1371,25 @@ function publicationLockIdentity(descriptor: number): string {
 }
 
 async function withPublicationFileLock<T>(lock: string, operation: () => Promise<T>, expectedIdentity: string): Promise<{ locked: true; value: T } | { locked: false }> {
-  const descriptor = acquirePublicationFileLock(lock);
+  const descriptor = await acquirePublicationFileLock(lock);
   if (descriptor === null) return { locked: false };
   try {
     if (publicationLockIdentity(descriptor) !== expectedIdentity) return { locked: false };
     return { locked: true, value: await operation() };
   }
-  finally { fs.closeSync(descriptor); }
+  finally { releasePublicationFileLock(descriptor); }
+}
+
+export function pipelinePublicationFence(pipeline: Pipeline): string {
+  const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+  const delivery = pipeline.delivery;
+  return crypto.createHash("sha256").update(JSON.stringify({ state: pipeline.state, closed: pipeline.closedAt, hidden: pipeline.hiddenAt,
+    control: pipeline.controlGeneration,
+    cursor: pipeline.cursor, stages: pipeline.stages, head: pipeline.lastPassedCommit,
+    branch: pipeline.branch, worktree: pipeline.worktreeDir,
+    attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
+    delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null })).digest("hex");
 }
 
 /**
@@ -1159,11 +1413,33 @@ async function withPublicationFileLock<T>(lock: string, operation: () => Promise
  * to, which is a different fact from a failed publication and never a stall on
  * its own.
  */
+const PUBLICATION_INSTALL_SUBJECT = "publication install";
+
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  const descriptor = acquirePublicationFileLock(lock);
+  let descriptor: number | null;
+  try {
+    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    descriptor = await acquirePublicationFileLock(lock);
+  } catch (error) {
+    const result = { ok: false as const, error: error instanceof Error ? error.message : "Pipeline locking unavailable" };
+    const queued = pipeline.delivery?.operation;
+    if (queued?.state === "pending") await withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      const delivery = current?.delivery;
+      if (!current || !delivery || delivery.epoch !== pipeline.delivery!.epoch
+        || delivery.operation?.id !== queued.id || delivery.operation.state !== "pending"
+        || delivery.operation.sha !== request.acceptedSha) return;
+      // Nothing could execute before locking. Record that known refusal on
+      // this admission without replacing a newer reservation or lane detail.
+      delivery.operation = { ...delivery.operation, state: "settled", result };
+      if (current.stateDetail === "publication accepted; remote verification pending") current.stateDetail = result.error;
+      deliveryJournal(current, "recovery", `publication refused before execution: ${result.error}`);
+      tx.put(current);
+    });
+    return result;
+  }
   if (descriptor === null) {
     const current = findPipelineRecord(pipeline.id);
     const error = deliveryOwnerError(current ?? pipeline, current);
@@ -1175,6 +1451,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const lockIdentity = publicationLockIdentity(descriptor);
   let descriptorOpen = true;
   let reserved = false;
+  let watch: ReturnType<typeof setInterval> | undefined;
   try {
     const reservation = await withDeliveryMutationAsync((tx) => {
       const current = tx.get(pipeline.id);
@@ -1190,8 +1467,21 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
+      if (previous?.state === "pending" && ((previous.fence && previous.fence !== pipelinePublicationFence(current))
+        || (!previous.fence && current.state === "paused"))) {
+        const error = "publication admission superseded before execution";
+        current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        deliveryJournal(current, "recovery", error); tx.put(current);
+        return { error };
+      }
+      if (current.state === "closed" || current.closedAt || current.hiddenAt) {
+        const error = "publication superseded by lane closure";
+        if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        deliveryJournal(current, "recovery", error); tx.put(current);
+        return { error };
+      }
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey } : {}), state: "running",
+        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1200,20 +1490,133 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (reservation.waiting) return reservation.waiting;
     if (!reservation.pipeline) return { ok: false, error: reservation.error! };
     reserved = true;
+    const fence = pipelinePublicationFence(reservation.pipeline);
+    const abort = new AbortController();
+    let writeStarted = false;
+    const matches = (current: Pipeline | null) => current !== null && pipelinePublicationFence(current) === fence;
+    const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
+    const superseded = (): PipelinePublishResult => writeStarted
+      ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
+        detail: "publication superseded after a remote write began; reconcile its outcome" }
+      : { ok: false, error: "publication superseded before a remote write" };
+    let progressAt = performance.now();
+    watch = setInterval(() => {
+      revalidate();
+      // A live controller can be waiting on a long repository hook. Keep its
+      // lock progress fresh; a dead controller stops touching it immediately.
+      if (!abort.signal.aborted && performance.now() - progressAt >= 1000) {
+        try { fs.futimesSync(descriptor, new Date(), new Date()); progressAt = performance.now(); }
+        catch { abort.abort(); }
+      }
+    }, 50);
+    let failureEvidence: PipelinePublicationFailure | undefined;
+    const showInstallHold = (reason: string | null, replaced: { detail: string | null } | null) => withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      if (!current || !matches(current)) return;
+      if (reason) current.stateDetail = reason;
+      else if (replaced && isCpuPressureDetail(current.stateDetail, PUBLICATION_INSTALL_SUBJECT)) current.stateDetail = replaced.detail;
+      else return;
+      tx.put(current);
+    });
+    const waitForPublicationInstall = async (): Promise<boolean> => {
+      let shown: Promise<void> = Promise.resolve();
+      let replaced: { detail: string | null } | null = null;
+      const admitted = await waitForCpuPressure(machineCpuPressureGate(), { subject: PUBLICATION_INSTALL_SUBJECT, signal: abort.signal,
+        pollMs: machineCpuPressurePollMs(),
+        onReason: (reason) => {
+          replaced ??= { detail: findPipelineRecord(pipeline.id)?.stateDetail ?? null };
+          shown = shown.then(() => showInstallHold(reason, null));
+        } });
+      await shown;
+      // The detail the hold replaced comes back: settlement reads it.
+      if (replaced) await showInstallHold(null, replaced);
+      return admitted && !abort.signal.aborted;
+    };
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
     // lock stays held until that child is gone; takeover must prove it is free.
-    const fencedExec: ExecPort = (command, args, cwd) => {
+    const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       fs.futimesSync(descriptor, new Date(), new Date());
-      if (exec !== realExec) return exec(command, args, cwd);
-      const child = spawnSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", descriptor] });
-      return { code: child.status, stdout: child.stdout ?? "", stderr: child.stderr ?? String(child.error ?? ""), signal: child.signal };
+      const preparingDependencies = command === "bun" && args[0] === "install";
+      // The push runs the repository's pre-push gates; both leave the
+      // production service for a work scope. Its PID, group and the inherited
+      // lock descriptor stay this command's.
+      let launch = { command, args };
+      if ((command === "git" && args[0] === "push") || preparingDependencies) {
+        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : "publish-push" }); }
+        catch (error) {
+          if (!(error instanceof CpuContainmentUnavailable)) throw error;
+          failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+            code: 1, signal: null, durationMs: 0, outputTail: error.message };
+          return { code: 1, stdout: "", stderr: error.message };
+        }
+      }
+      // Preparing dependencies is heavy work that starts only when CPU
+      // pressure allows; the push is held by nothing, its gates take slots
+      // through gate-slot.sh. The lane shows the reason while it waits, and a
+      // close or takeover aborts the wait before any child exists.
+      if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
+      if (command === "git" && args[0] === "push") writeStarted = true;
+      const started = performance.now();
+      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
+      if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
+        // Redact the whole output before taking its tail; clipping first can
+        // remove the prefix that identifies a secret to the shared redactor.
+        const output = redactPublicationOutput(executed.stdout, executed.stderr);
+        const tail = output.slice(-4000);
+        const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
+          .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Long test diagnostics must not erase the hook's phase markers.
+        const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
+        const hookStop = preparingDependencies ? null : hookBudgetStop(output);
+        const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
+        failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+          code: executed.code, signal: executed.signal ?? null,
+          durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
+          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
+      }
+      return executed;
     };
     let result: PipelinePublishResult;
-    try { result = executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
-      publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null }); }
-    catch (error) { result = { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }; }
-    fs.closeSync(descriptor);
+    try {
+      result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
+        publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null }));
+      // A refusal of a head that changes nothing cannot be the stage's doing.
+      if (failureEvidence && !result.ok) {
+        const changed = await publicationChangedFiles(reservation.pipeline, request.acceptedSha, fencedExec);
+        if (changed !== null) failureEvidence = { ...failureEvidence, changedFiles: changed };
+      }
+    }
+    catch (error) { result = writeStarted
+      ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
+      : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
+    revalidate();
+    if (abort.signal.aborted) result = superseded();
+    if (!result.ok) result = { ...result, error: redactBounded(redactPublicationText(result.error), 4500) };
+    else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(redactPublicationText(result.detail), 4500) };
+    if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
+      const detail = publicationFailureDetail(failureEvidence);
+      result = result.ok ? { ...result, failure: failureEvidence, detail }
+        : { ...result, failure: failureEvidence, error: detail };
+      // A hook that stopped at its budget judged nothing: retried like a push
+      // its time limit killed, never parked as the stage's own refusal.
+      if (!result.ok && failureEvidence.hookBudgetMs) result = { ...result, outcome: "not-landed" };
+    }
+    clearInterval(watch); watch = undefined;
+    // Retain the actual child outcome before trying the kernel fence again.
+    // Another inherited holder can delay settlement without erasing evidence.
+    await withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      if (current?.delivery?.operation?.id === reservation.operationId
+        && current.delivery.epoch === reservation.pipeline.delivery!.epoch && current.delivery.operation.executor) {
+        current.delivery.operation.executor.result = result;
+        current.delivery.operation.executor.finished = true;
+        tx.put(current);
+      }
+    });
+    releasePublicationFileLock(descriptor);
     descriptorOpen = false;
     // Reacquisition proves that no orphan child retained the inherited lock.
     const completed = await withPublicationFileLock(lock, () => withDeliveryMutationAsync<PipelinePublishResult>((tx) => {
@@ -1221,10 +1624,20 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const delivery = current?.delivery;
       if (!current || !delivery || delivery.operation?.id !== reservation.operationId
         || delivery.epoch !== reservation.pipeline.delivery!.epoch) return { ok: false, error: "publication reservation changed; reconcile the remote before retrying" };
+      if (!matches(current)) result = superseded();
       // A lost reply after push must keep fencing takeover.
       if (delivery.operation.executor) delivery.operation.executor.finished = true;
-      if (result.ok && result.remote === "unreachable" && result.uncertain) { tx.put(current); return result; }
+      if (result.ok && result.remote === "unreachable" && result.uncertain) {
+        deliveryJournal(current, "recovery", result.detail);
+        tx.put(current); return result;
+      }
       delivery.operation = { ...delivery.operation, state: "settled", result };
+      const awaitingPass = delivery.operation.passedStage && current.cursor?.state === "committing"
+        && current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.verdict?.status === "pass";
+      if (matches(current) && (current.stateDetail === "publication accepted; remote verification pending" || awaitingPass)) current.stateDetail = result.ok
+        ? result.remote === "published" ? null : "publication checked; remote is unavailable"
+        : result.error;
+      deliveryJournal(current, "recovery", result.ok ? `publication verified: ${result.remote}` : `publication refused: ${result.error}`);
       if (result.ok && result.remote === "published") current.publishedCommit = result.sha;
       tx.put(current);
       return result;
@@ -1243,8 +1656,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     // After reservation, even a store lease refusal cannot prove non-execution.
     if (!reserved) throw error;
     return { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
-      detail: `publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}` };
-  } finally { if (descriptorOpen) fs.closeSync(descriptor); }
+      detail: redactBounded(redactPublicationText(`publication settlement is unconfirmed; reconcile the reserved operation: ${String(error)}`), 4500) };
+  } finally { if (watch) clearInterval(watch); if (descriptorOpen) releasePublicationFileLock(descriptor); }
 }
 
 /** Explicit recovery reads the remote only after proving the previous executor
@@ -1260,17 +1673,44 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
   // through its final Git command. A free lock therefore proves quiescence
   // even when a live Viewer could not persist its finished marker.
   const reconciled = await withPublicationFileLock(executor.lock, async () => {
-    const remote = readRemotePipelineBranch(pipeline, exec, "reconciling the interrupted publisher");
-    if (!remote.ok) return remote.error;
+    const remote = (await readRemotePipelineBranch(pipeline, exec, "reconciling the interrupted publisher"));
+    if (!remote.ok) return redactBounded(redactPublicationText(remote.error), 4500);
     return withDeliveryMutationAsync((tx) => {
       const current = tx.get(id);
       if (!current?.delivery || current.delivery.epoch !== expectedEpoch || current.delivery.operation?.id !== operation.id
-        || current.delivery.operation.state !== "running") return "publication changed while reconciling";
+        || current.delivery.operation.state !== "running" || current.delivery.operation.epoch !== expectedEpoch
+        || current.delivery.operation.sha !== operation.sha) return "publication changed while reconciling";
+      // The publisher can persist its outcome between the initial record read
+      // and quiescence. Use the fenced transaction's latest durable evidence.
+      const retained = current.delivery.operation.executor?.result;
+      const failure = retained?.failure ? { ...retained.failure,
+        outputTail: redactPublicationText(retained.failure.outputTail).slice(-4000) } : undefined;
       const result: PipelinePublishResult = remote.sha === operation.sha
         ? { ok: true, sha: operation.sha, remote: "published" }
-        : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
+        : retained
+          ? { ok: false, error: failure ? publicationFailureDetail(failure)
+            : retained.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
+              : redactBounded(redactPublicationText(retained.error), 4500),
+            ...(failure ? { failure } : {}), ...(!retained.ok && retained.outcome ? { outcome: retained.outcome } : {}) }
+          : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
+      if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
+      const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
+      // Older engines parked the accepted attempt itself. Preserve its pass
+      // before replacing the legacy display prefix, and upgrade the operation
+      // so subsequent recovery uses durable identity rather than diagnostics.
+      if (current.state === "needs_decision" && current.cursor?.state === "committing"
+        && current.lastPassedCommit === operation.sha && current.delivery.ownerId === id
+        && !deliveryOwnerError(current, tx.pipelineLookup({ ...current.delivery.target, active: true }))
+        && (current.delivery.operation.passedStage === true || (current.delivery.operation.passedStage === undefined
+          && current.stateDetail?.startsWith("publishing the passed stage:") === true))
+        && (attempt?.state === "needs_decision" || attempt?.state === "passed") && attempt.verdict?.status === "pass") {
+        attempt.state = "passed";
+        current.delivery.operation.passedStage = true;
+      }
       current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
       if (result.ok) current.publishedCommit = operation.sha;
+      else if ((current.state === "needs_decision" || current.state === "running") && current.cursor?.state === "committing"
+        && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
       deliveryJournal(current, "recovery", "publisher quiescent; remote reconciled", conversationId);
       tx.put(current);
       return null;
@@ -1279,12 +1719,12 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
   return reconciled.locked ? reconciled.value : "publisher child is still in flight or its lock could not be checked";
 }
 
-function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): PipelinePublishResult {
+async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const acceptedSha = request.acceptedSha;
   if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) {
     return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${acceptedSha || "absent"}` };
   }
-  const local = currentPipelineBranchHead(pipeline, exec);
+  const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   /* The worktree must still hold the accepted revision when publication starts.
      A head that has moved on is not this publication's business to push. */
@@ -1295,10 +1735,10 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
 
   const origin = pipeline.delivery
     ? { code: 0, stdout: pipeline.delivery.target.remote, stderr: "" }
-    : exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir);
+    : (await exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir));
   if (origin.code !== 0 || !origin.stdout.trim()) return { ok: true, sha: acceptedSha, remote: "unavailable" };
 
-  const probe = readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch");
+  const probe = (await readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch"));
   if (!probe.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: probe.error };
   const remoteSha = probe.sha;
   if (remoteSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
@@ -1309,28 +1749,55 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
        — it fails outright, which would report a transient git error where the
        truth is a divergence. Fetch it first, and only when it is genuinely
        unknown, so an ordinary fast-forward still costs no extra round trip. */
-    const known = exec("git", ["cat-file", "-e", `${remoteSha}^{commit}`], pipeline.worktreeDir);
+    const known = (await exec("git", ["cat-file", "-e", `${remoteSha}^{commit}`], pipeline.worktreeDir));
     if (known.code !== 0) {
-      const fetched = exec(
+      const fetched = (await exec(
         "git",
         ["fetch", "--no-tags", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
         pipeline.worktreeDir,
-      );
+      ));
       if (fetched.code !== 0) return failure("fetching the remote pipeline branch", fetched);
     }
     /* Only a fast-forward is ever published. A remote revision the ACCEPTED
        revision does not contain is someone else's repair; overwriting it would
        discard work, so the pipeline parks and lets the operator choose. */
-    const remoteIsAncestor = exec("git", ["merge-base", "--is-ancestor", remoteSha, acceptedSha], pipeline.worktreeDir);
+    const remoteIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", remoteSha, acceptedSha], pipeline.worktreeDir));
     if (remoteIsAncestor.code === 1) {
       return { ok: false, error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree, then retry publication; both tips are preserved" };
     }
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
 
-  const push = exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir);
+  // Read-only stages can pass without dependencies. Prepare a Bun worktree before
+  // its full repository hook runs, keeping privacy and every other gate active.
+  // Frozen installation cannot upgrade the accepted lockfile. The same bounded,
+  // fenced executor retains setup failures and cancels them on supersession.
+  // Verify even an existing installation: an interrupted install may have
+  // left node_modules incomplete, or a merged lockfile may have moved on.
+  if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
+    && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
+    const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
+    if (installed.code !== 0) return failure("preparing publication dependencies", installed);
+    // Lifecycle scripts must not change the accepted head or tracked work.
+    const prepared = await currentPipelineBranchHead(pipeline, exec);
+    if (!prepared.ok) return prepared;
+    if (prepared.sha !== acceptedSha) return { ok: false, error: "dependency preparation changed the accepted pipeline revision; nothing was published" };
+  }
+  // Full repository hooks exceed the generic command budget. Publication
+  // remains finite and the ownership watcher can cancel it throughout.
+  /* A push to a declared App repository goes out as the Delegatus GitHub App
+     or is refused; any other push is the one it always was. The App's
+     variables are spread over the hook environment, which removes the
+     Viewer's own settings first. */
+  /* The hook is handed the moment it must be done by, a minute before this
+     limit for git to send the pack, so it ends with its own verdict or with
+     a named missing one instead of being killed (scripts/local-gate.ts). */
+  const pushEnv = { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv(),
+    LLV_GATE_PUSH_DEADLINE: String(Date.now() + PUBLICATION_PUSH_TIMEOUT_MS - PUBLICATION_PACK_MARGIN_MS) };
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: PUBLICATION_PUSH_TIMEOUT_MS }));
+  if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
-  const confirm = readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch");
+  const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
   if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
   const publishedHead = confirm.sha;
   if (publishedHead !== acceptedSha) {
@@ -1344,36 +1811,36 @@ function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request:
  * fast-forwards the shared worktree; a local repair stays intact; divergence
  * parks for an operator and preserves both repair tips.
  */
-export function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort): PipelineGitResult {
-  const local = currentPipelineBranchHead(pipeline, exec);
+export async function synchronizePipelineRetryHead(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
+  const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (pipeline.delivery && !pipeline.delivery.target.remote) return local;
 
-  const remoteProbe = exec("git", ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`], pipeline.worktreeDir);
+  const remoteProbe = (await exec("git", ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`], pipeline.worktreeDir));
   if (remoteProbe.code !== 0) return failure("checking the remote pipeline branch", remoteProbe);
   if (!remoteProbe.stdout.trim()) return local;
 
-  const fetch = exec(
+  const fetch = (await exec(
     "git",
     ["fetch", "--no-tags", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
     pipeline.worktreeDir,
-  );
+  ));
   if (fetch.code !== 0) return failure("fetching the remote pipeline branch", fetch);
   const remoteSha = remoteProbe.stdout.trim().split(/\s+/)[0] ?? "";
   if (!/^[0-9a-f]{40}$/i.test(remoteSha)) return { ok: false, error: "resolving the remote pipeline branch: expected an exact commit SHA" };
-  const present = exec("git", ["cat-file", "-e", `${remoteSha}^{commit}`], pipeline.worktreeDir);
+  const present = (await exec("git", ["cat-file", "-e", `${remoteSha}^{commit}`], pipeline.worktreeDir));
   if (present.code !== 0) return { ok: false, error: "the remote pipeline branch moved during fetch; retry review at its current head" };
   if (remoteSha === local.sha) return local;
 
-  const localIsAncestor = exec("git", ["merge-base", "--is-ancestor", local.sha, remoteSha], pipeline.worktreeDir);
+  const localIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", local.sha, remoteSha], pipeline.worktreeDir));
   if (localIsAncestor.code === 0) {
-    const merge = exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir);
+    const merge = (await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir));
     if (merge.code !== 0) return failure("fast-forwarding the pipeline worktree to its remote repair", merge);
     return { ok: true, sha: remoteSha };
   }
   if (localIsAncestor.code !== 1) return failure("comparing local and remote pipeline revisions", localIsAncestor);
 
-  const remoteIsAncestor = exec("git", ["merge-base", "--is-ancestor", remoteSha, local.sha], pipeline.worktreeDir);
+  const remoteIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", remoteSha, local.sha], pipeline.worktreeDir));
   if (remoteIsAncestor.code === 0) return local;
   if (remoteIsAncestor.code !== 1) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   return { ok: false, error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree before retrying review; both tips are preserved" };

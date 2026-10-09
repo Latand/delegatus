@@ -39,6 +39,11 @@ export interface OutboxEntry {
   /** Idempotency key of this submission — also the bubble's stable identity. */
   id: string;
   text: string;
+  /** An idle parallel ask keeps its original draft until normal admission. */
+  idleParallelDraft?: string;
+  idleParallelTextSettled?: boolean;
+  idleParallelImageIds?: string[];
+  idleParallelChips?: { project: string; snapshot: { id: string; revision: string }[] };
   /** How many images rode with this submission (previews stay local). */
   images: number;
   /** How many non-image attachments rode with it (#1224). Counted apart from
@@ -480,11 +485,9 @@ export function readOperationShared(
       /* Cancelled by its holders (unmount, hidden tab, inactive composer): not
          a failed read, and due again as soon as someone asks. */
       if (current.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
-      /* Only an arrival or a discard ends the row. An unknown-fate answer
-         (uncertain, or failed with verify-first) is absorbing on the server
-         until the operator retries or discards, so asking again at the
-         interval learns nothing: it backs off to the ceiling like a failure. */
-      else read.failures = receipt && receiptHasAbsorbingOutcome(receipt) ? 0 : read.failures + 1;
+      // Readable uncertainty can acquire a late canonical echo. Recheck it at
+      // the normal 30-second interval; only failed reads back off to five minutes.
+      else read.failures = receipt ? 0 : read.failures + 1;
       read.inFlight = null;
       return receipt;
     });
@@ -1724,7 +1727,6 @@ function sameCounts(left: TranscriptEchoCounts | undefined, right: TranscriptEch
 }
 
 interface EchoOwner {
-  type: "tombstone" | "queue";
   id: string;
   at: number;
   key: string;
@@ -1756,9 +1758,8 @@ interface EchoOwner {
 function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly OutboxEntry[]; tombstones: readonly PersistedOccurrenceTombstone[] } {
   const queue = readOutbox(cardId);
   const tombstones = readOccurrenceTombstones(cardId);
-  const owners: EchoOwner[] = [
+  const representations: EchoOwner[] = [
     ...tombstones.map((entry) => ({
-      type: "tombstone" as const,
       id: entry.id,
       at: entry.at,
       key: entry.key,
@@ -1779,7 +1780,6 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
        submissions of the same text still own two different records and
        identical text alone never merges them. */
     ...queue.map((entry) => ({
-      type: "queue" as const,
       id: entry.id,
       at: entry.at,
       key: echoKey(entry.echoText ?? entry.text),
@@ -1790,7 +1790,22 @@ function echoOwners(cardId: string): { owners: EchoOwner[]; queue: readonly Outb
       ...(submissionNamesItsDelivery(entry) ? { identified: true as const } : {}),
       ...(entry.deliveryUncertain ? { uncertain: true as const } : {}),
     })),
-  ].sort((left, right) => left.at - right.at);
+  ];
+  // Compaction and a recurring launch seed can leave two representations of
+  // one submission. Preserve the original occurrence watermark and propagate
+  // its claim to both; another submission with identical text remains separate.
+  const byId = new Map<string, EchoOwner>();
+  for (const entry of representations) {
+    const original = byId.get(entry.id);
+    byId.set(entry.id, original ? {
+      ...original,
+      key: entry.key,
+      retiredEchoId: original.retiredEchoId ?? entry.retiredEchoId,
+      identified: original.identified || entry.identified,
+      uncertain: original.uncertain || entry.uncertain,
+    } : entry);
+  }
+  const owners = [...byId.values()].sort((left, right) => left.at - right.at);
   return { owners, queue, tombstones };
 }
 
@@ -1902,11 +1917,14 @@ function reconcileEchoRetirements(
   const claimed = new Set(owners.flatMap((owner) => owner.retiredEchoId ? [owner.retiredEchoId] : []));
   const retirements = new Map<string, { echoId: string; retiredAt: number }>();
   for (const entry of owners) {
-    if (entry.retiredEchoId) continue;
+    if (entry.retiredEchoId) {
+      retirements.set(entry.id, { echoId: entry.retiredEchoId, retiredAt: Date.now() });
+      continue;
+    }
     const owner = claimEcho(entry, ledger, claimed);
     if (!owner) continue;
     claimed.add(owner.id);
-    retirements.set(`${entry.type}:${entry.id}`, {
+    retirements.set(entry.id, {
       echoId: owner.id,
       retiredAt: Date.now(),
     });
@@ -1914,8 +1932,8 @@ function reconcileEchoRetirements(
 
   let tombstonesChanged = false;
   const nextTombstones = tombstones.map((entry) => {
-    const retirement = retirements.get(`tombstone:${entry.id}`);
-    if (!retirement) return entry;
+    const retirement = retirements.get(entry.id);
+    if (!retirement || entry.retiredEchoId === retirement.echoId) return entry;
     tombstonesChanged = true;
     return {
       ...entry,
@@ -1938,8 +1956,8 @@ function reconcileEchoRetirements(
 
   let queueChanged = false;
   const nextQueue = queue.map((entry) => {
-    const retirement = retirements.get(`queue:${entry.id}`);
-    if (retirement) {
+    const retirement = retirements.get(entry.id);
+    if (retirement && entry.retiredEchoId !== retirement.echoId) {
       queueChanged = true;
       return {
         ...entry,

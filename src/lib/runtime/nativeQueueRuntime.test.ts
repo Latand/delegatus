@@ -11,6 +11,10 @@ import type { RuntimeHostClient } from "./client";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
 import { parseRuntimeCommand } from "./commands";
 import { handleNativeQueue } from "./nativeQueueHttp";
+import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+import { activeDrain, drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 const conversationId = "conversation_native";
 const binding = { threadId: "thread-native", accountId: "account-a" };
@@ -89,7 +93,7 @@ function fixture(journal = makeJournal()) {
     },
   } as unknown as EngineHost;
   const executor = new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => liveBinding });
-  return { journal, client, executor, calls, queue, startedSubmissionIds, get items() { return items; },
+  return { journal, client, executor, host, calls, queue, startedSubmissionIds, get items() { return items; },
     loseAdd: () => { loseAdd = true; }, race: () => { raceDelete = true; }, refuseDelete: () => { refuseDelete = true; },
     refuseUpdate: (value = true) => { refuseUpdate = value; },
     /* The host goes idle AND the journal's session projection says so: the
@@ -346,6 +350,63 @@ test("two executors competing for the same admitted native add perform one write
   f.journal.close();
 });
 
+test("two executors rebinding an unsubmitted add to a successor perform one native write", async () => {
+  const f = fixture();
+  const add = command("op-successor-race");
+  const successor = { threadId: "successor-thread", accountId: "account-b" };
+  f.journal.executeOperation(add);
+  const writes: string[] = [];
+  const host = { ...f.host, nativeQueue: { ...f.host.nativeQueue!, queue: new NativeCodexQueue({ rpc: async (_method, params) => {
+    writes.push(params.clientUserMessageId as string);
+    return { queuedSubmission: { id: "successor-submission", clientUserMessageId: params.clientUserMessageId, input: params.input } };
+  } }, successor.threadId) } };
+  const port = { client: f.client, resolveHost: () => host, binding: () => successor,
+    succession: () => ({ status: "committed" as const, binding: successor }) };
+  try {
+    await Promise.all([new NativeQueueExecutor(port).execute(add), new NativeQueueExecutor(port).execute(add)]);
+    expect(writes).toEqual([add.operationId]);
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("applied");
+    expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({ state: "queued", binding: successor });
+  } finally { f.journal.close(); }
+});
+
+test("prepared successor binding survives journal reopening with original admission identity and successor proof", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-rebind-"));
+  const filename = path.join(root, "journal.sqlite");
+  let journal = makeJournal(filename);
+  const add = command("op-rebound");
+  const successor = { threadId: "successor-thread", accountId: "account-b" };
+  const input = [{ type: "text" as const, text: add.text! }];
+  try {
+    journal.executeOperation(add);
+    journal.nativeQueueTransition(add.operationId, { phase: "prepared", input, binding: successor });
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.executeOperation(add)).toMatchObject({ replayed: true, receipt: { status: "delivering" } });
+    journal.nativeQueueTransition(add.operationId, { phase: "acknowledged", nativeSubmissionId: "successor-submission" });
+    const proof = { threadId: successor.threadId, clientUserMessageId: add.operationId, revision: 1, turnId: "turn", itemId: "item", input };
+    expect(() => journal.nativeQueueTransition(add.operationId, { phase: "proven", proof: { ...proof, threadId: binding.threadId } })).toThrow("canonical proof mismatch");
+    journal.nativeQueueTransition(add.operationId, { phase: "proven", proof });
+    expect(journal.nativeQueueRead(conversationId)[0]).toMatchObject({ binding: successor, state: "delivered", proof });
+    expect(journal.operationResult(add.operationId)?.receipt.status).toBe("delivered");
+  } finally { journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a prepared native add cannot be rebound or replayed on a successor", () => {
+  const f = fixture();
+  const add = command("op-frozen-owner");
+  const input = [{ type: "text" as const, text: add.text! }];
+  try {
+    f.journal.executeOperation(add);
+    f.journal.nativeQueueTransition(add.operationId, { phase: "prepared", input });
+    expect(() => f.journal.nativeQueueTransition(add.operationId, { phase: "prepared", input,
+      binding: { threadId: "successor-thread", accountId: "account-b" } })).toThrow("submitted input cannot change ownership");
+    expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({ binding, mutationOperationId: add.operationId });
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("delivering");
+    expect(f.calls).toEqual([]);
+  } finally { f.journal.close(); }
+});
+
 test("native canonical proof must retain original client, version, content and thread", async () => {
   const f = fixture(); const add = command("op-proof"); f.journal.executeOperation(add); await f.executor.execute(add);
   const entry = f.journal.nativeQueueRead(conversationId)[0]!;
@@ -589,4 +650,52 @@ test("editing the words of a message keeps its attachments, its card and its aut
     action: "update", entryId: add.operationId, expectedRevision: entry.revision, text: "no images",
   }))).toThrow("native queue edit must carry the entry's attachments");
   f.journal.close();
+});
+
+
+test.each(["add", "start", "send-now"] as const)("persistent drain holds authenticated native %s through recovery and dispatches it once after release", async action => {
+  const f = fixture(); f.idle();
+  const seed = command("native-drain-seed");
+  if (action === "send-now") { f.journal.executeOperation(seed); await f.executor.execute(seed); }
+  f.calls.length = 0;
+  const queued = () => new StructuredDeliveryQueue({
+    effects: async (kinds, after) => f.journal.effectBatch(100, kinds, after),
+    status: async id => { const r = f.journal.operationResult(id); return r ? { ...r.receipt, at: r.receipt.admittedAt! } : null; },
+    transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+    autonomousTurnHeld: (_id, admittedAt) => {
+      const hold = activeDrain();
+      return !!hold && (!admittedAt || Date.parse(admittedAt) >= Date.parse(hold.since));
+    },
+    nativeQueueExecute: (c, reason) => f.executor.execute(c, reason),
+  }, () => f.host);
+  const post = (id: string, manual = false) => handleNativeQueue(new NextRequest("http://localhost/api/runtime/queue", {
+    method: "POST", headers: { host: "localhost",
+      ...(manual ? { "sec-fetch-site": "same-origin" } : { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }) },
+    body: JSON.stringify(command(id, { action, origin: { kind: "operator" },
+      ...(action !== "add" ? { turnId: null } : {}),
+      ...(action === "send-now" ? { entryId: seed.operationId, expectedRevision: 1 } : {}) })),
+  }), { client: () => f.client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [] });
+  setCallerConversationResolverForTests(() => "conversation_native_sender");
+  try {
+    writeDrain(drainFile(), { id: "native-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    const response = await post("native-drain-fresh"); expect(response.status).toBe(202);
+    const accepted = await response.json();
+    const effect = f.journal.effectBatch(100).find(e => e.payload.operationId === accepted.operationId)!;
+    expect(effect.payload.origin).toMatchObject({ kind: "agent" });
+    await queued().drain(); await queued().drain();
+    expect(f.calls).toEqual([]);
+    expect(f.journal.operationResult(accepted.operationId)!.receipt.status).toBe("queued");
+    // The fresh effect stays in the journal across executor reconstruction.
+    releaseDrain(drainFile(), "native-drain");
+    await queued().drain(); await queued().drain();
+    expect(f.calls).toEqual([action === "add" ? "thread/queue/add" : "thread/queue/start"]);
+    expect(f.journal.operationResult(accepted.operationId)!.receipt.status).toBe("applied");
+    // Original submitted receipts remain settled while a later hold is active.
+    writeDrain(drainFile(), { id: "native-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    await queued().drain(); expect(f.calls).toHaveLength(1);
+    if (action !== "send-now") {
+      expect((await post("native-drain-manual", true)).status).toBe(202);
+      await queued().drain(); expect(f.calls).toHaveLength(2);
+    }
+  } finally { setCallerConversationResolverForTests(null); releaseDrain(drainFile(), "native-drain"); f.journal.close(); }
 });

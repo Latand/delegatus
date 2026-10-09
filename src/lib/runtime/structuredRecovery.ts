@@ -1,4 +1,4 @@
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { resolveContinuityAccount } from "@/lib/accounts/manager";
@@ -10,10 +10,13 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
+import { activeDrain } from "@/lib/selfUpdate/drain";
+import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -27,6 +30,36 @@ import { spawnTransport } from "./spawnTransport";
 export interface StructuredRecoveryRequest {
   path: string;
   conversationId?: string | null;
+  origin?: MessageOrigin;
+  operationId?: string;
+  /** Immutable journal admission time when no registry reservation exists. */
+  admittedAt?: string;
+}
+
+/** No successor receipt exists yet; callers keep the original message queued. */
+export class StructuredRecoveryHeldForUpdateError extends Error {
+  constructor(message = "new autonomous recovery is held for the automatic update") {
+    super(message);
+    this.name = "StructuredRecoveryHeldForUpdateError";
+  }
+}
+
+/** Startup holds a predecessor's row until its restart cut evidence is decided
+    (docs/design/restart-cut-recognition.md): nothing retires or replaces it
+    before then, whoever asks. The caller keeps its message queued. */
+function assertRestartCutEvidenceDecided(key: SessionKey): void {
+  if (restartCutEvidenceHolds(sessionKeyId(key))) {
+    throw new StructuredRecoveryHeldForUpdateError("recovery is held until the conversation's restart cut evidence is decided");
+  }
+}
+
+function assertRecoveryAdmission(request: StructuredRecoveryRequest, registry: AgentRegistry): void {
+  if (request.origin?.kind !== "agent") return;
+  const hold = activeDrain();
+  if (!hold) return;
+  const acceptedAt = request.operationId ? registry.deliveryAdmissionAtForOperation(request.operationId) : null;
+  const accepted = Date.parse(acceptedAt ?? request.admittedAt ?? "");
+  if (!Number.isFinite(accepted) || accepted >= Date.parse(hold.since)) throw new StructuredRecoveryHeldForUpdateError();
 }
 
 export interface StructuredRecoveryResult {
@@ -75,6 +108,10 @@ export interface StructuredRecoveryDependencies {
     revision: number;
     owns: () => Promise<boolean>;
     releaseHost: (key: SessionKey) => Promise<boolean>;
+    /** Throws when the operation's owner no longer allows the account the
+        successor host would start on. A recorded account resumes through
+        continuity, which asks no project pool, so the owner is asked here. */
+    authorizeAccount?: (accountId: string | null) => void | Promise<void>;
   };
   /** The staged-launch probe and settlement a resume's publication is driven
       through; tests substitute the runtime boundary behind them. */
@@ -112,6 +149,7 @@ async function awaitResumePublication(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   dependencies: StructuredRecoveryDependencies,
+  authorize: () => Promise<void>,
 ): Promise<string | null> {
   const now = dependencies.now ?? Date.now;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -119,6 +157,16 @@ async function awaitResumePublication(
   const staged = registry.readOnlySnapshot().receipts[launchId];
   const deadline = (stagedLaunchRecovery(staged)?.startedAt ?? now()) + RESUME_PUBLICATION_BOUND_MS;
   for (;;) {
+    /* The probe may publish a host that no continuation of this process holds,
+       so the owner is asked before each one. A refused resume ends here: its
+       receipt fails and the host it started is retired. */
+    try {
+      await authorize();
+    } catch (error) {
+      await (dependencies.failStagedLaunch ?? failStagedResume)(launchId, registry, client,
+        error instanceof Error ? error.message : "structured recovery account is no longer allowed");
+      throw error;
+    }
     const receipt = await probe(launchId, registry, client, { now, eligible: () => true });
     if (receipt.state === "completed") return receipt.artifactPath;
     if (receipt.state === "failed" || receipt.state === "conflicted") {
@@ -332,6 +380,8 @@ async function recoverCandidate(
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {
     await assertOwnership();
+    /* Again under the lock: a startup pass may have held the row meanwhile. */
+    assertRestartCutEvidenceDecided(candidate.key);
     const park = dependencies.park ?? defaultParkResolver;
     let current = candidateFor(registry, request, Boolean(ownership), park);
     if (!current) return null;
@@ -377,20 +427,28 @@ async function recoverCandidate(
       current.accountId,
       current.project,
     );
+    const assertAccountAuthorized = async (): Promise<void> => {
+      await ownership?.authorizeAccount?.(account.accountId ?? null);
+    };
     let begun: SpawnBeginResult;
     try {
-      begun = await registry.beginSpawnRequestAsync({
-        engine: current.engine,
-        cwd: current.spec.cwd,
-        transport: "structured",
-        accountId: account.accountId,
-        conversationId: current.conversationId,
-        parentConversationId: current.parentConversationId,
-        purpose: "resume-successor",
-        origin: { kind: "successor" },
-        expectedArtifactPath: current.path,
-        launchProfile: current.spec.launchProfile,
-      });
+      begun = await withAccountMutationLockAsync(async () => {
+        // Admission may have closed while recovery waited for this lease.
+        assertRecoveryAdmission(request, registry);
+        await assertAccountAuthorized();
+        return await registry.beginSpawnRequestAsync({
+          engine: current.engine,
+          cwd: current.spec.cwd,
+          transport: "structured",
+          accountId: account.accountId,
+          conversationId: current.conversationId,
+          parentConversationId: current.parentConversationId,
+          purpose: "resume-successor",
+          origin: { kind: "successor" },
+          expectedArtifactPath: current.path,
+          launchProfile: current.spec.launchProfile,
+        });
+      }, { holder: "resume admission", caller: "resume" });
     } catch (error) {
       /* #1716: the lock throws its typed busy refusal from the acquire, before
          the reservation's transaction is admitted, so this recovery reserved
@@ -407,6 +465,12 @@ async function recoverCandidate(
       registry.failSpawn(begun.receipt.launchId, "structured recovery operation was superseded");
       throw error;
     }
+    try {
+      await assertAccountAuthorized();
+    } catch (error) {
+      registry.failSpawn(begun.receipt.launchId, "structured recovery account is no longer allowed");
+      throw error;
+    }
     const response = await (dependencies.spawn ?? spawnStructuredConversation)({
       engine: current.engine,
       receipt: begun.receipt,
@@ -415,17 +479,19 @@ async function recoverCandidate(
       "prompt": "",
       registry,
       client,
+      authorize: assertAccountAuthorized,
     });
     let publishedPath = response.ok ? response.path : null;
     /* A staged resume with no path has not published its host yet. One that
        names its path has, and only its transcript is pending. */
     if (response.ok && !publishedPath && response.state === "path-pending") {
-      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies)
+      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies, assertAccountAuthorized)
         ?? current.path;
     }
     if (!response.ok || !publishedPath) throw new Error("structured recovery host did not publish its transcript");
     try {
       await assertOwnership();
+      await assertAccountAuthorized();
     } catch (error) {
       await ownership?.releaseHost(current.key);
       registry.terminateStructuredHost(current.key);
@@ -457,9 +523,10 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  assertRestartCutEvidenceDecided(candidate.key);
   const recoveryKey = dependencies.ownership
     ? `${registry.filename}:${candidate.conversationId}:${dependencies.ownership.operationId}:${dependencies.ownership.revision}`
-    : `${registry.filename}:${candidate.conversationId}`;
+    : `${registry.filename}:${candidate.conversationId}:${request.operationId ?? "operator"}`;
   const pending = recoveries.get(recoveryKey);
   if (pending) return pending;
   if (candidate.hostLive && !dependencies.ownership) return liveHostResult(candidate);

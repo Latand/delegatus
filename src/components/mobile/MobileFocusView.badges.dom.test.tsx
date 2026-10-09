@@ -22,7 +22,9 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 const dom = new HappyWindow({ innerWidth: 390, innerHeight: 844 });
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 Object.assign(globalThis, {
-  window: dom, document: dom.document, navigator: dom.navigator,
+  window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom), document: dom.document, navigator: dom.navigator,
   Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
   Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
   PointerEvent: dom.PointerEvent ?? dom.MouseEvent,
@@ -143,6 +145,11 @@ test("the ⋯ menu lists the child as an in-flow row that opens the current non-
   const selected: string[] = [];
   await renderFocus([childStale, childCurrent, parent], "/parent.jsonl", (file) => selected.push(file.path));
   await openMenu();
+  /* The children are one named row that opens in place and says how many it holds. */
+  const fold = dom.document.querySelector('[data-mobile2-menu-section="subagents"]') as unknown as HTMLButtonElement;
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  expect(fold.textContent).toContain("1");
+  flushSync(() => fold.click());
   const rows = [...dom.document.querySelectorAll('[data-mobile2-menu-row="subagent"]')] as unknown as HTMLButtonElement[];
   expect(rows.map((row) => row.getAttribute("data-mobile2-subagent"))).toEqual(["conv_child"]);
   const row = rows[0]!;

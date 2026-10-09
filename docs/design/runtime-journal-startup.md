@@ -1,4 +1,4 @@
-# A large runtime journal never takes the stable entry down
+# Keep the stable entry answering while a large runtime journal opens
 
 Design for pipeline `4c010c33` (architect stage), issue #2459, 2026-10-02, read on `main` at `e7185fec5`. Line anchors below refer to that commit.
 
@@ -18,7 +18,7 @@ The issue (Latand/delegatus#2459) governs. Its required outcome, verbatim:
 
 Incident evidence from the issue: `fence-acquired` 12:48:08Z → `journal-open` 13:06:46Z (18m37s), no stable listener in between, D-state in `jbd2_log_wait_commit`, >6 GB of process writes, ~304k events and ~307k producer receipts. A second same-revision handoff followed, and that boot was fast.
 
-## 1. What the code does today
+## 1. Original investigation at `e7185fec5`
 
 ### 1.1 Boot order (`src/runtime-host/main.ts`)
 
@@ -297,9 +297,9 @@ Red at base: S logs "untracked" and the stub log shows `container start <S>`. Be
 - **Bun pin.** It does not move, so the AGENTS.md rule on Bun pins asks for nothing beyond the rehearsal.
 - **Base-red runs.** Run them by the builder against `git show e7185fec5:<file>` copies, or in a merge-base worktree, never by stashing. A base S re-inserting 279,600 receipts takes about 14 s on tmpfs but minutes on a real disk, so run the process scenarios' base-red demonstration on tmpfs and give them generous `bun test` timeouts.
 
-## 4. Deferred — not currently justified
+## 4. Deferred at the original investigation
 
-- **Event retention is pinned.** 304k events against the default `maxEvents` of 20,000 means compaction is held back. `compact()` (`journal.ts:1654`) never passes `MIN(consumer_cursors.completed_seq)`, and the orchestration cursor advances only over a contiguous completed prefix (`:1342-1356`), so one event deferred forever pins all history. This design makes startup cost independent of history size, so it does not depend on retention. Filing an issue is part of this lane's work. The issue carries the read-only check to run on a **copy** of a live journal (`SELECT consumer, completed_seq FROM consumer_cursors; SELECT MIN(seq), COUNT(*) FROM events;`), which this stage could not run because of the live-state fence.
+- **Event retention is pinned.** 304k events against the default `maxEvents` of 20,000 means compaction is held back. `compact()` (`journal.ts:1654`) never passes `MIN(consumer_cursors.completed_seq)`, and the orchestration cursor advances only over a contiguous completed prefix (`:1342-1356`), so one event deferred forever pins all history. This design removes the history-length connection-refused interval, so it does not depend on retention. Filing an issue is part of this lane's work. The issue carries the read-only check to run on a **copy** of a live journal (`SELECT consumer, completed_seq FROM consumer_cursors; SELECT MIN(seq), COUNT(*) FROM events;`), which this stage could not run because of the live-state fence.
 - **A sequence watermark advanced on every append (§2.1).** No writer exists that appends without a receipt.
 - **Gating `migrateLegacyEvents` / `migrateEntityUpdatedAt` UPDATEs.** They measured about 0 ms on the current schema.
 - **Incremental or worker-thread chain verification.** It would weaken or complicate the integrity guarantee. The 4.4 s at 300k runs cooperatively after §2.3.
@@ -317,3 +317,56 @@ None of these needs the operator. The code and one isolated measurement settled 
 - the index `DROP` is deleted outright (§2.2);
 - the stable entry binds after the fence and before the journal (§2.4);
 - the release record is read after the fence (§2.6).
+
+
+## 6. Integration on current main (2026-10-09)
+
+The original investigation and its line anchors above describe `e7185fec5`.
+The implementation now merges main at `08e85880b80d0b360719efbdccec89a8077015ca`.
+Main's #2487 already batches missing receipts into a single durable transaction.
+The remaining cost is synchronous opening and chain verification, the index
+rebuild, and recreating superseded engine receipts. The versioned pass keeps
+#2487's existing-receipt preservation and SQL-error rollback contracts.
+Its three legacy tests now remove both the migration marker and resume cursor
+when synthesizing an old journal; all ten startup cases pass together.
+
+Current entry points are `RuntimeJournal.open` and `backfillProducerReceipts`
+in `src/runtime-host/journal.ts`, `acquireRuntimeHostFence` and the early
+`listenViewerEntry` call in `src/runtime-host/main.ts`, and the transport-failure
+catch in `src/app/api/runtime/snapshot/route.ts`. Function names supersede the
+historical line anchors for the integrated implementation. Main's snapshot
+byte forwarding, gzip, scoped reads, and request cancellation remain intact.
+The active Platform tests workflow retains main's scoped jobs and adds a
+journal-startup job under the Dockerfile's Bun 1.4.0 pin with a closed Viewer
+control URL. Every suite runs by exact file path.
+
+The process regression holds a real SQLite immediate transaction while a
+fenced host opens the journal. A separate process invokes the real Viewer
+snapshot handler and production socket client: main returns generic
+unavailability, the candidate reports `runtime-host-booting` and schema progress,
+and the candidate returns 200 after release and readiness. An append fails
+while the storage lock is held. FULL durability and chain verification stay
+in place. Individual synchronous SQLite calls still occupy the host thread;
+this experiment verifies the independent snapshot response and readiness
+boundary, and supplies no zero-latency guarantee for stalled storage.
+
+The handoff driver traces acquire/release calls only in its isolated child
+processes, without adding a production startup phase. A 750 ms drain deliberately
+finishes between the old 500 ms retries. The recorded refusal interval precedes
+acquisition and follows lock release. Main's startup call now retries every
+25 ms; parked and bounded wait semantics retain the existing fence. A listener
+still closes and rebinds across process ownership, so an unconditional
+zero-refusal transfer would require a persistent entry owner or descriptor
+transfer outside this startup seam. Timings are observations, with no flaky
+wall-clock pass threshold; assertions require answers throughout journal open
+once the entry is listening and preserve single-owner mutation admission.
+
+Fresh boot, transfer, interruption, slow-storage and runtime-host rehearsal
+results are in `evidence/runtime-journal-startup.json` under
+`currentMainIntegration`. These exercise real runtime-host processes and a
+synthetic HTTP Viewer upstream; the snapshot cases invoke the real route.
+The separate Viewer build/runtime checks exercise the Next.js server process.
+One managed-auto deployment test fails identically on main and candidate in
+self-update code outside this lane; it is retained unchanged and reported as
+baseline evidence. Fresh independent review and the designated manager's
+approved deploy/rendered verification remain separate stages.

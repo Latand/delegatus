@@ -87,6 +87,33 @@ test("only the first journal admission under a known claim supplies first-dispat
   }
 });
 
+test("retry evidence binds to the resolved host generation before delivery starts", async () => {
+  const order: string[] = [];
+  const engine = host(async () => {
+    order.push("host-send");
+    return { outcome: "turn-started", turnId: "turn-successor" };
+  });
+  engine.health = async () => idleState("generation-successor");
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:retry-generation", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "retry-generation", conversationId: "conversation-one", text: "retry", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }),
+    hostClaim: async () => "owner:1",
+    bindDeliveryGeneration: async (operationId, generationId) => {
+      order.push(`bind:${operationId}:${generationId}`);
+      return true;
+    },
+    transition: async (_id, status) => { if (status === "delivering") order.push("delivering"); },
+  }, () => engine);
+
+  await queue.drain();
+  expect(order).toEqual([
+    "bind:retry-generation:generation-successor",
+    "delivering",
+    "host-send",
+  ]);
+});
+
 test("a read retry never reuses first-dispatch evidence", async () => {
   const seen: Array<FirstDispatchEvidence | undefined> = [];
   const queue = new StructuredDeliveryQueue({
@@ -358,6 +385,54 @@ test("a dead-host requeue refused after terminal settlement does not fail the pa
   await queue.drain();
 
   expect(recoveries).toBe(0);
+});
+
+test("an account pick carries the sends it holds back that no host was handed, and only those", async () => {
+  /* 2026-10-07, run 3: the send behind the pick was claimed on the old
+     account, and the switch waited for it while it waited for the switch. */
+  const carried: Array<readonly string[] | undefined> = [];
+  const receipts: Record<string, { status: string; revision: number }> = {
+    "pick-b": { status: "queued", revision: 1 },
+    "never-dispatched": { status: "queued", revision: 1 },
+    "dispatched-before": { status: "queued", revision: 3 },
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [
+      { id: "effect:pick-b", kind: "runtime.reconfigure", eventSeq: 1,
+        payload: { operationId: "pick-b", conversationId: "conversation-one", model: "claude-haiku-4-5", effort: "low", fast: false, accountId: "account-b" } },
+      { id: "effect:dispatched-before", kind: "runtime.send", eventSeq: 2,
+        payload: { kind: "send", operationId: "dispatched-before", conversationId: "conversation-one", text: "earlier", policy: "queue" } },
+      { id: "effect:never-dispatched", kind: "runtime.send", eventSeq: 3,
+        payload: { kind: "send", operationId: "never-dispatched", conversationId: "conversation-one", text: "Second message", policy: "interrupt-active" } },
+    ],
+    status: async (operationId) => receipts[operationId] ?? null,
+    transition: async () => {},
+  }, () => host(async () => ({ outcome: "turn-started", turnId: "turn-one" })), undefined, () => {}, undefined, async (_effect, ownership) => {
+    carried.push(ownership.carriedSends);
+    return "pending";
+  });
+
+  await queue.drain();
+
+  expect(carried).toEqual([["never-dispatched"]]);
+});
+
+test("a switch refused the registry writer goes back to queued with the reason the composer shows", async () => {
+  const transitions: Array<[string, string, string | null | undefined]> = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [
+      { id: "effect:pick-b", kind: "runtime.reconfigure", eventSeq: 1,
+        payload: { operationId: "pick-b", conversationId: "conversation-one", model: "claude-haiku-4-5", effort: "low", fast: false, accountId: "account-b" } },
+      { id: "effect:carried", kind: "runtime.send", eventSeq: 2,
+        payload: { kind: "send", operationId: "carried", conversationId: "conversation-one", text: "Second message", policy: "queue" } },
+    ],
+    status: async () => ({ status: "queued", revision: 1 }),
+    transition: async (operationId, next, details) => { transitions.push([operationId, next, details?.reason]); },
+  }, () => host(async () => ({ outcome: "turn-started", turnId: "turn-one" })), undefined, () => {}, undefined, async () => "writer-busy");
+
+  await queue.drain();
+
+  expect(transitions).toEqual([["pick-b", "applying", undefined], ["pick-b", "queued", "switch-writer-busy"]]);
 });
 
 test("a busy structured turn keeps reconfigure queued and applies it before later messages", async () => {
@@ -2783,4 +2858,74 @@ for (const policy of ["steer-or-queue", "steer-if-active"]) test(`${policy} unkn
   await dropped.queue.drain(); await Promise.resolve();
   expect(dropped.states.get("m0")!.status).toBe(policy === "steer-or-queue" ? "queued" : "failed");
   expect((await dropped.target.health()).status).toBe("active");
+});
+
+test.each(["steer", "idle", "unsupported", "interrupt", "fallback-policy", "fallback-effect"] as const)("update drain permits original-turn steering and holds fresh %s turn actuation", async (seam) => {
+  const f = steerQueueFixture([seam === "interrupt" ? "interrupt-active" : seam === "fallback-policy" ? "steer-if-active" : seam === "fallback-effect" ? "queue" : "steer-or-queue"]);
+  Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  if (seam === "fallback-effect") Object.assign(f.effects[0], { kind: "runtime.steer" });
+  let held = true;
+  f.port.autonomousTurnHeld = () => held;
+  if (seam === "idle") f.setActive(null);
+  if (seam === "unsupported" || seam.startsWith("fallback")) Object.assign(f.target, { supportsSteer: false, steerFallback: "interrupt" });
+  await f.queue.drain();
+  expect(f.interrupts).toEqual([]);
+  if (seam === "steer") { expect(f.writes).toEqual(["steer:m0"]); return; }
+  expect(f.writes).toEqual([]); expect(f.states.get("m0")!.status).toBe("queued");
+  held = false; f.setActive(null);
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual(["start:m0"]);
+});
+test("a fresh autonomous message cannot recover a missing host during update drain", async () => {
+  const f = steerQueueFixture();
+  Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  f.port.autonomousTurnHeld = () => true;
+  let recoveries = 0;
+  const queue = new StructuredDeliveryQueue(f.port, () => null, undefined, undefined, async () => { recoveries++; return false; });
+  await queue.drain(); await queue.drain();
+  expect(recoveries).toBe(0); expect(f.transitions).toEqual([]);
+});
+
+test.each(["running", "attention", "flags", "unreadable"])("automatic kill defers owned host with %s evidence", async (scenario) => {
+  let pending = true;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
+  let terminations = 0;
+  const transitions: string[] = [];
+  const owned = host(async () => { throw new Error("no delivery expected"); });
+  owned.health = async () => {
+    if (scenario === "unreadable") throw new Error("health unavailable");
+    return { ...idleState(), ...(scenario === "running" ? { status: "active" as const, activeTurnRef: "resumed-turn" } : {}),
+      pendingAttention: scenario === "attention" ? ["request-one"] : [],
+      activeFlags: scenario === "flags" ? ["busy"] : [] };
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:retire-one", kind: "runtime.kill", eventSeq: 1,
+      payload: { operationId: "retire-one", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
+        onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } }] : [],
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; transitions.push(status); if (status === "failed") pending = false; },
+  }, () => owned, async () => { terminations++; return true; });
+  await queue.drain();
+  expect(terminations).toBe(0);
+  expect(transitions).toEqual(["delivering", "failed"]);
+});
+
+
+test.each(["native-queue", "native-inject", "structured-image-v1", "native-turn-profile", "native-multi-agent-deny:Task"])("automatic kill permits idle capability marker %s", async (flag) => {
+  let pending = true;
+  let terminations = 0;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
+  const owned = host(async () => { throw new Error("no delivery expected"); });
+  owned.health = async () => ({ ...idleState(), activeFlags: [flag] });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:retire-capability", kind: "runtime.kill", eventSeq: 1,
+      payload: { operationId: "retire-capability", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
+        onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } }] : [],
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; if (status === "delivered") pending = false; },
+  }, () => owned, async () => { terminations++; return true; });
+  await queue.drain();
+  expect(terminations).toBe(1);
 });

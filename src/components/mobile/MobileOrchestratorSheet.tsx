@@ -35,9 +35,11 @@ import {
   rotateMandateBase,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
-  type RotationHint,
+  rotationBannerLines,
+  telegramActionLine,
   type SeatSubmitFailure,
   type SeatTransition,
+  seatFailureCopy,
 } from "../orchestrator/seatState";
 import type { SeatConfirmLaunch } from "../orchestrator/useSeatConfirm";
 import { humanizeDuration } from "../turnDuration";
@@ -1136,7 +1138,7 @@ function SeatIdentity({
   now: number;
   predecessorConversationId: string | null;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const designated = incumbent?.designated ? incumbent : null;
   const engine = designated?.engine ?? (file?.engine === "claude" || file?.engine === "codex" ? file.engine : null);
   const model = designated?.model ?? file?.model ?? null;
@@ -1155,6 +1157,10 @@ function SeatIdentity({
   const percent = context?.percent ?? null;
   const left = percent === null ? null : Math.max(0, 100 - percent);
   const window = context?.limit ?? null;
+  const telegramLine = telegramActionLine(t, designated?.telegram);
+  const rotationCauses = state.rotation && (state.rotation.causes?.length || state.rotation.reasons.includes("dead"))
+    ? rotationBannerLines(t, locale, state.rotation)
+    : [];
   /* «Holding the seat for 2h»: since the seat ACTIVATED, which is when this
      conversation started answering for the project — a designation that has
      not activated yet is not holding anything. */
@@ -1220,10 +1226,21 @@ function SeatIdentity({
           </>
         )}
       </div>
-      {state.rotation && left !== null ? (
+      {/* The causes the status read reports, and a host the board saw gone,
+          each said once with what to do. A recommendation with neither keeps
+          the line it always had, in the meter's own «left» reading. */}
+      {state.rotation && rotationCauses.length ? (
+        <div className="space-y-0.5 text-label leading-4 text-warning" data-orchestrator-rotation={state.rotation.level} role="status">
+          {rotationCauses.map((line) => <p key={line} data-orchestrator-rotation-cause>{line}</p>)}
+        </div>
+      ) : state.rotation && left !== null ? (
         <p className="text-label leading-4 text-warning" data-orchestrator-rotation={state.rotation.level} role="status">
           {t("mobile2.seat.rotationRecommended", { percent: String(left) })}
         </p>
+      ) : null}
+
+      {telegramLine ? (
+        <p className="text-label leading-4 text-warning" data-orchestrator-telegram={designated?.telegram ?? undefined} role="status">{telegramLine}</p>
       ) : null}
 
       {predecessorConversationId ? (
@@ -1294,6 +1311,7 @@ function MandateView({ seat }: { seat: OrchestratorSeat }) {
     exactly when the operator is deciding whether to try again. */
 function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" | "same"; rotate: boolean }) {
   const { t } = useLocale();
+  const failureCopy = seatFailureCopy(error, retry);
   return (
     <div className="shrink-0 rounded-surface border border-danger/40 bg-danger-soft px-3 py-2.5" role="alert" data-orchestrator-intent-error>
       <p className="flex items-center gap-1.5 text-ui font-semibold text-danger">
@@ -1302,13 +1320,15 @@ function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" |
           ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
           : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
       </p>
-      <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary">
-        {error}
+      <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
+        {failureCopy ? t(failureCopy.text) : error}
       </pre>
-      <p className="mt-1 text-caption text-muted">
-        {t(retry === "same"
-          ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
-          : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
+      <p className="mt-1 text-caption text-muted" data-orchestrator-failure-hint>
+        {t(failureCopy
+          ? failureCopy.hint
+          : retry === "same"
+            ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
+            : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
       </p>
     </div>
   );
@@ -1324,39 +1344,14 @@ function TransitionCard({ transition }: { transition: SeatTransition }) {
       </p>
     );
   }
+  const failureCopy = seatFailureCopy(transition.error, "fresh");
   return (
     <div className="shrink-0 rounded-surface border border-danger/40 bg-danger-soft px-3 py-2" role="alert" data-orchestrator-intent-error>
       <p className="flex items-center gap-1.5 text-ui font-semibold text-danger">
         <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
-      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary">{transition.error}</p>
-    </div>
-  );
-}
-
-/** The advisory and nothing more — rotation happens only when the operator asks
-    for it, through the Rotate control above, and confirms the draft it opens. */
-function RotationCard({ rotation }: { rotation: RotationHint }) {
-  const { t } = useLocale();
-  const summary = rotation.reasons.map((reason) => (
-    reason === "context"
-      ? t("orchPanel.rotationContext", { percent: String(rotation.contextPercent ?? 0) })
-      : t("orchPanel.rotationDead")
-  )).join(" · ");
-  return (
-    <div className="shrink-0 rounded-surface border border-warning/45 bg-warning-soft px-3 py-2" role="status" data-orchestrator-rotation={rotation.level}>
-      <p className="text-ui font-semibold text-warning">
-        {t(rotation.level === "strongly_recommend" ? "orchPanel.rotationStrong" : "orchPanel.rotation")}
-      </p>
-      {summary ? <p className="mt-0.5 text-caption leading-4 text-secondary">{summary}</p> : null}
-      {/* The server's own reasons, verbatim: each names the threshold it crossed
-          and whether the number behind it is an estimate. */}
-      {rotation.notes?.length ? (
-        <ul className="mt-0.5 list-disc pl-3.5 text-caption leading-4 text-muted marker:text-muted/60">
-          {rotation.notes.map((note) => <li key={note}>{note}</li>)}
-        </ul>
-      ) : null}
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );
 }

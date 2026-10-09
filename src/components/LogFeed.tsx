@@ -1,7 +1,8 @@
 "use client";
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
-import { Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { ArrowDown, ChevronUp, Sparkle } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -19,8 +20,11 @@ import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 import { LaunchChips } from "./conversation/LaunchChips";
 import { MandateCard, MandateConversationContext } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
-import { LiveTurnRows } from "./conversation/LiveTurnRows";
+import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from "./conversation/assistantRows";
+import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
+import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
+import { isOwnMessageStepKey, OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
 import { messageRowModel } from "./conversation/messageRow";
 import { publishRenderedMessageRows } from "./conversation/renderedRows";
 import {
@@ -54,6 +58,8 @@ import { localSubmissionJoin, submissionNamesItsDelivery } from "./conversation/
 import { createFeedSession, rawUserTextFor, type FeedSession, type FeedSnapshot } from "./feed/parse";
 import { claimFeedSession, releaseFeedSession, takeFeedSession } from "./feed/sessionPool";
 import { FeedItem, resolveDeliveredItem } from "./feed/FeedItem";
+import { StreamingMd } from "./feed/markdown";
+import { READING_MEASURE } from "./feed/measure";
 import { heldMandateFor, heldMandateMatches, holdMandate } from "./conversation/heldMandate";
 import { useConversationGallery } from "./feed/imageGallery";
 import { GalleryOwnerProvider, ImageGalleryProvider } from "./feed/Lightbox";
@@ -89,9 +95,9 @@ type ConversationRow =
       canonical: CanonicalMessage | null;
       responseDurationMs?: number;
     }
-  | { kind: "item"; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
+  | { kind: "item"; live?: RuntimeLiveTurnItem; leads?: boolean; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
-  | { kind: "delta"; key: "delta"; resumes?: SeatResume }
+  | { kind: "delta"; key: string; items: RuntimeLiveTurnItem[]; instant?: number | null; liveOrder?: number; leads?: boolean; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
      head's position among the transcript rows, never part of the tail. */
   | { kind: "deputy"; key: string; deputy: SeatDeputyView };
@@ -100,6 +106,15 @@ type ConversationRow =
     continues (null: none in the window). */
 type SeatResume = { ask: string | null };
 
+/* How many screens from the top the reader is when the next page of history
+   starts loading, so the page is usually there before the top is. */
+const PREFETCH_SCREENS = 2;
+/* The fewest ms between two reads of which answer is on screen. */
+const SPEECH_MEASURE_GAP_MS = 120;
+/* Rows an older-history reveal mounts per animation frame. A step is
+   RENDER_STEP rows; mounting them in one commit is a frame of 300 ms or more,
+   and the reader scrolling up is looking at the rows the first few frames add. */
+const REVEAL_RAMP_ROWS = 80;
 /** Items rendered initially and added per «show earlier» step. */
 const RENDER_STEP = 1500;
 /** Compact scheme panes keep the DOM small — five agents on the canvas must
@@ -127,22 +142,19 @@ const FOCUS_CAP = typeof window !== "undefined" && window.matchMedia("(pointer: 
 const EMPTY_FEED: FeedSnapshot = { items: [], hiddenServiceCount: 0 };
 
 /** How long after a programmatic glue an untagged not-at-bottom scroll event
-    is treated as layout settling (content-visibility estimates, pane resizes)
+    is treated as layout settling (initial row windows, pane resizes)
     and glued again. Input-tagged releases bypass this window. */
 const GLUE_SETTLE_MS = 300;
+
+/** Frames the position has to stay put after a scrollend before a released
+    phone feed aligns: a scrollend that momentum outlives is not the end. */
+const REST_QUIET_FRAMES = 2;
 
 /* Read at call time: the glue runs from effects bound once at mount, and a
    render-scope `useIsMobile()` value would be the one from that first render. */
 function onPhoneLayout(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches === true;
 }
-
-/** Quiet time after the last scroll event before a released phone feed moves
-    to the nearest line boundary (#1978): momentum has ended by then. */
-const REST_ALIGN_MS = 160;
-/** Settles in a row, without the operator's input between them, before the
-    feed stops trying; one is the norm, the band clearance makes a second rare. */
-const MAX_AUTO_ALIGNS = 3;
 
 type ScrollCause =
   | { kind: "programmatic" }
@@ -186,7 +198,91 @@ function viewportAnchor(scroller: HTMLElement, path: string): ViewportAnchor | n
 }
 
 function rowForAnchor(scroller: HTMLElement, key: string): HTMLElement | null {
-  return feedRows(scroller).find((row) => row.dataset.feedKey === key) ?? null;
+  /* The browser's own attribute lookup, not a pass over every row in script. */
+  return scroller.querySelector<HTMLElement>(`[data-feed-key="${key.replace(/["\\]/g, "\\$&")}"]`);
+}
+
+/* The reader's own anchor: the row at the top edge, plus the block inside it
+   that the edge crosses. A message or a tool run can be taller than the
+   screen, and the reader rests deep inside it; a late image above the reader
+   in that same row leaves the row's top where it was, so only the block
+   under the reader can say that the content moved. The block is held as an
+   element, never in the scroll memory, which outlives the page's nodes.
+
+   Offsets are in the scroller's own layout pixels, the unit of `scrollTop`.
+   A pane under the canvas's zoom changes every rectangle without a scroll
+   event, so an offset kept in window pixels would read the next zoom as the
+   content having moved. */
+interface ReaderAnchor {
+  path: string;
+  key: string;
+  offset: number;
+  inner: { el: Element; offset: number } | null;
+}
+
+/** On-screen height over layout height: 1 on the phone, below 1 for a pane
+    under the canvas's zoom. */
+function layoutScale(scroller: HTMLElement): number {
+  const scale = scroller.offsetHeight ? scroller.getBoundingClientRect().height / scroller.offsetHeight : 1;
+  return scale > 0 ? scale : 1;
+}
+
+/** A closed `<details>` leaves its summary's other label in the DOM with no
+    box, and its rectangle then reads as zeros. */
+function hasBox(el: Element): boolean {
+  return el.getClientRects().length > 0;
+}
+
+const INNER_DEPTH = 8;
+const INNER_CHILD_CAP = 400;
+
+function innerBlock(row: HTMLElement, top: number, scale: number): ReaderAnchor["inner"] {
+  let node: Element = row;
+  for (let depth = 0; depth < INNER_DEPTH; depth += 1) {
+    if (!node.children.length || node.children.length > INNER_CHILD_CAP) break;
+    const next = firstRowPastTop(Array.from(node.children), top);
+    if (!next) break;
+    /* Only a block laid out in flow can anchor: an inline run has no box of
+       its own, and a sticky or positioned one does not move with the content. */
+    const style = getComputedStyle(next);
+    if (style.display === "inline" || style.display === "contents" || (style.position !== "static" && style.position !== "relative")) break;
+    node = next;
+  }
+  return node === row ? null : { el: node, offset: (node.getBoundingClientRect().top - top) / scale };
+}
+
+function readerAnchorAt(scroller: HTMLElement, path: string): ReaderAnchor | null {
+  const viewportTop = scroller.getBoundingClientRect().top;
+  const row = firstRowPastTop(readingRows(scroller), viewportTop);
+  const key = row?.dataset.feedKey;
+  const scale = layoutScale(scroller);
+  return row && key
+    ? { path, key, offset: (row.getBoundingClientRect().top - viewportTop) / scale, inner: innerBlock(row, viewportTop, scale) }
+    : null;
+}
+
+/** How far the reader's anchor has moved from where it was taken, in layout
+    pixels. A block with no box is as good as gone and the row stands in for
+    it; null when neither the block nor its row can say. */
+function anchorDrift(scroller: HTMLElement, anchor: ReaderAnchor): number | null {
+  if (!hasBox(scroller)) return null;
+  const top = scroller.getBoundingClientRect().top;
+  const scale = layoutScale(scroller);
+  const inner = anchor.inner;
+  if (inner && inner.el.isConnected && scroller.contains(inner.el) && hasBox(inner.el)) {
+    return (inner.el.getBoundingClientRect().top - top) / scale - inner.offset;
+  }
+  const row = rowForAnchor(scroller, anchor.key);
+  return row && hasBox(row) ? (row.getBoundingClientRect().top - top) / scale - anchor.offset : null;
+}
+
+/** The anchor after the reader's own travel of `distance` layout pixels. */
+function anchorAfterTravel(anchor: ReaderAnchor, distance: number): ReaderAnchor {
+  return {
+    ...anchor,
+    offset: anchor.offset - distance,
+    inner: anchor.inner && { el: anchor.inner.el, offset: anchor.inner.offset - distance },
+  };
 }
 
 interface PrependViewportProps {
@@ -196,24 +292,26 @@ interface PrependViewportProps {
   prependGen: number;
   visibleCount: number;
   following: RefObject<boolean>;
+  readerAnchor: RefObject<ReaderAnchor | null>;
+  onRestore: (scroller: HTMLElement) => void;
 }
 
 /* The before-mutation lifecycle reads the current viewport, including gestures
    made while history was in flight. Layout-effect cleanups can run after DOM
    mutations and therefore cannot supply this snapshot. */
 class PrependViewport extends Component<PrependViewportProps> {
-  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ViewportAnchor & { toolSource?: string }) | null {
+  getSnapshotBeforeUpdate(previous: PrependViewportProps): (ReaderAnchor & { toolSource?: string }) | null {
     const { scroller, identity, prependGen, visibleCount, following } = this.props;
     if (identity !== previous.identity || following.current
       || (prependGen === previous.prependGen && visibleCount <= previous.visibleCount)) return null;
     const el = scroller.current;
-    const anchor = el ? viewportAnchor(el, identity) : null;
+    const anchor = el ? readerAnchorAt(el, identity) : null;
     if (!el || !anchor) return null;
     const toolSource = rowForAnchor(el, anchor.key)?.dataset.feedToolSources?.split(" ")[0];
     return { ...anchor, toolSource };
   }
 
-  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ViewportAnchor & { toolSource?: string }) | null) {
+  componentDidUpdate(_previous: PrependViewportProps, _state: unknown, anchor: (ReaderAnchor & { toolSource?: string }) | null) {
     const el = this.props.scroller.current;
     if (!el || !anchor || this.props.following.current) return;
     // A boundary tool run can absorb older calls and acquire a new group key.
@@ -222,13 +320,17 @@ class PrependViewport extends Component<PrependViewportProps> {
       ? feedRows(el).find((candidate) => candidate.dataset.feedToolSources?.split(" ").includes(anchor.toolSource!))
       : null);
     if (!row) return;
-    // Measure the residual after native anchoring, avoiding double compensation.
-    const bounds = el.getBoundingClientRect();
-    const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
+    // Measure the residual so an already restored layout is not compensated twice.
     // Compact panes can sit inside the scaled project canvas. DOM rectangles
-    // use viewport pixels while scrollTop uses untransformed layout pixels.
-    const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
-    if (delta && scale > 0) el.scrollTop += delta / scale;
+    // use viewport pixels while scrollTop and the anchor use layout pixels.
+    if (!hasBox(row)) return;
+    const bounds = el.getBoundingClientRect();
+    const delta = (row.getBoundingClientRect().top - bounds.top) / layoutScale(el) - anchor.offset;
+    if (delta) {
+      el.scrollTop += delta;
+      this.props.onRestore(el);
+    }
+    this.props.readerAnchor.current = { path: anchor.path, key: row.dataset.feedKey!, offset: anchor.offset, inner: anchor.inner };
   }
 
   render() { return this.props.children; }
@@ -279,9 +381,12 @@ interface Props {
   /** The seat's deputies to draw as blocks. Absent: read from the seat's own
       poll for this conversation, which is empty for every non-seat feed. */
   deputies?: readonly SeatDeputyView[];
+  /** The slot the pane keeps between the feed and its composer for the row
+      that steps between the operator's own messages. Absent: no such row. */
+  stepsMount?: HTMLElement | null;
 }
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -291,6 +396,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      «back to live» control is NOT part of that: it only exists once the
      operator has scrolled away, and without it a phone cannot get back. */
   const phone = useIsMobile();
+  /* Off-screen rows skip layout and paint (`.feed-cv`) everywhere but the
+     phone. The conversation window is `compact` on the phone too, so the
+     phone is told apart by the layout, not the prop. A skipped row is a 44 px
+     estimate until it is first reached, so older history above a reader who
+     flicks up grows under them as the rows come into range, 50-70 px at a
+     time, with the scroll offset unchanged: a visible jump. Neutralizing
+     `.feed-cv` removed every one of them in the 390 px walk. */
+  const rowsSkipOffscreen = !phone;
   const { locale, t } = useLocale();
   const memoryKey = file ? conversationIdentity(file) : null;
   /* The conversation's own outbox (issue #561): submitted drafts render as
@@ -398,6 +511,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     magnet ? (compact ? TAIL_CAP : FOCUS_CAP) : 0,
   );
   const scroller = useRef<HTMLDivElement | null>(null);
+  const readerAnchor = useRef<ReaderAnchor | null>(null);
+  /* Where the feed's own anchor write left the scroll offset. The first scroll
+     event after it can also carry the reader's momentum; the difference is the
+     reader's travel, and the anchor follows it. */
+  const ownTopRef = useRef<number | null>(null);
+  const scrollSeqRef = useRef(0);
+  const restFrameRef = useRef<number | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
   const olderRequestRef = useRef<object | null>(null);
   const historyOwnerRef = useRef<object>({});
@@ -405,6 +525,39 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const revealStep = compact ? COMPACT_STEP : RENDER_STEP;
   const firstPaintCount = Math.min(FIRST_PAINT_ROWS, initialCount);
   const [visibleCount, setVisibleCount] = useState(firstPaintCount);
+  /* The count the ramp builds on: `visibleCount` as of the last commit, plus
+     what the ramp has asked for since. */
+  const visibleCountRef = useRef(visibleCount);
+  useLayoutEffect(() => { visibleCountRef.current = visibleCount; }, [visibleCount]);
+  const rampTargetRef = useRef<number | null>(null);
+  const rampHandleRef = useRef<number | null>(null);
+  /* Moves the rendered count toward `target` REVEAL_RAMP_ROWS per animation
+     frame, instead of mounting every row in one commit. */
+  const rampVisibleTo = useCallback((target: number) => {
+    if (rampTargetRef.current !== null) {
+      rampTargetRef.current = Math.max(rampTargetRef.current, target);
+      return;
+    }
+    rampTargetRef.current = target;
+    const advance = () => {
+      rampHandleRef.current = null;
+      const goal = rampTargetRef.current;
+      if (goal === null) return;
+      const next = Math.min(goal, visibleCountRef.current + REVEAL_RAMP_ROWS);
+      visibleCountRef.current = next;
+      setVisibleCount(next);
+      /* A load may resolve before its enlarged feed commits. The previous
+         committed item count cannot stop a requested reveal here. */
+      if (next >= goal) {
+        rampTargetRef.current = null;
+      } else {
+        rampHandleRef.current = typeof requestAnimationFrame === "function"
+          ? requestAnimationFrame(advance)
+          : (setTimeout(advance, 0) as unknown as number);
+      }
+    };
+    advance();
+  }, []);
   const [newCount, setNewCount] = useState(0);
   const [pulse, setPulse] = useState(false);
   const [endedQuestion, setEndedQuestion] = useState<string | null>(null);
@@ -418,23 +571,39 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const lastPrependRef = useRef(0);
   const pulseTimer = useRef<number | null>(null);
   const glueAtRef = useRef(0);
+  /* A glue wrote the offset and the scroll event for that write has not come.
+     A frame dispatches its scroll events before its animation callbacks, so
+     the next frame's callback ends the wait: a glue whose writes moved
+     nothing leaves no mark on a later scroll. */
+  const glueScrollPendingRef = useRef(false);
+  const glueScrollFrameRef = useRef<number | null>(null);
   const scrollCauseRef = useRef<ScrollCause | null>(null);
   /* One scrollbar press can drive many scroll events. Its moving baseline
      lives through the gesture; a stamped programmatic cause still wins. */
   const scrollbarPointerRef = useRef<{ fromBottom: number } | null>(null);
   const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const gestureRestPending = useRef(false);
+  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
   const filePathRef = useRef(tailPath);
   const controlledFollowRef = useRef(follow);
+  /* Ends an own-message step that is still in flight; the step hook, mounted
+     further down, fills it in. */
+  const releaseOwnStep = useRef<() => void>(() => undefined);
 
   const setMagnet = (value: boolean, withPulse = false) => {
     pendingRestoreRef.current = null;
     magnetRef.current = value;
     setMagnetState(value);
     setFollow(value);
-    if (value) setNewCount(0);
+    if (value) {
+      setNewCount(0);
+      /* The feed is going back to its tail: a step between own messages
+         that is still landing, or waiting for older history, is over. */
+      releaseOwnStep.current();
+    }
     if (memoryKey) {
       const remembered = scrollMemory.get(memoryKey);
       rememberScroll(memoryKey, {
@@ -460,8 +629,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      the content alone. The spacer sits outside `content`, whose resize
      observer would otherwise re-glue. */
   const tailSpacer = useRef<HTMLDivElement | null>(null);
-  const restTimer = useRef<number | null>(null);
-  const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
   const alignFollowedTop = (el: HTMLElement) => {
     const spacer = tailSpacer.current;
     if (!spacer) return;
@@ -481,32 +648,60 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     spacer.style.height = `${plan.spacer}px`;
     el.scrollTop = el.scrollHeight;
   };
-  /* Released from the tail, a feed that came to rest mid-line moves by the
-     shorter way to a line boundary, once the finger is off the glass and the
-     momentum has run out. */
-  const scheduleRestAlign = () => {
-    if (!onPhoneLayout()) return;
-    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
-    restTimer.current = window.setTimeout(() => {
-      restTimer.current = null;
-      const el = scroller.current;
-      if (!el || magnetRef.current || feedTouchRef.current) return;
-      const delta = restingDelta(el);
-      if (!delta) return;
-      /* A settle never undoes the one before it, and gives up after a few
-         in a row: the operator's next touch, wheel or key starts afresh. */
-      const previous = autoAlignRef.current;
-      if (previous && (Math.sign(previous.delta) !== Math.sign(delta) || previous.count >= MAX_AUTO_ALIGNS)) return;
+  /* Only a reader gesture may align a released phone feed. The browser's
+     scrollend includes momentum; prepends and resize restoration never arm
+     this step. Record the settled boundary as the shared reader anchor. */
+  const alignGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    if (!onPhoneLayout() || magnetRef.current) {
+      gestureRestPending.current = false;
+      return;
+    }
+    const delta = restingDelta(el);
+    const previous = autoAlignRef.current;
+    // Clearing a row can expose ink in its enclosing tall card. Continue on
+    // the glide's next scrollend, without reversing or exceeding three moves.
+    if (delta && (!previous || (Math.sign(previous.delta) === Math.sign(delta) && previous.count < 3))) {
       autoAlignRef.current = { delta, count: (previous?.count ?? 0) + 1 };
       markProgrammaticScroll();
       const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       el.scrollBy({ top: delta, behavior: reduce ? "auto" : "smooth" });
-    }, REST_ALIGN_MS);
+      return;
+    }
+    gestureRestPending.current = false;
+    readerAnchor.current = readerAnchorAt(el, `${memoryKey}\0${tailPath}`);
+    if (memoryKey && tailPath) rememberScroll(memoryKey, {
+      magnet: false,
+      fromBottom: distanceFromBottom(el),
+      anchor: viewportAnchor(el, tailPath),
+    });
+  };
+  /* A scrollend is also fired for the feed's own write, and a page that lands
+     during a flick writes while the finger is already up and the momentum is
+     still travelling. Aligning on that one would aim at a boundary the
+     momentum then carries past, and the glide would pull the feed back
+     against the reader. The reader's own scroll has ended when the position
+     stays put for a couple of frames after the event; otherwise the
+     momentum's own scrollend is still to come. */
+  const settleGestureRest = (el: HTMLDivElement) => {
+    if (!gestureRestPending.current || feedTouchRef.current) return;
+    if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+    const seq = scrollSeqRef.current;
+    const top = el.scrollTop;
+    let quiet = 0;
+    const check = () => {
+      restFrameRef.current = null;
+      if (scrollSeqRef.current !== seq || el.scrollTop !== top || feedTouchRef.current) return;
+      quiet += 1;
+      if (quiet < REST_QUIET_FRAMES) restFrameRef.current = requestAnimationFrame(check);
+      else alignGestureRest(el);
+    };
+    restFrameRef.current = requestAnimationFrame(check);
   };
   useEffect(() => () => {
-    if (restTimer.current !== null) window.clearTimeout(restTimer.current);
+    if (restFrameRef.current !== null) cancelAnimationFrame(restFrameRef.current);
+    if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
   }, []);
-
   const markProgrammaticScroll = () => {
     if (scrollCauseRef.current?.kind !== "user") {
       scrollCauseRef.current = { kind: "programmatic" };
@@ -523,6 +718,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     markProgrammaticScroll();
     el.scrollTop = el.scrollHeight;
     alignFollowedTop(el);
+    glueScrollPendingRef.current = true;
+    if (typeof requestAnimationFrame === "function") {
+      if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
+      glueScrollFrameRef.current = requestAnimationFrame(() => {
+        glueScrollFrameRef.current = null;
+        glueScrollPendingRef.current = false;
+      });
+    }
     const pendingUser = scrollCauseRef.current;
     if (pendingUser?.kind === "user") pendingUser.fromBottom = distanceFromBottom(el);
   };
@@ -572,11 +775,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const cancel = (handle: number) => (raf ? cancelAnimationFrame(handle) : clearTimeout(handle));
     let handle = schedule(() => {
       handle = schedule(() => {
-        setVisibleCount((count) => Math.max(count, initialCount));
+        rampVisibleTo(initialCount);
       });
     });
     return () => cancel(handle);
-  }, [tailPath, initialCount, firstPaintCount]);
+  }, [tailPath, initialCount, firstPaintCount, rampVisibleTo]);
   /* Same instance, new transcript: pick up that transcript's remembered state. */
   useEffect(() => {
     if (!memoryKey) return;
@@ -598,6 +801,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       setMagnetState(follow);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (follow) setNewCount(0);
+      if (follow) releaseOwnStep.current();
     }
   }, [follow]);
   useEffect(
@@ -714,10 +918,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const viewportOwner = Symbol("speech-viewport");
     speech.setRoots(viewportOwner, (id) => Array.from(viewport.querySelectorAll<HTMLElement>("[data-tts-answer-id]")).filter((node) => node.getAttribute("data-tts-answer-id") === id).flatMap((node) => Array.from(node.querySelectorAll<HTMLElement>("[data-tts-body]"))));
     let frame = 0;
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    let lastMeasured = -Infinity;
+    let wait = 0;
+    /* The speak button only has to name the answer in view, not follow it
+       frame by frame: while the reader flicks through history the measure
+       runs at most every SPEECH_MEASURE_GAP_MS, the first one at once and the
+       last one after the scroll rests, so a dense screen costs a frame in
+       eight instead of every one. */
+    const schedule = () => {
+      if (frame || wait) return;
+      const due = lastMeasured + SPEECH_MEASURE_GAP_MS - performance.now();
+      if (due > 0) wait = window.setTimeout(() => { wait = 0; frame = requestAnimationFrame(measure); }, due);
+      else frame = requestAnimationFrame(measure);
+    };
     const rows = trackVisibleAnswerRows(viewport, schedule);
     const measure = () => {
       frame = 0;
+      lastMeasured = performance.now();
       const box = viewport.getBoundingClientRect();
       const clip = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(window.innerWidth, box.right), bottom: Math.min(window.innerHeight, box.bottom) };
       if (clip.right <= clip.left || clip.bottom <= clip.top) { speech.selectFor(viewportOwner, null); return; }
@@ -732,7 +949,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     window.addEventListener("scroll", schedule, true);
     const resize = new ResizeObserver(schedule); resize.observe(viewport);
     schedule();
-    return () => { speechMeasureRef.current = null; cancelAnimationFrame(frame); rows.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
+    return () => { speechMeasureRef.current = null; cancelAnimationFrame(frame); window.clearTimeout(wait); rows.disconnect(); resize.disconnect(); speech.releaseViewport(viewportOwner); viewport.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); };
   }, [speechScope]);
   useEffect(() => { speechMeasureRef.current?.(); }, [feed.items, answerFor]);
 
@@ -760,6 +977,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     filePathRef.current = tailPath;
     restoreInitializedPathRef.current = null;
     pendingRestoreRef.current = null;
+    readerAnchor.current = null;
+    gestureRestPending.current = false;
+    autoAlignRef.current = null;
   }, [tailPath]);
 
   useLayoutEffect(() => {
@@ -768,6 +988,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     return () => {
       historyOwnerRef.current = {};
       olderRequestRef.current = null;
+      rampTargetRef.current = null;
+      if (rampHandleRef.current !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(rampHandleRef.current);
+        else clearTimeout(rampHandleRef.current);
+        rampHandleRef.current = null;
+      }
     };
   }, [tailPath, memoryKey]);
 
@@ -813,13 +1039,17 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (!el || !inner) return;
     const observer = new ResizeObserver(() => {
       if (magnetRef.current) glue();
-      else {
-        restorePendingPosition();
-        /* Rows that grew or shrank above a released feed move it without a
-           scroll event; it settles on a row edge again (#1978), as a fresh
-           layout, since a settle's own scroll never resizes anything. */
-        autoAlignRef.current = null;
-        scheduleRestAlign();
+      else if (!restorePendingPosition()) {
+        // Native anchoring may choose the newly prepended predecessor instead
+        // of the message being read. Own the same anchor across later layout.
+        const anchor = readerAnchor.current;
+        if (!anchor) return;
+        const delta = anchorDrift(el, anchor);
+        if (delta) {
+          markProgrammaticScroll();
+          el.scrollTop += delta;
+          ownTopRef.current = el.scrollTop;
+        }
       }
     });
     observer.observe(inner);
@@ -827,16 +1057,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     return () => observer.disconnect();
   }, []);
 
-  const revealOlder = () => {
+  /* One reveal step, a few rows per frame. Repeated scroll asks coalesce while
+     a ramp runs; explicit reveals and successful pages can extend its target. */
+  const growVisibleBy = (step: number, extendActiveRamp = false) => {
+    if (rampTargetRef.current === null || extendActiveRamp) {
+      rampVisibleTo(visibleCountRef.current + step);
+    }
+  };
+  const revealOlder = (source: "scroll" | "explicit" = "scroll") => {
     if (hiddenLocal) {
-      setVisibleCount((value) => value + revealStep);
+      growVisibleBy(revealStep, source === "explicit");
     } else if (tail.hasMore && !olderRequestRef.current) {
       const owner = historyOwnerRef.current;
       const request = {};
       olderRequestRef.current = request;
       void tail.loadOlder().then((added) => {
-        if (historyOwnerRef.current === owner && added > 0) {
-          setVisibleCount((value) => value + revealStep);
+        if (historyOwnerRef.current === owner && added > 0 && !magnetRef.current) {
+          growVisibleBy(revealStep, true);
         }
       }).finally(() => {
         if (olderRequestRef.current === request) olderRequestRef.current = null;
@@ -844,6 +1081,36 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     }
   };
   const canRevealOlder = hiddenLocal > 0 || tail.hasMore;
+  /* Fetches the next page of history before the reader reaches the top, without
+     showing it: the rows stay hidden until the reader gets there, and then they
+     reveal from memory instead of waiting on a request. */
+  const prefetchOlder = () => {
+    if (hiddenLocal || !tail.hasMore || olderRequestRef.current) return;
+    const owner = historyOwnerRef.current;
+    const request = {};
+    olderRequestRef.current = request;
+    void tail.loadOlder().finally(() => {
+      if (historyOwnerRef.current === owner && olderRequestRef.current === request) olderRequestRef.current = null;
+    });
+  };
+  /* A load that settles while the reader already sits at the top has nothing
+     left to move the scroller: its rows arrive hidden, no scroll event fires,
+     and the scroll handler (which skipped the reveal while the load was in
+     flight) never runs again. Look again when the load settles. */
+  const wasLoadingOlderRef = useRef(false);
+  const olderLoadStartRef = useRef(tail.linesStart);
+  useEffect(() => {
+    if (tail.loadingOlder && !wasLoadingOlderRef.current) olderLoadStartRef.current = tail.linesStart;
+    const settled = wasLoadingOlderRef.current && !tail.loadingOlder;
+    wasLoadingOlderRef.current = tail.loadingOlder;
+    const el = scroller.current;
+    if (!settled || tail.loading || !el) return;
+    /* A failed or zero-progress read leaves the history boundary unchanged.
+       Reveal rows already here, but fetch again automatically only after a
+       successful prepend; scroll and button handlers still permit a retry. */
+    if (el.scrollTop < 120 && hiddenLocal > 0) revealOlder();
+    else if (tail.linesStart < olderLoadStartRef.current && el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
+  });
 
   const lastItem = feed.items.at(-1)?.item;
   const transcriptWorking: { icon: LucideIcon; label: string } =
@@ -1106,10 +1373,28 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     adoptCanonicalAssistantClaims(tailPath, memoryKey);
     publishCanonicalAssistantClaims(memoryKey, feed.items);
   }, [tailPath, memoryKey, feed.items]);
+  /* The tail settles `loading` on a failed first read too, and the lines land
+     on the retry. A file with bytes and no line read yet is still an unread
+     window, so nothing is judged against it. */
+  const windowUnread = tail.loading || tail.lines.length === 0 && tail.size > 0;
+  const assistantHandoff = useAssistantHandoff(memoryKey, runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn, windowUnread);
   const visibleLiveTurnItems = useMemo(
-    () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn),
+    () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn).filter(item => item.tool || !item.text.trim()),
     [runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn],
   );
+  const liveTail = useMemo(() => {
+    const ordered = retainedAssistantItems(assistantHandoff, runtimeLiveTurn, visibleLiveTurnItems).sort((a, b) => {
+      const time = Date.parse(a.startedAt ?? a.completedAt ?? "") - Date.parse(b.startedAt ?? b.completedAt ?? "");
+      if (Number.isFinite(time) && time) return time;
+      const order = (item: RuntimeLiveTurnItem) => item.itemId ? assistantHandoff.liveOrder.get(item.itemId) ?? Infinity
+        : assistantHandoff.pending.find(answer => answer.live === item)?.order ?? Infinity;
+      return order(a) - order(b);
+    });
+    // Replies remain conversation rows until their own canonical echo adopts them.
+    // Only transient tools and transport summaries share the eight-step tail.
+    const tail = liveTurnTail(ordered.filter(item => item.tool || !item.text.trim()));
+    return { ...tail, handoff: assistantHandoff };
+  }, [assistantHandoff, visibleLiveTurnItems, runtimeLiveTurn]);
   /* The status bar names the tool that is running NOW: a live tool row from the
      structured host (issue #1100) is newer than anything the transcript window
      shows, so it wins over the transcript's last row while it is still running.
@@ -1130,7 +1415,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     : transcriptWorking;
   /* Anything the window shows below the transcript. While it is present an
      empty transcript is not "no output" — it is a conversation mid-launch. */
-  const windowTail = visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
+  const windowTail = assistantHandoff.pending.length > 0 || visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
 
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
@@ -1386,13 +1671,38 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     for (const section of orderedConversationTail({
       launch: Boolean(launch),
       outbox: Boolean(memoryKey && pendingOutbox.length),
-      delta: visibleLiveTurnItems.length > 0,
+      delta: visibleLiveTurnItems.length > 0 || liveTail.earlier > 0,
     })) {
       if (section === "launch") {
         if (memoryKey) rows.push(...pendingOutbox.filter(launchPrompt).flatMap(tailMessage));
         rows.push({ kind: "launch", key: "launch" });
-      } else if (section === "delta") rows.push({ kind: "delta", key: "delta" });
+      } else if (section === "delta") {
+        const tail = liveTail;
+        if (tail.earlier) rows.push({ kind: "delta", key: "delta-earlier", items: [{ itemId: null, text: "", phase: "awaiting-echo", startedAt: null, completedAt: null, omittedItems: tail.earlier }] });
+        for (const [index, item] of tail.rows.filter(item => item.tool || !item.text.trim()).entries()) rows.push({ kind: "delta", key: `delta:${item.itemId ?? index}`,
+          items: [item], liveOrder: item.itemId ? assistantHandoff.liveOrder.get(item.itemId) : undefined, instant: Date.parse(item.startedAt ?? item.completedAt ?? "") || null });
+      }
       else rows.push(...pendingOutbox.filter((entry) => !launchPrompt(entry)).flatMap(tailMessage));
+    }
+    if (liveTail.handoff.pending.length || liveTail.handoff.bindings.size) {
+      const rowInstants = new Map<string, number | null>();
+      for (const entry of visibleItems) {
+        rowInstants.set(entry.key, transcriptInstant(entry.item));
+        if (entry.anchorKey) rowInstants.set(entry.anchorKey, transcriptInstant(entry.item));
+      }
+      const withAnswers = mergeAssistantRows<ConversationRow>(rows, liveTail.handoff, ({ key, live }) => ({
+        kind: "item", key, anchorKey: key, live,
+        item: { kind: "prose", ts: live.startedAt ?? live.completedAt, text: live.text,
+          engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : "claude",
+          ...(live.itemId ? { sourceId: live.itemId } : {}) },
+      }), row => row.kind === "message"
+        ? row.entry?.at ?? rowInstants.get(row.anchorKey ?? row.key) ?? null
+        : row.kind === "delta" ? row.instant ?? null
+          : row.kind === "item" ? transcriptInstant(row.item)
+            : row.kind === "deputy" ? Date.parse(row.deputy.startedAt) : null,
+      // A deputy starts after seat rows at the same instant (ghost-seat §6.1).
+      row => row.kind === "deputy");
+      rows.splice(0, rows.length, ...withAnswers);
     }
     /* A block splits the seat's own answer, so the first seat row after one
        names the seat head it continues (docs/design/ghost-seat.md §6.1). */
@@ -1409,13 +1719,21 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         const row = rows[index]!;
         if (row.kind === "item" || row.kind === "delta") rows[index] = { ...row, resumes: { ask } };
       }
+      /* The seat's live turn is one stream however many rows carry it, so
+         only the first row of an uninterrupted run names the seat. */
+      let streaming = false;
+      for (const [index, row] of rows.entries()) {
+        const live = row.kind === "delta" || row.kind === "item" && Boolean(row.live);
+        if (live && !streaming) rows[index] = { ...row, leads: true };
+        streaming = live;
+      }
     }
     return rows;
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
        functions of the memos already named here. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleItems, visibleStartIndex, echoBindings, boundSubmissions, outbox, pendingOutbox, launch, memoryKey,
-    visibleLiveTurnItems.length, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
+    visibleLiveTurnItems, assistantHandoff, liveTail, answerFor, provenanceLookup, withheldRecords, withheldNativeRecords, deputies, holdsMandate, heldMandate, firstMandateRecord, mandateCard]);
   /* What this feed is painting, so the composer's receipt stack knows which
      deliveries already have a row explaining them and stops repeating them.
      Read off the ROWS rather than off the queue, and including the rows the
@@ -1455,6 +1773,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     const el = scroller.current;
     if (!el) return;
     autoAlignRef.current = null;
+    if (direction !== null && direction !== 0) gestureRestPending.current = true;
     scrollCauseRef.current = {
       kind: "user",
       fromBottom: distanceFromBottom(el),
@@ -1465,9 +1784,105 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const forwardPillVerticalDelta = (row: HTMLElement | null, deltaY: number): void => {
     const el = scroller.current;
     if (!el || !deltaY || (row && canScrollVertically(row, deltaY))) return;
+    releaseOwnStep.current();
     markUserScroll(deltaY);
     el.scrollTop += deltaY;
   };
+
+  /* Stepping between the operator's own messages
+     (docs/design/own-message-steps.md). A delivered Claude record is a system
+     row until the ledger names its sender, so while one is unanswered the
+     count is not final. */
+  const sendersPending = useMemo(() => feed.items.some(({ item }) => item.kind === "sysmsg"
+    && Boolean(item.deliveredMessage?.engineMessageId)
+    && !provenanceLookup.forItem(item)
+    && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [feed.items, provenanceLookup]);
+  const stepsHost = file && logFeedDependencies().ownMessageSteps ? stepsMount : null;
+  /* The page shows the last rows of what is loaded, and that window slides
+     on while the agent works. The own messages above it are counted from
+     their records, by the verdict that marks a row on the page, so neither
+     the count nor the row depends on how much history is on the page. */
+  const mandateRecord = holdsMandate && heldMandate ? firstMandateRecord : null;
+  const submittedMessages = useMemo(() => new Map(outbox.map((entry) => [entry.id, entry])), [outbox]);
+  /* The transcript of a file-only send can contain a generated inbox path.
+     Where its submission still supplies the authored text, use that same
+     evidence on the page and above it. Older unproven bubbles inherit the
+     feed's verdict, as the design's known limits describe. */
+  const ownRecord = useCallback((item: FeedSnapshot["items"][number]["item"], sourceId: string): boolean => {
+    if (item === mandateRecord) return false;
+    const kind = resolveDeliveredItem(item, provenanceLookup).kind;
+    if (kind === "voice") return true;
+    if (kind !== "user") return false;
+    const bound = echoBindings.get(transcriptEchoObservationId({ generation: transcriptGeneration ?? undefined, id: sourceId, text: "" }));
+    const entry = bound ? submittedMessages.get(bound) : undefined;
+    return entry ? Boolean(entry.text.trim()) : true;
+  }, [mandateRecord, provenanceLookup, echoBindings, transcriptGeneration, submittedMessages]);
+  const ownBeforePage = useMemo(() => {
+    if (!stepsHost || !hiddenLocal) return 0;
+    let own = 0;
+    for (let index = 0; index < hiddenLocal; index += 1) {
+      const { item, anchorKey, key } = feed.items[index]!;
+      if (ownRecord(item, anchorKey ?? `key:${key}`)) own += 1;
+    }
+    return own;
+  }, [stepsHost, hiddenLocal, feed.items, ownRecord]);
+  const ownSteps = useOwnMessageSteps({
+    scroller,
+    mount: stepsHost,
+    identity: memoryKey && tailPath ? `${memoryKey}\0${tailPath}` : null,
+    phone,
+    atTail: magnet,
+    olderOwn: ownBeforePage,
+    olderUnloaded: tail.hasMore,
+    operatorWrote: file?.userAuthored === true,
+    sendersPending,
+    revision: conversationRows,
+    markReaderScroll: markUserScroll,
+    restoreTail: () => {
+      /* The abandoned step no longer needs to reveal more rows. A slow ramp
+         must not keep prepending after the tail has been restored. */
+      rampTargetRef.current = null;
+      if (rampHandleRef.current !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(rampHandleRef.current);
+        else clearTimeout(rampHandleRef.current);
+        rampHandleRef.current = null;
+      }
+      /* The history request's upward tag has no gesture behind it. Retiring
+         it prevents a late layout scroll from releasing the restored tail. */
+      scrollCauseRef.current = { kind: "programmatic" };
+      gestureRestPending.current = false;
+      readerAnchor.current = null;
+      setMagnet(true);
+      glue();
+    },
+    revealOlder: () => revealOlder("explicit"),
+  });
+  const releaseStep = ownSteps.release;
+  useEffect(() => { releaseOwnStep.current = releaseStep; }, [releaseStep]);
+  const awayFromTail = Boolean(file && feed.items.length && !magnet);
+  /* On the phone the way back shares the step row while both are needed, so
+     only one row is spent under the feed. */
+  const wayBackInStepRow = phone && ownSteps.shown && stepsMount !== null;
+  const wayBack = (shared: boolean) => (
+    <button
+      className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
+      aria-label={t("feed.backToLive")}
+      data-own-step-control={shared ? "latest" : undefined}
+      onClick={jumpToTail}
+    >
+      <span
+        data-feed-jump-pill
+        className={`inline-flex h-8 items-center whitespace-nowrap rounded-full border border-border bg-raised text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40 ${shared ? "min-w-8 flex-col justify-center px-1" : "gap-1 px-3"}`}
+      >
+        <ArrowDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {/* The shared cell is 44 px wide, so the arrow keeps its size and the
+            count of new rows goes under it, short. */}
+        {shared
+          ? newCount ? <span data-feed-jump-count className="font-mono text-[10px] leading-none tabular-nums">{newCount > 99 ? "99+" : newCount}</span> : null
+          : <>{" "}{newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}</>}
+      </span>
+    </button>
+  );
 
   return (
     <RawLineProvider value={getRawLine}>
@@ -1537,6 +1952,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            capture measures this scroller's rendered height against the usable
            visual viewport to prove the transcript owns its ≥60% share. */
         data-log-feed-scroller
+        // Prepend and resize share the reader's message anchor. Letting the
+        // browser independently choose another row causes double restoration.
+        style={{ overflowAnchor: "none" }}
         data-tail-lines-start={tail.linesStart}
         data-tail-line-count={tail.lines.length}
         className={compact ? "min-h-0 flex-1 overflow-y-auto py-3" : "min-h-0 flex-1 overflow-y-auto py-6"}
@@ -1546,7 +1964,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         onPointerDownCapture={(event) => {
           if (event.button === 0 && pointerHitsVerticalScrollbar(event.currentTarget, event.clientX)) {
             scrollbarPointerRef.current = { fromBottom: distanceFromBottom(event.currentTarget) };
-            autoAlignRef.current = null;
             scrollCauseRef.current = null;
           }
         }}
@@ -1566,14 +1983,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         }}
         onTouchEndCapture={() => {
           feedTouchRef.current = null;
-          scheduleRestAlign();
         }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
+          if (isOwnMessageStepKey(event)) return;
           if (["ArrowUp", "Home", "PageUp"].includes(event.key)) markUserScroll(-1);
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
         }}
+        onScrollEnd={(event) => settleGestureRest(event.currentTarget)}
         onScroll={(event) => {
           const el = event.currentTarget;
           const fromBottom = distanceFromBottom(el);
@@ -1596,14 +2014,19 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           if (scrollbarPointer) scrollbarPointer.fromBottom = fromBottom;
           if (scrollbarPointer || cause?.kind !== "user" || userDelta !== 0) scrollCauseRef.current = null;
           const settling = nowMs() - glueAtRef.current < GLUE_SETTLE_MS;
+          const glueOwnScroll = glueScrollPendingRef.current;
+          glueScrollPendingRef.current = false;
           if (!settling || userInitiated) pendingRestoreRef.current = null;
           if (userReturnedToBottom && !magnetRef.current) setMagnet(true, true);
           else if ((userReleasedMagnet || !atBottom) && magnetRef.current) {
             /* Off-bottom right after a programmatic glue is layout settling
-               (content-visibility estimates, pane resizes during a scheme
+               (initial row windows, pane resizes during a scheme
                reshuffle) — hold the magnet and glue again. A preceding input
-               event identifies an operator release inside the same window. */
-            if (settling && !userInitiated) glue();
+               event identifies an operator release inside the same window.
+               A glue's own scroll event holds it whenever it arrives: a busy
+               page delivers it past the window, after rows that landed
+               above have left the offset short of the tail. */
+            if ((settling || glueOwnScroll) && !userInitiated) glue();
             else setMagnet(false);
           }
           if (memoryKey && file && (!settling || userInitiated)) {
@@ -1613,12 +2036,30 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               anchor: magnetRef.current ? null : viewportAnchor(el, tailPath ?? file.path),
             });
           }
-          if (el.scrollTop < 120 && canRevealOlder && !tail.loadingOlder && !tail.loading) revealOlder();
-          if (!magnetRef.current) scheduleRestAlign();
+          scrollSeqRef.current += 1;
+          const ownTop = ownTopRef.current;
+          ownTopRef.current = null;
+          if (magnetRef.current) readerAnchor.current = null;
+          else if (cause?.kind !== "programmatic") readerAnchor.current = readerAnchorAt(el, `${memoryKey}\0${tailPath}`);
+          else if (ownTop !== null && readerAnchor.current) {
+            /* The feed's own write is already in the anchor; whatever else
+               moved the offset is the reader's momentum, so the anchor moves
+               with it instead of reading it back as drift. */
+            const travel = el.scrollTop - ownTop;
+            if (travel) readerAnchor.current = anchorAfterTravel(readerAnchor.current, travel);
+          }
+          if (!tail.loadingOlder && !tail.loading) {
+            if (el.scrollTop < 120 && canRevealOlder) revealOlder();
+            else if (el.scrollTop < el.clientHeight * PREFETCH_SCREENS) prefetchOlder();
+          }
         }}
       >
       <PrependViewport scroller={scroller} identity={`${memoryKey}\0${tailPath}`}
-        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}>
+        prependGen={tail.prependGen} visibleCount={visibleCount} following={magnetRef}
+        readerAnchor={readerAnchor} onRestore={(el) => {
+          markProgrammaticScroll();
+          ownTopRef.current = el.scrollTop;
+        }}>
       <div
         ref={content}
         /* Whether this feed has settled, readable off the page: a surface that
@@ -1636,7 +2077,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               <button
                 className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-control border border-dashed border-border bg-sunken px-2 py-1 text-label font-semibold text-muted [@media(pointer:coarse)]:min-h-11 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 disabled={tail.loadingOlder}
-                onClick={revealOlder}
+                onClick={() => revealOlder("explicit")}
               >
                 {tail.loadingOlder ? (
                   t("common.loading")
@@ -1651,7 +2092,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               <button
                 className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-control border border-dashed border-border bg-sunken px-3 py-1.5 text-ui font-semibold text-muted [@media(pointer:coarse)]:min-h-11 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 disabled={tail.loadingOlder}
-                onClick={revealOlder}
+                onClick={() => revealOlder("explicit")}
               >
                 {tail.loadingOlder
                   ? t("common.loading")
@@ -1688,8 +2129,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                    own live turn names its participant too, so the two streams
                    never read as one. */
                 const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} engine={file.engine} />
-                  : deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
-                return <LiveTurnRows key="delta" items={visibleLiveTurnItems} lead={lead} />;
+                  : row.leads && deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
+                return <LiveTurnRows key={row.key} items={row.items} lead={lead} />;
               }
               if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
               if (row.kind === "message") {
@@ -1703,7 +2144,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
-                    className={compact ? "feed-cv" : undefined}
+                    /* Attachment-only submissions draw a generated caption;
+                       only words the operator sent make this row a step. */
+                    data-own-message={(row.entry ? row.entry.text.trim() : row.canonical?.text.trim()) ? "" : undefined}
+                    className={rowsSkipOffscreen ? "feed-cv" : undefined}
                   >
                     <FeedMessageRow
                       entry={row.entry}
@@ -1720,31 +2164,59 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               /* On the phone a prose row names its speaker in its own header,
                  so the continuation joins that header rather than stacking a
                  second name over it (ghost-seat.md §6.1). */
-              const foldResumes = resumes !== undefined && phone && item.kind === "prose";
+              const foldResumes = resumes !== undefined && phone && item.kind === "prose" && row.live?.phase !== "streaming";
               return (
                 /* Session-stable keys: a row keeps its DOM node while the
-                   window slides. Compact panes live on the zoomable canvas:
-                   off-screen rows skip layout/paint via content-visibility. */
+                   window slides, and an older page prepended to it. On the
+                   phone rows keep their measured heights: a guessed intrinsic
+                   height invalidates the prepend snapshot, then shifts the
+                   reader again as those rows enter the viewport. On the
+                   zoomable canvas and in the desktop reader off-screen rows
+                   skip layout/paint via content-visibility (see
+                   rowsSkipOffscreen); the text they skip stays findable and
+                   copyable. */
                 <div
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
-                  data-feed-kind={item.kind}
+                  data-feed-kind={row.live ? undefined : item.kind}
+                  /* A step of the own-message row: what the feed draws as the
+                     operator's bubble, whatever the record parsed as. */
+                  data-own-message={!row.live && ownRecord(item, anchorKey ?? `key:${row.key}`) ? "" : undefined}
+                  data-live-turn={row.live ? "" : undefined}
+                  data-live-turn-item-id={row.live?.itemId ?? undefined}
                   data-tts-answer-index={speechIndex}
                   data-tts-answer-id={speechId}
                   data-tts-offset={speakOffset}
                   data-feed-tool-sources={item.kind === "cmd-group" ? item.calls.map((call) => call.srcCall).join(" ")
                     : item.kind === "tool" ? String(item.srcCall) : undefined}
                   data-feed-source-id={"sourceId" in item ? item.sourceId : undefined}
-                  className={compact ? "feed-cv" : undefined}
+                  className={rowsSkipOffscreen ? "feed-cv" : undefined}
                 >
-                  {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} /> : null}
+                  {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} />
+                    : row.leads && !resumes && deputies.some(deputy => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null}
+                  {row.live?.omittedChars ? <div data-live-turn-omitted-chars className="my-1 text-caption text-muted">
+                    {t("feed.liveOmittedChars", { chars: row.live.omittedChars })}
+                  </div> : null}
                   <GalleryOwnerProvider value={item}>
                     {/* The first delivery keeps the launch's conversation identity;
                         later mandates in the same transcript have their own row. */}
                     <MandateConversationContext.Provider value={memoryKey && row.key !== "held-mandate"
                       && !(tail.linesStart <= 0 && !tail.hasMore && row.key === firstMandateEntry?.key)
                       ? `${memoryKey}\0${row.key}` : memoryKey}>
-                    <SpeechScope.Provider value={file.path}><FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} /></SpeechScope.Provider>
+                    <SpeechScope.Provider value={file.path}>{item.kind === "raw" && item.processingError ? (
+                      <div role="alert" data-processing-error className="my-3 rounded-surface border border-danger/40 bg-danger-soft p-3 text-danger [overflow-wrap:anywhere]">
+                        <p className="font-semibold">{t("feed.processingFailed")}</p>
+                        <p className="mt-1 text-label">{t("feed.processingFailedRecord", { type: item.processingError.recordType })}</p>
+                        <p className="mt-1 whitespace-pre-wrap text-body">{item.processingError.message}</p>
+                      </div>
+                    ) : row.live?.phase === "streaming" ? (
+                      /* Keep unfinished markdown literal while deltas arrive.
+                         The keyed row survives completion and its own echo. */
+                      <div className={`my-2 ${phone ? "" : "ml-9 "}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] ${phone ? "text-title leading-[1.45]" : "text-body"}`}>
+                        <StreamingMd text={row.live.text} streaming />
+                        <span data-live-turn-caret="seat" className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] bg-accent align-text-bottom" aria-hidden />
+                      </div>
+                    ) : <FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} />}</SpeechScope.Provider>
                     </MandateConversationContext.Provider>
                   </GalleryOwnerProvider>
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
@@ -1829,22 +2301,16 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         feed, never over it. It exists only while the reader is away from the
         tail, which is exactly when a line of text would sit under a floating
         control. When it appears the feed's viewport ends 44 px higher and the
-        line being read, anchored at the top, stays where it is. */}
-    {file && feed.items.length && !magnet ? (
+        line being read, anchored at the top, stays where it is. On the phone,
+        beside the own-message step row, it is a cell of that row. */}
+    {awayFromTail && !wayBackInStepRow ? (
       <div data-feed-jump-strip className="flex h-11 shrink-0 items-center justify-center border-t border-border">
-        <button
-          className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
-          aria-label={t("feed.backToLive")}
-          onClick={jumpToTail}
-        >
-          <span
-            data-feed-jump-pill
-            className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised px-3 text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40"
-          >
-            <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
-          </span>
-        </button>
+        {wayBack(false)}
       </div>
+    ) : null}
+    {ownSteps.shown && stepsMount ? createPortal(
+      <OwnMessageStepRow steps={ownSteps} phone={phone} wayBack={awayFromTail ? wayBack(true) : null} />,
+      stepsMount,
     ) : null}
     {/* Bottom working-status slot: live elapsed from the transcript receipt.
         Completed totals stay beside their response rows in the scroller. Not on

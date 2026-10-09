@@ -7,11 +7,12 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
-import { sampleRequest } from "./protocol.test";
+import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
+import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -113,6 +114,7 @@ test("an unsafe provider home declines as a profile error before launch", async 
       ...sampleRequest, request_id: "rq_unsafe_provider_home",
     }, undefined, { command: stub("throw new Error('should not launch')") });
     expect(outcome).toMatchObject({ outcome: "declined", reason: "profile_error" });
+    expect(readAnswerRecord(paired.id, "target_1", "rq_unsafe_provider_home")?.admitted).toBe(false);
     expect(completions).toHaveLength(1);
     expect(readRunLedger().runs).toEqual([]);
     expect(runningCount(paired.id, "target_1")).toBe(0);
@@ -569,6 +571,51 @@ test("a note arriving during a heartbeat is sent on the next beat", async () => 
     await server.close();
   }
 });
+test("local answers and early declines survive recovery while completion is pending", async () => {
+  for (const earlyDecline of [false, true]) {
+    let received!: () => void;
+    let release!: () => void;
+    const seen = new Promise<void>((resolve) => { received = resolve; });
+    const acknowledgement = new Promise<void>((resolve) => { release = resolve; });
+    const server = await startTestRelay(async (req) => {
+      if (req.url?.endsWith("/complete")) {
+        received();
+        await acknowledgement;
+        return { body: { status: "accepted", duplicate: false } };
+      }
+      return { body: { status: "ok" } };
+    });
+    const paired = relay(`${server.origin}/v1`);
+    paired.paused = earlyDecline;
+    const requestId = earlyDecline ? "rq_pending_decline" : "rq_pending_answer";
+    const pending = runClaimedRequest(paired, { ...sampleRequest, request_id: requestId }, undefined, {
+      command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`),
+    });
+    try {
+      await seen;
+      const record = readAnswerRecord(paired.id, "target_1", requestId);
+      expect(record).toMatchObject({
+        state: "finished", delivery: "unconfirmed", input: sampleRequest.input,
+        outcome: earlyDecline ? "declined:disabled" : "answered",
+        answer: earlyDecline ? null : { action: "reply", text: "Done", reply_to: null },
+      });
+      // The recovery path only settles unfinished model work; a persisted
+      // local result keeps its answer and its uncertain original receipt.
+      settleInterruptedAnswer(paired.id, "target_1", requestId, "refused");
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toEqual(record);
+      release();
+      await pending;
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({
+        delivery: "accepted", answer: record?.answer, outcome: record?.outcome,
+      });
+    } finally {
+      release();
+      await pending;
+      await server.close();
+    }
+  }
+}, 15_000);
+
 test("413 on an answer completes failed invalid_answer immediately", async () => {
   const completions: any[] = [];
   const server = await startTestRelay((req, body) => {
@@ -587,6 +634,10 @@ test("413 on an answer completes failed invalid_answer immediately", async () =>
       ["answered", undefined], ["failed", "invalid_answer"],
     ]);
     expect(outcome).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(readAnswerRecord("relay_1", "target_1", "rq_too_large")).toMatchObject({
+      outcome: "failed:invalid_answer", delivery: "accepted",
+      answer: { action: "reply", text: "Done", reply_to: null },
+    });
   } finally {
     await server.close();
   }
@@ -639,3 +690,345 @@ test("hard cap kills the child and completes failed hard_cap", async () => {
     await server.close();
   }
 });
+
+
+test("relay advertises zero capacity and starts no answer child during drain, then admits after release", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const marker = path.join(root, "drain-child-marker");
+  const command = stub(`const a=process.argv; await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched"); await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply', text:'Done', reply_to:'m1'}));`);
+  const completed: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completed.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const request = { ...sampleRequest, request_id: "rq_drain" };
+  try {
+    writeDrain(drainFile(), { id: "relay-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    expect(await runClaimedRequest(paired, request, undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(fs.existsSync(marker)).toBe(false); expect(readRunLedger().runs).toEqual([]);
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    releaseDrain(drainFile(), "relay-hold");
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
+    expect(await runClaimedRequest(paired, { ...request, lease_id: "ls_released_Zq3vN8bY1xKp4Lm" }, undefined, { command })).toMatchObject({ outcome: "answered" });
+    expect(fs.readFileSync(marker, "utf8")).toBe("launched");
+    expect(completed).toHaveLength(2);
+  } finally { releaseDrain(drainFile(), "relay-hold"); await server.close(); }
+});
+
+test("an answer admitted before drain completes normally while fresh children stay held", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const marker = path.join(root, "admitted-child-marker");
+  const gate = path.join(root, "admitted-child-release");
+  const command = stub(`const a=process.argv; await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched"); while(!require('node:fs').existsSync(${JSON.stringify(gate)})) await Bun.sleep(10); await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply', text:'Done', reply_to:'m1'}));`);
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const paired = relay(`${server.origin}/v1`);
+  const pending = runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_admitted_drain" }, undefined, { command });
+  try {
+    for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await Bun.sleep(10);
+    expect(fs.existsSync(marker)).toBe(true);
+    writeDrain(drainFile(), { id: "relay-admitted", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    fs.writeFileSync(gate, "release");
+    expect(await pending).toMatchObject({ outcome: "answered" });
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { fs.writeFileSync(gate, "release"); await pending; releaseDrain(drainFile(), "relay-admitted"); await server.close(); }
+});
+
+/** A Codex stub that answers with the hand-off action when its schema offers it, and records the schema and prompt it saw. */
+function handoffStub(seen: string) {
+  return stub(
+    `const a=process.argv.slice(2);const prompt=await Bun.stdin.text();const schema=await Bun.file(a[a.indexOf('--output-schema')+1]).text();await Bun.write(${JSON.stringify(seen)},JSON.stringify({schema,prompt}));await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:schema.includes('handoff')?'handoff':'reply',text:'I will mute them',reply_to:'m1'}));`,
+  );
+}
+test("a hand-off completes as declined/handoff with no text, and its exchange is recorded", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const seen = path.join(root, "handoff-seen.json");
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const outcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_handoff" }, undefined, { command: handoffStub(seen) });
+    const sent = { lease_id: sampleRequest.lease_id, outcome: "declined", reason: "handoff", detail: HANDOFF_DETAIL, retry_after_s: null };
+    expect(outcome).toEqual(sent as typeof outcome);
+    expect(completions).toEqual([sent]);
+    const { schema, prompt } = JSON.parse(fs.readFileSync(seen, "utf8"));
+    expect(JSON.parse(schema).properties.action.enum).toEqual(["reply", "ignore", "handoff"]);
+    expect(prompt).toContain("<tools>");
+    const record = readAnswerRecord(paired.id, "target_1", "rq_handoff");
+    expect(record).toMatchObject({
+      state: "finished",
+      outcome: "declined:handoff",
+      answer: { action: "handoff", text: "", reply_to: null },
+      delivery: "accepted",
+      engine: "codex",
+      model: "gpt-6-sol",
+      targetName: "Target",
+    });
+    // The input is kept as received, unknown fields included.
+    expect(record?.input).toEqual(contextRequest.input);
+    expect(record?.durationMs).toBeGreaterThanOrEqual(0);
+    // Neither the lease nor the credential is written into the record.
+    const files = fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "external-relay/answers", paired.id, "target_1"));
+    const text = files.map((name) => fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "external-relay/answers", paired.id, "target_1", name), "utf8")).join("");
+    expect(text).not.toContain(sampleRequest.lease_id);
+    expect(text).not.toContain(paired.credential);
+  } finally {
+    await server.close();
+  }
+});
+test("without a tool index the schema and the answer stay as before", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const seen = path.join(root, "legacy-seen.json");
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const outcome = await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_legacy_schema", answer: { max_chars: 100, progress: "none" } }, undefined, { command: handoffStub(seen) });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "I will mute them", reply_to: "m1" } });
+    expect(JSON.parse(JSON.parse(fs.readFileSync(seen, "utf8")).schema).properties.action.enum).toEqual(["reply", "ignore"]);
+    expect(readAnswerRecord(paired.id, "target_1", "rq_legacy_schema")).toMatchObject({
+      outcome: "answered", answer: { action: "reply", text: "I will mute them" }, delivery: "accepted",
+    });
+  } finally {
+    await server.close();
+  }
+});
+test("declines, lost leases and refused completions are recorded too", async () => {
+  let completeStatus = 200;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat"))
+      return req.url.includes("rq_rec_lost")
+        ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } }
+        : { body: { status: "ok" } };
+    return completeStatus === 200
+      ? { body: { status: "accepted", duplicate: false } }
+      : { status: completeStatus, body: { error: { code: "lease_lost", message: "gone" } } };
+  });
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    paired.paused = true;
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_paused" })).toMatchObject({ reason: "disabled" });
+    expect(readAnswerRecord(paired.id, "target_1", "rq_rec_paused")).toMatchObject({ state: "finished", outcome: "declined:disabled", answer: null, delivery: "accepted", engine: null });
+    paired.paused = false;
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_lost" }, undefined, { command: stub(`await Bun.stdin.text();await Bun.sleep(5000);`) })).toBeNull();
+    expect(readAnswerRecord(paired.id, "target_1", "rq_rec_lost")).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null, engine: "codex" });
+    completeStatus = 409;
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_refused", kind: "other" })).toMatchObject({ reason: "unsupported_kind" });
+    expect(readAnswerRecord(paired.id, "target_1", "rq_rec_refused")).toMatchObject({ outcome: "declined:unsupported_kind", delivery: "refused" });
+    // A request whose ids cannot name a file is answered and not recorded.
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "../escape", target_id: "../x" })).toMatchObject({ reason: "invalid_request" });
+    expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "external-relay/answers", paired.id, "..", "x"))).toBe(false);
+    const listed = listAnswerRecords(paired.id, "target_1").map((row) => row.requestId);
+    expect(listed.slice(0, 3)).toEqual(["rq_rec_refused", "rq_rec_lost", "rq_rec_paused"]);
+  } finally {
+    await server.close();
+  }
+}, 15_000);
+
+test("every relay answer runs with the native web search, and the record says so", async () => {
+  const server = await startTestRelay((req) => ({ body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } }));
+  const argsFile = path.join(root, "web-search-args.json");
+  const script = stub(
+    `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(${JSON.stringify(argsFile)},JSON.stringify(a));await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
+  );
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_web_search" }, undefined, { command: script })).toMatchObject({ outcome: "answered" });
+    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toContain("web_search=live");
+    expect(readAnswerRecord(paired.id, "target_1", "rq_web_search")).toMatchObject({ profile: { webSearch: true }, admitted: true, requester: null });
+  } finally {
+    await server.close();
+  }
+});
+test("the member limit declines a member past it, per chat, and never counts the owner or admins", async () => {
+  const completions: { reason?: string; detail?: string | null; retry_after_s?: number | null }[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body as never);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const script = stub(
+    `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
+  );
+  const ask = (n: number, requester: Record<string, unknown> | null, chat = "chat_key_aaaaaaaaaaaa", target?: Partial<PairedRelay["targets"][number]>) => {
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
+    return runClaimedRequest(paired, {
+      ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
+      input: { ...sampleRequest.input, requester },
+    }, undefined, { command: script });
+  };
+  const member = { key: "u_m", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
+  try {
+    expect(await ask(1, member)).toMatchObject({ outcome: "answered" });
+    expect(await ask(2, member)).toMatchObject({ outcome: "answered" });
+    const third = await ask(3, member);
+    expect(third).toMatchObject({ outcome: "declined", reason: "member_limit", detail: memberLimitDetail(2) });
+    const retry = (third as { retry_after_s: number }).retry_after_s;
+    expect(retry).toBeGreaterThan(3500);
+    expect(retry).toBeLessThanOrEqual(3600);
+    expect(readAnswerRecord("relay_1", "target_limit", "rq_limit_3")).toMatchObject({
+      outcome: "declined:member_limit", admitted: false, chatKey: "chat_key_aaaaaaaaaaaa",
+      requester: member,
+    });
+    // Another chat counts on its own; admins and the owner are not counted.
+    expect(await ask(4, member, "chat_key_bbbbbbbbbbbb")).toMatchObject({ outcome: "answered" });
+    expect(await ask(5, { ...member, is_admin: true })).toMatchObject({ outcome: "answered" });
+    expect(await ask(6, { ...member, is_owner: true })).toMatchObject({ outcome: "answered" });
+    // Another member is not affected; 0 and null are no limit; no requester block is never counted.
+    expect(await ask(7, { ...member, key: "u_other" })).toMatchObject({ outcome: "answered" });
+    expect(await ask(8, member, undefined, { memberLimitPerHour: 0 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(9, member, undefined, { memberLimitPerHour: null })).toMatchObject({ outcome: "answered" });
+    expect(await ask(10, null)).toMatchObject({ outcome: "answered" });
+    // A former admin or owner starts their member count with their first member run.
+    const roleChangeChat = "chat_key_changedaaaaa";
+    expect(await ask(11, { ...member, is_admin: true }, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(12, { ...member, is_owner: true }, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(13, member, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(14, member, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+    expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(2);
+  } finally {
+    await server.close();
+  }
+}, 60_000);
+
+test("pre-launch capacity and drain declines leave the member's allowance available", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_admission";
+  paired.targets[0]!.memberLimitPerHour = 2;
+  const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
+  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: { ...sampleRequest.input, requester } });
+  const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  const previous = accountManager.resolveHeadlessSpawn;
+  try {
+    accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previous;
+    expect(await runClaimedRequest(paired, request("rq_before_capacity"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "no_capacity" });
+    // Acquire the drain after reservation/account selection, exercising the
+    // second check immediately before the profile and child are built.
+    accountManager.resolveHeadlessSpawn = (() => {
+      writeDrain(drainFile(), { id: "admission-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+      return { kind: "available", account };
+    }) as typeof previous;
+    expect(await runClaimedRequest(paired, request("rq_before_drain"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    releaseDrain(drainFile(), "admission-hold");
+    accountManager.resolveHeadlessSpawn = previous;
+    for (const id of ["rq_before_capacity", "rq_before_drain"])
+      expect(readAnswerRecord(paired.id, "target_1", id)?.admitted).toBe(false);
+    for (const id of ["rq_after_capacity", "rq_after_drain"])
+      expect(await runClaimedRequest(paired, request(id), undefined, { command })).toMatchObject({ outcome: "answered" });
+    expect(await runClaimedRequest(paired, request("rq_after_allowance"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+  } finally {
+    accountManager.resolveHeadlessSpawn = previous;
+    releaseDrain(drainFile(), "admission-hold");
+    await server.close();
+  }
+});
+
+test("launched hand-offs, failed agents and running agents each consume the member limit", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_count_launched";
+  paired.targets[0] = { ...paired.targets[0]!, concurrency: 2, memberLimitPerHour: 1 };
+  const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
+  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: { ...contextRequest.input, requester } });
+  const handoff = handoffStub(path.join(root, "admission-handoff"));
+  const failure = stub("process.exit(1)");
+  const release = path.join(root, "admission-release");
+  const running = stub(`const a=process.argv.slice(2);await Bun.stdin.text();while(!await Bun.file(${JSON.stringify(release)}).exists())await Bun.sleep(10);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  let pending: ReturnType<typeof runClaimedRequest> | undefined;
+  try {
+    for (const [kind, command, outcome] of [
+      ["handoff", handoff, "declined"], ["failed", failure, "failed"],
+    ] as const) {
+      const chat = `chat_key_${kind}_aaaaa`;
+      const id = `rq_launched_${kind}`;
+      expect(await runClaimedRequest(paired, request(id, chat), undefined, { command })).toMatchObject({ outcome, reason: kind === "handoff" ? "handoff" : "agent_error" });
+      expect(readAnswerRecord(paired.id, "target_1", id)?.admitted).toBe(true);
+      expect(await runClaimedRequest(paired, request(`${id}_limited`, chat), undefined, { command })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+    }
+    const chat = "chat_key_runningaaaa";
+    pending = runClaimedRequest(paired, request("rq_launched_running", chat), undefined, { command: running });
+    const deadline = Date.now() + 5000;
+    while (!readAnswerRecord(paired.id, "target_1", "rq_launched_running")?.admitted && Date.now() < deadline) await Bun.sleep(10);
+    expect(readAnswerRecord(paired.id, "target_1", "rq_launched_running")).toMatchObject({ state: "running", admitted: true });
+    expect(countMemberAnswers({ relayId: paired.id, targetId: "target_1", chatKey: chat, requesterKey: requester.key, sinceMs: Date.now() - 3600000 }).count).toBe(1);
+    expect(await runClaimedRequest(paired, request("rq_running_limited", chat), undefined, { command: running })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+  } finally {
+    fs.writeFileSync(release, "release");
+    await pending;
+    await server.close();
+  }
+}, 30_000);
+
+test("service-built roles answer and the real runner and poller emit cross-check bodies", async () => {
+  const { ensureExternalRelayPollers, stopExternalRelayPollers } = await import("./poller");
+  const completions: unknown[] = [];
+  let claimBody: unknown;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: "t_target", name: "Target", answered_by: "install", fallback: "service" }] } };
+    if (req.url?.endsWith("/claim")) {
+      claimBody = body;
+      stopExternalRelayPollers();
+      return { status: 204 };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_wire";
+  paired.targets[0] = { ...paired.targets[0]!, id: "t_target", memberLimitPerHour: null };
+  const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  const fixture = (role: string) => serviceClaims.find(({ name }) => name === `claimed_rc_${role}.json`)!.body.request;
+  try {
+    for (const role of ["member", "admin", "owner", "anonymous_admin"]) {
+      const request = { ...fixture(role), request_id: `rq_wire_${role}` };
+      expect(await runClaimedRequest(paired, request, undefined, { command })).toMatchObject({ outcome: "answered" });
+      expect(readAnswerRecord(paired.id, "t_target", request.request_id)).toMatchObject({
+        requester: request.input.requester, input: request.input, admitted: true,
+      });
+    }
+    const member = fixture("member");
+    const handoff = await runClaimedRequest(paired, { ...member, request_id: "rq_wire_handoff" }, undefined, { command: handoffStub(path.join(root, "wire-handoff-seen")) });
+    expect(handoff).toMatchObject({ outcome: "declined", reason: "handoff", detail: HANDOFF_DETAIL, retry_after_s: null });
+
+    paired.id = "relay_wire_limit";
+    paired.targets[0]!.memberLimitPerHour = 1;
+    expect(await runClaimedRequest(paired, { ...member, request_id: "rq_wire_first" }, undefined, { command })).toMatchObject({ outcome: "answered" });
+    const limited = await runClaimedRequest(paired, { ...member, request_id: "rq_wire_limit" }, undefined, { command });
+    expect(limited).toMatchObject({ outcome: "declined", reason: "member_limit", detail: "This member reached 1 answer in the last hour in this chat." });
+    expect(limited?.outcome === "declined" && limited.retry_after_s).toBeGreaterThan(3500);
+    expect(limited?.outcome === "declined" && [...limited.detail!].length).toBeLessThanOrEqual(200);
+    // These fixtures use the same key as the counted member; the role flags exempt them.
+    for (const role of ["admin", "owner"])
+      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: { ...fixture(role).input, requester: { ...fixture(role).input.requester, key: member.input.requester.key } } }, undefined, { command })).toMatchObject({ outcome: "answered" });
+
+    updateRelayStore((store) => ({ ...store, relays: [paired] }));
+    ensureExternalRelayPollers();
+    const deadline = Date.now() + 5000;
+    while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context"], slots: [{ target_id: "t_target", free: 1 }] });
+    const expected = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_completions.json"), "utf8"));
+    expect(handoff).toEqual(expected.handoff);
+    expect(claimBody).toEqual(expected.claim_body);
+    // The absolute retry duration depends on the clock between launches.
+    // Check its range above and compare the stable wire fields here.
+    expect({ ...limited, retry_after_s: expected.member_limit.retry_after_s }).toEqual(expected.member_limit);
+    expect(completions.filter((body) => ["handoff", "member_limit"].includes((body as { reason?: string }).reason ?? "")))
+      .toEqual([handoff, limited]);
+    if (process.env.LLV_RELAY_WIRE_OUTPUT) {
+      fs.mkdirSync(path.dirname(process.env.LLV_RELAY_WIRE_OUTPUT), { recursive: true });
+      fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT, JSON.stringify({
+        handoff, member_limit: limited, claim_body: claimBody,
+        completions_on_wire: completions.filter((body) => ["handoff", "member_limit"].includes((body as { reason?: string }).reason ?? "")),
+      }, null, 2) + "\n");
+    }
+  } finally {
+    stopExternalRelayPollers();
+    await server.close();
+  }
+}, 60_000);

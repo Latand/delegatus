@@ -523,7 +523,7 @@ install"):
     bind), would otherwise come back from a restart open to that proxy.
     Whoever authenticates against a release it did not start (the runtime
     host's trusted local entry, the deploy adapter's health probes) finds
-    that key through `viewerBootGateKey` (`src/lib/access/phoneAccessBootGate.ts:45-57`,
+    that key through `viewerBootGateKey` (`bin/viewerGateKey.mjs`,
     used by `viewerReleaseCredentialResolver`, `deploymentProxy.ts:176-201`),
     which today reads the key file only while the phone-access flag exists.
     It gains the second condition, read from the same root: a saved
@@ -573,6 +573,51 @@ install"):
      carries an `Authorization: Bearer` equal to the gate key. The probe sends
      no `Authorization`, so a credential on it can only have been added by the
      gateway.
+
+     **What proves the address (#2516).** The route admits each nonce once
+     and writes what it read (`Host`, `X-Forwarded-Host`,
+     `X-Forwarded-Proto`, `Forwarded`) into the process's own table of
+     pending probes (`consumeSelfNonce`). The cut to 200 characters each, a
+     longer value ending in an ellipsis, applies only to what the error box
+     shows. The verdict reads `Host` whole, as it arrived, up to the 260
+     characters the longest "name:port" takes; a longer `Host` names no
+     address and reads as rewritten. Next writes
+     `X-Forwarded-Host` from `Host` and `X-Forwarded-Proto: http` before any
+     route runs when the proxy sent none, so the route keeps a value equal to
+     that as null and names the header in `unknown`: it may be Next's own. The check
+     rules on that record. The nonce is 32 random bytes that leave this
+     process only inside the probe, and the probe is dialled at the address
+     the public name resolves to, on the public port, with the public SNI.
+     A record therefore exists only when a request sent to the public
+     address reached this very process. The answer's body is never the
+     proof: anything listening at the address can write
+     `{"host":…,"vouched":false}`, and an answer with no record behind it is
+     `unverified`.
+
+     **What counts as the same Host.** The recorded `Host` names the address
+     when its name equals the address's name in any letter case, and its port
+     is either left out or equal to the address's own port, with 443 and 80
+     standing for an `https` and an `http` address that write none
+     (`hostNamesAddress`). The Host pin (`sameOrigin.ts`) reads the name
+     alone, so this is the property it depends on. Only `Host` decides:
+     `X-Forwarded-Host`, `X-Forwarded-Proto` and `Forwarded` are whatever the
+     caller or the proxy wrote, the Viewer authorizes nothing by them, and
+     Next fills the first two in from `Host` and the socket when the proxy
+     sent none. The scheme this server saw is never compared, so TLS that
+     ends at the proxy passes. Until #2516 the two strings had to match
+     letter for letter, which refused two correct proxies: nginx
+     `proxy_set_header Host $host` in front of a port of its own (`$host`
+     carries no port), and a proxy that writes the default port into `Host`
+     (`name:443`).
+
+     | Proxy | `Host` this server reads | Result |
+     |---|---|---|
+     | nginx `proxy_set_header Host $host` | the name, lower case, no port | passes |
+     | nginx `proxy_set_header Host $http_host`, Caddy defaults, a tunnel | what the caller sent | passes |
+     | TLS ended at the proxy, with or without `X-Forwarded-*` / `Forwarded` | what the caller sent, over plain HTTP | passes |
+     | a proxy that adds `:443` to an `https` address, or `:80` to `http` | the name with the default port | passes |
+     | nginx `proxy_pass` with no `Host` line (`$proxy_host`), Caddy `header_up Host {upstream_hostport}` | the upstream, such as `127.0.0.1:8898` | `host-rewritten` |
+     | a proxy that keeps the name and writes the upstream's port | the name with another port | `host-rewritten` |
   2. **Spoof:** the same request once per loopback probe name, the seven
      spellings of §2.5 (every one is loopback to `isLoopbackHost`, which
      ignores case and whatever follows the last colon, and a proxy may route
@@ -592,9 +637,22 @@ install"):
     connection" is disabled, and the message names the fix: point the proxy at
     the public entry port above, or stop trusting the local entry;
   - "Your proxy replaces the address it was called at" (`host-rewritten`):
-    probe 1 arrived with a loopback `Host`. B's Host pin would then admit it
-    only as a local request, and on a trusted entry that is the same open
-    board; treated as `open-to-internet` when it also arrived vouched;
+    probe 1 arrived with a `Host` that does not name the address (the table
+    above). A loopback `Host` is admitted by B's Host pin only as a local
+    request, and on a trusted entry that is the same open board; treated as
+    `open-to-internet` when it also arrived vouched. The saved check keeps
+    `expected` (the address's host) and `seen` (the four recorded headers),
+    and the same error box lists them under the sentence: "Expected Host:
+    {expected}. This server received:", one row per header, then the action.
+    A header listed in `unknown` reads "cannot tell: this server writes this
+    header itself when the proxy sends none", so a proxy that sent no
+    `X-Forwarded-*` never shows two values as received; "none" is left for a
+    header nothing fills in, which is `Forwarded`. When `Host` carries
+    another name and `X-Forwarded-Host` carries the address's, the action
+    says so, since then the proxy knows the name and withholds it from
+    `Host`. A `Host` with the right name and another port gets the general
+    action. Nothing here changes
+    the verdict;
   - "The certificate is not valid" (TLS failure);
   - "This server could not reach its own address, so the proxy could not be
     checked here" (`unverified`): a server often cannot reach its own public
@@ -1309,6 +1367,10 @@ vps-2         Not connected                    [Connect this machine]
 | `open-to-internet` | Anyone on the internet can use this board as you: a request that claims to be local passed through your proxy and was trusted. Point the proxy at 127.0.0.1:{port} instead. Connections are disabled until the check passes. | Будь-хто в інтернеті може користуватися цією дошкою від вашого імені: запит, що видає себе за локальний, пройшов через ваш проксі й отримав довіру. Спрямуйте проксі на 127.0.0.1:{port}. Під'єднання вимкнено, доки перевірка не пройде. |
 | `peer-open` (on A) | {address} is open to the internet: a request that claimed to be local reached it as its owner. Nothing was sent, and the code was cancelled there. Its owner must point the proxy at the port shown in its Settings, then make a new code. | {address} відкрита в інтернет: запит, що видавав себе за локальний, дістався до неї як до власника. Нічого не надіслано, а код там скасовано. Її власник має спрямувати проксі на порт, указаний у її налаштуваннях, і створити новий код. |
 | `host-rewritten` | Your proxy replaces the address it was called at. Keep the Host header in the proxy and point it at 127.0.0.1:{port}. | Ваш проксі підміняє адресу, за якою до нього звернулися. Збережіть заголовок Host у проксі та спрямуйте його на 127.0.0.1:{port}. |
+| `host-rewritten`, what arrived (#2516) | Expected Host: {expected}. This server received: | Очікуваний Host: {expected}. Сервер отримав: |
+| `host-rewritten`, a header Next may have written | cannot tell: this server writes this header itself when the proxy sends none | невідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає |
+| `host-rewritten`, action | Send the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again. | Надсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз. |
+| `host-rewritten`, action when `Host` carries another name and `X-Forwarded-Host` names the address | Host carries another name, and the public name arrived in X-Forwarded-Host. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again. | У Host інше ім'я, і публічне ім'я дійшло в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз. |
 | `unverified` | This server could not reach its own address, so the proxy could not be checked from here. Make sure it points at 127.0.0.1:{port}. A machine that connects checks it again from outside. | Цей сервер не зміг звернутися до власної адреси, тому проксі звідси не перевірено. Переконайтеся, що він спрямований на 127.0.0.1:{port}. Машина, що під'єднується, перевірить його ще раз ззовні. |
 | code burned | This code was burned after too many wrong attempts. Make a new one. | Цей код анульовано після забагатьох хибних спроб. Створіть новий. |
 
@@ -2692,7 +2754,12 @@ Acceptance:
   vouches for (`LOCALHOST`, `127.0.0.1:443`);
 - a proxy that rewrites `Host` to loopback reports `host-rewritten`; a
   public URL the server cannot reach reports `unverified` and does not block
-  saving.
+  saving;
+- one case per proxy header shape in `self.test.ts`, each through a local
+  proxy in front of the real self-check route (#2516): the passing shapes of
+  the §3.1 table pass, the rewriting ones report `host-rewritten` with
+  `expected` and `seen`, an answer with no record behind it is `unverified`,
+  and a replayed nonce is refused.
 
 Tests: `sameOrigin` tests for `LLV_PUBLIC_HOST` with the key on and off; the
 refusal table (private and public addresses, key on and off); the boot gate

@@ -29,6 +29,7 @@ import { assignTranscriptPids } from "./transcripts";
 import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { waitingInputProbe } from "./waitingInput";
+import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
 
 function applyProcessState(entry: FileEntry, holders: Map<string, number>) {
   if (entry.root === "claude-tasks" && entry.path.endsWith(".output")) {
@@ -314,6 +315,7 @@ async function listFilesInternal(
   // activity() only consults holders on the same claude-tasks/.output path.
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
   const holders = needsHolders ? outputHolders() : NO_HOLDERS;
+  const durableTiers = durableServiceTierIndex();
   await forEachEntryYielding(entries, (entry) => {
     const verdict = activityVerdict(entry.root, entry.path, entry.mtime, entry.size);
     entry.activity = verdict.state;
@@ -330,6 +332,9 @@ async function listFilesInternal(
     entry.derivationComplete &&= models.complete;
     const effort = entryEffortResult(entry);
     entry.effort = effort.value;
+    // Derive this while the shared transcript tail is resident; a second full
+    // pass would reread every tail once the bounded cache holds fewer entries.
+    entryServiceTier(entry, durableTiers);
     entry.derivationComplete &&= effort.complete;
     entry.plan = planFor(entry);
     entry.goal = goalFor(entry);
@@ -344,7 +349,6 @@ async function listFilesInternal(
     applyProcessState(entry, holders);
   });
   assignTranscriptPids(entries);
-  const durableTiers = durableServiceTierIndex();
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
     entry.effort = entryEffort(entry);
@@ -383,6 +387,7 @@ async function listFilesInternal(
     stable: workflows observe the flow state from the same controller tick. */
 export async function reconcileFileControllers(entries: FileEntry[]): Promise<void> {
   await linkEntries(entries, { persist: true });
+  observeCodexSubagentTranscripts(agentRegistry(), entries);
   await yieldToRuntime();
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.

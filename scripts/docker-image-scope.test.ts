@@ -1,0 +1,274 @@
+import { expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import postcss from "postcss";
+import tailwind from "@tailwindcss/postcss";
+import ts from "typescript";
+import { getBabelConfigFile } from "next/dist/build/get-babel-config-file";
+import { getSupportedBrowsers } from "next/dist/build/get-supported-browsers";
+import { findConfig } from "next/dist/lib/find-config";
+import { isImageInput, isMultiArchInput } from "./docker-image-scope.cjs";
+
+const root = path.resolve(import.meta.dir, "..");
+interface Job {
+  if?: string;
+  needs?: string;
+  "timeout-minutes": string | number;
+  concurrency?: { group: string; "cancel-in-progress": boolean; queue: string };
+  outputs?: Record<string, string>;
+  steps: { name?: string; if?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string>; run?: string }[];
+}
+const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/docker-image.yml"), "utf8")) as {
+  jobs: Record<string, Job>;
+  concurrency: { group: string; "cancel-in-progress": string };
+  on: { pull_request?: { types?: string[]; paths?: string[]; "paths-ignore"?: string[] }; push: { branches: string[]; tags: string[] } };
+};
+
+test("image inputs build, while prose, unrelated CI and shell tooling skip", () => {
+  for (const file of [
+    "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml", "tsconfig.json",
+    "next.config.ts", "postcss.config.mjs", "patches/framework.patch", "src/app/page.tsx",
+    "src/app/globals.css", "src/template.md", "public/icon.svg", "bin/cli.mjs", "vendor/tool/data.txt",
+    "scripts/build-mcp.ts", "scripts/whisper_transcribe.py", "scripts/runtime-host-viewer-adapter.ts",
+    "scripts/runtime-host-healthcheck.ts", "scripts/published-image-entrypoint.sh",
+    "landing/site/demo/taskIcons.json", "evals/probe.ts", "spikes/probe.mts", "test-preload.ts",
+    "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
+    "scripts/fixtures/usage-metrics/recorded.json", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+    ".env", ".env.local", ".env.production", ".env.production.local",
+    ".gitignore", "src/.gitignore", "src/components/.gitignore", "public/.gitignore",
+    "bin/.gitignore", "patches/.gitignore", "vendor/.gitignore", ".github/workflows/docker-image.yml",
+  ]) expect(isImageInput(file), file).toBe(true);
+  for (const file of [
+    "README.md", "CONTRIBUTING.md", "docs/docker.md", "docs/guide.md", "evidence/report.txt",
+    ".github/workflows/privacy-publication.yml", ".githooks/pre-push", "scripts/audit-with-retry.sh",
+    "landing/site/index.html", "docker-compose.yml",
+    "evidence/docker-image/incident.json", "docs/unused.json", "docs/unused.js",
+    "external/unused.cjs", "external/unused.mjs", "external/unused.jsx",
+    ".env.development", ".env.test", ".env.example", "docs/.env.production",
+    "docs/.gitignore", "docs/design/desktop-v2/.gitignore", "landing/site/.gitignore",
+  ]) expect(isImageInput(file), file).toBe(false);
+});
+
+test("native installation and runtime inputs verify both architectures; app changes verify amd64", () => {
+  for (const file of ["Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml",
+    "patches/native.patch", "vendor/native/index.js", "bin/provision-telegram-connector.mjs",
+    "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "scripts/whisper_transcribe.py",
+    "scripts/published-image-entrypoint.sh", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
+    ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs"]) {
+    expect(isMultiArchInput(file), file).toBe(true);
+    expect(isImageInput(file), file).toBe(true);
+  }
+  for (const file of ["src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md"]) {
+    expect(isMultiArchInput(file), file).toBe(false);
+  }
+});
+
+test("the admission list covers every repository JS/JSON dependency in the TypeScript program", () => {
+  const configPath = path.join(root, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  expect(config.error).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+  expect(parsed.errors).toEqual([]);
+  const program = ts.createProgram(parsed.fileNames, parsed.options);
+  const dependencies = program.getSourceFiles()
+    .map(source => path.relative(root, source.fileName).split(path.sep).join("/"))
+    .filter(file => !file.startsWith("node_modules/") && /\.(?:[cm]?js|jsx|json)$/.test(file));
+  expect(dependencies).toContain("landing/site/demo/taskIcons.json");
+  expect(dependencies.filter(file => !isImageInput(file))).toEqual([]);
+}, 20_000);
+
+test("each admitted root production env file is read by the installed Next loader", () => {
+  const loader = require.resolve("@next/env");
+  for (const file of [".env", ".env.local", ".env.production", ".env.production.local"]) {
+    const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-env-"));
+    try {
+      writeFileSync(path.join(cwd, file), "DOCKER_SCOPE_ENV_PROBE=loaded\n");
+      const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "production" };
+      delete env.DOCKER_SCOPE_ENV_PROBE;
+      delete env.__NEXT_PROCESSED_ENV;
+      const result = spawnSync("node", ["-e", `
+        const { loadEnvConfig } = require(${JSON.stringify(loader)});
+        const { combinedEnv, loadedEnvFiles } = loadEnvConfig(process.cwd(), false);
+        console.log(JSON.stringify({ value: combinedEnv.DOCKER_SCOPE_ENV_PROBE, files: loadedEnvFiles.map(f => f.path) }));
+      `], { cwd, env, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ value: "loaded", files: [file] });
+      expect(isImageInput(file), file).toBe(true);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  }
+});
+
+test("installed Next consumes admitted root Babel and Browserslist configurations", () => {
+  for (const file of [
+    ".babelrc", ".babelrc.json", ".babelrc.js", ".babelrc.mjs", ".babelrc.cjs",
+    "babel.config.js", "babel.config.json", "babel.config.mjs", "babel.config.cjs",
+    ".browserslistrc", "browserslist",
+  ]) {
+    const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-config-"));
+    try {
+      const browserConfig = file === ".browserslistrc" || file === "browserslist";
+      writeFileSync(path.join(cwd, file), browserConfig ? "chrome 100\n" : "{}");
+      if (browserConfig) expect(getSupportedBrowsers(cwd, false)).toEqual(["chrome 100"]);
+      else expect(getBabelConfigFile(cwd)).toBe(path.join(cwd, file));
+      expect(isImageInput(file), file).toBe(true);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  }
+});
+
+test("admitted PostCSS rc files override the checked-in config in installed Next", async () => {
+  for (const file of [".postcssrc.json", ".postcssrc.js"]) {
+    const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-postcss-"));
+    try {
+      writeFileSync(path.join(cwd, "postcss.config.mjs"), readFileSync(path.join(root, "postcss.config.mjs")));
+      const config = { plugins: { "fixture-plugin": {} } };
+      writeFileSync(path.join(cwd, file), file.endsWith(".js")
+        ? `module.exports = ${JSON.stringify(config)};` : JSON.stringify(config));
+      expect(await findConfig(cwd, "postcss")).toEqual(config);
+      expect(isImageInput(file), file).toBe(true);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  }
+});
+
+test("every PR reaches scope even for inputs omitted by the former trigger", () => {
+  expect(workflow.on).toHaveProperty("pull_request");
+  expect(workflow.on.pull_request?.paths).toBeUndefined();
+  expect(workflow.on.pull_request?.["paths-ignore"]).toBeUndefined();
+  for (const file of [
+    "landing/site/demo/taskIcons.json", "scripts/demo-capture-browser.cjs",
+    ".env.production", ".postcssrc.json",
+  ]) expect(isImageInput(file), file).toBe(true);
+});
+
+test("workflow gates Docker steps and reserves capacity across different refs", () => {
+  const { scope, build } = workflow.jobs;
+  expect(scope.if).toBe("github.event_name == 'pull_request'");
+  expect(scope["timeout-minutes"]).toBe(3);
+  expect(scope.steps[0].with?.["fetch-depth"]).toBe(0);
+  expect(scope.outputs?.build).toBe("${{ steps.inputs.outputs.build }}");
+  expect(scope.outputs?.platforms).toBe("${{ steps.inputs.outputs.platforms }}");
+  expect(workflow.on.pull_request?.types).toEqual(["opened", "synchronize", "reopened", "closed"]);
+  for (const step of scope.steps.slice(0, 2)) {
+    expect(step.if).toBe("github.event.pull_request.state == 'open' && !startsWith(github.head_ref, 'merge-batch/')");
+  }
+  expect(scope.steps[2].if).toBe("github.event.pull_request.state != 'open' || startsWith(github.head_ref, 'merge-batch/')");
+  expect(scope.steps[1].env).toEqual({
+    BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+    HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+  });
+  expect(scope.steps[1].run).toBe('node scripts/docker-image-scope.cjs "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"');
+  expect(build.needs).toBe("scope");
+  expect(build.if).toBe("${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}");
+  expect(build.concurrency).toEqual({
+    group: "${{ github.event_name == 'pull_request' && 'docker-image-build' || 'docker-image-publish-build' }}",
+    "cancel-in-progress": false, queue: "max",
+  });
+  expect(workflow.concurrency.group).toBe("docker-image-${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}");
+  expect(workflow.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
+  expect(workflow.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
+  expect(build["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
+  const qemu = build.steps.find(step => step.uses === "docker/setup-qemu-action@v3");
+  expect(qemu?.if).toBe("github.event_name != 'pull_request' || needs.scope.outputs.platforms == 'linux/amd64,linux/arm64'");
+  const verify = build.steps.find(step => step.name === "Verify PR image");
+  expect(verify?.if).toBe("github.event_name == 'pull_request'");
+  expect(verify?.uses).toBe("docker/build-push-action@v6");
+  expect(verify?.with?.platforms).toBe("${{ needs.scope.outputs.platforms }}");
+  expect(verify?.with?.push).toBe(false);
+  expect(verify?.with?.["cache-from"]).toBe("type=gha");
+  expect(verify?.with?.["cache-to"]).toBeUndefined();
+  expect(verify?.with?.tags).toBeUndefined();
+  const image = build.steps.find(step => step.name === "Publish both architectures");
+  expect(image?.if).toBe("github.event_name != 'pull_request'");
+  expect(image?.with?.platforms).toBe("linux/amd64,linux/arm64");
+  expect(image?.with?.push).toBe(true);
+});
+
+test("real Git diff excludes main merges and retains deletions, renames and files beyond 300", () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-git-"));
+  // Hooks can supply repository selectors; the fixture must own its own Git.
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    NODE_ENV: "test",
+  };
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture" });
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+  const write = (file: string, content = "fixture") => {
+    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    writeFileSync(path.join(cwd, file), content);
+  };
+  const commit = () => { git("add", "."); git("commit", "-qm", "Fixture"); return git("rev-parse", "HEAD"); };
+  const run = (base: string, head: string) => spawnSync("node", [path.join(root, "scripts/docker-image-scope.cjs"), base, head], { cwd, env, encoding: "utf8" });
+  try {
+    git("init", "-q", "-b", "main");
+    git("config", "core.hooksPath", "/dev/null");
+    write("README.md"); write("src/old.ts");
+    commit(); git("branch", "topic");
+    write("src/main-only.ts"); const main = commit();
+    git("checkout", "-q", "topic");
+    write("docs/guide.md"); commit();
+    // Before and after merging main, only the PR's prose is a changed input.
+    expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\nplatforms=linux/amd64\n");
+    git("merge", "-qm", "Merge fixture main", "main");
+    expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\nplatforms=linux/amd64\n");
+    // Evaluate each change on its own, through the workflow's real CLI.
+    let previous = git("rev-parse", "HEAD");
+    for (const [file, build] of [
+      ["evidence/docker-image/incident.json", false], ["docs/unused.json", false],
+      ["docs/unused.js", false], ["external/unused.cjs", false],
+      ["external/unused.mjs", false], ["external/unused.jsx", false],
+      ["docs/.gitignore", false], ["docs/design/desktop-v2/.gitignore", false],
+      ["landing/site/.gitignore", false],
+      [".gitignore", true], ["src/.gitignore", true], ["src/components/.gitignore", true],
+      ["public/.gitignore", true], ["bin/.gitignore", true],
+      ["patches/.gitignore", true], ["vendor/.gitignore", true],
+      ["landing/site/demo/taskIcons.json", true],
+      ["scripts/demo-capture-browser.cjs", true],
+      [".env", true], [".env.local", true],
+      [".env.production", true], [".env.production.local", true],
+      [".babelrc", true], [".browserslistrc", true],
+      ["Dockerfile.dockerignore", true], [".postcssrc.json", true], [".postcssrc.js", true],
+      ["Dockerfile", true], ["package.json", true], ["bun.lock", true],
+      ["patches/native.patch", true],
+    ] as const) {
+      write(file, file.startsWith(".env") ? "LLV_STANDALONE=1\n" : "{}");
+      const current = commit();
+      const result = run(previous, current);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout, file).toBe(`build=${build}\nplatforms=${isMultiArchInput(file) ? "linux/amd64,linux/arm64" : "linux/amd64"}\n`);
+      previous = current;
+    }
+    git("mv", "src/old.ts", "docs/old.txt"); const moved = commit();
+    expect(run(previous, moved).stdout).toBe("build=true\nplatforms=linux/amd64\n");
+    expect(git("diff", "--name-only", "--no-renames", previous, moved)).toContain("src/old.ts");
+    for (let i = 0; i < 305; i++) write(`docs/${i}.md`);
+    write("src/late\ninput.ts"); const large = commit();
+    expect(run(moved, large).stdout).toBe("build=true\nplatforms=linux/amd64\n");
+    expect(git("diff", "--name-only", "-z", moved, large).split("\0").filter(Boolean)).toHaveLength(306);
+    expect(run("missing", large).status).not.toBe(0);
+    expect(run("0".repeat(40), large).status).not.toBe(0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("real Tailwind compilation uses app sources and ignores prose outside src", async () => {
+  const css = readFileSync(path.join(root, "src/app/globals.css"), "utf8");
+  const directive = css.match(/@import "tailwindcss"[^;]*;/)![0];
+  const compile = async (prose: string) => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "docker-scope-css-"));
+    try {
+      mkdirSync(path.join(cwd, "src/app"), { recursive: true });
+      symlinkSync(path.join(root, "node_modules"), path.join(cwd, "node_modules"), "dir");
+      writeFileSync(path.join(cwd, "src/component.tsx"), '<div className="w-[13451px]" />');
+      writeFileSync(path.join(cwd, "README.md"), prose);
+      const from = path.join(cwd, "src/app/globals.css");
+      writeFileSync(from, directive);
+      return (await postcss([tailwind({ base: cwd, optimize: false })]).process(directive, { from })).css;
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  };
+  const before = await compile("Documentation");
+  const after = await compile('<div class="w-[24562px]" />');
+  expect(after).toContain("13451px");
+  expect(after).not.toContain("24562px");
+  expect(after).toBe(before);
+});

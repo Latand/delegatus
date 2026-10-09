@@ -144,6 +144,23 @@ export interface RuntimeEventInput {
   occurredAt?: string;
   causationId?: string | null;
   correlationId?: string | null;
+  /** Binds a session-scope event to the session row its writer read (#2515):
+      the journal records it only while that row still has this revision. A
+      writer that decides from a reading, with no host of its own behind the
+      event, names the reading here so a row a new owner has published since
+      is left as that owner wrote it. */
+  expectedSessionRevision?: number;
+  /** A delta folded from consecutive engine deltas names the text length of
+      each one, oldest first; the last belongs to the sequence in its producer
+      key and each earlier one to the sequence before. The journal keeps only
+      the text after the sequence it already recorded, so a group that overlaps
+      an earlier writer's append is recorded exactly once. */
+  foldedTextLengths?: number[];
+}
+
+/** A fenced event met a session row that moved on after its writer read it. */
+export class RuntimeSessionFenceError extends Error {
+  readonly code = "session-fence";
 }
 
 export interface NormalizedRuntimeEventInput extends Omit<RuntimeEventInput, "scope" | "kind" | "producer"> {
@@ -208,7 +225,14 @@ export interface RuntimeAttention {
   turnId?: string | null;
 }
 
+export interface RuntimeRetirementClaim {
+  executorId: string;
+  process: import("@/lib/processIdentity").ProcessIdentity;
+}
+
 export interface RuntimeOperationReceipt {
+  /** Exclusive automatic teardown authority, held until actuation ends. */
+  retirementClaim?: RuntimeRetirementClaim | null;
   nativeQueue?: {
     entryId: string;
     nativeSubmissionId: string | null;
@@ -226,6 +250,8 @@ export interface RuntimeOperationReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: RuntimeOperationKind;
+  /** Kill authorship, derived from the admitted onlyIfIdle fence. */
+  origin?: "system" | "operator";
   status: RuntimeReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -273,6 +299,8 @@ export interface RuntimeTransitionDetails {
 }
 
 export interface RuntimeTransitionOptions {
+  /** Competing transitions cannot release a live automatic teardown executor. */
+  retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
   fromStatuses?: readonly RuntimeReceiptStatus[];
   /** Marks a terminal transition as owed a durable projection, inside the same
@@ -381,8 +409,27 @@ export interface RuntimeInterruptCommand extends RuntimeCommandBase {
   turnId?: string | null;
 }
 
+/** Automatic retirement is bound to one observed idle session revision and writer. */
+export interface RuntimeIdleKillFence {
+  revision: number;
+  writerClaim: string;
+}
+
+export function runtimeIdleKillMatches(
+  session: RuntimeSession | null | undefined,
+  key: RuntimeKillCommand["sessionKey"],
+  fence: RuntimeIdleKillFence,
+): boolean {
+  return !!session && session.host === "hosted" && session.turn === "idle"
+    && session.activeTurnId === null && session.attentionIds.length === 0
+    && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
+    && session.revision === fence.revision && session.writerClaim === fence.writerClaim
+    && session.retirementBlocked !== true;
+}
+
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  onlyIfIdle?: RuntimeIdleKillFence;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
 }
 
@@ -534,6 +581,9 @@ export interface RuntimeInjectionBinding {
 }
 
 export interface RuntimeSession {
+  /** Fresh keyed session reads derive this from all open operations and native
+      queue entries. Absence is insufficient evidence for automatic retirement. */
+  retirementBlocked?: boolean;
   /** Structured writer identity published with this session generation. */
   writerClaim?: string | null;
   diagnostics?: RuntimeHostDiagnostics;
@@ -910,6 +960,22 @@ export function parseViewerDeploymentListCursor(cursor?: string): [number, strin
   } catch { throw new Error("deployment list cursor is invalid"); }
 }
 
+/** One keyset page of an in-memory ledger, newest first: the snapshot of an
+    older host and the ledger of a checkout install page the way the host's
+    journal does. */
+export function viewerDeploymentPage(rows: ViewerDeploymentStatus[], limit: number, cursor: [number, string, boolean] | null,
+  compact = false, legacySnapshot = false): Pick<ViewerDeploymentList, "deployments" | "nextCursor" | "hasMore"> {
+  const after = rows.slice()
+    .sort((a, b) => viewerDeploymentStartedAt(b) - viewerDeploymentStartedAt(a) || b.deploymentId.localeCompare(a.deploymentId))
+    .filter(row => !cursor || viewerDeploymentStartedAt(row) < cursor[0]
+      || (viewerDeploymentStartedAt(row) === cursor[0] && row.deploymentId < cursor[1]));
+  const page = after.slice(0, limit);
+  const last = page.at(-1);
+  return { deployments: compact ? page.map(viewerDeploymentSummary) : page,
+    hasMore: after.length > limit,
+    nextCursor: after.length > limit && last ? viewerDeploymentListCursor(viewerDeploymentStartedAt(last), last.deploymentId, legacySnapshot) : null };
+}
+
 export function viewerDeploymentStartedAt(row: ViewerDeploymentStatus): number {
   const created = Date.parse(row.createdAt);
   const updated = Date.parse(row.updatedAt);
@@ -938,7 +1004,7 @@ export interface RuntimeReplay {
 
 export interface RuntimeSocketRequest {
   id: string;
-  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
@@ -1052,6 +1118,9 @@ export function axesForEvent(current: RuntimeSessionAxes, event: Pick<RuntimeEve
   return next;
 }
 
+/** The serialized payload budget of every event without a canonical voice response. */
+export const RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES = 16 * 1024;
+
 export function assertRuntimeEvent(input: RuntimeEventInput): void {
   if (!input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) throw new Error("runtime event payload is invalid");
   const normalized = normalizeRuntimeEventInput(input);
@@ -1060,11 +1129,18 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
   const carriesCanonicalVoiceResponse = normalized.kind === "item"
     && normalized.payload.voiceResponse !== null
     && typeof normalized.payload.voiceResponse === "object";
-  const payloadLimit = carriesCanonicalVoiceResponse ? 16 * 1024 * 1024 : 16 * 1024;
+  const payloadLimit = carriesCanonicalVoiceResponse ? 16 * 1024 * 1024 : RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES;
   if (payloadBytes > payloadLimit) {
     throw new Error(carriesCanonicalVoiceResponse
       ? "runtime terminal response payload exceeds 16 MiB"
       : "runtime event payload exceeds 16 KiB");
+  }
+  const folded = input.foldedTextLengths;
+  if (folded !== undefined && (normalized.kind !== "delta" || typeof normalized.payload.text !== "string"
+    || !Array.isArray(folded) || folded.length === 0 || folded.length > payloadLimit
+    || folded.some((length) => !Number.isSafeInteger(length) || length < 0)
+    || folded.reduce((total, length) => total + length, 0) !== normalized.payload.text.length)) {
+    throw new Error("runtime folded delta lengths are invalid");
   }
 }
 

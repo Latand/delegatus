@@ -2,11 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 
-import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { MigrationTargetUnavailableError } from "@/lib/accounts/migration/safeHistoryCopy";
+import { registerAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import { runtimeReceiptForSend, sendReceiptFor } from "./sendSettlement";
+import { translate } from "@/lib/i18n";
+import { messageRowModel } from "@/components/conversation/messageRow";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS } from "@/components/runtime/runtimeModel";
+import type { OutboxEntry } from "@/components/conversation/outbox";
 import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 import { setBoardFileForTests } from "@/lib/board/store";
@@ -106,7 +113,7 @@ interface SwitchCase {
   successorPath: string;
   effect: StructuredReconfigureEffect;
   releasedKeys: SessionKey[];
-  reconfigure: (provider?: SuccessorProviderPort) => Promise<"applied" | "pending">;
+  reconfigure: (provider?: SuccessorProviderPort) => Promise<"applied" | "pending" | "writer-busy">;
   hostTurn: (activeTurnRef: string | null) => void;
 }
 
@@ -342,78 +349,91 @@ test("a stuck pre-receipt phase is advanced by the same evidence", async () => {
   expect(advanced.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
 });
 
-test("a send forces the pending switch and becomes the successor's first delivery", async () => {
+test("a send to an idle host is answered at once and the switch's owner carries it to the successor once", async () => {
   const { registry, conversation, sourceKey, sourcePath, successorPath, releasedKeys, reconfigure, hostTurn } = await switchRequestedMidTurn();
   hostTurn(null);
-  const commands: { conversationId: string; text: string }[] = [];
-  let migrationTicks = 0;
-  const client = {
-    snapshot: async () => structuredSnapshot(registry.conversation(conversation.id)!, "idle"),
-    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; text: string }) => {
-      commands.push({ conversationId: command.conversationId, text: command.text });
-      return {
-        operationId: command.operationId,
-        replayed: false,
-        receipt: {
-          operationId: command.operationId,
-          idempotencyKey: command.idempotencyKey,
-          conversationId: command.conversationId,
-          kind: "send" as const,
-          status: "delivered" as const,
-          at: "2026-07-21T10:01:00.000Z",
-          revision: 1,
-        },
-      };
-    },
-  } as unknown as RuntimeHostClient;
+  const commands: string[] = [];
+  const delivered: string[] = [];
+  const port = { async deliver(input: { path: string; clientMessageId: string }) { delivered.push(input.path + ":" + input.clientMessageId); return "delivered" as const; } };
+  const ticks: Promise<void>[] = [];
+  const tick = () => { const work = reconcileMigrations(provider, port, registry, { deferBoardRepair: true }); ticks.push(work); return work; };
+  let allowCreate!: () => void;
+  const creating = new Promise<void>(resolve => { allowCreate = resolve; });
+  const ordinaryProvider = successorProvider(successorPath);
+  const provider: SuccessorProviderPort = { ...ordinaryProvider, async create(input) {
+    await creating;
+    return ordinaryProvider.create(input);
+  } };
+  const unregister = registerAccountMigrationTick(tick);
+  let drain: Promise<unknown> | null = null;
+  try {
+    const client = {
+      snapshot: async () => structuredSnapshot(registry.conversation(conversation.id)!, "idle"),
+      readSession: async (identity: { conversationId?: string }) => structuredSnapshot(registry.conversation(conversation.id)!, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
+      command: async (command: { text: string }) => { commands.push(command.text); throw new Error("the send must not reach a host from its request"); },
+    } as unknown as RuntimeHostClient;
 
-  const result = await enqueueStructuredMessage({
-    path: sourcePath,
-    conversationId: conversation.id,
-    clientMessageId: "forced-switch-send",
-    text: "continue on the other account",
-  }, {
-    enabled: () => true,
-    client: () => client,
-    registry: () => registry,
-    requestMigrationTick: () => { migrationTicks += 1; },
-    /* What the structured queue's drain does when the send kicks it. */
-    kick: async () => { await reconfigure(); },
-  });
+    const result = await enqueueStructuredMessage({
+      path: sourcePath,
+      conversationId: conversation.id,
+      clientMessageId: "send-during-switch",
+      text: "continue on the other account",
+    }, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      requestMigrationTick: () => { void tick(); },
+      /* What the structured queue's drain does when the send kicks it; the
+         request answers without waiting for it (2026-10-06). */
+      kick: () => { drain = reconfigure(provider); return drain; },
+    });
 
-  expect(result).toMatchObject({ ok: true, outcome: "delivered", target: conversation.id });
-  const switched = registry.conversation(conversation.id)!;
-  expect(switched.migration?.phase).toBe("committed");
-  expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
-  /* One executor still owned the transition, so the predecessor is gone. */
-  expect(releasedKeys).toEqual([sourceKey]);
-  expect(terminatedSource(registry, sourceKey)).toMatchObject({ status: "dead", structuredHost: null });
-  expect(commands).toEqual([{ conversationId: conversation.id, text: "continue on the other account" }]);
-  /* Deliveries held earlier in the same pending window are drained without
-     waiting for the controller's poll. */
-  expect(migrationTicks).toBeGreaterThan(0);
-  expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
-    clientMessageId: "forced-switch-send",
-    state: "delivered",
-    generationId: "successor-native",
-  }]);
+    expect(result).toMatchObject({ ok: true, outcome: "held", target: conversation.id });
+    expect(ticks).toHaveLength(1);
+    await ticks[0];
+    expect(delivered).toEqual([]);
+    allowCreate();
+    expect(drain).not.toBeNull();
+    await drain;
+    const switched = registry.conversation(conversation.id)!;
+    expect(switched.migration?.phase).toBe("committed");
+    expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+    /* One executor still owned the transition, so the predecessor is gone. */
+    expect(releasedKeys).toEqual([sourceKey]);
+    expect(terminatedSource(registry, sourceKey)).toMatchObject({ status: "dead", structuredHost: null });
+    expect(commands).toEqual([]);
+
+    await Promise.resolve();
+    expect(ticks).toHaveLength(2);
+    await ticks[1];
+    expect(delivered).toEqual([`${successorPath}:send-during-switch`]);
+    expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
+      clientMessageId: "send-during-switch",
+      state: "delivered",
+      generationId: "successor-native",
+      attempts: 1,
+    }]);
+  } finally {
+    allowCreate();
+    await drain;
+    unregister();
+  }
 });
 
-test("an image send whose successor has no host yet is held durably, never rejected", async () => {
+test("an image send during a switch is held durably, never rejected", async () => {
   const { registry, conversation, sourcePath, successorPath, reconfigure, hostTurn } = await switchRequestedMidTurn();
   hostTurn(null);
-  let snapshots = 0;
+  let drain: Promise<unknown> | null = null;
   const client = {
-    /* The source is hosted and idle; once the switch commits, the successor's
-       host has not published a session yet. */
-    snapshot: async () => structuredSnapshot(conversation, "idle", snapshots++ === 0 ? 1 : 0),
-    command: async () => { throw new Error("no successor host is published yet"); },
+    snapshot: async () => structuredSnapshot(conversation, "idle"),
+    readSession: async (identity: { conversationId?: string }) => structuredSnapshot(conversation, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
+    command: async () => { throw new Error("no host receives the image from its request"); },
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage({
     path: sourcePath,
     conversationId: conversation.id,
-    clientMessageId: "forced-switch-image-send",
+    clientMessageId: "switch-image-send",
     text: "look at this",
     images: [{ base64: PNG_BASE64, mime: "image/png" }],
   }, {
@@ -421,14 +441,18 @@ test("an image send whose successor has no host yet is held durably, never rejec
     client: () => client,
     registry: () => registry,
     requestMigrationTick: () => {},
-    kick: async () => { await reconfigure(); },
+    kick: () => { drain = reconfigure(); return drain; },
     storeImages: () => [],
   });
 
   expect(result).toMatchObject({ ok: true, structured: true, outcome: "held" });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "switch-image-send", payloadKind: "runtime-images", state: "held", waitReason: "switching-accounts",
+  }]);
+  await drain;
   expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
   expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
-    clientMessageId: "forced-switch-image-send",
+    clientMessageId: "switch-image-send",
     payloadKind: "runtime-images",
     generationId: "successor-native",
   }]);
@@ -503,4 +527,197 @@ test("a switch that cannot execute surfaces an actionable failure instead of sta
     errorCode: "target-account-unavailable",
     error: "target account is not signed in; sign it in or switch to another account",
   });
+});
+
+test("held receipts follow a failed switch, retry and rollback in both languages", async () => {
+  const { registry, conversation, hostTurn } = await switchWithoutOwner();
+  const held = registry.holdDelivery(conversation.id, "keep this message", "failed-switch-send");
+  hostTurn(null);
+  const unavailable: SuccessorProviderPort = {
+    async create() { throw new MigrationTargetUnavailableError("not-authenticated", "target account requires authentication"); },
+    async verify() {},
+  };
+  await advanceConversationMigration(conversation.id, registry, unavailable, { deferBoardRepair: true });
+  const receipt = () => sendReceiptFor(registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId);
+  expect(registry.conversation(conversation.id)?.migration?.phase).toBe("failed-recoverable");
+  expect(receipt()).toMatchObject({ state: "in-flight", reason: "switch-failed" });
+  for (const locale of ["en", "uk"] as const) {
+    const entry: OutboxEntry = { id: held.clientMessageId!, text: held.text, images: 0, at: Date.now(),
+      state: "delivering", deliveryReceipt: { ...runtimeReceiptForSend(receipt()!), revision: 1 } };
+    const row = messageRowModel((key, vars) => translate(locale, key, vars), entry);
+    expect(row.transport).toBe(translate(locale, "receipt.human.switchFailed"));
+  }
+  registry.retryConversationMigration(conversation.id);
+  expect(receipt()).toMatchObject({ state: "in-flight", reason: "switch-after-turn" });
+  registry.rollbackConversationMigration(conversation.id);
+  expect(registry.deliverySnapshotForOperation(held.command.operationId)!.heldDeliveries[held.id]).toMatchObject({ state: "assigned", waitReason: null });
+  expect(receipt()!.reason).not.toBe("switching-accounts");
+});
+
+/** The run 3 race on production (2026-10-07): the operator picked account B
+    in the composer of an idle conversation and sent a message 0.09 s later.
+    The send was admitted before the queue claimed the pick, so it was claimed
+    on account A and journaled behind the pick. */
+function sendClaimedBehindPick(storage: { sqliteMode: "sqlite"; sqliteWriterDeadlineMs?: number } | null = null) {
+  const root = path.join(sandbox, `case-${caseNumber += 1}`);
+  fs.mkdirSync(root);
+  setBoardFileForTests(path.join(root, "board.json"));
+  const sqliteFilename = path.join(root, "registry.sqlite");
+  const registry = storage
+    ? new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { ...storage, sqliteFilename })
+    : new AgentRegistry(path.join(root, "registry.json"));
+  const sourcePath = path.join(root, "source.jsonl");
+  const successorPath = path.join(root, "successor.jsonl");
+  claudeTranscript(sourcePath);
+  registry.reconcileConversations([{
+    engine: "claude",
+    path: sourcePath,
+    accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "terminal", source: "assistant", terminalAt: "2026-07-21T10:00:26.000Z" },
+    observedAt: "2026-07-21T10:00:30.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  const generationId = conversation.generations.at(-1)!.id;
+  recordStructuredHost(registry, { engine: "claude", sessionId: generationId }, sourcePath, "account-a", null);
+  const admitted = registry.holdDelivery(conversation.id, "Second message: reply with the single word OK", "send-behind-pick",
+    "text", [], null, { operationId: "send-behind-pick" });
+  const claimed = registry.beginDeliveryAttempt(admitted.id, generationId);
+  expect(claimed).toMatchObject({ state: "delivery-uncertain", generationId });
+  const effect: StructuredReconfigureEffect = {
+    operationId: "pick-account-b",
+    conversationId: conversation.id,
+    kind: "reconfigure",
+    model: "claude-haiku-4-5",
+    effort: "low",
+    fast: false,
+    accountId: "account-b",
+    eventSeq: 7,
+  };
+  const reconfigure = (carriedSends?: readonly string[]) => applyStructuredReconfigure(effect, {
+    registry,
+    validateAccount: async () => {},
+    resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: root, engine })) as never,
+    releaseHost: async () => true,
+    recover: (async () => true) as never,
+    migrate: (conversationId, targetAccountId, store, ownsOperation, reconfigureOperationId) =>
+      advanceConversationMigration(conversationId, store, successorProvider(successorPath), {
+        ownsOperation,
+        reconfigureOperationId,
+        deferBoardRepair: true,
+      }),
+    ...(carriedSends ? { carriedSends } : {}),
+  });
+  return { registry, conversation, successorPath, reconfigure, sqliteFilename };
+}
+
+/** Another process's writer: the registry's write lock taken on a second
+    connection and kept until released. */
+function holdRegistryWriter(sqliteFilename: string) {
+  const database = new Database(sqliteFilename);
+  database.exec("BEGIN IMMEDIATE");
+  return { release: () => { database.exec("ROLLBACK"); database.close(); } };
+}
+
+/** The longest stretch a 10 ms heartbeat went unserved while `work` ran. */
+async function longestHeartbeatGap<T>(work: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
+  let last = performance.now();
+  let gapMs = 0;
+  const beat = setInterval(() => {
+    const at = performance.now();
+    gapMs = Math.max(gapMs, at - last);
+    last = at;
+  }, 10);
+  try {
+    const value = await work();
+    gapMs = Math.max(gapMs, performance.now() - last);
+    return { value, gapMs };
+  } finally {
+    clearInterval(beat);
+  }
+}
+
+test("a send claimed on the old account behind the pick moves with the switch and goes out on the new account", async () => {
+  const { registry, conversation, successorPath, reconfigure } = sendClaimedBehindPick();
+
+  expect(await reconfigure(["send-behind-pick"])).toBe("applied");
+
+  const switched = registry.conversation(conversation.id)!;
+  expect(switched.migration?.phase).toBe("committed");
+  expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  /* The message waits for the successor's host, never for itself. */
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "send-behind-pick",
+    state: "assigned",
+    generationId: "successor-native",
+  }]);
+});
+
+test("a send the queue may already have handed the old host still holds the switch", async () => {
+  const { registry, conversation, reconfigure } = sendClaimedBehindPick();
+
+  expect(await reconfigure()).toBe("pending");
+
+  expect(registry.conversation(conversation.id)!.migration?.phase).toBe("waiting-turn");
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
+});
+
+test("the switch hands its carried sends over without holding the Viewer while another writer has the lock", async () => {
+  const { registry, conversation, successorPath, reconfigure, sqliteFilename } = sendClaimedBehindPick({ sqliteMode: "sqlite" });
+  /* The handover's write comes after the pick's own reseat write, so the lock
+     is taken once that has committed: the next write is the handover. */
+  const reseat = registry.requestConversationReseat.bind(registry);
+  let writer: ReturnType<typeof holdRegistryWriter> | null = null;
+  registry.requestConversationReseat = (...args) => {
+    const conversationAfter = reseat(...args);
+    writer = holdRegistryWriter(sqliteFilename);
+    setTimeout(() => writer!.release(), 600);
+    return conversationAfter;
+  };
+
+  const { value, gapMs } = await longestHeartbeatGap(() => reconfigure(["send-behind-pick"]));
+
+  expect(writer).not.toBeNull();
+  expect(value).toBe("applied");
+  expect(gapMs).toBeLessThan(50);
+  expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ clientMessageId: "send-behind-pick", state: "assigned" }]);
+  registry.close();
+});
+
+test("a handover refused at its deadline writes nothing, says why, and the next pass carries the send once", async () => {
+  const { registry, conversation, successorPath, reconfigure, sqliteFilename } = sendClaimedBehindPick({ sqliteMode: "sqlite", sqliteWriterDeadlineMs: 100 });
+  const reseat = registry.requestConversationReseat.bind(registry);
+  let writer: ReturnType<typeof holdRegistryWriter> | null = null;
+  let deliveriesBeforeHandover: unknown = null;
+  registry.requestConversationReseat = (...args) => {
+    const conversationAfter = reseat(...args);
+    if (!writer) {
+      deliveriesBeforeHandover = structuredClone(registry.readOnlySnapshot().heldDeliveries);
+      writer = holdRegistryWriter(sqliteFilename);
+    }
+    return conversationAfter;
+  };
+
+  const { value, gapMs } = await longestHeartbeatGap(() => reconfigure(["send-behind-pick"]));
+  writer!.release();
+
+  expect(value).toBe("writer-busy");
+  expect(gapMs).toBeLessThan(50);
+  /* Nothing was written: the claim still sits on the old account. */
+  expect(registry.readOnlySnapshot().heldDeliveries).toEqual(deliveriesBeforeHandover as never);
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
+  /* The composer names the wait from the switch's receipt. */
+  expect(translate("en", humanReceiptReasonKey("switch-writer-busy")!)).toContain("retries");
+  expect(SWITCH_WAIT_REASONS.has("switch-writer-busy")).toBe(true);
+
+  expect(await reconfigure(["send-behind-pick"])).toBe("applied");
+
+  expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "send-behind-pick",
+    state: "assigned",
+    generationId: "successor-native",
+  }]);
+  registry.close();
 });

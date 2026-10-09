@@ -12,6 +12,8 @@ import {
 } from "@/lib/agent/registry";
 import type { FileEntry } from "@/lib/types";
 
+import { setStateFreeBytesProbeForTests } from "@/lib/state/diskFull";
+
 import { buildFilesResponse } from "./response";
 
 let registryRoot = "";
@@ -19,12 +21,14 @@ let stateDir = "";
 const previousState = process.env.LLV_STATE_DIR;
 
 beforeEach(() => {
+  setStateFreeBytesProbeForTests(() => 1024 ** 3);
   registryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-perf-"));
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-perf-state-"));
   process.env.LLV_STATE_DIR = stateDir;
 });
 
 afterEach(() => {
+  setStateFreeBytesProbeForTests(null);
   setAgentRegistryForTests(null);
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;

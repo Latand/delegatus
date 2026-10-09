@@ -409,3 +409,63 @@ test("an agent relay that carries the mandate text stays the internal card", () 
   expect(html).toContain("orchestrator");
   expect(html).not.toContain("data-mandate-card");
 });
+
+for (const engine of ["claude", "codex"] as const) for (const locale of ["en", "uk"] as const) {
+  test(`${engine} native offers render once for their own occurrence after reload in ${locale}`, () => {
+    setLocale(locale);
+    const first = engine === "claude"
+      ? JSON.stringify({ type: "user", uuid: "synthetic-first", timestamp: at(1000), message: { role: "user", content: "Repeat synthetic input" } })
+      : codexUserLine("Repeat synthetic input", at(1000));
+    const second = engine === "claude"
+      ? JSON.stringify({ type: "user", uuid: "synthetic-second", timestamp: at(3000), message: { role: "user", content: "Repeat synthetic input" } })
+      : codexUserLine("Repeat synthetic input", at(3000));
+    const parse = () => engine === "claude" ? claudeItems([first, second]) : codexItems([first, codexEventLine("Repeat synthetic input", at(1001)), second]);
+    const memoryOffers = { [`native:${messageTextDigest(first)}`]: ["Synthetic memory name"] };
+    for (const items of [parse(), parse()]) {
+      const lookup = provenanceLookupFor({ memoryOffers }, items);
+      const users = items.filter(item => item.kind === "user");
+      expect(lookup.memoryFor!(users[0])).toEqual(["Synthetic memory name"]);
+      expect(lookup.memoryFor!(users[1])).toEqual([]);
+      const markup = renderToStaticMarkup(<MessageProvenanceProvider value={lookup}>
+        {users.map((item, index) => <FeedItem key={index} item={item} />)}
+      </MessageProvenanceProvider>);
+      expect(markup.match(/data-memory-offer/g)).toHaveLength(1);
+      expect(markup).toContain("Synthetic memory name");
+    }
+  });
+}
+
+for (const locale of ["en", "uk"] as const) {
+  test(`a turn draws a chip with its count, a quiet line, or nothing in ${locale}`, () => {
+    setLocale(locale);
+    const turn = (ref: string): Item => ({ kind: "user", ts: "2026-10-01T12:00:00Z", text: `Turn ${ref}`, structuredUserRef: ref });
+    const one = turn("one"), many = turn("many"), quiet = turn("quiet"), ordinary = turn("ordinary");
+    const titles = Array.from({ length: 4 }, (_, i) => `Synthetic title ${i + 1}`);
+    const lookup = provenanceLookupFor({
+      memoryOffers: { one: ["Synthetic title"], many: titles },
+      memoryPaths: { many: ["~/fixture/memory/a.md", null] },
+      memoryNone: ["quiet", "many"],
+    }, [one, many, quiet, ordinary]);
+    /* Titles without a recorded file stay readable; a turn that has titles is never also "nothing relevant". */
+    expect(lookup.memoryOn!(one)).toEqual({ added: [{ title: "Synthetic title", path: null }], none: false });
+    expect(lookup.memoryOn!(many).added.map(entry => entry.path)).toEqual(["~/fixture/memory/a.md", null, null, null]);
+    expect(lookup.memoryOn!(many).none).toBe(false);
+    expect(lookup.memoryOn!(quiet)).toEqual({ added: [], none: true });
+    expect(lookup.memoryOn!(ordinary)).toEqual({ added: [], none: false });
+    const render = (item: Item) => renderToStaticMarkup(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
+    for (const [item, count] of [[one, 1], [many, 4]] as const) {
+      const markup = render(item);
+      expect(markup.match(/data-memory-offer/g)).toHaveLength(1);
+      /* Static markup reads the server's language; the wording is held in MemoryOnMessage.dom.test.tsx. */
+      expect(markup).toContain(`· ${count}</span>`);
+      expect(markup).toContain('aria-expanded="false"');
+      expect(markup).not.toContain("data-memory-none");
+    }
+    /* Every title is in the row once, behind the chip. */
+    for (const title of titles) expect(render(many).split(`${title}<`).length - 1).toBe(1);
+    const line = render(quiet);
+    expect(line).toContain(`data-memory-none`);
+    expect(line).not.toContain("data-memory-offer");
+    expect(render(ordinary)).not.toMatch(/data-memory-(offer|none)/);
+  });
+}

@@ -29,9 +29,11 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { FakeEngineHost, createFakeDeliveryLedger } from "@/lib/runtime/fixtures/fakeEngineHost";
-import { handleRuntimeOperationQuery } from "@/lib/runtime/http";
-import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
+import { handleRuntimeDiscard, handleRuntimeOperationQuery } from "@/lib/runtime/http";
+import { NextRequest } from "next/server";
+import { resolveSendReceipt, sendReceiptFor } from "@/lib/runtime/sendSettlement";
 import { structuredContentDigest } from "@/lib/runtime/structuredContent";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "@/lib/runtime/structuredDeliveryQueue";
 import type { FileEntry } from "@/lib/types";
@@ -94,6 +96,7 @@ function journalClient(journal: RuntimeJournal): RuntimeHostClient {
     operationStatus: async (operationId: string) => journal.operationResult(operationId),
     transitionOperation: async (operationId: string, status: Parameters<RuntimeJournal["transitionOperation"]>[1], details?: Parameters<RuntimeJournal["transitionOperation"]>[2]) =>
       journal.transitionOperation(operationId, status, details),
+    claimDeliveryAction: async (...args: Parameters<RuntimeHostClient["claimDeliveryAction"]>) => journal.claimDeliveryAction(...args),
   } as unknown as RuntimeHostClient;
 }
 
@@ -121,7 +124,7 @@ interface Delivery {
 
 /** One admitted operator message: a reservation in the registry and the
     operation in the runtime journal, exactly as the send route leaves them. */
-function admit(name: string): Delivery {
+function admit(name: string, origin?: MessageOrigin): Delivery {
   const directory = path.join(sandbox, name);
   const sessionId = `${name}-session`;
   const artifactPath = path.join(directory, `${sessionId}.jsonl`);
@@ -170,7 +173,7 @@ function admit(name: string): Delivery {
     "text",
     [],
     structuredContentDigest({ text, images: [] }),
-    { operationId, kind: "send", policy: "interrupt-active", turnId: null },
+    { operationId, kind: "send", policy: "interrupt-active", turnId: null, ...(origin ? { origin } : {}) },
   );
   expect(registry.beginDeliveryAttempt(held.id, held.generationId!)?.state).toBe("delivery-uncertain");
   const journalFile = path.join(directory, "events.sqlite");
@@ -189,7 +192,7 @@ function admit(name: string): Delivery {
       capabilities: { steer: true, structuredAttention: true },
     },
   });
-  journal.executeOperation({ kind: "send", operationId, idempotencyKey: clientKey, conversationId: conversation.id, text, policy: "interrupt-active" });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: clientKey, conversationId: conversation.id, text, policy: "interrupt-active", ...(origin ? { origin } : {}) });
   journal.close();
   return { conversationId: conversation.id, operationId, key: clientKey, text, registry, journalFile, ledger: createFakeDeliveryLedger() };
 }
@@ -265,6 +268,96 @@ async function waitFor(condition: () => boolean): Promise<void> {
 
 const touchesOperation = (requests: Recorded[], delivery: Delivery) => requests.filter((request) =>
   request.method !== "GET" && (request.url.includes(delivery.operationId) || request.body.includes(delivery.key)));
+
+for (const locale of ["en", "uk"] as const) {
+  test(`checking delivery discard clears a relay card through the production DELETE route (${locale})`, async () => {
+    setLocale(locale);
+    const delivery = admit(`discard-relay-${locale}`, {
+      kind: "agent", role: "orchestrator", project: "repo-source", conversationId: "conversation_source",
+    });
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    journal.transitionOperation(delivery.operationId, "delivering");
+    journal.transitionOperation(delivery.operationId, "uncertain", { reason: "confirmation lost" });
+    const held = Object.values(delivery.registry.readOnlySnapshot().heldDeliveries)[0]!;
+    delivery.registry.recordDeliveryOutcome(held.id, "failed", "confirmation lost");
+    const original = { ...journal.operationResult(delivery.operationId)!.receipt, text: delivery.text } as RuntimeReceipt;
+    sessionStorage.setItem(`llvRecoveryReceipts:${delivery.conversationId}`, JSON.stringify([original]));
+    const requests = serveOperations(async () => Response.json({ operationId: delivery.operationId, receipt: original }));
+    const serve = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      if (init?.method === "DELETE") {
+        requests.push({ method: "DELETE", url: String(input), body: "" });
+        return handleRuntimeDiscard(new NextRequest(`http://127.0.0.1${String(input)}`,
+          { method: "DELETE", headers: { host: "127.0.0.1" } }), delivery.operationId,
+        { enabled: () => true, client: () => journalClient(journal), registry: () => delivery.registry,
+          kick: () => { throw new Error("discard must not wake delivery"); } });
+      }
+      return serve(input, init);
+    }) as typeof fetch;
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      const button = document.querySelector<HTMLButtonElement>("[data-receipt-discard]")!;
+      expect(button).toBeTruthy();
+      await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+      await waitFor(() => !document.querySelector("[data-runtime-receipt-stack]"));
+      expect(Boolean(document.querySelector("[data-runtime-receipt-stack]"))).toBe(false);
+      expect(touchesOperation(requests, delivery)).toEqual([
+        { method: "DELETE", url: `/api/runtime/operations/${delivery.operationId}`, body: "" },
+      ]);
+      expect(sendReceiptFor(delivery.registry.readOnlySnapshot(), delivery.operationId)?.reason).toBe("delivery-discarded");
+    } finally {
+      await unmount();
+      journal.close();
+    }
+  });
+
+  for (const method of ["DELETE", "POST"] as const) test(`checking delivery errors use localized recovery copy (${locale}, ${method})`, async () => {
+    setLocale(locale);
+    const conversationId = `conversation_discard_error_${locale}_${method}`;
+    const original: RuntimeReceipt = { operationId: "discard-error-operation", idempotencyKey: "discard-error-key",
+      conversationId, kind: "send", status: "uncertain", text: "relay handoff",
+      at: new Date().toISOString(), revision: 1 };
+    sessionStorage.setItem(`llvRecoveryReceipts:${conversationId}`, JSON.stringify([original]));
+    serveOperations(async () => Response.json({ receipt: original }));
+    const serve = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => init?.method === method && String(input).startsWith("/api/runtime/operations/")
+      ? Response.json({ error: "delivery discard could not be recorded durably" }, { status: 503 })
+      : serve(input, init)) as typeof fetch;
+    const unmount = await mountComposer(conversationId);
+    try {
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>(method === "DELETE" ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]")!.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(document.body.textContent).not.toContain("delivery discard could not be recorded durably");
+      expect(document.body.textContent).toContain(translate(locale, method === "DELETE" ? "composer.deliveryDiscardFailed" : "composer.deliveryRetryFailed"));
+    } finally { await unmount(); }
+  });
+
+  for (const actuated of [false, true]) test(`checking delivery settles its stalled original attempt through the production GET route (${locale}, actuated=${actuated})`, async () => {
+    setLocale(locale);
+    const delivery = admit(`stuck-check-${locale}-${actuated}`);
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    if (actuated) journal.transitionOperation(delivery.operationId, "delivering");
+    const original = { ...journal.operationResult(delivery.operationId)!.receipt,
+      status: "uncertain", text: delivery.text, admittedAt: new Date(Date.now() - 11 * 60_000).toISOString() } as RuntimeReceipt;
+    sessionStorage.setItem(`llvRecoveryReceipts:${delivery.conversationId}`, JSON.stringify([original]));
+    const requests = serveOperations(operationId => handleRuntimeOperationQuery(operationId, {
+      rolledBack: () => false, client: () => journalClient(journal),
+      settle: (id, client) => resolveSendReceipt(id, { registry: delivery.registry, client,
+        now: () => Date.now() + 11 * 60_000 }),
+    }));
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      await waitFor(() => sendReceiptFor(delivery.registry.readOnlySnapshot(), delivery.operationId)?.state === "failed");
+      expect(sendReceiptFor(delivery.registry.readOnlySnapshot(), delivery.operationId)?.state).toBe("failed");
+      expect(document.body.textContent).not.toContain(translate(locale, "composer.deliveryChecking"));
+      expect(document.body.textContent).toContain(translate(locale, actuated ? "composer.deliveryCheckEnded" : "composer.deliveryNotDelivered"));
+      expect(touchesOperation(requests, delivery)).toEqual([]);
+      expect(journal.effectBatch()).toEqual([]);
+    } finally { await unmount(); journal.close(); }
+  });
+}
 
 test("a stale delivering row reloaded after a release reads its delivered record back and drains the queue once", async () => {
   const delivery = admit("delivered-before-release");
@@ -657,7 +750,7 @@ test("a delivered operation from another sender is not shown as unknown after a 
     operationId,
     receipt: { ...uncertain, status: "delivered", reason: null, resend: "not-needed", at: new Date(Date.parse(admittedAt) + 60_000).toISOString(), revision: 1 },
   }));
-  const unknown = "The last attempt's outcome is unknown";
+  const unknown = "Checking delivery…";
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -757,3 +850,32 @@ test("two composers showing the same operation share one read", async () => {
     await first();
   }
 });
+
+for (const locale of ["uk", "en"] as const) {
+  test(`a real uncertain delivery clears its ${locale} composer banner on canonical readback after restart`, async () => {
+    setLocale(locale);
+    const delivery = admit(`late-canonical-${locale}`);
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    journal.transitionOperation(delivery.operationId, "delivering");
+    journal.transitionOperation(delivery.operationId, "uncertain");
+    delivery.registry.recordDeliveryOutcomeForOperation(delivery.conversationId as `conversation_${string}`,
+      delivery.operationId, "failed", "delivery was started by an earlier executor", "unverified");
+    const admittedAt = new Date(Date.now() - 60_000).toISOString();
+    seedStaleTab(delivery, admittedAt);
+    const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+    const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+    const wire = encodeCodexStructuredUserText(delivery.text, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.operationId));
+    const transcript = delivery.registry.conversation(delivery.conversationId as `conversation_${string}`)!.generations[0]!.path;
+    fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    const requests = serveOperations(id => handleRuntimeOperationQuery(id, {
+      client: () => journalClient(journal), rolledBack: () => false,
+      settle: (operationId, client) => resolveSendReceipt(operationId, { registry: delivery.registry, client }),
+    }));
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+      expect(document.querySelector("[data-delivery-notice]")).toBeNull();
+      expect(touchesOperation(requests, delivery)).toEqual([]);
+    } finally { await unmount(); journal.close(); }
+  });
+}

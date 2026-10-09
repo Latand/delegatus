@@ -1,7 +1,9 @@
+import { test } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
-import type { Browser } from "playwright-core";
+import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
 import postcss from "postcss";
 
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
@@ -12,6 +14,97 @@ import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
    so every #1695 caller is unchanged; another surface's driver passes its own.
    It also answers `/api/task-icons` the way the Viewer does (#2102), so a
    fixture draws lucide's real icons. */
+
+/* One case of a browser driver, run so that its timeout fails that case and
+   nothing after it. Bun's own per-test timeout abandons the body and kills the
+   processes it spawned, so a wait still pending on the killed browser rejected
+   later as "Unhandled error between tests" and a merge gate read the whole
+   file as broken (2026-10-07). Here the case owns a deadline of its own, ahead
+   of Bun's: when it passes, every browser and fixture server the case opened
+   is closed, which settles its pending waits as failures of this case, and
+   only then does the case fail. A body still running after its deadline cannot
+   open another browser into the next case.
+
+   The deadline is the declared timeout scaled for a loaded machine (load 25-35
+   on 24 cores runs a case several times slower than an idle one) with a floor
+   that covers bundling the fixture and starting Chromium. A hang costs the
+   longer wait; a passing case is not slowed. LLV_BROWSER_TIMEOUT_SCALE
+   overrides the factor. */
+const BROWSER_TIMEOUT_SCALE = Number(process.env.LLV_BROWSER_TIMEOUT_SCALE) > 0 ? Number(process.env.LLV_BROWSER_TIMEOUT_SCALE) : 2;
+const BROWSER_TIMEOUT_FLOOR = 90_000;
+/* How long a timed-out body gets to unwind its own `finally` blocks once its
+   browsers are gone, and how long each close may take. */
+const SETTLE_MS = 15_000;
+
+type CaseScope = { closers: (() => unknown)[]; expired: boolean };
+const caseScope = new AsyncLocalStorage<CaseScope>();
+
+function adopt(close: () => unknown) {
+  caseScope.getStore()?.closers.push(close);
+}
+
+function openable(): CaseScope | undefined {
+  const scope = caseScope.getStore();
+  if (scope?.expired) throw new Error("this browser case has timed out; it cannot open another browser");
+  return scope;
+}
+
+async function owned<T>(open: () => Promise<T>, close: (value: T) => unknown): Promise<T> {
+  const scope = openable();
+  const value = await open();
+  scope?.closers.push(() => close(value));
+  if (scope?.expired) {
+    await close(value);
+    throw new Error("this browser case timed out while its browser was starting");
+  }
+  return value;
+}
+
+async function closeAll(scope: CaseScope) {
+  const closers = scope.closers.splice(0).reverse();
+  await Promise.all(closers.map(async (close) => {
+    await Promise.race([Promise.resolve().then(close).catch(() => undefined), Bun.sleep(SETTLE_MS)]);
+  }));
+}
+
+/* The drivers launch through this, so the case that opened a browser can close it. */
+export const caseChromium = {
+  launch: (...args: Parameters<typeof chromium.launch>) => owned(() => chromium.launch(...args), (browser) => browser.close()),
+  launchServer: (...args: Parameters<typeof chromium.launchServer>) => owned(() => chromium.launchServer(...args), (server) => server.kill()),
+  connect: (wsEndpoint: string, options?: ConnectOptions) => owned(() => chromium.connect(wsEndpoint, options), (browser) => browser.close()),
+};
+
+export function browserCaseDeadline(declared: number): number {
+  return Math.max(Math.round(declared * BROWSER_TIMEOUT_SCALE), BROWSER_TIMEOUT_FLOOR);
+}
+
+/** `test` for a gated browser driver; a disabled gate skips every case. */
+export function browserCase(enabled: boolean) {
+  return (name: string, body: () => void | Promise<unknown>, declared = 5_000) => {
+    if (!enabled) return test.skip(name, body);
+    const deadline = browserCaseDeadline(declared);
+    test(name, async () => {
+      const scope: CaseScope = { closers: [], expired: false };
+      const run = caseScope.run(scope, () => Promise.resolve().then(body));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expiry = new Promise<"expired">((resolve) => { timer = setTimeout(() => resolve("expired"), deadline); });
+      try {
+        if (await Promise.race([run.then(() => "done" as const), expiry]) === "expired") {
+          scope.expired = true;
+          // The wait the case was stuck on rejects once its browser closes; its call log names it.
+          const stuck = run.then(() => null, (error: unknown) => error);
+          await closeAll(scope);
+          const reason = await Promise.race([stuck, Bun.sleep(SETTLE_MS).then(() => null)]);
+          const where = reason instanceof Error ? `\n${reason.message}` : "";
+          throw new Error(`browser case timed out after ${deadline} ms; its browsers and fixture servers were closed before the next case${where}`);
+        }
+      } finally {
+        clearTimeout(timer);
+        await closeAll(scope);
+      }
+    }, deadline + 3 * SETTLE_MS);
+  };
+}
 
 export async function serveEvidenceFixture(
   outDir: string,
@@ -56,6 +149,7 @@ export async function serveEvidenceFixture(
       );
     },
   });
+  adopt(() => server.stop(true));
   return { base: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
 }
 
@@ -90,6 +184,19 @@ export async function openFixture(
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);
   return { context, page, pageErrors };
+}
+
+/** Waits until an opened `<details>` shows all of its content. The board's
+ * sections ease their content open from no height under `overflow: clip`, so
+ * a control near the end is clipped for a moment; a click there lands on the
+ * card behind it. */
+export async function waitForSectionOpen(page: Page, selector: string, timeout = 20_000): Promise<void> {
+  await page.waitForFunction((target) => {
+    const details = document.querySelector<HTMLDetailsElement>(target);
+    if (!details?.open) return false;
+    const last = details.lastElementChild;
+    return !last || last.getBoundingClientRect().bottom <= details.getBoundingClientRect().bottom + 0.5;
+  }, selector, { timeout, polling: "raf" });
 }
 
 /** Shared fast-speech case for the existing phone and desktop drivers. The
@@ -129,34 +236,42 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
       const width = mobile ? 390 : 1440;
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?${mobile ? "fast-tts=1&runtime=structured#c=conversation_running" : "scenario=fast-tts#c=conversation_export-impl"}`, { width, height: mobile ? 844 : 900 }, scheme, "en", "reduce", mobile);
       try {
-        const control = page.locator(mobile ? '[data-mobile2-bar] [data-tts-header]' : '[data-kanban-reader="conversation_export-impl"] [data-tts-header]');
+        /* The phone reads aloud from the control beside the message (its header carries none). */
+        const control = page.locator(mobile ? '[data-mobile-message-actions] [data-tts-trigger]' : '[data-kanban-reader="conversation_export-impl"] [data-tts-header]').last();
+        const phase = mobile ? '[data-mobile-message-actions] [data-tts-trigger]' : '[data-tts-header]';
         await control.waitFor({ timeout: 20000 });
-        await page.waitForFunction((mobile) => !!document.querySelector(mobile ? '[data-mobile2-bar] [data-tts-header]:enabled' : '[data-kanban-reader="conversation_export-impl"] [data-tts-header]:enabled'), mobile);
+        await page.waitForFunction((selector) => !!document.querySelector(`${selector}:enabled`), phase);
         const prefix = `${mobile ? "phone" : "desktop"}-${width}-${scheme}`;
         const measure = async () => control.evaluate((node) => {
           const rect = node.getBoundingClientRect();
-          const header = node.closest("header, .conv-head, [data-orchestrator-incumbent]")!;
-          const title = header.querySelector("[data-mobile2-chat-title], [data-pane-title-override], .ch-title");
+          const header = node.closest("header, .conv-head, [data-orchestrator-incumbent]") ?? document.querySelector("[data-mobile2-bar]");
+          const title = header?.querySelector("[data-mobile2-chat-title], [data-pane-title-override], .ch-title");
           const titleRect = title?.getBoundingClientRect();
-          return { x: rect.x, right: rect.right, width: rect.width, height: rect.height, barHeight: header.getBoundingClientRect().height,
+          return { x: rect.x, right: rect.right, width: rect.width, height: rect.height, barHeight: header?.getBoundingClientRect().height ?? 0,
             titleOverlap: !!titleRect && rect.left < titleRect.right && rect.right > titleRect.left && rect.top < titleRect.bottom && rect.bottom > titleRect.top };
         });
         const idle = await measure();
         expect(idle.width).toBeGreaterThan(0); expect(idle.right).toBeLessThanOrEqual(width); expect(idle.titleOverlap).toBe(false);
-        if (mobile) { expect(idle.width).toBe(44); expect(idle.height).toBe(44); expect(idle.barHeight).toBe(52); }
+        if (mobile) {
+          expect(idle.width).toBe(44); expect(idle.height).toBe(44);
+          expect(await page.locator('[data-mobile2-bar] [data-tts-trigger], [data-mobile2-bar] [data-tts-header]').count()).toBe(0);
+          expect((await page.locator('[data-mobile2-bar]').boundingBox())!.height).toBe(52);
+        }
         await page.screenshot({ path: path.join(out, `${prefix}-idle.png`) });
         await control.click();
-        await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="loading"]'));
+        await page.waitForFunction((selector) => document.querySelector(`${selector}[data-tts-phase="loading"]`), phase);
         await page.screenshot({ path: path.join(out, `${prefix}-loading.png`) });
         expect(await control.getAttribute("aria-busy")).toBe("true");
-        await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
+        await page.waitForFunction((selector) => document.querySelector(`${selector}[data-tts-phase="playing"]`), phase);
         await page.screenshot({ path: path.join(out, `${prefix}-playing.png`) });
         expect((await measure()).barHeight).toBe(idle.barHeight);
         await control.click(); expect(await control.getAttribute("data-tts-phase")).toBe("idle");
-        // The row and header use the same session and stop surface.
-        const row = page.locator(mobile ? '[data-log-feed-scroller] [data-tts-trigger]' : '[data-kanban-reader="conversation_export-impl"] [data-log-feed-scroller] [data-tts-trigger]').first();
-        await row.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
-        await control.click(); expect(await row.getAttribute("data-tts-phase")).toBe("idle");
+        if (!mobile) {
+          // The row and header use the same session and stop surface.
+          const row = page.locator('[data-kanban-reader="conversation_export-impl"] [data-log-feed-scroller] [data-tts-trigger]').first();
+          await row.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
+          await control.click(); expect(await row.getAttribute("data-tts-phase")).toBe("idle");
+        }
         if (!mobile) {
           await control.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
           await page.locator('[data-reader-full-toggle="conversation_export-impl"]').click();
@@ -211,19 +326,21 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
     if (mobile) {
       const { context, page } = await openFixture(browser, `${server.base}?fast-tts=1&seatnoise=ii&runtime=structured#c=conversation_running`, { width: 390, height: 844 }, "dark", "uk", "reduce", true);
       try {
-        await page.locator('[data-tts-header]:enabled').waitFor();
-        expect(await page.locator('[data-mobile2-bar] [data-mobile2-open="reports"]').count()).toBe(0);
+        await page.locator('[data-mobile-message-actions] [data-tts-trigger]:enabled').last().waitFor();
+        /* The seat's report button stays on the bar next to the attention badge, and the bar carries no speech control. */
+        expect(await page.locator('[data-mobile2-bar] [data-mobile2-open="reports"]').count()).toBe(1);
+        expect(await page.locator('[data-mobile2-bar] [data-tts-header], [data-mobile2-bar] [data-tts-trigger]').count()).toBe(0);
         const title = await page.locator('[data-mobile2-title]').boundingBox(); expect(title!.width).toBeGreaterThanOrEqual(190);
         await page.screenshot({ path: path.join(out, "phone-390-dark-attention-reports-overflow.png") });
         await page.locator('[data-mobile2-open="menu"]').click();
-        const speechRow = page.locator('[data-mobile2-menu-row="speech"]'); await speechRow.waitFor();
+        expect(await page.locator('[data-mobile2-menu-row="speech"]').count()).toBe(0);
         expect(await page.locator('[data-mobile2-menu-row="reports"]').count()).toBe(1);
         await page.screenshot({ path: path.join(out, "phone-390-dark-reports-menu.png") });
-        await speechRow.click(); await page.locator('[data-tts-menu]').waitFor();
         await page.keyboard.press("Escape");
         await page.setViewportSize({ width: 375, height: 844 });
         await page.waitForFunction(() => !document.querySelector('[data-mobile2-bar] [data-mobile2-open="attention"]'));
         expect(await page.locator('[data-mobile2-bar] [data-mobile2-open="attention"]').count()).toBe(0);
+        expect(await page.locator('[data-mobile2-bar] [data-mobile2-open="reports"]').count()).toBe(1);
         expect((await page.locator('[data-mobile2-title]').boundingBox())!.width).toBeGreaterThanOrEqual(190);
         await page.locator('[data-mobile2-open="menu"]').click();
         expect(await page.locator('[data-mobile2-menu-row="attention"]').count()).toBe(1);
@@ -234,7 +351,7 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
       clockMode = true;
       const { context, page } = await openFixture(browser, `${server.base}?fast-tts=1&runtime=structured#c=conversation_running`, { width: 390, height: 844 }, "light", "en", "reduce", true);
       try {
-        const control = page.locator('[data-tts-header]:enabled'); await control.waitFor();
+        const control = page.locator('[data-mobile-message-actions] [data-tts-trigger]:enabled').last(); await control.waitFor();
         await page.evaluate(async () => {
           const context = new AudioContext({ sampleRate: 24000 });
           const nativeClose = context.close.bind(context);
@@ -253,10 +370,10 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
           window.AudioContext = function () { return context; } as unknown as typeof AudioContext;
           (window as unknown as { capturedSpeech: { chunks: number[][]; frames: number[]; clock: AudioContext; close: () => Promise<void> } }).capturedSpeech = { chunks, frames, clock: context, close: nativeClose };
         });
-        await control.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
+        await control.click(); await page.waitForFunction(() => document.querySelector('[data-mobile-message-actions] [data-tts-trigger][data-tts-phase="playing"]'));
         await page.waitForTimeout(2000);
         await page.evaluate(() => { const until = performance.now() + 500; while (performance.now() < until) { /* stall UI across the queued join */ } });
-        await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="idle"]'), undefined, { timeout: 15000 });
+        await page.waitForFunction(() => document.querySelector('[data-mobile-message-actions] [data-tts-trigger][data-tts-phase="idle"]'), undefined, { timeout: 15000 });
         await page.waitForTimeout(50);
         const output = await page.evaluate(() => {
           const evidence = (window as unknown as { capturedSpeech: { chunks: number[][]; clock: AudioContext } }).capturedSpeech;
@@ -269,7 +386,7 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
         expect(providerTexts).toHaveLength(3);
         // Cached replay buys nothing, and Stop removes old samples promptly.
         await page.evaluate(() => { const evidence = (window as unknown as { capturedSpeech: { chunks: number[][]; frames: number[] } }).capturedSpeech; evidence.chunks.length = 0; evidence.frames.length = 0; });
-        await control.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
+        await control.click(); await page.waitForFunction(() => document.querySelector('[data-mobile-message-actions] [data-tts-trigger][data-tts-phase="playing"]'));
         const stopped = await control.evaluate((node) => {
           const evidence = (window as unknown as { capturedSpeech: { clock: AudioContext } }).capturedSpeech;
           (node as HTMLButtonElement).click(); return evidence.clock.currentTime;
@@ -459,6 +576,11 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
         }
         await page.locator("[data-orchestrator-confirm]").first().click();
         await page.locator("[data-mandate-card]").first().waitFor();
+        /* Until the launch's own record arrives the card holds the mandate the
+           page expected to send, and a section opened then keeps that text
+           until it is reopened (MandateCard). The fixture's seat delivers a
+           one-line mandate of its own: open the card once it shows that. */
+        await page.waitForFunction(() => /·\s*1\s+\S+\s*·/.test(document.querySelector("[data-mandate-card] .text-muted")?.textContent ?? ""));
         await page.locator("[data-mandate-card] summary").first().click();
         await page.waitForFunction(() => document.querySelector("[data-mandate-card] details[open] > div")?.textContent?.includes("Keep the project moving."));
         await page.evaluate(() => {

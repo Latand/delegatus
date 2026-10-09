@@ -324,6 +324,22 @@ test("pipeline_action answers the acknowledgement for every accepted action (#18
   expect(requestedTicks).toBeGreaterThan(ticksBefore);
 });
 
+test("pipeline_action acknowledges durable remote and legacy admission checks as pending", async () => {
+  const pipeline = reviewedPipeline();
+  pipeline.remoteAction = { id: "retry-intent", action: "retry-stage", state: "pending", fence: "a".repeat(64), at: "now", actor: null };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async () => ({ pipeline }),
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+  } as never);
+  const retry = await bindings.pipeline_action({ clientRequestId: "pending-retry", pipelineId: pipeline.id, action: "retry-stage" });
+  expect(retry).toMatchObject({ remoteCheck: { id: "retry-intent", action: "retry-stage", state: "pending" } });
+  delete pipeline.remoteAction;
+  pipeline.publicationAdmission = { id: "publication-intent", sha: "a".repeat(40), fence: "a".repeat(64), state: "pending" };
+  const publish = await bindings.pipeline_action({ clientRequestId: "pending-publish", pipelineId: pipeline.id, action: "publish" });
+  expect(publish).toMatchObject({ publicationAdmission: { id: "publication-intent", state: "pending" } });
+  expectNoBodies(retry); expectNoBodies(publish);
+});
+
 test("agent_activity compact rows drop paths, host detail and the reports (#1845)", () => {
   const row = {
     conversationId: "conversation_lane",
@@ -348,7 +364,7 @@ test("agent_activity compact rows drop paths, host detail and the reports (#1845
     stalledCount: 1,
     stalledConfirmedCount: 1,
     conversations: Array.from({ length: 20 }, () => row),
-    selection: { scope: "project", scanned: 900, matched: 20, selected: 20, recovered: 0, recoveryTruncated: false, hydrated: 20, unreadable: 0, projected: 0, generation: 12, cacheStatus: "hit", freshScan: false, evidenceBytes: 400_000, budget: "complete" },
+    selection: { scope: "project", scanned: 900, matched: 20, selected: 20, recovered: 0, recoveryTruncated: false, recoveryPending: 0, hydrated: 20, unreadable: 0, projected: 0, generation: 12, cacheStatus: "hit", freshScan: false, evidenceBytes: 400_000, budget: "complete" },
     timings: { inventorySelectionMs: 3, journalProjectionMs: 5, evidenceReadMs: 40, serializationMs: 1, totalMs: 49 },
   };
   const compact = compactLiveness(snapshot as never);

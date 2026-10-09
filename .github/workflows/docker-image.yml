@@ -1,43 +1,10 @@
 name: Docker image
 
 on:
-  # A pull request builds the image only when something the Dockerfile copies,
-  # installs from or compiles changes. The build runs next build, whose type
-  # check covers every TypeScript file in the checkout (tsconfig.json include),
-  # and resolveJsonModule lets any of them import JSON, so those globs sit
-  # beside the directory paths. Tailwind scans every non-ignored file under the
-  # root for class names, not only src/, and .gitignore decides which files it
-  # skips. Tailwind scans text sources across extensions, so every repository
-  # path is an input; the broad glob also covers new source formats.
-  # Pushes to main and v* tags always build.
+  # The scope job checks the complete PR diff before admitting a build.
+  # GitHub paths filters only inspect the first 300 files and can hide inputs.
   pull_request:
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - "**/*"
-      - package.json
-      - bun.lock
-      - bunfig.toml
-      - patches/**
-      - next.config.ts
-      - postcss.config.mjs
-      - tsconfig.json
-      - src/**
-      - public/**
-      - bin/**
-      - vendor/**
-      - scripts/**
-      - "**/*.ts"
-      - "**/*.tsx"
-      - "**/*.mts"
-      - "**/*.json"
-      - "**/*.html"
-      - "**/*.js"
-      - "**/*.jsx"
-      - "**/*.mjs"
-      - "**/*.cjs"
-      - "**/.gitignore"
-      - .github/workflows/docker-image.yml
+    types: [opened, synchronize, reopened, closed]
   push:
     branches: [main]
     tags: ["v*"]
@@ -47,16 +14,46 @@ permissions:
   packages: write
 
 concurrency:
-  group: docker-image-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}
+  # A merged PR's closed event has refs/heads/main as its ref. Reconstruct its
+  # pull ref so closure cancels the same group as open/synchronize events,
+  # including runs started under the previous workflow, and keeps main separate.
+  group: docker-image-${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
-  build:
+  scope:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 360 }}
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.inputs.outputs.build }}
+      platforms: ${{ steps.inputs.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event.pull_request.state == 'open' && !startsWith(github.head_ref, 'merge-batch/')
+        with:
+          fetch-depth: 0
+      - name: Check image inputs in the complete PR diff
+        if: github.event.pull_request.state == 'open' && !startsWith(github.head_ref, 'merge-batch/')
+        id: inputs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/docker-image-scope.cjs "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Finish closure or merge-batch cancellation without a build
+        if: github.event.pull_request.state != 'open' || startsWith(github.head_ref, 'merge-batch/')
+        run: echo 'Image verification skipped for a closed PR or merge batch.'
+  build:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 360 }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
+        if: github.event_name != 'pull_request' || needs.scope.outputs.platforms == 'linux/amd64,linux/arm64'
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -66,6 +63,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Image metadata
+        if: github.event_name != 'pull_request'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -80,15 +78,36 @@ jobs:
             org.opencontainers.image.source=https://github.com/Latand/delegatus
             org.opencontainers.image.description=Delegatus agent runtime and viewer
             org.opencontainers.image.licenses=MIT
-      - name: Build both architectures
+      - name: Verify PR image
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: published
+          platforms: ${{ needs.scope.outputs.platforms }}
+          push: false
+          cache-from: type=gha
+      - name: Publish both architectures
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           target: published
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+    # One PR image build leaves runners for the two required privacy checks.
+    # Publication has its own single-build slot, so main/tags bypass PR work.
+    # At most two image builds run: one verification and one publication.
+    # Keep the existing PR slot name so older queued runs share the same cap.
+    # Per-PR workflow cancellation removes superseded/closed runs from this
+    # queue; queue:max retains verification for other still-open PRs and tags.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && 'docker-image-build' || 'docker-image-publish-build' }}
+      cancel-in-progress: false
+      queue: max

@@ -24,6 +24,7 @@ import {
 } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { BoardTask } from "@/lib/tasks/types";
+import { PrototypeNoticeChip } from "@/components/prototypeReview/PrototypeNoticeRow";
 import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
@@ -47,9 +48,13 @@ import {
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatBindPending,
+  seatFailureCopy,
   seatRequestSettled,
+  vacatedSeatReplacement,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
+  rotationBannerLines,
+  telegramActionLine,
   type RotationHint,
   type SeatBadge,
   type SeatBindFailure,
@@ -250,6 +255,7 @@ export function OrchestratorPanel({
      describes the predecessor — showing that as «the incumbent» would put the
      retired orchestrator's model and context in the successor's header. */
   const incumbent = read && read.conversationId === seatConversationId ? read : null;
+  const telegramLine = telegramActionLine(t, incumbent?.telegram);
   /* The DURABLE id is the key, and the status read's `transcriptPath` is that id
      resolved through the registry's current generation — which is what binds a
      seat whose recorded path was replaced by a re-host (issue #1182). The
@@ -452,7 +458,7 @@ export function OrchestratorPanel({
            and wrong here — this draft exists BECAUSE the operator closed that
            conversation (PRD decision 4), so it says what it means and the
            «returns to draft» promise is one the button can keep. */
-        ...(state.kind === "draft" && state.vacated ? { replaceIncumbent: true } : {}),
+        ...vacatedSeatReplacement(status),
       },
       launch: { draft: launch, cwd: projectCwd ?? "", firstMessage: mandate },
     }, replayRequestId);
@@ -576,6 +582,9 @@ export function OrchestratorPanel({
           ) : null}
           {state.kind === "live" && !collapsed && file && rotating ? <ProcessStatusControls file={file} hideChip compact /> : null}
           <span className="grow" />
+          {/* Folded, the composer and its notice lines are put away: the strip
+              keeps the word that a prototype waits. */}
+          {collapsed ? <PrototypeNoticeChip project={project} /> : null}
           {unreadReply ? (
             <span className="seat-unread" data-seat-unread="" title={t("orchPanel.seatUnreadReply")}>
               <i aria-hidden />
@@ -717,6 +726,11 @@ export function OrchestratorPanel({
               a retry and once without, so the draft's own block is the one. */}
           {state.transition && !rotating ? <TransitionBanner transition={state.transition} /> : null}
           {state.rotation ? <RotationBanner rotation={state.rotation} /> : null}
+          {telegramLine ? (
+            <p className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-ui text-warning" role="status" data-orchestrator-telegram={incumbent?.telegram ?? undefined}>
+              {telegramLine}
+            </p>
+          ) : null}
           {rotating ? null : (
             <>
               {orchestratorQuietBannerEligible(state, file) ? (
@@ -987,6 +1001,8 @@ function OrchestratorDraft({
   const { t } = useLocale();
   const errored = state.kind === "intent-error";
   const rotate = mode === "rotate";
+  /* A cause with a plain sentence replaces the recorded text and the hint. */
+  const failureCopy = errored ? seatFailureCopy(state.error, state.retry) : null;
   /* A stale incumbent (#1452): the draft started from the current default, so
      the incumbent's own text is offered explicitly, for as long as the text in
      the box is not already it. */
@@ -1043,13 +1059,15 @@ function OrchestratorDraft({
                 ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
                 : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
             </p>
-            <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary">
-              {state.error}
+            <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
+              {failureCopy ? t(failureCopy.text) : state.error}
             </pre>
-            <p className="mt-1 text-caption text-muted">
-              {t(state.retry === "same"
-                ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
-                : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
+            <p className="mt-1 text-caption text-muted" data-orchestrator-failure-hint>
+              {t(failureCopy
+                ? failureCopy.hint
+                : state.retry === "same"
+                  ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
+                  : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
             </p>
           </div>
         ) : (
@@ -1218,7 +1236,7 @@ const WARNING_BADGE = "border-warning/45 bg-warning-soft text-warning";
     tone the rest of the app spends on a wait is what «needs you» wears. */
 const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
   "needs-you": { tone: WARNING_BADGE, key: "orchPanel.badgeNeedsYou" },
-  live: { tone: "border-success/45 bg-success-soft text-success", key: "orchPanel.badgeLive" },
+  working: { tone: "border-success/45 bg-success-soft text-success", key: "orchPanel.badgeWorking" },
   /* Hosted and idle. Not green: green is the word for a turn that is running,
      and an agent awaiting input is a state the operator may want to act on. */
   waiting: { tone: QUIET_BADGE, key: "orchPanel.badgeWaiting" },
@@ -1329,6 +1347,7 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
       </p>
     );
   }
+  const failureCopy = seatFailureCopy(transition.error, "fresh");
   return (
     <div
       className="shrink-0 border-b border-danger/40 bg-danger-soft px-3 py-1.5"
@@ -1339,7 +1358,7 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
         <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
-      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary">{transition.error}</p>
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );
 }
@@ -1351,24 +1370,21 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
  * and does not start here.
  */
 function RotationBanner({ rotation }: { rotation: RotationHint }) {
-  const { t } = useLocale();
-  const summary = rotation.reasons.map((reason) => (
-    reason === "context"
-      ? t("orchPanel.rotationContext", { percent: String(rotation.contextPercent ?? 0) })
-      : t("orchPanel.rotationDead")
-  )).join(" · ");
+  const { t, locale } = useLocale();
+  const lines = rotationBannerLines(t, locale, rotation);
   return (
     <div className="shrink-0 border-b border-warning/45 bg-warning-soft px-3 py-1.5" role="status" data-orchestrator-rotation={rotation.level}>
       <p className="text-ui font-semibold text-warning">
         {t(rotation.level === "strongly_recommend" ? "orchPanel.rotationStrong" : "orchPanel.rotation")}
       </p>
-      {summary ? <p className="mt-0.5 text-caption leading-4 text-secondary">{summary}</p> : null}
-      {/* The server's own reasons, verbatim: each names the threshold it crossed
-          and whether the number behind it is an estimate. Re-wording them here is
-          how the panel and `get_orchestrator` would start disagreeing. */}
-      {rotation.notes?.length ? (
-        <ul className="mt-0.5 list-disc pl-3.5 text-caption leading-4 text-muted marker:text-muted/60">
-          {rotation.notes.map((note) => <li key={note}>{note}</li>)}
+      {/* One line per cause, in the interface language, each with what to do
+          about it. The numbers are the server's own: the threshold it applied
+          and whether the count behind it is an estimate. */}
+      {lines.length === 1 ? (
+        <p className="mt-0.5 text-caption leading-4 text-secondary" data-orchestrator-rotation-cause>{lines[0]}</p>
+      ) : lines.length ? (
+        <ul className="mt-0.5 list-disc pl-3.5 text-caption leading-4 text-secondary marker:text-muted/60">
+          {lines.map((line) => <li key={line} data-orchestrator-rotation-cause>{line}</li>)}
         </ul>
       ) : null}
     </div>

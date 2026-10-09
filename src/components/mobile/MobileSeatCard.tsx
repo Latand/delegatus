@@ -25,6 +25,7 @@ import {
   newSeatRequestId,
   seatBindPending,
   seatRequestSettled,
+  vacatedSeatReplacement,
   type SeatSubmitFailure,
 } from "../orchestrator/seatState";
 import { onOrchestratorDraftRequest, takePendingSeatOpen } from "../orchestrator/draftPrefill";
@@ -41,6 +42,7 @@ import { useMobileNav, useMobileNavStore } from "./mobileNav";
 import { readSeatDraftField, seatFlowStorage, writeSeatDraftField } from "./orchestratorDraftStorage";
 import { seatCardView } from "./orchestratorRowState";
 import { deputyAskLabel, DeputyTwin, liveSeatDeputy } from "../orchestrator/SeatDeputyChip";
+import { PrototypeNoticeChip } from "@/components/prototypeReview/PrototypeNoticeRow";
 
 /**
  * Why the sheet is open. `handoff` arms the landing: the sheet was opened to
@@ -309,6 +311,9 @@ export function MobileSeatCard({
           /* Only an UNEDITED mandate is a version of the approved prompt; an
              edited one is bespoke and records no version. */
           ...(text === ORCHESTRATOR_SYSTEM_PROMPT.trim() ? { promptVersion: ORCHESTRATOR_PROMPT_VERSION } : {}),
+          /* A vacated seat is replaced, not rotated: the same fragment the
+             dock's create form posts, from the same status read. */
+          ...vacatedSeatReplacement(status),
         }),
       });
       const body = (await response.json().catch(() => null)) as (SpawnResponseBody & { code?: string }) | null;
@@ -375,7 +380,7 @@ export function MobileSeatCard({
       setSubmitting(false);
       await refresh();
     }
-  }, [project, projectCwd, refresh, t]);
+  }, [project, projectCwd, status, refresh, t]);
 
   const openConversation = useCallback(() => {
     if (file) onOpenConversation(file);
@@ -531,7 +536,7 @@ export function MobileSeatCard({
 
   return (
     <div
-      className="flex w-full items-center gap-1 rounded-[12px] bg-card py-1.5 pl-3 pr-1 shadow-1"
+      className="flex w-full flex-wrap items-center gap-1 rounded-[12px] bg-card py-1.5 pl-3 pr-1 shadow-1"
       data-mobile2-seat-card={project}
       data-mobile2-seat-state={view.state}
       data-mobile2-seat-shape={view.shape}
@@ -582,6 +587,10 @@ export function MobileSeatCard({
           </span>
         )}
       </button>
+      {/* A prototype waits: the seat's card says so in a word with the count,
+          on its own line under the seat's words, and a tap goes to the task
+          and opens its review. */}
+      {view.shape === "invitation" ? null : <PrototypeNoticeChip project={project} compact />}
       {/* The seat's ⚙ (issue #1347): visible beside the card whenever the
           card's own tap is the conversation, so the one surface that opens the
           chat also shows where rotation and the seat's settings live. */}

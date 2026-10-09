@@ -30,6 +30,7 @@ const refusedClose = {
   stopped: [],
   stillRunning: [{ stageId: "build", attempt: 1, conversationId: "conversation_stage_1", agentPath: null, paneId: null, error: "host is unreachable" }],
 };
+let forwardedActor: unknown;
 mock.module("@/lib/pipelines/engine", () => ({
   getPipelines: () => ({ pipelines: [pipeline] }),
   getPipeline: (id: string) => {
@@ -38,7 +39,8 @@ mock.module("@/lib/pipelines/engine", () => ({
   },
   createPipelineFromRequest: () => ({ pipeline }),
   tickPipelines: async () => ({ pipelines: [], changed: false }),
-  patchPipeline: async (id: string, body: unknown) => {
+  patchPipeline: async (id: string, body: unknown, _ports: unknown, actor: unknown) => {
+    forwardedActor = actor;
     if (id !== pipeline.id) return { error: "pipeline not found", status: 404 };
     if ((body as { repoDir?: string }).repoDir === "/blocked") {
       return { error: "Git metadata is not writable: /blocked/.git", status: 403, code: "git_metadata_unwritable", field: "repoDir", path: "/blocked/.git" };
@@ -194,6 +196,19 @@ test("pipeline PATCH rejects non-object JSON", async () => {
   }
 });
 
+test("decision PATCH explicitly attributes requests without an agent capability to the operator", async () => {
+  const response = await PATCH(
+    new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
+      method: "PATCH",
+      headers: { host: "127.0.0.1" },
+      body: JSON.stringify({ action: "resolve-decision", actor: { kind: "agent", conversationId: "spoofed" } }),
+    }),
+    { params: Promise.resolve({ id: "pipeline-1" }) },
+  );
+  expect(response.status).toBe(200);
+  expect(forwardedActor).toEqual({ kind: "operator" });
+});
+
 test("pipeline PATCH forwards repository-admission fields from final revalidation", async () => {
   const response = await PATCH(
     new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
@@ -228,4 +243,10 @@ test("pipeline close forwards the operator's host acknowledgement to the engine 
     ok: true,
     pipeline: { body: { action: "close", acknowledgeHosts: true } },
   });
+});
+
+test("apply-now passes the admitted operator actor into the pipeline mutation", async () => {
+  const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", { method: "PATCH", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "override-stage", stageId: "build", model: "gpt-6.1-sol", applyNow: true }) }), { params: Promise.resolve({ id: "pipeline-1" }) });
+  expect(response.status).toBe(200);
+  expect(forwardedActor).toEqual({ kind: "operator" });
 });

@@ -22,6 +22,7 @@ import type { CopilotAcpHost } from "./copilotAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 
 export { structuredHostsEnabled };
 
@@ -127,6 +128,12 @@ interface ObservableStructuredHost {
 
 export const DEFAULT_CURSOR_DEBOUNCE_MS = 30_000;
 
+/** The row is held by a termination's captured tree and this writer still owns
+    its claim. The write waits; nothing about the host is decided by it. */
+class StructuredHostWriteHeld extends Error {
+  constructor() { super("structured host row is held by a captured termination tree"); }
+}
+
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -169,7 +176,14 @@ async function bindStructuredHostPersistence(
       writerClaimEpoch,
       terminal,
     );
-    if (!persisted) throw new Error("structured host writer claim is stale");
+    if (!persisted) {
+      /* Two refusals share one null. A captured termination tree holds the row
+         while this writer still owns it; a lost claim means another writer does. */
+      if (!terminal && registry.structuredHostWriteHeldByTermination(key, claimOwner, writerClaimEpoch)) {
+        throw new StructuredHostWriteHeld();
+      }
+      throw new Error("structured host writer claim is stale");
+    }
     lastPersistedState = structuredClone(state);
     return persisted;
   };
@@ -221,9 +235,20 @@ async function bindStructuredHostPersistence(
     cursorTimer = setTimeout(() => {
       cursorTimer = null;
       if (failed || stopped || pendingState === null) return;
+      const state = pendingState;
       try {
         persistPending();
-      } catch {
+      } catch (error) {
+        /* A refused checkpoint has two meanings. Held by a captured termination
+           tree while this writer still owns its claim, it waits one more
+           period: a withdrawn stop lets it land, and a termination that
+           proceeds ends the process itself. Only a lost claim means another
+           writer owns the row, and only that ends this host. */
+        if (error instanceof StructuredHostWriteHeld) {
+          pendingState ??= state;
+          schedulePending();
+          return;
+        }
         fail();
       }
     }, cursorDebounceMs);
@@ -233,9 +258,13 @@ async function bindStructuredHostPersistence(
     if (stopped) return;
     try {
       persistPending();
-    } catch {
-      fail();
-      return;
+    } catch (error) {
+      /* A held final checkpoint is dropped; the caller stopping this binding
+         keeps deciding about the host. */
+      if (!(error instanceof StructuredHostWriteHeld)) {
+        fail();
+        return;
+      }
     }
     stopped = true;
     unsubscribe();
@@ -259,7 +288,12 @@ async function bindStructuredHostPersistence(
         stopped = true;
         unsubscribe();
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof StructuredHostWriteHeld) {
+        pendingState = structuredClone(state);
+        schedulePending();
+        return;
+      }
       fail();
     }
   });
@@ -378,10 +412,11 @@ export function reconcileDeadStructuredRegistryHost(
 
 /** Bounded reconciliation pass for completed conversation rows. Active conversation
     recovery stays demand-driven. `shouldRetain` protects rows the same startup
-    pass will re-host; every other terminal row releases its dead process claim. */
+    pass will re-host; every other terminal row releases its dead process claim.
+    By default a row startup holds for its restart cut evidence is retained. */
 export function reconcileDeadStructuredRegistryHosts(
   registry: AgentRegistry,
-  shouldRetain: StructuredHostAdoptionFilter = () => false,
+  shouldRetain: StructuredHostAdoptionFilter = (entry) => restartCutEvidenceHolds(sessionKeyId(entry.key)),
 ): void {
   const snapshot = registry.readOnlySnapshot();
   for (const conversation of Object.values(snapshot.conversations)) {
@@ -626,6 +661,8 @@ export async function adoptCodexRegistryHosts(
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
+          // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
@@ -741,6 +778,8 @@ export async function adoptClaudeRegistryHosts(
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
+          // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",

@@ -37,6 +37,7 @@ import {
 } from "./contracts";
 import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
+import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
 import {
   createBotApiTransport,
   removeBotToken,
@@ -87,11 +88,13 @@ export interface TelegramBotDependencies {
   documentEnvironment(): DocumentEnvironment;
   /** The team module's `/start <code>` hook: the reply to send, or null. */
   signInHook?(input: { from: TgUser | undefined; chatType: string; text: string | undefined }): string | null;
+  reportReplies?: ReportReplyPorts;
 }
 
 export type PollStep = { next: "continue"; delayMs: number } | { next: "stop" };
 
 const GET_UPDATES_TIMEOUT_S = 50;
+const REPLY_RETRY_TIMEOUT_S = 5;
 const PHOTO_MAX_BYTES = 10_000_000;
 const PHOTO_CAPTION_MAX_CHARS = 1024;
 
@@ -365,6 +368,8 @@ export class TelegramBotService {
         };
       }),
       documents: this.documentRoots(store),
+      reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked"
+        : this.receiving(bot) !== "polling" ? "receiving_unavailable" : "ready",
       limits: TELEGRAM_BOT_LIMITS,
     };
   }
@@ -639,17 +644,21 @@ export class TelegramBotService {
     const transport = this.transport();
     if (!transport) return { next: "stop" };
     const store = this.store();
+    const timeout = store.pendingReportReplies().length ? REPLY_RETRY_TIMEOUT_S : GET_UPDATES_TIMEOUT_S;
     const result = await transport.call<TgUpdate[]>("getUpdates", {
       ...(this.offset !== null ? { offset: this.offset } : {}),
-      timeout: GET_UPDATES_TIMEOUT_S,
+      timeout,
       allowed_updates: ALLOWED_UPDATES,
-    }, { signal, timeoutMs: (GET_UPDATES_TIMEOUT_S + 15) * 1000 });
+    }, { signal, timeoutMs: (timeout + 15) * 1000 });
     if (signal.aborted) return { next: "stop" };
     if (result.ok) {
       const now = this.deps.now();
       const updates = Array.isArray(result.result) ? result.result : [];
       const applied = store.applyUpdates(updates, now);
+      // Durable intake precedes confirmation of Telegram's update cursor.
+      if (this.deps.reportReplies) admitReportReplies(store, this.storedBotId()!, updates, this.deps.reportReplies);
       if (applied.maxUpdateId !== null) this.offset = applied.maxUpdateId + 1;
+      if (this.deps.reportReplies) await drainReportReplies(store, this.storedBotId()!, this.deps.reportReplies);
       await this.answerSignIns(transport, updates, signal);
       const botId = Number(this.storedBotId());
       for (const chatId of applied.needsMembership) {
@@ -1118,6 +1127,7 @@ export function productionTelegramBotDependencies(): TelegramBotDependencies {
     }),
     documentEnvironment: () => ({ home: homeDirectory(), stateDir: stateDir() }),
     signInHook: (input) => teamTelegramHook(input),
+    reportReplies: productionReportReplyPorts,
     conversationTitle: (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as Parameters<ReturnType<typeof agentRegistry>["conversation"]>[0]);
       const title = conversation?.generations.at(-1)?.launchProfile.title;

@@ -1,0 +1,218 @@
+{
+  "phone-390-uk": {
+    "before": {
+      "height": 44,
+      "width": 370,
+      "excerptShown": 146,
+      "statusWidth": 132,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Доставку не підтверджено",
+      "text": "Доставку не підтверджено — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
+      "actions": [
+        {
+          "label": "Перевірити доставку",
+          "width": 32,
+          "height": 44
+        },
+        {
+          "label": "Прибрати",
+          "width": 32,
+          "height": 44
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    },
+    "checked": {
+      "height": 44,
+      "width": 370,
+      "excerptShown": 159,
+      "statusWidth": 119,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Не підтверджено · 14:13",
+      "text": "Не підтверджено · 14:13 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
+      "actions": [
+        {
+          "label": "Перевірити доставку",
+          "width": 32,
+          "height": 44
+        },
+        {
+          "label": "Прибрати",
+          "width": 32,
+          "height": 44
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    }
+  },
+  "phone-390-en": {
+    "before": {
+      "height": 44,
+      "width": 370,
+      "excerptShown": 176,
+      "statusWidth": 102,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Delivery unconfirmed",
+      "text": "Delivery unconfirmed — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Delivery outcome is unknown. This message will not be sent again automatically.",
+      "actions": [
+        {
+          "label": "Re-check delivery",
+          "width": 32,
+          "height": 44
+        },
+        {
+          "label": "Dismiss",
+          "width": 32,
+          "height": 44
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    },
+    "checked": {
+      "height": 44,
+      "width": 370,
+      "excerptShown": 182,
+      "statusWidth": 96,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Unconfirmed · 14:13",
+      "text": "Unconfirmed · 14:13 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Delivery outcome is unknown. This message will not be sent again automatically.",
+      "actions": [
+        {
+          "label": "Re-check delivery",
+          "width": 32,
+          "height": 44
+        },
+        {
+          "label": "Dismiss",
+          "width": 32,
+          "height": 44
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    }
+  },
+  "desktop-1440-uk": {
+    "before": {
+      "height": 24,
+      "width": 1420,
+      "excerptShown": 529,
+      "statusWidth": 132,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Доставку не підтверджено",
+      "text": "Доставку не підтверджено — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
+      "actions": [
+        {
+          "label": "Перевірити доставку",
+          "width": 24,
+          "height": 24
+        },
+        {
+          "label": "Прибрати",
+          "width": 24,
+          "height": 24
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    },
+    "checked": {
+      "height": 24,
+      "width": 1420,
+      "excerptShown": 529,
+      "statusWidth": 119,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Не підтверджено · 14:13",
+      "text": "Не підтверджено · 14:13 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
+      "actions": [
+        {
+          "label": "Перевірити доставку",
+          "width": 24,
+          "height": 24
+        },
+        {
+          "label": "Прибрати",
+          "width": 24,
+          "height": 24
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    }
+  },
+  "desktop-1440-en": {
+    "before": {
+      "height": 24,
+      "width": 1420,
+      "excerptShown": 529,
+      "statusWidth": 102,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Delivery unconfirmed",
+      "text": "Delivery unconfirmed — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Delivery outcome is unknown. This message will not be sent again automatically.",
+      "actions": [
+        {
+          "label": "Re-check delivery",
+          "width": 24,
+          "height": 24
+        },
+        {
+          "label": "Dismiss",
+          "width": 24,
+          "height": 24
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    },
+    "checked": {
+      "height": 24,
+      "width": 1420,
+      "excerptShown": 529,
+      "statusWidth": 96,
+      "lineHeight": 15,
+      "textHeight": 15,
+      "border": "0px",
+      "paragraphs": 0,
+      "status": "Unconfirmed · 14:13",
+      "text": "Unconfirmed · 14:13 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Delivery outcome is unknown. This message will not be sent again automatically.",
+      "actions": [
+        {
+          "label": "Re-check delivery",
+          "width": 24,
+          "height": 24
+        },
+        {
+          "label": "Dismiss",
+          "width": 24,
+          "height": 24
+        }
+      ],
+      "clearOfField": true,
+      "overflowX": 0
+    }
+  }
+}

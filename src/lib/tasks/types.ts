@@ -1,4 +1,37 @@
+export const TASK_HOLD_KINDS = ["operator", "task", "pr", "issue", "worker", "resource", "limit", "postponed", "external", "unstated"] as const;
+export type TaskHoldKind = typeof TASK_HOLD_KINDS[number];
+export interface TaskHold {
+  kind: TaskHoldKind;
+  ref?: string;
+  /** One sentence naming what ends the wait, at most 200 characters. */
+  note: string;
+  since: string;
+  until?: string;
+  by: "operator" | "agent" | "migration";
+  conversationId?: string;
+}
+
+/** A small, task-local checklist. `state` is the declared value; the board
+    derives live work from `ref` when it names one of this task's pipelines. */
+export interface TaskStep {
+  id: string;
+  text: string;
+  state: "done" | "open" | "dropped";
+  ref?: string;
+  hold?: TaskHold;
+}
+
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
+
+/** Who put a task in its column (docs/design/orchestrator-arrows.md §5):
+    written with the status by a writer that names itself, `from` null on a
+    create. A status that changes without a named writer loses the record, so
+    it never credits an earlier writer with a later move. */
+export interface TaskStatusBy {
+  actor: import("@/lib/pauseResumeActor").PauseResumeActor;
+  from: TaskStatus | null;
+  at: string;
+}
 
 /** The text of a placeholder task whose admission carried no title at all. */
 export const UNTITLED_TASK_TEXT = "Untitled task";
@@ -144,11 +177,21 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Task-bound review history; linked boards exchange metadata, never media. */
+  prototypeReviews?: import("@/lib/prototypeReview/types").PrototypeReviewRound[];
+  /** Derived by server reads; never supplied by a task update. */
+  prototypeReview?: import("@/lib/prototypeReview/types").PrototypeReviewSummary;
+  prototypeReviewReplica?: import("@/lib/prototypeReview/types").PrototypeReviewReplica;
   /** Current situation, replaced by each writer; no thread. */
   note?: TaskNote;
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
+  /** The named writer of the current status; absent when nobody named one. Local; never crosses. */
+  statusBy?: TaskStatusBy;
+  hold?: TaskHold;
+  /** Up to twenty partial outcomes recorded alongside the task. */
+  steps?: TaskStep[];
   /** Entry into done or its latest new admission; cleared on reopen. Legacy
       rows freeze updatedAt on read and persist it on the next store write. */
   doneAt?: string;

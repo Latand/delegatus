@@ -172,3 +172,33 @@ test("a fresh legacy row revalidates until its receipt settles; a historical one
   expect(historical.text()).toBe("unresolved");
   await historical.unmount();
 });
+
+test("a cached admission join still reads delayed memory for the compact operator turn", async () => {
+  setMessageProvenanceRetryScheduleForTests([10, 10]);
+  const ref = "fixture-memory-turn", dedup = "a".repeat(64), path = "/sessions/memory-offer.jsonl";
+  const timestamp = new Date().toISOString(), message = "Update the widget parser";
+  let calls = 0, offerReady = false;
+  globalThis.fetch = (async () => {
+    calls++;
+    return { ok: true, json: async () => ({ messages: {}, occurrences: [{ textDigest: messageTextDigest(message), deliveredAt: timestamp, origin: "operator" }], submissions: { [dedup]: "submission" },
+      memoryOffers: offerReady ? { [ref]: ["Widget parser constraint"] } : {} }) };
+  }) as unknown as typeof fetch;
+  const item: Item = { kind: "user", text: message, ts: timestamp, structuredUserRef: ref };
+  const row: FeedEntry = { key: "memory-row", anchorKey: null, item, submissionDedup: dedup };
+  function MemoryProbe({ items, pending }: { items: FeedEntry[]; pending: string[] }) {
+    const lookup = useDeliveredMessageProvenance(path, items, pending);
+    return <span id="memory">{lookup.memoryFor?.(item).join(", ")}</span>;
+  }
+  const container = dom.document.createElement("div"), root = createRoot(container as unknown as Element);
+  try {
+    await act(async () => root.render(<MemoryProbe items={[]} pending={["submission"]} />));
+    expect(calls).toBe(1);
+    await act(async () => root.render(<MemoryProbe items={[row]} pending={[]} />));
+    offerReady = true;
+    await act(async () => { await sleep(50); });
+    expect(container.querySelector("#memory")?.textContent).toBe("Widget parser constraint");
+    const settled = calls;
+    await act(async () => { await sleep(40); });
+    expect(calls).toBe(settled);
+  } finally { await act(async () => root.unmount()); }
+});

@@ -9,7 +9,7 @@ import { isMemberColor, type MessageSender } from "@/lib/team/contract";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { assignDeliveredOccurrences, candidateDigests, occurrenceCandidate, type MatchedDeliveryProvenance } from "./deliveredOccurrences";
-import { rawUserTextFor, type FeedEntry, type Item } from "./parse";
+import { nativeUserRefFor, rawUserTextFor, type FeedEntry, type Item } from "./parse";
 import { BoundedLru } from "./scrollMemory";
 import { useStructuredUserProvenance } from "./structuredUserProvenance";
 
@@ -83,7 +83,20 @@ export interface ProvenanceLookup {
   senderFor(item: Item): MessageSender | null;
   /** The same answer for a submission this browser holds by its own id. */
   senderForSubmission(submissionId: string | null | undefined): MessageSender | null;
+  memoryFor?(item: Item): string[];
+  /** What shared memory did with this operator turn; see {@link MessageMemory}. */
+  memoryOn?(item: Item): MessageMemory;
 }
+
+/** Shared memory on one operator turn: the memories added to it, or the
+    verdict that candidates were judged and none was chosen. Both empty is the
+    ordinary turn, which draws nothing. */
+export interface MessageMemory {
+  /** `path` opens the memory's text; null when its file is no longer indexed. */
+  added: Array<{ title: string; path: string | null }>;
+  none: boolean;
+}
+const NO_MEMORY: MessageMemory = { added: [], none: false };
 
 export const NO_PROVENANCE: ProvenanceLookup = {
   forItem: () => null,
@@ -101,7 +114,24 @@ export function useMessageProvenance(): ProvenanceLookup {
 }
 
 type ProvenanceMap = Record<string, DeliveredMessageProvenance>;
+function parseMemoryOffers(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).slice(0, 1000).flatMap(([key, names]) =>
+    Array.isArray(names) && names.every(n => typeof n === "string") ? [[key, names.slice(0, 15).map(n => n.slice(0, 160))]] : []));
+}
+function parseMemoryPaths(value: unknown): Record<string, Array<string | null>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).slice(0, 1000).flatMap(([key, paths]) =>
+    Array.isArray(paths) && paths.every(p => p === null || typeof p === "string") ? [[key, paths.slice(0, 15).map(p => (p && p.length <= 4096 ? p : null))]] : []));
+}
+function parseMemoryNone(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((key): key is string => typeof key === "string").slice(0, 1000) : [];
+}
 interface PathProvenance {
+  memoryOffers?: Record<string, string[]>;
+  memoryPaths?: Record<string, Array<string | null>>;
+  memoryNone?: string[];
+  memoryChecked?: string[];
   messages: ProvenanceMap;
   occurrences: DeliveredMessageOccurrence[];
   /** `dedup token → submission id`, straight from the registry's own record
@@ -264,6 +294,7 @@ interface WantedDriver {
 }
 
 interface WantedEvidence {
+  memory: Array<{ key: string; tsMs: number }>;
   /** Rows whose visual could still change with evidence — the ONLY fetch
       trigger, so an idle pane never polls. */
   drivers: WantedDriver[];
@@ -286,11 +317,14 @@ interface WantedEvidence {
 
 function wantedEvidence(items: readonly FeedEntry[], pending: readonly string[]): WantedEvidence {
   const drivers: WantedDriver[] = [];
+  const memory = new Map<string, number>();
   const candidates: Item[] = [];
   const seenDedup = new Set<string>();
   for (const { item, submissionDedup } of items) {
     const candidate = occurrenceCandidate(item);
     if (candidate) candidates.push(item);
+    const memoryKey = item.structuredUserRef ?? nativeUserRefFor(item) ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
+    if (memoryKey) memory.set(memoryKey, candidate?.tsMs ?? Number.NaN);
     const token = candidate ? candidateDigests(candidate)[0].slice(0, 16) : "";
     if (item.kind === "sysmsg" && item.deliveredMessage) {
       drivers.push({ item, engineMessageId: item.deliveredMessage.engineMessageId, tsMs: candidate?.tsMs ?? Number.NaN, token });
@@ -304,15 +338,19 @@ function wantedEvidence(items: readonly FeedEntry[], pending: readonly string[])
       drivers.push({ item, engineMessageId: null, tsMs: candidate?.tsMs ?? Number.NaN, token, dedup: submissionDedup });
     }
   }
-  return { drivers, candidates, pending };
+  return { drivers, candidates, pending, memory: [...memory].map(([key, tsMs]) => ({ key, tsMs })) };
 }
 
 /** Whether some driver row still lacks evidence. `recentRowsOnly` is the
     revalidation rule: a ledger id revalidates regardless of age, a row
     without one only while it is fresh enough to be racing its receipt. */
 function unresolvedDrivers(wanted: WantedEvidence, data: PathProvenance | null, recentRowsOnly: boolean, nowMs: number): boolean {
-  if (wanted.drivers.length === 0 && wanted.pending.length === 0) return false;
+  if (wanted.drivers.length === 0 && wanted.pending.length === 0 && wanted.memory.length === 0) return false;
   if (!data) return true;
+  // Admission provenance can settle before the native hook finishes Jev.
+  // Offered context has its own per-turn read and bounded empty verdict.
+  if (wanted.memory.some(m => !data.memoryOffers?.[m.key] && !data.memoryNone?.includes(m.key) && !data.memoryChecked?.includes(m.key)
+    && (!recentRowsOnly || nowMs - m.tsMs < RECENT_ROW_MS))) return true;
   /* A submission the server has not named yet. Answering it early is the
      whole point; once every live submission is named there is nothing left
      to ask for on their account. */
@@ -369,8 +407,20 @@ function lookupFor(
     return assignment.get(item) ?? null;
   };
   const senderForSubmission = (id: string | null | undefined) => (id ? data.senders[id] ?? null : null);
+  const memoryKey = (item: Item) => item.structuredUserRef ?? nativeUserRefFor(item) ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
   return {
     forItem,
+    memoryFor: item => {
+      const key = memoryKey(item);
+      return key ? data.memoryOffers?.[key] ?? [] : [];
+    },
+    memoryOn: item => {
+      const key = memoryKey(item);
+      if (!key) return NO_MEMORY;
+      const titles = data.memoryOffers?.[key];
+      if (titles?.length) return { added: titles.map((title, i) => ({ title, path: data.memoryPaths?.[key]?.[i] ?? null })), none: false };
+      return data.memoryNone?.includes(key) ? { added: [], none: true } : NO_MEMORY;
+    },
     submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
     submissionPending: pending,
     messagePending,
@@ -399,6 +449,9 @@ export function provenanceLookupFor(
     occurrences?: readonly DeliveredMessageOccurrence[];
     submissions?: Record<string, string>;
     senders?: Record<string, MessageSender>;
+    memoryOffers?: Record<string, string[]>;
+    memoryPaths?: Record<string, Array<string | null>>;
+    memoryNone?: string[];
     /** The path's evidence is still being read; see
         {@link ProvenanceLookup.submissionPending}. */
     resolving?: boolean;
@@ -407,7 +460,7 @@ export function provenanceLookupFor(
 ): ProvenanceLookup {
   const occurrences = [...(data.occurrences ?? [])];
   return lookupFor(
-    { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {}, senders: data.senders ?? {} },
+    { messages: data.messages ?? {}, occurrences, submissions: data.submissions ?? {}, senders: data.senders ?? {}, memoryOffers: data.memoryOffers ?? {}, memoryPaths: data.memoryPaths ?? {}, memoryNone: data.memoryNone ?? [] },
     assignDeliveredOccurrences(items, occurrences),
     Boolean(data.resolving),
   );
@@ -430,7 +483,7 @@ export function useDeliveredMessageProvenance(
   const structuredForItem = useStructuredUserProvenance(items);
   const pendingKey = pending.join("\n");
   const wanted = useMemo<WantedEvidence>(
-    () => (path ? wantedEvidence(items, pending) : { drivers: [], candidates: [], pending: NO_PENDING }),
+    () => (path ? wantedEvidence(items, pending) : { drivers: [], candidates: [], pending: NO_PENDING, memory: [] }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `pending` is keyed by its content, so a same-content array keeps the evidence
     [path, items, pendingKey],
   );
@@ -438,6 +491,7 @@ export function useDeliveredMessageProvenance(
     () => [
       ...wanted.drivers.map((driver) => driver.dedup ?? driver.engineMessageId ?? driver.token),
       ...wanted.pending,
+      ...wanted.memory.map(m => `memory:${m.key}`),
     ].join("\n"),
     [wanted],
   );
@@ -491,7 +545,7 @@ export function useDeliveredMessageProvenance(
       try {
         const res = await fetch(`/api/log/provenance?path=${encodeURIComponent(path)}`);
         if (!res.ok) return;
-        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown; senders?: unknown };
+        const json = (await res.json()) as { messages?: unknown; occurrences?: unknown; submissions?: unknown; senders?: unknown; memoryOffers?: unknown; memoryPaths?: unknown; memoryNone?: unknown };
         const previous = provenanceCache.get(path);
         const merged: PathProvenance = {
           messages: { ...(previous?.messages ?? {}), ...parseProvenanceMessages(json.messages) },
@@ -502,6 +556,11 @@ export function useDeliveredMessageProvenance(
           submissions: { ...(previous?.submissions ?? {}), ...parseSubmissions(json.submissions) },
           /* The latest answer wins: a rename reads on the next fetch. */
           senders: { ...(previous?.senders ?? {}), ...parseSenders(json.senders) },
+          memoryOffers: { ...(previous?.memoryOffers ?? {}), ...parseMemoryOffers(json.memoryOffers) },
+          memoryPaths: { ...(previous?.memoryPaths ?? {}), ...parseMemoryPaths(json.memoryPaths) },
+          memoryNone: [...new Set([...(previous?.memoryNone ?? []), ...parseMemoryNone(json.memoryNone)])].slice(-1000),
+          memoryChecked: [...new Set([...(previous?.memoryChecked ?? []), ...wanted.memory
+            .filter(m => retry >= retryDelaysMs.length || !(Date.now() - m.tsMs < RECENT_ROW_MS)).map(m => m.key)])].slice(-1000),
         };
         provenanceCache.set(path, merged);
         if (!alive) return;

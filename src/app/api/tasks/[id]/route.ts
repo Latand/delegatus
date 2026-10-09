@@ -12,16 +12,18 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { taskRevision } from "@/lib/tasks/revision";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+import { taskForResponse } from "@/lib/prototypeReview/read";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const TASK_REQUEST_FIELDS = ["text", "details", "status"] as const;
+const TASK_REQUEST_FIELDS = ["text", "details", "status", "hold", "restoreHold", "steps"] as const;
 /* What the team audit names as a change to a task (§7.3): its words, where it
    stands, and whether it is on the board. Placement and decoration are not. */
-const TEAM_TASK_FIELDS = ["note", "text", "details", "status", "hide", "board", "priority", "dueAt"] as const;
+const TEAM_TASK_FIELDS = ["note", "text", "details", "status", "hold", "restoreHold", "steps", "hide", "board", "priority", "dueAt"] as const;
 
 type TaskRouteContext = {
   params: Promise<{ id: string }>;
@@ -57,7 +59,7 @@ export async function PATCH(
     before.status = tasks.find((task) => task.id === id)?.status ?? null;
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
-    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHoldingSnapshot(), workLinks: taskWorkLinkContext(loadPipelines), explicit: true });
+    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", statusActor: OPERATOR_PAUSE_RESUME_ACTOR, seatHolding: taskSeatHoldingSnapshot(), workLinks: taskWorkLinkContext(loadPipelines), explicit: true });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   /* The refusal's code and field travel with it, as they do over MCP, so a
@@ -93,7 +95,7 @@ export async function PATCH(
   if (LINE_EDIT_KEYS.some((key) => Object.hasOwn(body, key))) {
     return NextResponse.json({ ok: true, taskId: result.task.id, revision: taskRevision(result.task), detailsLength: result.task.details?.length ?? 0, updatedAt: result.task.updatedAt, ...extras });
   }
-  return NextResponse.json({ ok: true, task: result.task, ...extras });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...extras });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

@@ -2442,7 +2442,7 @@ describe("readOperationShared", () => {
     }
   });
 
-  test("an unknown-fate answer backs off to the ceiling instead of being asked again every interval", async () => {
+  test("a readable unknown-fate answer is checked every 30 seconds for late canonical evidence", async () => {
     let answer: RuntimeReceipt = { ...delivered("op-unknown"), status: "failed", resend: "verify-first" };
     const { requests, fetchImpl } = server(() => Response.json({ receipt: answer }));
     let at = now;
@@ -2456,7 +2456,7 @@ describe("readOperationShared", () => {
       spacings.push(next - at);
       at = next;
     }
-    expect(spacings).toEqual([60_000, 120_000, 240_000, 300_000, 300_000, 300_000]);
+    expect(spacings).toEqual([30_000, 30_000, 30_000, 30_000, 30_000, 30_000]);
     expect(requests).toHaveLength(6);
     // An arrival resets the spacing; the row then leaves the candidates anyway.
     answer = delivered("op-unknown");
@@ -2601,4 +2601,62 @@ describe("an injection into the thread's context (composer context mode)", () =>
     expect(editContextOutbox(CARD, "ctx-fail")?.text).toBe("words to edit");
     expect(readOutbox(CARD).map((entry) => entry.id)).toEqual(["ctx-unsure", "ctx-live", ordinary!.id]);
   });
+});
+
+
+test("issue 641: a compacted launch and its reseed share one delayed echo across refresh and churn", () => {
+  const provisional = "spawn:launch-delayed";
+  const card = "conversation-delayed";
+  const at = Date.now();
+  const seed = { id: "launch-delayed", text: "Repeat this request", images: 0, at };
+  seedLaunchOutbox(provisional, seed);
+  updateOutbox(provisional, seed.id, { state: "delivered", settledAt: at });
+  for (let i = 0; i < OUTBOX_LIMIT; i++) {
+    enqueueOutbox(provisional, { id: `filler-${i}`, text: `Filler ${i}`, images: 0, at: at + i + 1 });
+    updateOutbox(provisional, `filler-${i}`, { state: "delivered", settledAt: at + i + 1 });
+  }
+  expect(readOutbox(provisional).some(e => e.id === seed.id)).toBe(false);
+  adoptOutbox(provisional, card);
+  resetOutboxForTests();
+  seedLaunchOutbox(card, seed);
+  enqueueOutbox(card, { id: "other-submission", text: seed.text, images: 0, at: at + 100 });
+  const echo = { generation: "/transcripts/delayed.jsonl", id: "launch-echo", text: seed.text };
+  expect([...transcriptEchoBindings(card, [echo]).values()]).toEqual([seed.id]);
+  publishTranscriptEchoes(card, [echo]);
+  expect(readOutbox(card).find(e => e.id === seed.id)?.retiredEchoId).toBeDefined();
+  expect(readOutbox(card).find(e => e.id === "other-submission")?.retiredEchoId).toBeUndefined();
+  expect(visibleOutbox(readOutbox(card), echoes(seed.text), at + 200).map(e => e.id)).toContain("other-submission");
+  expect(visibleOutbox(readOutbox(card), echoes(seed.text), at + 200).map(e => e.id)).not.toContain(seed.id);
+  // A full ledger of unrelated echoes and a different transcript generation
+  // cannot release the launch's retirement or steal its successor's echo.
+  publishTranscriptEchoes(card, Array.from({ length: 520 }, (_, i) => ({
+    generation: "/transcripts/new-generation.jsonl", id: `history-${i}`, text: `History ${i}`,
+  })));
+  resetOutboxForTests();
+  seedLaunchOutbox(card, seed);
+  expect(visibleOutbox(readOutbox(card), echoes(), at + 300).map(e => e.id)).not.toContain(seed.id);
+  expect(readOutbox(card).find(e => e.id === "other-submission")?.retiredEchoId).toBeUndefined();
+  publishTranscriptEchoes(card, [{ ...echo, generation: "/transcripts/new-generation.jsonl", id: "successor-echo" }]);
+  expect(readOutbox(card).find(e => e.id === "other-submission")?.retiredEchoId).toBeDefined();
+});
+
+
+for (const unresolvedSubmission of [false, true]) test(`issue 641: a compacted launch accepts canonical echo text upgrades (${unresolvedSubmission})`, () => {
+  const card = "conversation-upgraded";
+  const at = Date.now();
+  const seed = { id: "launch-upgraded", text: "Raw request", images: 0, at };
+  const echoText = "Role instructions\n\nRaw request";
+  seedLaunchOutbox(card, seed);
+  updateOutbox(card, seed.id, { state: "delivered", settledAt: at });
+  for (let i = 0; i < OUTBOX_LIMIT; i++) {
+    enqueueOutbox(card, { id: `filler-${i}`, text: `Filler ${i}`, images: 0, at: at + i + 1 });
+    updateOutbox(card, `filler-${i}`, { state: "delivered", settledAt: at });
+  }
+  seedLaunchOutbox(card, { ...seed, echoText });
+  enqueueOutbox(card, { id: "successor", text: echoText, images: 0, at: at + 100 });
+  const echo = { generation: "/transcripts/upgraded.jsonl", id: "upgraded-echo", text: echoText, ...(unresolvedSubmission ? { unresolvedSubmission: true as const } : {}) };
+  expect([...transcriptEchoBindings(card, [echo]).values()]).toEqual([seed.id]);
+  publishTranscriptEchoes(card, [echo]);
+  expect(readOutbox(card).find(e => e.id === seed.id)?.retiredEchoId).toBeDefined();
+  expect(readOutbox(card).find(e => e.id === "successor")?.retiredEchoId).toBeUndefined();
 });

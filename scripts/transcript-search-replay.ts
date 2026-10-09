@@ -149,7 +149,7 @@ export async function runReplay(args: string[]): Promise<void> {
     const sample = seededSample([...distinct.values()], Number(flag("sample") ?? 1000), 20260926);
     if (!sample.length) throw new Error("No recorded queries were available for replay");
     let zeroBefore = 0, zeroAfter = 0, anyZeroAfter = 0;
-    const beforeMs: number[] = [], afterMs: number[] = [];
+    const beforeMs: number[] = [], afterMs: number[] = [], pageBytes: number[] = [];
     const after = (q: ReplayQuery) => searchTranscripts({ query: q.query, project: q.project, order: "relevance", limit: 6,
       fence: { timestamp: q.timestamp, excludeTranscript: q.source } });
     // Measure the first request's event-loop delay separately, then let the
@@ -179,6 +179,7 @@ export async function runReplay(args: string[]): Promise<void> {
       start = performance.now();
       const page = after(q);
       afterMs.push(performance.now() - start);
+      pageBytes.push(Buffer.byteLength(JSON.stringify(page)));
       if (!before.total) zeroBefore++;
       if (!page.total) anyZeroAfter++;
       if (!page.strongTotal) zeroAfter++;
@@ -209,6 +210,7 @@ export async function runReplay(args: string[]): Promise<void> {
       openedTop6Before: recallBefore, openedTop6After: recallAfter,
       beforeP50Ms: percentile(beforeMs, 0.5), beforeP95Ms: percentile(beforeMs, 0.95),
       afterP50Ms: percentile(afterMs, 0.5), afterP95Ms: percentile(afterMs, 0.95), afterMaxMs: Math.max(...afterMs),
+      pageBytesP50: percentile(pageBytes, 0.5), pageBytesP95: percentile(pageBytes, 0.95), pageBytesMax: Math.max(...pageBytes),
       firstSearchMs, initializationEventLoopDelayMs, backgroundIndexMs,
       firstSearchResults: firstPage.total, firstSearchStrong: firstPage.strongTotal,
     }, null, 2));

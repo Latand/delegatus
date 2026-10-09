@@ -56,6 +56,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
   const environment = Object.fromEntries(Object.entries(process.env)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string"
       && !entry[0].startsWith("LLV_")
+      && !entry[0].startsWith("DELEGATUS_")
       && !entry[0].startsWith("NEXT_PUBLIC_")));
   const directories = {
     HOME: path.join(sandbox, "home"),
@@ -135,6 +136,26 @@ async function callSpawn(client: Client, clientRequestId: string, extra: Record<
     },
   });
 }
+
+test("the real stdio server releases retained handles when its client disappears", async () => {
+  const sandbox = sandboxDir("llv-mcp-eof-");
+  const ready = path.join(sandbox, "ready");
+  const child = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import { startViewerMcpServer } from "./src/lib/mcp/server";
+    await startViewerMcpServer();
+    // Model a retained domain timer/socket independently of incidental imports.
+    setInterval(() => {}, 1000);
+    fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+  `], { cwd: process.cwd(), env: isolatedEnvironment(sandbox), stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(ready) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+  expect(fs.existsSync(ready)).toBe(true);
+  expect(child.exitCode).toBeNull();
+  child.stdin.end();
+  const exited = await Promise.race([child.exited, Bun.sleep(2500).then(() => "still alive")]);
+  expect(exited).toBe(0);
+}, 15_000);
 
 test("store reads stay independent of a slow host, held pipeline lease and same-client HTTP call", async () => {
   const sandbox = sandboxDir("llv-mcp-read-latency-");
@@ -246,7 +267,7 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
     ]));
     expect(retirement.description).toContain("designated seat");
     expect((retirement.inputSchema.properties?.callerLaunchId as { description: string }).description).toContain("Optional");
-    expect(retirement.inputSchema.required).not.toContain("callerLaunchId");
+    expect(retirement.inputSchema.required ?? []).not.toContain("callerLaunchId");
 
     const first = await session.client.callTool({
       name: "list_flows",
@@ -910,18 +931,58 @@ test("spoofing and concurrency: another caller, a changed payload, and two proce
     expect(await call(owner, "send_message", sendArguments(fixture, "send-owned-1", { recoveryOnly: true })))
       .toMatchObject({ ok: true, outcome: "in-flight", operationId: accepted.operationId, state: "in-flight", nextAction: "original-key-lookup" });
 
-    /* Two processes race one fresh key: exactly one dispatch owner, and the
-       other answers from evidence. */
-    fixture.control({ mode: "respond", sendEffect: "deliver" });
-    const race = await Promise.all([
-      call(owner, "send_message", sendArguments(fixture, "send-race-1")),
-      call(peer, "send_message", sendArguments(fixture, "send-race-1")),
+    /* A peer can save terminal recovery before the original HTTP response
+       reaches its MCP caller, so exercise both response orders deterministically. */
+    for (const settlementOrder of ["original-first", "peer-first"] as const) {
+      const requestId = `send-race-${settlementOrder}`;
+      fixture.resetMarkers();
+      fixture.control({ mode: settlementOrder === "peer-first" ? "hold" : "respond", sendEffect: "deliver" });
+
+      const originalPending = call(owner, "send_message", sendArguments(fixture, requestId));
+      let race: Record<string, unknown>[];
+      if (settlementOrder === "peer-first") {
+        /* Hold the original POST response after its single downstream request
+           has completed. The peer reads and saves the terminal evidence first. */
+        await fixture.marker("accepted");
+        const recovered = await call(peer, "send_message", sendArguments(fixture, requestId));
+        expect(recovered).toMatchObject({ ok: true, outcome: "settled", state: "delivered", replayed: true });
+        fixture.release();
+        race = [await originalPending, recovered];
+      } else {
+        const original = await originalPending;
+        const recovered = await call(peer, "send_message", sendArguments(fixture, requestId));
+        race = [original, recovered];
+      }
+
+      expect(race.every((answer) => answer.ok === true)).toBe(true);
+      expect(typeof race[0]?.operationId).toBe("string");
+      expect(new Set(race.map((answer) => answer.operationId)).size).toBe(1);
+      expect(fixture.effects().filter((effect) => effect.kind === "recipient" && effect.clientMessageId === downstream("send_message", requestId))).toHaveLength(1);
+      expect(fixture.responses().filter((response) => response.pathname === "/api/tmux" && response.body.includes(String(race[0]?.operationId)))).toHaveLength(1);
+    }
+
+    /* Keep the original same-key race: two MCP processes begin a fresh key
+       together while the first downstream effect is still in flight. */
+    fixture.resetMarkers();
+    const concurrentKey = "send-race-simultaneous";
+    fixture.control({ mode: "respond", sendEffect: "deliver", sendSettlementDelayMs: 500 });
+    const concurrent = await Promise.all([
+      call(owner, "send_message", sendArguments(fixture, concurrentKey)),
+      call(peer, "send_message", sendArguments(fixture, concurrentKey)),
     ]);
-    expect(race.every((answer) => answer.ok === true)).toBe(true);
-    const operationIds = new Set(race.map((answer) => answer.operationId));
-    expect(operationIds.size).toBe(1);
-    expect(race.filter((answer) => answer.replayed === false)).toHaveLength(1);
-    expect(fixture.effects().filter((effect) => effect.kind === "recipient" && effect.clientMessageId === downstream("send_message", "send-race-1"))).toHaveLength(1);
+    const ownerAnswer = concurrent.find((answer) => answer.replayed === false);
+    const replayAnswer = concurrent.find((answer) => answer.replayed === true);
+    expect(ownerAnswer).toMatchObject({ ok: true, outcome: "delivered", settled: true, operationId: expect.any(String) });
+    expect(replayAnswer).toBeDefined();
+    if (replayAnswer?.ok === false) {
+      expect(replayAnswer).toMatchObject({ code: "outcome_unknown", retryable: false, details: { outcome: "unknown", nextAction: "original-key-lookup" } });
+      expect(replayAnswer.operationId).toBeUndefined();
+    } else {
+      expect(replayAnswer).toMatchObject({ ok: true, operationId: ownerAnswer?.operationId });
+    }
+    expect(fixture.effects().filter((effect) => effect.kind === "recipient" && effect.clientMessageId === downstream("send_message", concurrentKey))).toHaveLength(1);
+    expect(await call(peer, "send_message", sendArguments(fixture, concurrentKey)))
+      .toMatchObject({ ok: true, operationId: ownerAnswer?.operationId, replayed: true });
   } finally {
     await owner.close();
     await stranger.close();

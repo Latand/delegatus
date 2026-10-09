@@ -4,6 +4,7 @@ import path from "node:path";
 import { isTaskNote } from "./note";
 
 import { statePath } from "@/lib/configDir";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
@@ -26,10 +27,12 @@ import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
+import { storedTaskHold } from "./hold";
+import { storedTaskSteps } from "./steps";
 import { isTaskAttachment } from "./attachments";
 import { withTaskCompletion } from "./completion";
 import type { RecentCreate } from "./commands";
-import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskOrigin } from "./types";
+import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskStatusBy, TaskOrigin } from "./types";
 
 export const TASKS_FILE = statePath("tasks.json");
 
@@ -42,6 +45,9 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
     const prior = before.get(task.id);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
+    /* A writer that moved the task without naming itself leaves the earlier
+       writer's record behind; it goes, so the move is nobody's. */
+    if (prior && prior.status !== task.status && JSON.stringify(task.statusBy ?? null) === prior.statusBy) delete task.statusBy;
     if (task.status !== "done") {
       delete task.doneAt;
       delete task.doneAdmissions;
@@ -84,6 +90,13 @@ export interface TasksFileState {
 
 function isTaskStatus(value: unknown): value is TaskStatus {
   return value === "inbox" || value === "assigned" || value === "blocked" || value === "done";
+}
+
+function isTaskStatusBy(value: unknown): value is TaskStatusBy {
+  if (!value || typeof value !== "object") return false;
+  const { actor, from, at } = value as Partial<TaskStatusBy>;
+  if (typeof at !== "string" || (from !== null && !isTaskStatus(from)) || !actor || typeof actor !== "object") return false;
+  return actor.kind === "operator" || (actor.kind === "agent" && (actor.conversationId === null || typeof actor.conversationId === "string"));
 }
 
 function isAssignmentState(value: unknown): value is AssignmentState {
@@ -188,6 +201,7 @@ function coerceTask(value: unknown): BoardTask | null {
   if (!structural) return null;
 
   const hasPos = isFinitePos(raw.pos);
+  const steps = storedTaskSteps(raw.steps);
   const placement: TaskPlacement = isPlacement(raw.placement) ? raw.placement : hasPos ? "pinned" : "unplaced";
   const pinned = placement === "pinned" && hasPos;
   const task: BoardTask = {
@@ -195,6 +209,8 @@ function coerceTask(value: unknown): BoardTask | null {
     id: raw.id!,
     project: canonicalProject(raw.project!),
     status: raw.status!,
+    hold: storedTaskHold(raw.hold),
+    ...(steps ? { steps } : {}),
     text: raw.text!,
     ...(raw.details !== undefined ? { details: raw.details } : {}),
     placement: placement === "pinned" && !hasPos ? "unplaced" : placement,
@@ -209,6 +225,9 @@ function coerceTask(value: unknown): BoardTask | null {
     updatedAt: raw.updatedAt!,
   };
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
+  if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
+  // A rejected checklist must not survive the raw extension spread above.
+  if (!steps) delete task.steps;
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;
@@ -508,10 +527,18 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
 const listSnapshots = new WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>();
 const listRows = new WeakMap<object, { aliases: string; task: BoardTask }>();
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated
- * list does not clone and validate every task and assignment again. */
+ * list does not clone and validate every task and assignment again.
+ *
+ * The list, every task and everything a task holds are frozen, because they
+ * are the cache every later caller reads: a reader that wrote into one would
+ * have changed the next reader's tasks. Anything that changes a task goes
+ * through `mutateTasks`, and anything that overlays one copies the task it
+ * changes. A row the collection hands out is decoded for its cache alone and a
+ * write reads its rows through clones, so freezing the nested values a task
+ * shares with its row leaves no writer holding a frozen object. */
 export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
   const collection = taskCollection(filePath, "read");
-  if (!collection) return readLegacyTasksFile(filePath).tasks;
+  if (!collection) return deepFreeze(readLegacyTasksFile(filePath).tasks);
   const rows = collection.loadReadonly();
   const aliases = JSON.stringify(projectAliasSnapshot().aliases);
   const cached = listSnapshots.get(rows);
@@ -524,10 +551,12 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
     if (!task) {
       task = coerceTask(row) ?? undefined;
       if (!task) throw new Error("invalid persisted task row");
+      deepFreeze(task);
       listRows.set(row, { aliases, task });
     }
     tasks.push(task);
   }
+  Object.freeze(tasks);
   listSnapshots.set(rows, { aliases, tasks });
   return tasks;
 }

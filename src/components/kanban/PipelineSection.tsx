@@ -13,7 +13,7 @@ import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLab
 export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineModel";
 import { fmtAge } from "@/components/utils";
 
-import type { KanbanPipeline } from "./kanbanModel";
+import type { KanbanPipeline, KanbanRecordedConversation } from "./kanbanModel";
 import { attemptArrivals, graphOrder, layoutGraph, routeEdge, STAGE_TONE, wireFired, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
 import { stageIdentity, type EdgeCount } from "./stageIdentity";
 import { CountCircle, engineWord, identityTitle, StageIdentity } from "./identityMarks";
@@ -124,7 +124,7 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   const who = actorName(t, edit.actor);
   const change = [
     t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
-    edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
+    edit.runtimeSwitch ? t("kanban.graph.edit.appliedNow", { n: edit.runtimeSwitch.attempt }) : edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
   ].filter(Boolean).join(" · ");
   const at = Date.parse(edit.at);
   return (
@@ -691,18 +691,23 @@ export function pastAttemptTone(row: PastAttempt): "ok" | "bad" | "" {
 
 /** "Past attempts · N": finished attempts and review rounds, newest first, then
     the helper conversations stage agents brought in, listed as such. Each opens
-    its conversation when one was kept. */
-export function PastAttempts({ rows, names, nowMs, onOpen }: {
+    its conversation when one was kept. The conversations the board did not load
+    are not attempts and are not counted in N: they fold into one quiet line at
+    the end of the open section, and only that line opens their list. */
+export function PastAttempts({ rows, elsewhere = [], names, nowMs, onOpen }: {
   rows: readonly PastAttempt[];
+  /** Conversations of the task this board did not load, each opened by id or path. */
+  elsewhere?: readonly KanbanRecordedConversation[];
   /** Stage names by pipeline id, then stage id. */
   names: ReadonlyMap<string, ReadonlyMap<string, string>>;
   nowMs: number;
   onOpen: (conversation: PastAttempt["conversation"]) => void;
 }) {
   const { t } = useLocale();
+  const [listed, setListed] = useState(false);
   const history = rows.filter((row) => row.kind !== "helper");
   const helpers = rows.filter((row) => row.kind === "helper");
-  if (!history.length && !helpers.length) return null;
+  if (!history.length && !helpers.length && !elsewhere.length) return null;
   const labelOf = (row: PastAttempt) => pastAttemptLabel(t, row, names.get(row.pipelineId)?.get(row.stageId) ?? row.stageId);
   const stateOf = (row: PastAttempt) => pastAttemptState(t, row);
   const tone = pastAttemptTone;
@@ -722,20 +727,40 @@ export function PastAttempts({ rows, names, nowMs, onOpen }: {
     </li>
   );
   const latest = history[0] ?? null;
+  const head = latest ? t("kanban.past.head", { count: history.length }) : helpers.length ? t("kanban.past.helpersHead", { count: helpers.length }) : t("kanban.past.elsewhereHead", { count: elsewhere.length });
   return (
-    <details className="history" data-past-attempts={history.length} data-helper-conversations={helpers.length}>
-      <summary aria-label={latest ? t("kanban.past.aria", { count: history.length, label: labelOf(latest), state: stateOf(latest) }) : t("kanban.past.helpersHead", { count: helpers.length })}>
+    <details className="history" data-past-attempts={history.length} data-helper-conversations={helpers.length} data-elsewhere-conversations={elsewhere.length}>
+      <summary aria-label={latest ? t("kanban.past.aria", { count: history.length, label: labelOf(latest), state: stateOf(latest) }) : head}>
         <ChevronRight />
-        <span className="hl">{latest ? t("kanban.past.head", { count: history.length }) : t("kanban.past.helpersHead", { count: helpers.length })}</span>
+        <span className="hl">{head}</span>
         {latest ? <span className="lbl">{t("kanban.past.last", { label: labelOf(latest), state: stateOf(latest), age: age(latest) })}</span> : null}
       </summary>
-      <p className="hnote">{t("kanban.past.note")}</p>
+      {history.length || helpers.length ? <p className="hnote">{t("kanban.past.note")}</p> : null}
       {history.length ? <ul>{history.map(item)}</ul> : null}
       {helpers.length ? (
         <>
           <p className="hsub">{t("kanban.past.helpersHead", { count: helpers.length })}</p>
           <p className="hnote">{t("kanban.past.helpersNote")}</p>
           <ul data-helpers="">{helpers.map(item)}</ul>
+        </>
+      ) : null}
+      {elsewhere.length ? (
+        <>
+          <button type="button" className="helsewhere" data-elsewhere-toggle="" aria-expanded={listed} onClick={() => setListed((value) => !value)}>
+            {t("kanban.past.elsewhere", { count: elsewhere.length })} · {t(listed ? "kanban.past.elsewhereHide" : "kanban.past.elsewhereShow")}
+          </button>
+          {listed ? (
+            <ul data-elsewhere="">
+              {elsewhere.map((ref, index) => (
+                <li key={ref.key} data-elsewhere-row={ref.key}>
+                  <span className="lbl">{t("kanban.past.elsewhereRow", { n: index + 1 })}</span>
+                  <button type="button" className="hopen" aria-label={t("kanban.past.elsewhereOpenAria", { n: index + 1 })} onClick={() => onOpen({ path: ref.path, conversationId: ref.conversationId })}>
+                    {t("kanban.past.open")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </>
       ) : null}
     </details>

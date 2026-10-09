@@ -210,6 +210,8 @@ export interface RuntimeReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: OperationKind;
+  /** Kill authorship, derived by the journal from the admitted idle fence. */
+  origin?: "system" | "operator";
   status: ReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -226,6 +228,11 @@ export interface RuntimeReceipt {
   /** Durable settlement guidance for choosing the retry identity. */
   resend?: "not-needed" | "safe" | "verify-first";
   revision: number;
+}
+
+/** Automatic lifecycle work has its own audit receipt outside message history. */
+export function runtimeReceiptIsAutomaticRetirement(receipt: Pick<RuntimeReceipt, "kind" | "origin">): boolean {
+  return receipt.kind === "kill" && receipt.origin === "system";
 }
 
 export interface RuntimeEdge {
@@ -907,6 +914,14 @@ export const RECEIPT_REASON_KEYS: Record<string, MessageKey> = {
   "busy-turn": "receipt.human.turnActive",
   "no-active-turn": "receipt.human.noTurn",
   "delivery-discarded": "receipt.human.discarded",
+  /* A held send waits for the conversation's account switch; the server
+     records why on the reservation and answers it on the receipt. */
+  "switching-accounts": "receipt.human.switchingAccounts",
+  "switch-after-turn": "receipt.human.switchAfterTurn",
+  "switch-failed": "receipt.human.switchFailed",
+  /* The switch's own receipt: it found the delivery record's write lock held
+     and retries without blocking the Viewer. */
+  "switch-writer-busy": "receipt.human.switchWriterBusy",
   /* #862 compact refusals. `stale-generation` is the same class of fact as a
      stale delivery key: the operator was pointing at a generation that is no
      longer the live one. */
@@ -922,6 +937,9 @@ export const RECEIPT_REASON_KEYS: Record<string, MessageKey> = {
      nothing. The command still went, so the sentence says both halves. */
   "compact-declined": "receipt.human.compactDeclined",
 };
+
+/** Reason codes of a send held while its conversation switches accounts. */
+export const SWITCH_WAIT_REASONS: ReadonlySet<string> = new Set(["switching-accounts", "switch-after-turn", "switch-failed", "switch-writer-busy"]);
 
 /** The human sentence key for a receipt's reason, or null for an unknown one. */
 export function humanReceiptReasonKey(reason: string | null | undefined): MessageKey | null {

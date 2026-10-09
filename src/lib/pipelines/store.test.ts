@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -43,6 +43,38 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
   }
 }
 
+test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
+  const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
+    stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+  if (pinned) {
+    pipeline.baseBranch = "main";
+    pipeline.baseRef = "a".repeat(40);
+    pipeline.lastPassedCommit = pipeline.baseRef;
+  }
+  savePipelines([pipeline]);
+  expect(loadPipelines()).toEqual([pipeline]);
+  pipeline.state = "closed";
+  pipeline.closedAt = "2026-07-02T00:00:00.000Z";
+  pipeline.hiddenAt = pipeline.closedAt;
+  savePipelines([pipeline]);
+  expect(findPipelineRecord(pipeline.id)).toEqual(pipeline);
+  expect(loadPipelinesForStartup()).toEqual([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(1);
+  expect(loadPipelines()).toEqual([]);
+  expect(loadArchivedPipelines()).toEqual([pipeline]);
+  expect(findPipelineRecord(pipeline.id)).toEqual(pipeline);
+}));
+
+test.each(["provisioning", "running", "needs_decision", "needs_review", "paused", "completed"] as const)(
+  "a stageless pipeline still cannot be stored as %s", async (state) => isolatedDelivery(() => {
+    const pipeline = buildPipeline({ id: "empty-invalid", task: "Empty graph", project: "fixture", repoDir: "/repo",
+      stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+    pipeline.state = state;
+    expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record");
+    expect(loadPipelines()).toEqual([]);
+  }),
+);
+
 test("promoted Viewer loads historical severity-only verdicts before hot-state activation", async () => isolatedDelivery(async (root) => {
   const pipeline = deliveryFixture("legacy-verdict");
   pipeline.state = "running";
@@ -75,31 +107,48 @@ test("promoted Viewer loads historical severity-only verdicts before hot-state a
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.findings).toEqual(["P1", "P2"]);
 }));
 
-test("delivery ownership survives concurrent processes and original-key replay after restart", async () => isolatedDelivery(async (root) => {
+test.each([
+  { name: "delivery ownership survives concurrent processes and original-key replay after restart", contendedRelease: false },
+  { name: "delivery ownership survives a contended lease release and original-key replay after restart", contendedRelease: true },
+])("$name", async ({ contendedRelease }) => isolatedDelivery(async (root) => {
   savePipelines([]);
   const modulePath = path.join(import.meta.dir, "store.ts");
   const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
+    import { injectStateWriteFaultForTests } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
+    if (process.env.CONTENDED_RELEASE === "1") injectStateWriteFaultForTests({
+      site: "release", collection: "pipelines", times: 1,
+      error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
+    });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
     console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));`;
-  const run = (record: Pipeline) => Bun.spawn([process.execPath, "-e", script], {
-    env: { ...process.env, LLV_STATE_DIR: root, DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
+  const run = (record: Pipeline, contend = false) => Bun.spawn([process.execPath, "-e", script], {
+    env: { ...process.env, LLV_STATE_DIR: root, CONTENDED_RELEASE: contend ? "1" : "0",
+      DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
     stdout: "pipe", stderr: "pipe",
   });
-  const children = [run(deliveryFixture("owner-a")), run(deliveryFixture("owner-b"))];
-  const results = await Promise.all(children.map(async (child) => {
-    const output = await new Response(child.stdout).text();
-    const errors = await new Response(child.stderr).text();
-    expect({ exit: await child.exited, errors }).toEqual({ exit: 0, errors: "" });
-    return JSON.parse(output) as Pipeline;
-  }));
+  // A committed write can defer lease cleanup when a competing process holds
+  // SQLite's writer lock. Only that exact diagnostic is allowed; the exit,
+  // durable ownership and restart replay still have to prove success.
+  const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
+  const collect = async (child: ReturnType<typeof run>) => {
+    const [output, errors, exit] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(exit).toBe(0);
+    expect(["", releaseWarning]).toContain(errors);
+    return { record: JSON.parse(output) as Pipeline, errors };
+  };
+  const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
+  const completed = await Promise.all(children.map(collect));
+  if (contendedRelease) expect(completed[0]!.errors).toBe(releaseWarning);
+  const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
   expect(results.filter((record) => record.delivery?.active)).toHaveLength(1);
   expect(comparison).toMatchObject({ publication: "internal", delivery: { publish: "disabled", ownerId: owner.id, epoch: 1 } });
   const replay = run(deliveryFixture(owner.id));
-  expect(JSON.parse(await new Response(replay.stdout).text()).id).toBe(owner.id);
-  expect(await replay.exited).toBe(0);
-  expect(loadPipelines()).toHaveLength(2);
+  expect((await collect(replay)).record).toEqual(owner);
+  expect(loadPipelines().sort((a, b) => a.id.localeCompare(b.id))).toEqual(results.sort((a, b) => a.id.localeCompare(b.id)));
   const database = new Database(path.join(root, "state.sqlite"));
   try {
     const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
@@ -290,7 +339,7 @@ test.each(["max", "ultra"])("Astra %s pipelines persist creation and stage edits
   }
 });
 
-test("pipeline mutations preserve corrupt and future-schema registries", async () => {
+test("pipeline mutations refuse corrupt files and preserve individual rejected records", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipelines-corrupt-"));
   process.env.LLV_STATE_DIR = sandbox;
@@ -305,27 +354,31 @@ test("pipeline mutations preserve corrupt and future-schema registries", async (
       { id: "build", kind: "run", prompt: "build", next: "verify", effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } },
       { id: "verify", kind: "run", prompt: "verify", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } },
     ];
-    const rejectsWithoutRewrite = async (pipeline: unknown) => {
+    const preservesRejectedRecord = async (pipeline: unknown) => isolatedDelivery(async (root) => {
+      const filename = path.join(root, "pipelines.json");
       const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] });
-      fs.writeFileSync(file, bytes, "utf8");
-      await expect(withPipelineMutation((_pipelines, persist) => persist())).rejects.toThrow("malformed records");
-      expect(fs.readFileSync(file, "utf8")).toBe(bytes);
-    };
+      fs.writeFileSync(filename, bytes, "utf8");
+      await withPipelineMutation((records, persist) => { expect(records).toEqual([]); persist(); });
+      expect(fs.readFileSync(filename, "utf8")).toBe(bytes);
+      const db = new Database(path.join(root, "state.sqlite"));
+      try { expect(db.query("SELECT COUNT(*) AS count FROM state_rows WHERE collection='pipelines'").get()).toEqual({ count: 1 }); }
+      finally { db.close(); }
+    });
     const malformed = buildPipeline({ id: "badbad12", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" }) as unknown as Record<string, unknown>;
     malformed.state = "teleported";
-    await rejectsWithoutRewrite(malformed);
+    await preservesRejectedRecord(malformed);
 
     const incompatible = buildPipeline({ id: "badrole1", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     incompatible.stages[0]!.effectiveRole.model = "fable";
-    await rejectsWithoutRewrite(incompatible);
+    await preservesRejectedRecord(incompatible);
 
     const unsafeWorktree = buildPipeline({ id: "badpath1", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     unsafeWorktree.worktreeDir = "/repo";
-    await rejectsWithoutRewrite(unsafeWorktree);
+    await preservesRejectedRecord(unsafeWorktree);
 
     const mismatchedRole = buildPipeline({ id: "badrole2", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     mismatchedRole.stages[0]!.role = { roleId: "builder" };
-    await rejectsWithoutRewrite(mismatchedRole);
+    await preservesRejectedRecord(mismatchedRole);
 
     const expandedVerdict = buildPipeline({ id: "badverdt", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     expandedVerdict.runs[0]!.attempts.push({
@@ -346,7 +399,7 @@ test("pipeline mutations preserve corrupt and future-schema registries", async (
       verdict: { status: "pass", findings: Array.from({ length: 51 }, () => "finding") },
       error: null,
     });
-    await rejectsWithoutRewrite(expandedVerdict);
+    await preservesRejectedRecord(expandedVerdict);
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -861,20 +914,24 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
     savePipelines([pipeline]);
     if (collection === "pipelines_archive") await archiveSettledPipelines(Date.parse("2026-08-05T00:00:00.000Z"));
     expect(loadPipelinesForStartup()).toHaveLength(1);
+    expect(loadPipelinesForRetirement()).toHaveLength(1);
     loadPipelines();
     db = new Database(path.join(sandbox, "state.sqlite"));
     const read = () => db!.query("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?").get(collection, pipeline.id) as { value_json: string };
     const original = read().value_json;
     for (const corrupt of ["{broken", JSON.stringify({ ...pipeline, runs: null })]) {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(corrupt, collection, pipeline.id);
-      expect(() => loadPipelinesForStartup()).toThrow();
+      if (corrupt === "{broken") expect(() => loadPipelinesForStartup()).toThrow();
+      else expect(loadPipelinesForStartup()).toEqual([]);
+      expect(() => loadPipelinesForRetirement()).toThrow();
       expect(read().value_json).toBe(corrupt);
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(original, collection, pipeline.id);
       expect(loadPipelinesForStartup()).toHaveLength(1);
+      expect(loadPipelinesForRetirement()).toHaveLength(1);
     }
     if (collection === "pipelines_archive") {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run("{broken", collection, pipeline.id);
-      expect(loadArchivedPipelines()).toEqual([]);
+      expect(() => loadArchivedPipelines()).toThrow();
       expect(read().value_json).toBe("{broken");
     } else {
       db.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive',?,?,?,?,0)").run(pipeline.id, original, 0, 1);
@@ -897,7 +954,7 @@ test.each(["pipelines.json", "pipelines-archive.json"])("startup preserves malfo
   const archive = path.join(sandbox, filename);
   try {
     expect(loadPipelinesForStartup()).toEqual([]); // ENOENT is valid empty evidence.
-    for (const corrupt of ["null", "false", "[]", "{broken", JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [{}] })]) {
+    for (const corrupt of ["null", "false", "[]", "{broken"]) {
       fs.writeFileSync(archive, corrupt);
       expect(await withPipelineStartupAdmission(async (available) => available)).toBeFalse();
       expect(fs.readFileSync(archive, "utf8")).toBe(corrupt);
@@ -1065,4 +1122,14 @@ test("loaded provider recovery state does not alias the cached persisted record"
   expect(second.providerRecoveryBudget!.tries).toBe(2);
   expect(second.providerWait!.capacityProbes).toBe(1);
   expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
+}));
+
+test("runtime-switch state survives store reopening and malformed targets are refused", async () => isolatedDelivery(async () => {
+  const pipeline = deliveryFixture("runtime-switch-store");
+  pipeline.state = "running";
+  const seat = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "account-a" };
+  const record = { id: "runtime-switch-store:build:1:1", seq: 1, requestedAt: "2026-10-02T10:00:00.000Z", actor: { kind: "operator" as const }, mode: "fork" as const, phase: "requested" as const, from: { ...seat, conversationId: "conversation_store", launchId: "launch-store", sessionId: "session-store", agentPath: "/sessions/store.jsonl" }, to: { ...seat, accountId: "account-b", accountPinned: false } };
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole), launchId: "launch-store", conversationId: "conversation_store", sessionId: "session-store", agentPath: "/sessions/store.jsonl", paneId: null, flowId: null, startedAt: record.requestedAt, completedAt: null, input: "brief", activatedBy: null, output: null, verdict: null, error: null, runtimeSwitches: [record] });
+  savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
+  record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
 }));

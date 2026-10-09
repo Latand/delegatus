@@ -1,3 +1,4 @@
+import { telegramOperatorAction, type TelegramOperatorAction } from "@/lib/telegram/launchReadiness";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
@@ -63,11 +64,15 @@ export interface OrchestratorIncumbentBody {
   } | null;
   context: OrchestratorContextReading | null;
   rotation: (RotationRecommendation & { note: string }) | null;
+  /** What the operator has to do before this seat's Telegram tool works again,
+      or null: the seat holds no Telegram grant, Telegram is not set up here, or
+      nothing is asked of the operator. */
+  telegram: TelegramOperatorAction | null;
 }
 
 /** Same sentence `get_orchestrator` carries, for the same reason: a reader of
     this payload must never be able to mistake it for an instruction. */
-export const ROTATION_NOTE = "recommendation only — rotation never happens automatically; call rotate_orchestrator explicitly";
+export const ROTATION_NOTE = "recommendation only — call rotate_orchestrator explicitly; the seat tick automatically rotates only after authentication failure onto another allowed account";
 
 export interface IncumbentReadDependencies {
   conversation: (id: ViewerConversationId) => RegistryConversation | null;
@@ -77,6 +82,9 @@ export interface IncumbentReadDependencies {
   /** Message/tool/compaction counts, the one expensive read. Injected so a test
       — and a future cheaper reader — can supply them without a transcript. */
   sessionCounts: (path: string, engine: "claude" | "codex") => { messages: number; tools: number; compactions: number } | null;
+  /** The action Telegram needs from the operator, read from durable state.
+      Absent in a test that is not about Telegram. */
+  telegramAction?: () => TelegramOperatorAction | null;
 }
 
 export const productionIncumbentDependencies: IncumbentReadDependencies = {
@@ -88,6 +96,7 @@ export const productionIncumbentDependencies: IncumbentReadDependencies = {
     const record = snapshot.conversations[0];
     return record ? { lifecycle: record.lifecycle, hostState: record.host.state, silentForMs: record.silentForMs } : null;
   },
+  telegramAction: () => telegramOperatorAction(),
   sessionCounts: (path, engine) => {
     try {
       const read = readSession(path, engine);
@@ -120,6 +129,7 @@ const VACANT = (project: string): OrchestratorIncumbentBody => ({
   transcriptFacts: null,
   context: null,
   rotation: null,
+  telegram: null,
 });
 
 /**
@@ -188,5 +198,8 @@ export async function readOrchestratorIncumbent(
       }),
       note: ROTATION_NOTE,
     },
+    telegram: generation?.launchProfile?.mcpServers?.includes("telegram")
+      ? dependencies.telegramAction?.() ?? null
+      : null,
   };
 }

@@ -314,7 +314,8 @@ test.each(lifecycleMatrix)("migration lifecycle matrix: %s", async (_name, lifec
   const expectedHidden = resolveExpectedPath(closedPath);
   const expectedManual = resolveExpectedPath(first) === expectedHidden ? [] : [resolveExpectedPath(first)];
   expect(board.pathAliases).toEqual(expectedAliases);
-  expect(board.prefs.hidden).toEqual([expectedHidden]);
+  // Archive retains the exact path that was closed across alias succession.
+  expect(board.prefs.hidden).toEqual([...new Set([closedPath, expectedHidden])]);
   expect(board.prefs.manual).toEqual(expectedManual);
 });
 
@@ -364,7 +365,7 @@ test("a closed conversation stays hidden when a registry successor arrives witho
     ok: true,
     board: {
       pathAliases: { [source]: successor },
-      prefs: { manual: [], hidden: [successor] },
+      prefs: { manual: [], hidden: [source, successor] },
     },
   });
 });
@@ -422,7 +423,7 @@ test("a pre-commit continuity path cannot create a reverse board alias", async (
     board: {
       revision: 3,
       pathAliases: { [source]: successor },
-      prefs: { manual: [], hidden: [successor] },
+      prefs: { manual: [], hidden: [source, successor] },
     },
   });
 });
@@ -499,7 +500,7 @@ test("a repeated migration cannot alias its pending successor backward", async (
     board: {
       revision: 3,
       pathAliases: { [first]: third, [second]: third },
-      prefs: { manual: [], hidden: [third] },
+      prefs: { manual: [], hidden: [second, third] },
     },
   });
 });
@@ -547,6 +548,7 @@ test("a scanner-discovered repeated successor stays pending before its provider 
     accountId: "account-c",
     conversationId: conversation.id,
     purpose: "migration-successor",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Continue the requested change" }),
     expectedArtifactPath: third,
   });
   registry.reconcileConversations([{
@@ -756,7 +758,7 @@ test("a pending repeated migration preserves deferred historical continuity tomb
     board: {
       revision: 2,
       pathAliases: { [first]: second, [fork]: second },
-      prefs: { manual: [], hidden: [second] },
+      prefs: { manual: [], hidden: [fork, second] },
     },
   });
 });

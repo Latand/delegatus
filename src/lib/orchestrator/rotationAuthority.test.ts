@@ -7,6 +7,9 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
+import { statePath } from "@/lib/configDir";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+import { activeDrain, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
 import { POST as seatRoute } from "@/app/api/orchestrator/seat/route";
@@ -154,6 +157,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   setCallerConversationResolverForTests(null);
   setSeatCommandDependenciesForTests(null);
   restore("LLV_STATE_DIR", previousStateDir);
@@ -327,6 +331,95 @@ test("REGRESSION (#1402): the designated seat rotates ITSELF through rotate_orch
     successorConversationId: SUCCESSOR_ID,
     triggeredBy: { kind: "agent", conversationId: SEAT_ID, seatEpoch: 1 },
   })]);
+});
+
+test.each(["route", "tool"] as const)("%s holds a new agent rotation during update draining and admits one successor after release", async (surface) => {
+  seatSeeded();
+  callerIs(SEAT_ID);
+  const { spawns } = dependencies();
+  const file = statePath("self-update", "auto-drain.json");
+  const id = "rotation-drain";
+  writeDrain(file, { id, target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  const args = { project: "proj-a", clientRequestId: "held-rotation-1" };
+  if (surface === "route") {
+    const answer = await routeRotation("seat", args);
+    expect(answer.status).toBe(409);
+    expect(answer.body.code).toBe("launch_held_for_update");
+    // No reading of the blockers was recorded for this drain, and the refusal says so.
+    expect(answer.body).toMatchObject({ waitingFor: "its first reading of what is running", blockers: null });
+  } else {
+    const answer = await toolRotation(args);
+    expect(answer.failed).toBe(true);
+    expect(answer.payload.error).toContain("new launches are held while the automatic update waits for its first reading of what is running");
+  }
+  expect(spawns).toHaveLength(0);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(SEAT_ID);
+  expect(activeDrain(file)?.id).toBe(id);
+  releaseDrain(file, id);
+  if (surface === "route") expect((await routeRotation("seat", args)).status).toBe(200);
+  else expect((await toolRotation(args)).failed).toBe(false);
+  expect(spawns).toHaveLength(1);
+  if (surface === "route") expect((await routeRotation("seat", args)).status).toBe(200);
+  else expect((await toolRotation(args)).failed).toBe(false);
+  expect(spawns).toHaveLength(1);
+});
+
+test("the operator may manually rotate a seat while update draining holds agent launches", async () => {
+  seatSeeded();
+  callerIsOperator();
+  const { spawns } = dependencies();
+  const file = statePath("self-update", "auto-drain.json");
+  writeDrain(file, { id: "manual-rotation-drain", target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  const answer = await routeRotation("operator", { project: "proj-a", clientRequestId: "manual-rotation-1" });
+  expect(answer.status).toBe(200);
+  expect(spawns).toHaveLength(1);
+  expect(activeDrain(file)).not.toBeNull();
+});
+
+test.each([200, 202])("an agent rotation accepted with HTTP %s replays during update draining without a new launch", async (status) => {
+  seatSeeded();
+  callerIs(SEAT_ID);
+  const { deps, spawns } = dependencies();
+  if (status === 202) {
+    deps.spawn = async (body) => {
+      spawns.push(body);
+      return { status: 202, body: { ok: true, conversationId: SUCCESSOR_ID, path: null, launchId: "accepted-rotation-launch" } };
+    };
+    const resolved = deps.resolvedConversation;
+    deps.resolvedConversation = (conversationId) => conversationId === SUCCESSOR_ID ? null : resolved(conversationId);
+  }
+  const args = { project: "proj-a", clientRequestId: "accepted-rotation-1" };
+  expect((await routeRotation("seat", args)).status).toBe(status);
+  const file = statePath("self-update", "auto-drain.json");
+  writeDrain(file, { id: "replay-rotation-drain", target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  const replay = await routeRotation("seat", args);
+  expect(replay.status).toBe(200);
+  expect(replay.body.replayed).toBe(true);
+  expect(spawns).toHaveLength(1);
+  expect(activeDrain(file)).not.toBeNull();
+});
+
+test("an update hold begun while a rotation composes its handoff prevents its fresh spawn intent", async () => {
+  seatSeeded();
+  callerIsOperator();
+  const { deps, spawns } = dependencies();
+  expect((await routeRotation("operator", { project: "proj-a", clientRequestId: "first-rotation-1" })).status).toBe(200);
+  callerIs(SEAT_ID);
+  let entered!: () => void;
+  let finish!: () => void;
+  const composing = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  deps.summarizeHandoffs = async () => { entered(); await gate; return { kind: "fallback", reason: "unavailable" }; };
+  const rotation = routeRotation("seat", { project: "proj-a", clientRequestId: "delayed-rotation-1" });
+  await composing;
+  const file = statePath("self-update", "auto-drain.json");
+  writeDrain(file, { id: "delayed-rotation-drain", target: "a".repeat(40), since: AT, until: Date.now() + 60_000, persistent: true });
+  finish();
+  const answer = await rotation;
+  expect(answer.status).toBe(409);
+  expect(answer.body.code).toBe("launch_held_for_update");
+  expect(spawns).toHaveLength(1);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(SUCCESSOR_ID);
 });
 
 test("REGRESSION (#1402): a conversation holding no seat rotates too — no role gate survives on this path", async () => {
@@ -536,4 +629,81 @@ test("an agent's create_orchestrator is refused at the seat route, and a create 
   const byOperator = await executeOrchestratorSeatRequest(request, deps, { kind: "operator", conversationId: null, seatEpoch: null });
   expect(byOperator.status).toBe(200);
   expect(spawns).toEqual([expect.objectContaining({ engine: "claude", model: "sonnet" })]);
+});
+
+test("agent rotation retains its pending intent when downstream update admission closes", async () => {
+  seatSeeded(); callerIs(SEAT_ID);
+  const { deps, spawns } = dependencies();
+  const nativeSpawn = deps.spawn;
+  let autonomous: boolean | undefined;
+  deps.spawn = async (_body, restriction?: boolean) => {
+    autonomous = restriction;
+    writeDrain(statePath("self-update", "auto-drain.json"), { id: "downstream-seat-drain", target: "a".repeat(40), since: AT, until: 0, persistent: true });
+    return { status: 503, body: { code: "AUTO_UPDATE_DRAIN", error: "held for update" } };
+  };
+  const request = { project: "proj-a", clientRequestId: "downstream-rotation-1" };
+  const held = await routeRotation("seat", request);
+  expect(autonomous).toBe(true);
+  expect(held.body.code).toBe("launch_held_for_update");
+  expect(orchestratorSeatFor("proj-a").pending?.state).toBe("pending");
+  expect(spawns).toHaveLength(0);
+  releaseDrain(statePath("self-update", "auto-drain.json"), "downstream-seat-drain");
+  deps.spawn = nativeSpawn;
+  const resumed = await routeRotation("seat", request);
+  expect(resumed.status).toBe(200); expect(spawns).toHaveLength(1);
+  expect(spawns[0].clientAttemptId).toBe(request.clientRequestId);
+});
+
+
+test.each([
+  { seam: "account", actor: "seat" }, { seam: "publication", actor: "seat" },
+  { seam: "account", actor: "operator" }, { seam: "publication", actor: "operator" },
+] as const)("handoff child respects drain after $seam wait for $actor rotation", async ({ seam, actor }) => {
+  const { summarizeHandoffsHeadless, productionDigestRuntime } = await import("./handoffDigest");
+  const { runHeadlessCodexOnce } = await import("@/lib/agent/headless");
+  const { setCodexShellPolicyReaderForTest } = await import("@/lib/git/codexShellPolicy");
+  seatSeeded(); callerIsOperator();
+  const { deps, spawns } = dependencies();
+  expect((await routeRotation("operator", { project: "proj-a", clientRequestId: "first-helper-rotation" })).status).toBe(200);
+  if (actor === "seat") callerIs(SEAT_ID);
+  const marker = path.join(sandbox, "helper-marker");
+  const command = path.join(sandbox, "helper-stub");
+  fs.writeFileSync(command, `#!${process.execPath}
+import fs from "node:fs"; fs.appendFileSync(${JSON.stringify(marker)}, "launched\\n"); const args = process.argv; fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "Decisions: shipped");
+`, { mode: 0o700 });
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const restorePolicy = setCodexShellPolicyReaderForTest(async () => {
+    if (seam === "publication") { entered(); await gate; }
+    return {};
+  });
+  deps.summarizeHandoffs = request => summarizeHandoffsHeadless(request, {
+    ...productionDigestRuntime,
+    resolveAccount: async () => {
+      if (seam === "account") { entered(); await gate; }
+      return { kind: "available", account: { engine: "codex", accountId: "helper", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } } };
+    },
+    run: request => runHeadlessCodexOnce({ ...request, account: null, runtime: { command } }),
+  });
+  const drainPath = statePath("self-update", "auto-drain.json");
+  try {
+    const input = { project: "proj-a", clientRequestId: "delayed-helper-rotation" };
+    const pending = routeRotation(actor, input);
+    await Promise.race([waiting, pending.then(() => { throw new Error("rotation never reached launch wait"); })]);
+    writeDrain(drainPath, { id: "helper-wait", target: "a".repeat(40), since: AT, until: 0, persistent: true });
+    release();
+    const answer = await pending;
+    if (actor === "seat") {
+      expect(answer.status).toBe(409);
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(spawns).toHaveLength(1);
+      releaseDrain(drainPath, "helper-wait");
+      expect((await routeRotation("seat", input)).status).toBe(200);
+    } else {
+      expect(answer.status).toBe(200);
+    }
+    expect(fs.readFileSync(marker, "utf8")).toBe("launched\n");
+    expect(spawns).toHaveLength(2);
+  } finally { release(); restorePolicy(); releaseDrain(drainPath, "helper-wait"); }
 });

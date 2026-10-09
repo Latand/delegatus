@@ -9,11 +9,13 @@ import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migrati
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
+import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { resolveSendReceipt, sendReceiptFor } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
@@ -21,9 +23,45 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-delivery-"));
+const ownedKillChildren = new Set<ReturnType<typeof Bun.spawn>>();
+afterAll(async () => {
+  for (const child of ownedKillChildren) {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+});
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+async function ownedKillProcess() {
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  ownedKillChildren.add(child);
+  const stop = async () => {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    ownedKillChildren.delete(child);
+  };
+  try {
+    await waitForCondition(() => processIdentityStatus(captureProcessIdentity(child.pid)) === "alive");
+    const identity = captureProcessIdentity(child.pid);
+    return {
+      identity,
+      owns: (expected: Readonly<ProcessIdentity>) => sameRecordedProcessIdentity(identity, expected)
+        && processIdentityStatus(identity) === "alive",
+      stop,
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
 
 function journalPort(
   journal: RuntimeJournal,
@@ -278,15 +316,15 @@ test("an engine event burst preserves every projection without polling the deliv
   });
   let effectBatchCalls = 0;
   let snapshotCalls = 0;
-  let deltaProjections = 0;
+  const deltaProjections: { text: string; eventKey: string }[] = [];
   let sessionStatusProjections = 0;
   const client = {
     snapshot: async () => {
       snapshotCalls += 1;
       return { filesRevision: 0 };
     },
-    append: async (event: { kind: string }) => {
-      if (event.kind === "delta") deltaProjections += 1;
+    append: async (event: { kind: string; payload: { text?: string }; producer?: { eventKey?: string } }) => {
+      if (event.kind === "delta") deltaProjections.push({ text: event.payload.text ?? "", eventKey: event.producer?.eventKey ?? "" });
       if (event.kind === "session-status") sessionStatusProjections += 1;
     },
     producerCursor: async () => 17,
@@ -310,14 +348,244 @@ test("an engine event burst preserves every projection without polling the deliv
       burst.emit({ kind: "delta", turnId: "turn:burst", text: `delta ${index}`, seq: index });
     }
 
-    await waitForCondition(() => deltaProjections === 40);
+    // A ready burst folds into fewer appends; every fragment still lands, in
+    // order, under the last sequence the journal's producer cursor resumes from.
+    const burstText = Array.from({ length: 40 }, (_, offset) => `delta ${offset + 18}`).join("");
+    await waitForCondition(() => deltaProjections.map(projection => projection.text).join("") === burstText);
     await Bun.sleep(50);
-    expect(deltaProjections).toBe(40);
+    expect(deltaProjections.map(projection => projection.text).join("")).toBe(burstText);
+    expect(deltaProjections.length).toBeLessThanOrEqual(40);
+    expect(deltaProjections.at(-1)!.eventKey).toBe("engine-host:codex:burst-session:57");
     expect(sessionStatusProjections - baselineStatuses).toBeLessThanOrEqual(1);
     expect(effectBatchCalls - baselineEffects).toBeLessThanOrEqual(1);
     expect(snapshotCalls - baselineSnapshots).toBeLessThanOrEqual(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
+  }
+});
+
+/** A structured host's own ledger: every attach replays what was produced
+    after its cursor, then follows new events as they arrive. */
+function ledgerObservableHost(sessionKey: string): {
+  host: EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  emit(...events: RuntimeEvent[]): void;
+} {
+  const ledger: RuntimeEvent[] = [];
+  const readers = new Set<() => void>();
+  const state: HostState = {
+    status: "active",
+    sessionKey,
+    endpoint: "fake:ledger-host",
+    pid: 1,
+    processStartIdentity: "fake:1",
+    eventCursor: 0,
+    protocolVersion: "fake-v1",
+    activeTurnRef: "turn:ledger",
+    pendingAttention: [],
+    activeFlags: [],
+    account: null,
+  };
+  const host = {
+    attach: (afterSeq: number) => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<RuntimeEvent> => {
+        let position = ledger.findIndex((event) => event.seq > afterSeq);
+        if (position < 0) position = ledger.length;
+        let closed = false;
+        return {
+          next: async () => {
+            while (!closed && position >= ledger.length) {
+              await new Promise<void>((resolve) => {
+                const wake = () => { readers.delete(wake); resolve(); };
+                readers.add(wake);
+              });
+            }
+            return closed ? { value: undefined, done: true } : { value: ledger[position++], done: false };
+          },
+          return: async () => {
+            closed = true;
+            for (const wake of [...readers]) wake();
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    }),
+    send: async (entry: QueueEntry) => ({ outcome: "turn-started" as const, turnId: `turn:${entry.id}` }),
+    interrupt: async () => {},
+    answer: async () => {},
+    health: async () => ({ ...state }),
+    release: async () => {},
+    onStateChange: () => () => {},
+  } satisfies EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  return {
+    host,
+    emit(...events) {
+      ledger.push(...events);
+      for (const wake of [...readers]) wake();
+    },
+  };
+}
+
+test("succession replay keeps text a predecessor's late append recorded exactly once", async () => {
+  const directory = path.join(sandbox, "controller-succession-fold");
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "succession-fold-session";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "succession-account",
+    launchProfile: profile,
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversationId = registry.conversationForPath(artifactPath)!.id;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "succession-account",
+    launchProfile: profile,
+    status: "live",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:ledger-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: "turn:ledger",
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const base = runtimeJournalClient(journal);
+  let held: { commit: () => void; committed: Promise<unknown> } | null = null;
+  let heldReady: () => void = () => {};
+  const heldAppend = new Promise<void>((resolve) => { heldReady = resolve; });
+  let cursorReads = 0;
+  const client = {
+    ...base,
+    append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
+      if (event.kind !== "delta" || held) return await base.append(event);
+      // The predecessor's append is in flight across the succession.
+      let commit = () => {};
+      const committed = new Promise<void>((resolve) => { commit = resolve; }).then(() => base.append(event));
+      held = { commit, committed };
+      heldReady();
+      return await committed;
+    },
+    producerCursor: async (producerKind: string, eventKeyPrefix: string) => {
+      cursorReads += 1;
+      const observed = await base.producerCursor(producerKind, eventKeyPrefix);
+      if (cursorReads === 2 && held) {
+        // The successor read the cursor; the predecessor's append commits after.
+        held.commit();
+        await held.committed;
+      }
+      return observed;
+    },
+  } as RuntimeHostClient;
+  const ledger = ledgerObservableHost(sessionId);
+  const delta = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn:ledger", text: `[${seq}]`, seq });
+
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: ledger.host }], { registry, client });
+    ledger.emit(delta(1), delta(2), delta(3), delta(4), delta(5));
+    await heldAppend;
+    ledger.emit(delta(6), delta(7), delta(8), delta(9), delta(10));
+    await bindStructuredDeliveryQueue([], { registry, client });
+    expect(cursorReads).toBe(2);
+    const expected = Array.from({ length: 10 }, (_, index) => `[${index + 1}]`).join("");
+    const recorded = () => journal.replay(0).events
+      .filter((event) => event.kind === "delta" && event.scope.id === conversationId)
+      .map((event) => String(event.payload.text))
+      .join("");
+    await waitForCondition(() => recorded().length >= expected.length);
+    await Bun.sleep(50);
+    expect(recorded()).toBe(expected);
+    expect(journal.producerCursor("codex-app-server", `engine-host:codex:${sessionId}:`)).toBe(10);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
+test("a ready burst of escaped text folds within the journal's payload budget and its turn ends", async () => {
+  const directory = path.join(sandbox, "controller-escaped-fold");
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "escaped-fold-session";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "escaped-account",
+    launchProfile: profile,
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversationId = registry.conversationForPath(artifactPath)!.id;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "escaped-account",
+    launchProfile: profile,
+    status: "live",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:ledger-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: "turn:ledger",
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const ledger = ledgerObservableHost(sessionId);
+  // JSON writes each of these four characters as two bytes, so 8 KiB of this
+  // text is 16 KiB of payload before the identities around it.
+  const fragment = "\\\n\\\n";
+  const count = 2_048;
+
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: ledger.host }], { registry, client });
+    ledger.emit(
+      { kind: "turn-started", turnId: "turn:ledger", seq: 1 },
+      ...Array.from({ length: count }, (_, index): RuntimeEvent => ({ kind: "delta", turnId: "turn:ledger", text: fragment, seq: index + 2 })),
+      { kind: "turn-ended", turnId: "turn:ledger", status: "completed", seq: count + 2 },
+    );
+    const recorded = () => journal.replay(0).events.filter((event) => event.scope.id === conversationId);
+    await waitForCondition(() => recorded().some((event) => event.kind === "turn-ended"));
+    const events = recorded();
+    const deltas = events.filter((event) => event.kind === "delta");
+    expect(deltas.map((event) => String(event.payload.text)).join("")).toBe(fragment.repeat(count));
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.length).toBeLessThanOrEqual(8);
+    for (const event of deltas) expect(Buffer.byteLength(JSON.stringify(event.payload))).toBeLessThanOrEqual(16 * 1024);
+    // The turn's events keep their order: its start, all of its text, its end.
+    const kinds = events.map((event) => event.kind).filter((kind) => kind === "turn-started" || kind === "delta" || kind === "turn-ended");
+    expect(kinds).toEqual(["turn-started", ...deltas.map(() => "delta"), "turn-ended"]);
+    expect(journal.producerCursor("codex-app-server", `engine-host:codex:${sessionId}:`)).toBe(count + 2);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
   }
 });
 
@@ -1152,6 +1420,7 @@ test("a failed route kick retries queued controls and messages without a host-st
 });
 
 test("a kill cancels an automatic delivery retry and fails the send retryably", async () => {
+  const ownedProcess = await ownedKillProcess();
   const directory = path.join(sandbox, "controller-kill-cancels-auto-retry");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "e40306b9-a4df-\x347b3-bf6e-4570c44259c7";
@@ -1178,7 +1447,7 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "fake:kill-auto-retry-host",
-      process: null,
+      process: ownedProcess.identity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 0,
@@ -1215,8 +1484,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       status: released ? "unhosted" as const : "active" as const,
       sessionKey: sessionId,
       endpoint: "fake:kill-auto-retry-host",
-      pid: 1,
-      processStartIdentity: "fake:1",
+      pid: ownedProcess.identity.pid,
+      processStartIdentity: ownedProcess.identity.startIdentity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       activeTurnRef: released ? null : "turn:kill-auto-retry",
@@ -1225,11 +1494,20 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       account: null,
     }),
     release: async () => {
+      await ownedProcess.stop();
       releaseCount += 1;
       released = true;
     },
+    async releaseIfOwned(expected: Readonly<ProcessIdentity>) {
+      if (!ownedProcess.owns(expected)) return false;
+      await this.release();
+      return true;
+    },
     onStateChange: () => () => {},
-  } satisfies EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  } satisfies EngineHost & {
+    onStateChange(listener: (state: HostState) => void): () => void;
+    releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  };
   const successorLedger = createFakeDeliveryLedger();
   const successor = observableFakeHost(new FakeEngineHost(successorLedger));
   let recoveryCalls = 0;
@@ -1251,8 +1529,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     return { target: null, path: artifactPath, conversationId, spawned: true } as const;
   };
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client, recover });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client, recover });
     const sendOperationId = "operation-send-before-kill";
     journal.executeOperation({
       kind: "send",
@@ -1311,12 +1594,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
 test("a failed kill projection retries through the coalesced drain and terminalizes", async () => {
+  const ownedProcess = await ownedKillProcess();
   const directory = path.join(sandbox, "controller-kill-projection-retry");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "b6b55ea7-4a5e-\x34fe5-894d-2f332a7247c7";
@@ -1343,7 +1627,7 @@ test("a failed kill projection retries through the coalesced drain and terminali
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "fake:kill-retry-host",
-      process: null,
+      process: ownedProcess.identity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 0,
@@ -1374,9 +1658,28 @@ test("a failed kill projection retries through the coalesced drain and terminali
     },
   } satisfies RuntimeHostClient;
   const host = observableFakeHost(new FakeEngineHost());
+  const hostState = await host.health();
+  Object.assign(host, {
+    health: async () => ({
+      ...hostState,
+      pid: ownedProcess.identity.pid,
+      processStartIdentity: ownedProcess.identity.startIdentity,
+    }),
+    release: ownedProcess.stop,
+    async releaseIfOwned(expected: Readonly<ProcessIdentity>) {
+      if (!ownedProcess.owns(expected)) return false;
+      await ownedProcess.stop();
+      return true;
+    },
+  });
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client });
     const operationId = "operation-kill-projection-retry";
     journal.executeOperation({
       kind: "kill",
@@ -1397,8 +1700,8 @@ test("a failed kill projection retries through the coalesced drain and terminali
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
@@ -4300,3 +4603,234 @@ test("a real executor killed after the engine write leaves one actuation and an 
     reopened.close();
   }
 });
+
+// Exercise the real admission, recovery reservation and production controller;
+// only the launcher is replaced, with real receipt settlement and publication.
+async function drainRecoveryFixture(name: string) {
+  const directory = path.join(sandbox, `drain-recovery-${name}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const sessionId = crypto.randomUUID();
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const profile = emptyLaunchProfile({ cwd: directory });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const key = { engine: "codex" as const, sessionId };
+  const evidence = { kind: "codex-app-server" as const, endpoint: "fake:drain-recovery",
+    process: null, eventCursor: 0, protocolVersion: "fake-v1", writerClaimEpoch: 0,
+    activeTurnRef: null, pendingAttention: [], activeFlags: [] };
+  const entry = { key, artifactPath, cwd: directory, accountId: "default", launchProfile: profile,
+    status: "dead" as const, host: null, structuredHost: evidence, claimEpoch: 0, claimOwner: null, pendingAction: null };
+  registry.upsert({ ...entry, structuredHost: null });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const ledger = createFakeDeliveryLedger();
+  const host = observableFakeHost(new FakeEngineHost(ledger));
+  let launches = 0;
+  let beforeReservation = () => {};
+  const projectDead = () => journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+    conversationId: conversation.id, sessionKey: key, hostKind: "codex-app-server", host: "dead",
+    turn: "unknown", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+  } });
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
+    ...dependencies, registry, client, transport: () => "structured",
+    resolveAccount: () => {
+      beforeReservation();
+      return { engine: "codex", accountId: "default", kind: "managed",
+        home: path.join(directory, "account"), transcriptRoot: directory, env: { NODE_ENV: "test" } };
+    },
+    spawn: async (input) => {
+      launches += 1;
+      const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+      if (!claimed?.claimOwner || !claimed.structuredHost) throw new Error("recovery fixture claim unavailable");
+      const staged = registry.stageStructuredSpawn(input.receipt.launchId, {
+        ...claimed, key, artifactPath, cwd: directory, accountId: "default", launchProfile: profile,
+        status: "idle", host: null, pendingAction: "spawn",
+        structuredHost: { ...claimed.structuredHost, process: captureProcessIdentity(process.pid) },
+      });
+      expect(staged.kind).toBe("settled");
+      expect(registry.finalizeStructuredSpawn(input.receipt.launchId).kind).toBe("settled");
+      await publishStructuredDeliveryHost({ key, host });
+      return { ok: true, target: null, path: artifactPath, conversationId: conversation.id, launchId: input.receipt.launchId,
+        launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+    },
+    requestDeliveryDrain: () => {},
+  });
+  const request = { path: artifactPath, conversationId: conversation.id, operationId: `operation-${name}`,
+    clientMessageId: `client-${name}`, text: "continue the accepted instruction", hasImages: false,
+    kind: "send" as const, policy: "queue" as const, origin: { kind: "agent" as const, role: "builder" } };
+  const dependencies = { enabled: () => true, registry: () => registry, client: () => client, recover,
+    kick: () => {}, requestMigrationTick: () => {}, republish: async () => false };
+  const hold = (since = new Date(Date.now() - 60_000).toISOString()) => writeDrain(drainFile(), {
+    id: name, target: "fixture-update", since, until: 0, persistent: true,
+  });
+  const drain = (now = Date.now()) => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path: deliveryPath, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path: deliveryPath, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, command: delivery.command,
+    }, { ...dependencies, kick: kickStructuredDeliveryQueue }) ?? "held",
+  }, registry, { now: () => now });
+  const receipts = () => Object.values(registry.readOnlySnapshot().receipts).filter(row => row.purpose === "resume-successor");
+  await bindStructuredDeliveryQueue([], { registry, client, recover });
+  registry.upsert(entry);
+  return { registry, journal, client, request, dependencies, recover, projectDead, hold, drain, ledger,
+    launches: () => launches, receipts,
+    beforeReservation: (callback: () => void) => { beforeReservation = callback; },
+    async close() {
+      releaseDrain(drainFile(), name);
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+    } };
+}
+
+for (const projection of ["missing", "dead"] as const) {
+  test(`update drain recovery: fresh agent ${projection} projection waits for release with original identity`, async () => {
+    const fixture = await drainRecoveryFixture(`fresh-${projection}`);
+    try {
+      if (projection === "dead") fixture.projectDead();
+      expect(fixture.journal.readSession({ conversationId: fixture.request.conversationId })?.host ?? "missing").toBe(projection);
+      fixture.hold();
+      const result = await enqueueStructuredMessage(fixture.request, fixture.dependencies);
+      expect(fixture.launches()).toBe(0);
+      expect(fixture.receipts()).toHaveLength(0);
+      expect(result).toMatchObject({ ok: true, outcome: "held", operationId: fixture.request.operationId });
+      await fixture.drain(Date.now() + 6 * 60 * 60_000);
+      await kickStructuredDeliveryQueue();
+      expect(fixture.registry.pendingDeliveries(fixture.request.conversationId)).toMatchObject([{ state: "assigned" }]);
+      expect(fixture.launches()).toBe(0);
+      expect(fixture.receipts()).toHaveLength(0);
+      expect(fixture.ledger.writes).toHaveLength(0);
+      releaseDrain(drainFile(), `fresh-${projection}`);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await fixture.drain();
+        await kickStructuredDeliveryQueue();
+      }
+      expect(fixture.launches()).toBe(1);
+      expect(fixture.receipts()).toHaveLength(1);
+      expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId, origin: fixture.request.origin }]);
+      expect(fixture.journal.operationResult(fixture.request.operationId)?.receipt).toMatchObject({
+        status: "delivered", idempotencyKey: fixture.request.clientMessageId,
+      });
+    } finally { await fixture.close(); }
+  });
+}
+
+for (const cohort of ["registry", "journal", "operator"] as const) {
+  test(`update drain recovery: ${cohort} admitted recovery stays available under hold`, async () => {
+    const fixture = await drainRecoveryFixture(`admitted-${cohort}`);
+    try {
+      fixture.projectDead();
+      if (cohort === "operator") {
+        fixture.hold();
+        await enqueueStructuredMessage({ ...fixture.request, origin: { kind: "operator" } }, fixture.dependencies);
+      } else {
+        if (cohort === "registry") {
+          fixture.registry.holdDelivery(fixture.request.conversationId, fixture.request.text,
+            fixture.request.clientMessageId, "text", [], structuredContentDigest({ text: fixture.request.text, images: [] }),
+            { operationId: fixture.request.operationId, kind: "send", policy: "queue", origin: fixture.request.origin },
+            { recoveryIntent: "reclaimed-host" });
+        } else {
+          fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+            conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+          } });
+          fixture.journal.executeOperation({ kind: "send", operationId: fixture.request.operationId,
+            conversationId: fixture.request.conversationId, idempotencyKey: fixture.request.clientMessageId,
+            text: fixture.request.text, policy: "queue", origin: fixture.request.origin });
+          fixture.projectDead();
+        }
+        // A future boundary makes ordering deterministic without sleeping.
+        fixture.hold(new Date(Date.now() + 60_000).toISOString());
+        if (cohort === "registry") await fixture.drain();
+        else await kickStructuredDeliveryQueue();
+      }
+      for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+      expect(fixture.launches()).toBe(1);
+      expect(fixture.receipts()).toHaveLength(1);
+      expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId }]);
+    } finally { await fixture.close(); }
+  });
+}
+
+test("update drain recovery: queued agent rechecks admission after awaiting the account lock", async () => {
+  const fixture = await drainRecoveryFixture("queued-lock-race");
+  let unlock = () => {};
+  let lockEntered = () => {};
+  const entered = new Promise<void>(resolve => { lockEntered = resolve; });
+  const gate = new Promise<void>(resolve => { unlock = resolve; });
+  try {
+    fixture.projectDead();
+    fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+      conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+    } });
+    fixture.journal.executeOperation({ kind: "send", operationId: fixture.request.operationId,
+      conversationId: fixture.request.conversationId, idempotencyKey: fixture.request.clientMessageId,
+      text: fixture.request.text, policy: "queue", origin: fixture.request.origin });
+    fixture.projectDead();
+    let locked: Promise<void> | undefined;
+    fixture.beforeReservation(() => {
+      locked = withAccountMutationLockAsync(async () => { lockEntered(); await gate; });
+    });
+    const recovering = kickStructuredDeliveryQueue();
+    await entered;
+    // Recovery has reached account admission while this independent lease
+    // holds it. Close admission before allowing that reservation to proceed.
+    fixture.hold();
+    unlock();
+    await locked;
+    await recovering;
+    fixture.beforeReservation(() => {});
+    expect(fixture.launches()).toBe(0);
+    expect(fixture.receipts()).toHaveLength(0);
+    expect(fixture.journal.operationResult(fixture.request.operationId)?.receipt.status).toBe("queued");
+    releaseDrain(drainFile(), "queued-lock-race");
+    await kickStructuredDeliveryQueue();
+    expect(fixture.launches()).toBe(1);
+    expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId, origin: fixture.request.origin }]);
+  } finally { unlock(); await fixture.close(); }
+});
+
+/* The controller's own follow-up to a stage attempt (the verdict request, the
+   continuation after a provider cut) belongs to the attempt's cohort: a drain
+   that found the attempt running has to let it finish, and one that began
+   before the attempt was admitted keeps holding its follow-ups. */
+for (const projection of ["dead", "hosted"] as const) {
+  for (const cohort of ["before", "after"] as const) {
+    test(`update drain cohort: controller follow-up to an attempt admitted ${cohort} the drain began, ${projection} host`, async () => {
+      const name = `cohort-${cohort}-${projection}`;
+      const fixture = await drainRecoveryFixture(name);
+      try {
+        fixture.projectDead();
+        if (projection === "hosted") {
+          // The attempt's own turn ran and ended before the drain: an idle live host.
+          await enqueueStructuredMessage({ ...fixture.request, operationId: `${name}-brief`, clientMessageId: `${name}-brief`,
+            origin: { kind: "operator" } }, fixture.dependencies);
+          for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+          expect(fixture.launches()).toBe(1);
+          expect(fixture.ledger.writes).toMatchObject([{ id: `${name}-brief` }]);
+          fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+            conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+          } });
+        }
+        const before = fixture.ledger.writes.length;
+        const launched = fixture.launches();
+        const since = Date.now() - 60_000;
+        fixture.hold(new Date(since).toISOString());
+        const followUp = { ...fixture.request, origin: { kind: "agent" as const, role: "pipeline" },
+          cohortAt: new Date(since + (cohort === "before" ? -60_000 : 30_000)).toISOString() };
+        const result = await enqueueStructuredMessage(followUp, fixture.dependencies);
+        expect(result).toMatchObject({ ok: true, operationId: followUp.operationId });
+        for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+        if (cohort === "before") {
+          expect(fixture.ledger.writes.slice(before)).toMatchObject([{ id: followUp.operationId, origin: followUp.origin }]);
+          expect(fixture.launches()).toBe(projection === "dead" ? 1 : launched);
+          return;
+        }
+        expect(fixture.ledger.writes).toHaveLength(before);
+        expect(fixture.launches()).toBe(launched);
+        releaseDrain(drainFile(), name);
+        for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+        expect(fixture.ledger.writes.slice(before)).toMatchObject([{ id: followUp.operationId, origin: followUp.origin }]);
+      } finally { await fixture.close(); }
+    });
+  }
+}

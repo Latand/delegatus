@@ -5,13 +5,35 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { claudeKeychainService, readClaudeCredentials, replaceClaudeCredentials, type ClaudeCredentialPorts } from "./claudeCredentials";
+import { claudeKeychainService, claudeKeychainCredentialChangedAt, readClaudeCredentials, replaceClaudeCredentials, type ClaudeCredentialPorts } from "./claudeCredentials";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-credential-store-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const home = () => fs.mkdtempSync(path.join(root, "account-"));
 const fixture = () => crypto.randomUUID();
 const document = () => ({ claudeAiOauth: { accessToken: fixture(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 3600_000, scopes: ["user:inference", "user:profile"], subscriptionType: "max" } });
+
+test("Keychain repair time reads only bounded item metadata and refuses unverified dates", () => {
+  const dir = home();
+  const commands: string[][] = [];
+  let output = '    "mdat"<timedate>=0x32303236313030383030313030305A00  "20261008001000Z\\000"\n';
+  const ports: ClaudeCredentialPorts = { platform: "darwin", security: (args) => {
+    commands.push(args);
+    return { status: 0, stdout: output };
+  } };
+  expect(claudeKeychainCredentialChangedAt(dir, ports)).toBe(Date.parse("2026-10-08T00:10:00Z"));
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toContain("-a");
+  expect(commands[0]?.at(-1)).toBe(claudeKeychainService(dir));
+  expect(commands[0]).not.toContain("-w");
+  expect(commands[0]).not.toContain("-g");
+  for (const value of ['"mdat"<timedate>="20260230001000Z"', '"mdat"<timedate>="damaged"', '"cdat"<timedate>="20261008001000Z"']) {
+    output = value;
+    expect(claudeKeychainCredentialChangedAt(dir, ports)).toBeNull();
+  }
+  expect(claudeKeychainCredentialChangedAt(dir, { ...ports, security: () => ({ status: 51, stdout: output }) })).toBeNull();
+  expect(claudeKeychainCredentialChangedAt(dir, { ...ports, platform: "linux", security: () => { throw new Error("unexpected metadata read"); } })).toBeNull();
+});
 
 test("explicit account directories use the provider NFC hash, including the default directory", () => {
   const dir = "/fixture/cafe\u0301";
@@ -49,6 +71,7 @@ test("unsafe mode and symlinks cannot be bypassed through Keychain", () => {
   const dir = home(), file = path.join(dir, ".credentials.json");
   const ports: ClaudeCredentialPorts = { platform: "darwin", security: () => { throw new Error("must not read Keychain"); } };
   fs.writeFileSync(file, "{}", { mode: 0o644 });
+  fs.chmodSync(file, 0o644); // The unsafe fixture must survive a restrictive umask.
   expect(readClaudeCredentials(dir, ports)).toEqual({ state: "unsafe" });
   fs.unlinkSync(file); fs.symlinkSync(path.join(root, "missing"), file);
   expect(readClaudeCredentials(dir, ports)).toEqual({ state: "unsafe" });

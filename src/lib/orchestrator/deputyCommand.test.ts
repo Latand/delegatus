@@ -1,3 +1,5 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -245,4 +247,53 @@ test("a record another process wrote under the key after the pre-read is finishe
   expect(replay).toMatchObject({ ok: true, replayed: true, deputyConversationId: "conversation_ghost" });
   expect(calls.forks).toEqual([]);
   expect(calls.delivered).toEqual([]);
+});
+
+
+test("a stale composer cannot fall back to a replacement seat", async () => {
+  const { ports: current, calls } = ports({ seatBusy: async () => false });
+  expect(await askOrchestratorInParallel({ ...ask, seatConversationId: "old-seat" }, current)).toMatchObject({ ok: false, code: "seat_not_found" });
+  expect(calls.delivered).toEqual([]);
+});
+
+for (const scenario of ["local-queued", "local-held"] as const) {
+  test(`deputy mutations wait for a short ${scenario} holder`, async () => {
+    const holder = scenario === "local-queued" ? await foreignAccountHolder() : null;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const neighbor = withAccountMutationLockAsync(async () => {
+      entered();
+      if (scenario === "local-held") await Bun.sleep(8);
+    });
+    if (scenario === "local-held") await ready;
+    try {
+      holder?.releaseAfter(8);
+      const { ports: p, calls } = ports();
+      const result = await askOrchestratorInParallel(ask, p);
+      expect(result).toMatchObject({ ok: true });
+      expect(readDeputies()).toHaveLength(1);
+      expect(readDeputies()[0]?.state).toBe("active");
+      expect(calls.forks).toHaveLength(1);
+      expect(calls.delivered).toHaveLength(1);
+    } finally { await neighbor; await holder?.close(); }
+  });
+}
+
+test("a deputy queued behind a seat change rechecks authority before writing", async () => {
+  let current = seat;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const neighbor = withAccountMutationLockAsync(async () => {
+    entered();
+    await Bun.sleep(8);
+    current = { ...seat, seatEpoch: seat.seatEpoch + 1, conversationId: "conversation_replacement" };
+  });
+  await ready;
+  try {
+    const { ports: p, calls } = ports({ activeSeat: () => current });
+    expect(await askOrchestratorInParallel(ask, p)).toMatchObject({ ok: false, code: "seat_not_found" });
+    expect(readDeputies()).toEqual([]);
+    expect(calls.forks).toEqual([]);
+    expect(calls.delivered).toEqual([]);
+  } finally { await neighbor; }
 });

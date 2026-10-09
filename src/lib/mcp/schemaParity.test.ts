@@ -319,6 +319,23 @@ test("spawn_agent listTools publishes every registry role exactly once", async (
   });
 });
 
+test("spawn_agent, create_pipeline and pipeline_action publish the visual critic", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const tools = (await client.listTools()).tools;
+    const schema = (name: string) => tools.find((tool) => tool.name === name)?.inputSchema.properties as Record<string, {
+      enum?: string[]; items?: { properties?: { role?: { properties?: { roleId?: { enum?: string[] } } } } };
+      properties?: { role?: { properties?: { roleId?: { enum?: string[] } } }; roleId?: { enum?: string[] } };
+      anyOf?: { properties?: { roleId?: { enum?: string[] } } }[];
+    }>;
+    expect(schema("spawn_agent").role?.enum).toContain("visual-critic");
+    expect(schema("create_pipeline").stages?.items?.properties?.role?.properties?.roleId?.enum).toContain("visual-critic");
+    const action = schema("pipeline_action");
+    expect(action.stage?.properties?.role?.properties?.roleId?.enum).toContain("visual-critic");
+    const overrideRole = action.role?.properties ? action.role : action.role?.anyOf?.find((branch) => branch.properties);
+    expect(overrideRole?.properties?.roleId?.enum).toContain("visual-critic");
+  });
+});
+
 test("get_conversation listTools publishes every bounded tail target", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const listed = await client.listTools();
@@ -429,6 +446,9 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     expect(tool?.description).toContain("has this been solved before?");
     expect(tool?.description).toContain("conversation_messages");
     expect(tool?.description).toContain("byteOffset");
+    /* The second pass's mark is explained where the agent reads it. */
+    expect(tool?.description).toContain("A unit ending in ~ matched loosely");
+    expect(tool?.description).toContain("its fragment decides");
     expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",
@@ -697,6 +717,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
+    /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
     expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
     /* Terminal stages re-check the last fix; other stages follow the pass edge. */
     expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
@@ -729,6 +750,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
     expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
+    expect(tool?.description).toContain("fixes every handed finding and every in-spec discovery immediately");
+    expect(tool?.description).toContain("It returns fail only when blocked");
+    expect(tool?.description).toContain("It never returns fail for its own discovery");
+    expect(tool?.description).toContain("every in-spec discovery immediately");
+    expect(tool?.description).toContain("fixer's findings as notes for the reviewer");
     expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
     expect(stage?.access?.description).toContain("does not select the sandbox");
@@ -943,6 +969,29 @@ test("task coordinates publish finite axes and retain pinned-update position sem
   });
 });
 
+test("task writes advertise hold reasons and the additive checklist with stopping guidance", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const listed = await client.listTools();
+    for (const name of ["create_task", "update_task"] as const) {
+      const tool = listed.tools.find(entry => entry.name === name)!;
+      const properties = tool.inputSchema.properties as Record<string, { description?: string; enum?: string[]; items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; properties?: Record<string, { enum?: string[]; type?: string }> }> }>;
+      const holdSchema = properties.hold as typeof properties.hold & { properties?: Record<string, { enum?: string[]; type?: string }> };
+      const hold = holdSchema.properties ? holdSchema : holdSchema.anyOf?.find(part => part.type === "object") ?? {};
+      const stepsSchema = properties.steps as unknown as { items?: { properties?: Record<string, unknown> }; maxItems?: number; anyOf?: Array<{ type?: string; items?: { properties?: Record<string, unknown> }; maxItems?: number }> };
+      const steps = stepsSchema.items ? stepsSchema : stepsSchema.anyOf?.find(part => part.type === "array") ?? {};
+      expect(hold.properties?.kind.type).toBe("string");
+      expect(hold.properties?.kind.enum).toBeUndefined();
+      expect(hold.properties?.note.type).toBe("string");
+      expect(hold.properties).not.toHaveProperty("by");
+      expect(hold.properties).not.toHaveProperty("conversationId");
+      expect(steps.maxItems).toBe(20);
+      expect(steps.items?.properties).toHaveProperty("id");
+      expect(steps.items?.properties).toHaveProperty("state");
+      expect(tool.description).toContain("Stop work while waiting");
+    }
+  });
+});
+
 /* #1720 — membership is committed at the launch reservation from what the CALL
    carried, and both binding fields worked only because these schemas pass extra
    keys through: a caller reading the published tool contract could not find the
@@ -1047,6 +1096,8 @@ test("stage_report's field descriptions match the stage contract", async () => {
     const listed = await client.listTools();
     const tool = listed.tools.find((candidate) => candidate.name === "stage_report");
     const properties = tool?.inputSchema.properties as Record<string, { description?: string; items?: { properties?: Record<string, { description?: string }> } }> | undefined;
+    expect(properties?.blocked?.description).toContain("fixer cannot proceed");
+    expect(properties?.blockedReason?.description).toContain("independently of prose and output truncation");
     const verdict = properties?.verdict?.description ?? "";
     expect(verdict).not.toContain("retryable stage failure");
     expect(verdict).toContain("for a review, the findings that stand");

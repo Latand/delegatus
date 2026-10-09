@@ -1,3 +1,5 @@
+import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
@@ -44,7 +46,7 @@ import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
-import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { findSeatDeploymentByKey, recoverSeatDeploymentRequests, seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
   lookupOriginalSend,
@@ -160,7 +162,7 @@ const OWN_LANE_LIMIT = 20;
  * `absent` (#1465) is the record AFFIRMING it holds nothing under the key, for
  * a send that was never given an operation to ask about: the layer refused
  * before reserving anything. It is not proof of loss, so it settles nothing —
- * but it is what licenses the controller to re-dispatch the frozen payload
+ * but it is what licenses the controller to re-dispatch
  * under the same key, which the layer's per-key reservation keeps from ever
  * producing a second copy. Absence beside an operation id is `unknown`.
  */
@@ -345,7 +347,7 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
       return "unreachable";
     }
   };
-  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId });
+  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
   if (evidence.kind === "absent") {
     if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
     const journal = await asked(wake.operationId);
@@ -367,7 +369,24 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
     if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
     current = settled;
   }
-  if (current.state === "delivered") return { state: "landed", evidence: withRecord(current, "unasked") };
+  if (current.state === "delivered") {
+    // A caller may supply the generic resolver's late-confirmation projection.
+    // Preserve the provenance even when it has already projected arrival.
+    if (evidence.receipt.state !== "delivered" && ports.confirmed) {
+      let confirmed = false;
+      try { confirmed = await ports.confirmed(wake, evidence.operationId); } catch { /* The delivered receipt still stands. */ }
+      if (confirmed) {
+        const journal = await asked(evidence.operationId);
+        const written = await ports.settleFromJournal?.(
+          { conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId },
+          { status: "delivered", reason: null },
+        );
+        return { state: "landed", evidence: { ...withRecord(written ?? evidence.receipt, journal), confirmation: "claude-ledger",
+          ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+      }
+    }
+    return { state: "landed", evidence: withRecord(current, "unasked") };
+  }
   /* `safe` is the fenced, proven non-delivery and the only failure the record
      alone can license raising the wake again on. */
   if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
@@ -443,6 +462,8 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
+  diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
@@ -472,6 +493,8 @@ export interface SeatTickSources {
       `deploy_exact_sha` recorded them. Absent reads as none, which is how a
       harness that does not model deploys stays exactly as it was. */
   seatDeployments?: (conversationId: string) => readonly SeatDeploymentRecord[];
+  /** Serialized, read-only recovery of an original deployment admission. */
+  deploymentByKey?: typeof findSeatDeploymentByKey;
   /** One deployment off the ledger by id (#2063). Absent reads as none. */
   deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
@@ -608,6 +631,12 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    seatTurnOutcome: async (conversationId) => {
+      const conversation = agentRegistry().conversation(conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
+      return readSeatTurnOutcome(conversation.engine, generation.path);
+    },
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -630,7 +659,9 @@ export function defaultSeatTickSources(): SeatTickSources {
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
+    deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
+    diskPressure: () => readDiskPressure(),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
@@ -971,16 +1002,17 @@ const SEAT_DEPLOY_LIMIT = 5;
  * cannot be read for one deployment leaves it out of this check only; the
  * next check asks again, and nothing is announced that was not seen.
  */
-function settledSeatDeploys(
+async function settledSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   context: { now: number; backlogAfterMs: number },
   sources: SeatTickSources,
-): SeatTickDeployInput[] {
+): Promise<SeatTickDeployInput[]> {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
   const settled: SeatTickDeployInput[] = [];
   let records: readonly SeatDeploymentRecord[];
   try {
+    if (sources.deploymentByKey) await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey);
     records = sources.seatDeployments(seat.conversationId);
   } catch {
     return [];
@@ -1056,7 +1088,10 @@ function activityOf(record: AgentLivenessRecord | undefined): SeatTickActivity |
  * "dead", and a lane with no row is a lane the tick has no stall evidence
  * about — which the decision reads as "still in flight", never as "stuck".
  */
-async function laneActivity(project: string, policy: SeatTickPolicy, sources: SeatTickSources): Promise<Map<string, SeatTickActivity>> {
+async function laneActivity(
+  project: string, policy: SeatTickPolicy, sources: SeatTickSources,
+  stages: ReadonlyMap<string, { stageId: string | null; number: number | null; conversationId: string | null }>,
+): Promise<Map<string, SeatTickActivity>> {
   const byPipeline = new Map<string, SeatTickActivity>();
   let rows: AgentLivenessRecord[];
   try {
@@ -1065,8 +1100,12 @@ async function laneActivity(project: string, policy: SeatTickPolicy, sources: Se
     return byPipeline;
   }
   for (const row of rows) {
-    const pipelineId = row.pipeline?.pipelineId;
-    if (!pipelineId || byPipeline.has(pipelineId)) continue;
+    const reference = row.pipeline;
+    if (!reference || byPipeline.has(reference.pipelineId)) continue;
+    const stage = stages.get(reference.pipelineId);
+    if (!stage || reference.stageId !== stage.stageId || reference.attempt !== stage.number
+      || row.conversationId !== stage.conversationId) continue;
+    const pipelineId = reference.pipelineId;
     const activity = activityOf(row);
     if (activity) byPipeline.set(pipelineId, activity);
   }
@@ -1320,11 +1359,28 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   return found;
 }
 
-export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending">): SeatTickSignalInput[] {
+async function diskPressureSignals(sources: SeatTickSources): Promise<SeatTickSignalInput[]> {
+  if (!sources.diskPressure) return [];
+  let pressure: DiskPressure;
+  try {
+    pressure = await sources.diskPressure();
+  } catch {
+    /* A failed volume read wakes nobody; the System panel still shows the last one. */
+    return [];
+  }
+  /* One item per episode: it waits for the consumer sizes, so the one the
+     orchestrator gets names them. */
+  return pressure.episode && diskPressureWakeReady(pressure) ? [{ id: "disk-space", episode: pressure.episode, label: diskPressureLabel(pressure) }] : [];
+}
+
+export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending"> & Pick<Partial<AutoState>, "drain">): SeatTickSignalInput[] {
   if (auto.off) return [{ id: "self-update-off", label: `self-update: automatic updates turned off — ${auto.off.reason}` }];
-  if (auto.noticeAt && auto.waitingSince) {
-    const counts = [auto.lastBlockers?.turns ? `${auto.lastBlockers.turns} agent turns` : "", auto.lastBlockers?.stages ? `${auto.lastBlockers.stages} stages` : ""].filter(Boolean).join(", ");
-    return [{ id: "self-update-wait", label: `self-update: ${auto.waitingTarget?.slice(0, 7) ?? "built release"} has waited over 24 h for a quiet moment${counts ? ` (${counts})` : ""}` }];
+  if (auto.drain?.overranAt) {
+    const blockers = auto.drain.blockers;
+    const names = [...(blockers?.stageList ?? []).map((stage) => `${stage.stageId} · ${stage.task}`),
+      ...(blockers?.turnList ?? []).map((turn) => turn.seat ? turn.project ?? turn.conversationId : `${turn.engine} · ${turn.conversationId}`)].join(", ");
+    if (auto.drain.acknowledgedAt) return [];
+    return [{ id: "self-update-drain-overran", label: `self-update: admission remains held after 6 h; still blocked by ${names || "unreadable activity"}; the operator can deploy now or keep waiting in Needs-you` }];
   }
   return [];
 }
@@ -2150,6 +2206,97 @@ async function childWork(
   return { children, unavailable: worstChildrenGap(gaps) };
 }
 
+function stageAttempt(lane: Pipeline) {
+  const stageId = lane.cursor?.stageId;
+  return stageId ? lane.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) ?? null : null;
+}
+
+function stageAttemptIdentity(lane: Pipeline): string | null {
+  const attempt = stageAttempt(lane);
+  return attempt ? JSON.stringify([attempt.n, attempt.conversationId ?? null, attempt.startedAt ?? null]) : null;
+}
+
+/** Refresh the cheap durable alarm sources after asynchronous evidence reads.
+ * Liveness belongs to the stage that was observed; a new stage inherits none.
+ */
+export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTickSources): SeatTickCheckInput {
+  const now = sources.now();
+  const hotLanes = sources.pipelines();
+  const openLanes = hotLanes.filter((lane) => isOpen(lane) && canonicalOrchestratorProject(lane.project) === input.project);
+  const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
+  const previous = new Map(input.pipelines.map((lane) => [lane.id, lane]));
+  const pipelines = openLanes.map((lane, index): SeatTickPipelineInput => ({
+    id: lane.id, title: evidence[index]!.title, state: evidence[index]!.state, updatedAt: evidence[index]!.updatedAt,
+    stageId: lane.cursor?.stageId ?? null,
+    stageAttempt: stageAttemptIdentity(lane),
+    stageActivity: previous.get(lane.id)?.stageId === (lane.cursor?.stageId ?? null)
+      && previous.get(lane.id)?.stageAttempt === stageAttemptIdentity(lane)
+      && previous.get(lane.id)?.updatedAt === evidence[index]!.updatedAt
+      ? previous.get(lane.id)?.stageActivity ?? null : null,
+    ...(lane.state === "paused" ? { pausedBy: pausedBy(lane, input.seat) } : {}),
+  }));
+  const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
+    .filter((task) => canonicalOrchestratorProject(task.project) === input.project);
+  const taskEvidence = evidenceFromTasks(board.map(taskSummary));
+  const linked = board.some((task) => task.machine) ? linkedContext() : null;
+  const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
+    id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: taskEvidence[index]!.owner !== null,
+    updatedAt: task.updatedAt ?? null,
+    ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
+  }));
+  const ownLanes = ownSettledLanes(input.project, input.seat, input.state.announcedLanes ?? [], hotLanes);
+  const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
+  return {
+    ...input, now, pipelines, tasks, ownLanes,
+    events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
+    settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
+    changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
+  };
+}
+
+/** The source read completed, but its evidence key moved again before the
+ * alarm could use it. Keep the refreshed gap available to the controller so
+ * canceling an unsent alarm does not erase a real source failure. */
+export class SeatTickEvidenceRefreshCanceledError extends Error {
+  constructor(readonly pullRequestGap: SeatTickSourceGap | null) {
+    super("Seat alarm sources changed while refreshing pull-request evidence; retry on the next tick");
+    this.name = "SeatTickEvidenceRefreshCanceledError";
+  }
+}
+
+/** The local gates and lane associations under which PR evidence was read.
+ * A note edit needs no subprocess; eligibility or lane changes do.
+ */
+function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): string {
+  return crypto.createHash("sha256").update(JSON.stringify([
+    input.settings.enabled,
+    seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
+    input.settings.wakeIntervalMs,
+    input.seat ? seatTurnProgressing(input.seat) : null,
+    sources.pipelines().filter(lane => canonicalOrchestratorProject(lane.project) === input.project),
+  ])).digest("hex");
+}
+
+/** Revalidate gated evidence too when fresh state changes its question. A
+ * second concurrent change leaves this check unsent for the next tick.
+ */
+export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
+  let fresh = refreshSeatTickInput(input, sources);
+  const key = pullRequestEvidenceKey(fresh, sources);
+  if (key === input.pullRequestEvidenceKey) return fresh;
+  const evidence = await unmergedPullRequests({
+    project: fresh.project, seat: fresh.seat,
+    wakeDue: seatTickWakeDue(fresh.state.lastWakeAt, fresh.now, fresh.settings.wakeIntervalMs),
+    enabled: fresh.settings.enabled, now: fresh.now, wakeIntervalMs: fresh.settings.wakeIntervalMs,
+    gap: fresh.state.pullRequestGap, sources,
+  });
+  fresh = refreshSeatTickInput({ ...fresh, pullRequests: evidence.pullRequests,
+    pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
+    state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
+  if (pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
+  return fresh;
+}
+
 export async function gatherSeatTickInput(
   project: string,
   state: SeatTickProjectState,
@@ -2164,14 +2311,20 @@ export async function gatherSeatTickInput(
   const hotLanes = sources.pipelines();
   const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
-  const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources) : new Map<string, SeatTickActivity>();
+  const observedStages = new Map(openLanes.map((lane) => {
+    const attempt = stageAttempt(lane);
+    return [lane.id, { stageId: lane.cursor?.stageId ?? null, attempt: stageAttemptIdentity(lane),
+      number: attempt?.n ?? null, conversationId: attempt?.conversationId ?? null }] as const;
+  }));
+  const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources, observedStages) : new Map<string, SeatTickActivity>();
   const pipelines: SeatTickPipelineInput[] = openLanes.map((pipeline, index) => ({
     id: pipeline.id,
     title: evidence[index]!.title,
     state: evidence[index]!.state,
     updatedAt: evidence[index]!.updatedAt,
     stageActivity: activity.get(pipeline.id) ?? null,
-    stageId: pipeline.cursor?.stageId ?? null,
+    stageId: observedStages.get(pipeline.id)!.stageId,
+    stageAttempt: observedStages.get(pipeline.id)!.attempt,
     ...(pipeline.state === "paused" ? { pausedBy: pausedBy(pipeline, seat) } : {}),
   }));
 
@@ -2193,7 +2346,7 @@ export async function gatherSeatTickInput(
 
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
   const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
-  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
   let endedMaintenance: readonly MaintenanceRun[] = [];
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
@@ -2221,6 +2374,7 @@ export async function gatherSeatTickInput(
   const childrenGap = !seat ? state.childrenGap
     : childrenUnavailable ? seatTickSourceGapAfterFailure(state.childrenGap, childrenUnavailable, new Date(now).toISOString()) : null;
   const harvestedChildren = state.harvestedChildren;
+  const pullRequestEvidenceKeyAtRead = pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
   const { pullRequests, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,
@@ -2246,7 +2400,8 @@ export async function gatherSeatTickInput(
     events,
     pullRequests,
     pullRequestsUnavailable,
-    signals: signals(canonical, seat, sources),
+    pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
+    signals: [...signals(canonical, seat, sources), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

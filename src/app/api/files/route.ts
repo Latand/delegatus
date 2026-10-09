@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import { bridgeReportLogSignature } from "@/lib/bridge/store";
 import { stateDir, statePath } from "@/lib/configDir";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES, type StateWriteHealth } from "@/lib/state/diskFull";
@@ -257,11 +259,15 @@ function projectionBaseKey(
   })).digest("hex");
 }
 
+/* `agent` is a caller that presented a capability: its body leaves out what
+   the board read may not show an agent (a task's prototype review), so it is
+   never the operator's cached body, its ETag or a delta from either. */
 function projectionScopeKey(
   pinnedPath: string | undefined,
   summary = false,
+  agent = false,
 ): string {
-  return JSON.stringify(summary ? [pinnedPath ?? null, "summary"] : [pinnedPath ?? null]);
+  return JSON.stringify([pinnedPath ?? null, ...(summary ? ["summary"] : []), ...(agent ? ["agent"] : [])]);
 }
 
 function projectionKey(baseKey: string): string {
@@ -555,7 +561,7 @@ export async function GET(request: Request): Promise<Response> {
   // This live health poll must work while writes and durable events are refused.
   // Return before presence, scans, migrations and projection-worker transport.
   if (url.searchParams.get("view") === "storage-health") {
-    return Response.json(currentWriteHealth(), { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ...currentWriteHealth(), registryIssues: pipelineRegistryHealth() }, { headers: { "Cache-Control": "no-store" } });
   }
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
@@ -583,7 +589,8 @@ export async function GET(request: Request): Promise<Response> {
      only delays that scan and can form a self-sustaining retry storm. */
   const previousEtag = request.headers.get("if-none-match");
   const summary = url.searchParams.get("view") === "summary";
-  const scopeKey = projectionScopeKey(pinnedPath, summary);
+  const agent = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
+  const scopeKey = projectionScopeKey(pinnedPath, summary, agent);
   const waiting = projectionCache().get(scopeKey)?.representation;
   if (requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag
     && currentWriteHealth().state === "ok" && waiting && withCurrentWriteHealth(waiting).etag === previousEtag) {
@@ -600,7 +607,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const baseKey = projectionBaseKey(scan, pinnedPath);
   const key = projectionKey(baseKey);
-  if (!summary) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
+  /* The persisted body is the operator's. */
+  if (!summary && !agent) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
   const cached = projectionCache().get(scopeKey)?.representation;
   const projected: ProjectionResult = filesystemExhausted() && cached
     ? { representation: cached, cacheStatus: "stale" }

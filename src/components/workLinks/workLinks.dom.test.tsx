@@ -130,15 +130,21 @@ const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
 };
-/* A task card draws one ⋯ (#2148): each lane's actions are a group in it,
-   headed by the lane's title when the card holds more than one. */
-const menuRows = () => [...document.querySelectorAll<HTMLElement>('.menu .head, .menu [role^="menuitem"]')];
-const laneAttach = (host: HTMLElement, laneTitle: string) => {
+/* A task card draws one ⋯ (#2148): its lanes are one row of it, which lists
+   them by title when the card holds more than one, and each opens its own
+   actions as a page. */
+const openLanes = (host: HTMLElement) => {
   click(card(host).querySelector("[data-menu]"));
-  const rows = menuRows();
-  const head = rows.findIndex((row) => row.classList.contains("head") && row.textContent === laneTitle);
-  expect(head).toBeGreaterThan(-1);
-  return rows.slice(head + 1).find((row) => row.textContent?.includes("Attach PR or issue to the pipeline…"));
+  click(document.querySelector('.menu [data-cm-section="pipelines"]'));
+};
+const attachOf = (laneTitle: string) => {
+  click([...document.querySelectorAll<HTMLElement>(".menu [data-cm-section]")].find((row) => row.querySelector(".lbl")?.firstChild?.textContent === laneTitle));
+  expect(document.querySelector(".menu [data-cm-back]")?.textContent).toBe(laneTitle);
+  return [...document.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].find((row) => row.textContent?.includes("Attach PR or issue to the pipeline…"));
+};
+const laneAttach = (host: HTMLElement, laneTitle: string) => {
+  openLanes(host);
+  return attachOf(laneTitle);
 };
 
 test("each lane row draws its own chips at the end of its chain line, and a lane with no PR says so as plain text", async () => {
@@ -188,13 +194,13 @@ test("the card's ⋯ names the task's Attach and each lane's apart, and a lane's
   await tick();
   /* The lane draws no ⋯ of its own on a task card. */
   expect(card(host).querySelector('.pblock[data-pipeline="p-two"] [data-pipeline-menu]')).toBeNull();
-  const attach = laneAttach(host, "A lane with nothing published");
-  const labels = menuRows().map((row) => `${row.classList.contains("head") ? "head" : "item"}:${row.querySelector(".lbl")?.firstChild?.textContent ?? row.textContent}`);
-  expect(labels.filter((label) => label.includes("Attach PR or issue") || label.startsWith("head:"))).toEqual([
-    "head:Move to", "head:Colour", "item:Attach PR or issue…",
-    "head:Header chips", "item:Attach PR or issue to the pipeline…",
-    "head:A lane with nothing published", "item:Attach PR or issue to the pipeline…",
-  ]);
+  click(card(host).querySelector("[data-menu]"));
+  /* The task's own Attach is an icon cell at rest, apart from the lanes' behind their row. */
+  expect([...document.querySelectorAll('.menu .cm-quick [role="menuitem"]')].map((cell) => cell.getAttribute("aria-label"))).toContain("Attach PR or issue…");
+  expect([...document.querySelectorAll('.menu [role^="menuitem"]')].some((row) => row.textContent?.includes("to the pipeline"))).toBe(false);
+  click(document.querySelector('.menu [data-cm-section="pipelines"]'));
+  expect([...document.querySelectorAll(".menu [data-cm-section] .lbl")].map((label) => label.firstChild?.textContent)).toEqual(["Header chips", "A lane with nothing published"]);
+  const attach = attachOf("A lane with nothing published");
   click(attach);
   await tick();
   const input = document.querySelector<HTMLInputElement>('[data-work-links-panel="pipeline:p-two"] [data-work-link-input]')!;

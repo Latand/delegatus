@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { loadTasks } from "@/lib/tasks/store";
 
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -7,9 +12,10 @@ import type { FileEntry } from "@/lib/types";
 import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { buildPhoneKanban } from "@/components/mobile/phoneKanbanModel";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
-import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, workingStageConversations } from "./kanbanModel";
+import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations, type KanbanCard } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -76,11 +82,11 @@ function layout(files: readonly FileEntry[]): SchemeLayout {
   } as unknown as SchemeLayout;
 }
 
-function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; query?: string; overrides?: Map<string, TaskStatus> } = {}) {
+function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options: { pipelines?: Pipeline[]; query?: string; overrides?: Map<string, TaskStatus>; reasonFilter?: "needs-you" | "queued" | "waiting" | "postponed" | "no-reason"; cardFilter?: (card: KanbanCard) => boolean } = {}) {
   const pipelines = options.pipelines ?? [];
   const projection = projectTaskWorkflows([...tasks], pipelines, [], [...files]);
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task", deferDoneVisibility: true });
-  return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, statusOverrides: options.overrides, now: NOW });
+  return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, cardFilter: options.cardFilter, reasonFilter: options.reasonFilter, statusOverrides: options.overrides, now: NOW });
 }
 
 test("every stored task is a card in exactly one column or counted off the board, at a thousand tasks", () => {
@@ -306,7 +312,12 @@ test("a stage in flight puts its card among the working ones, and a paused lane'
   const lane = buildingLane("pipeline-staged", "staged", { startedAt: iso(NOW - 600) });
   const order = (pipelines: Pipeline[]) => model(tasks, [quiet], { pipelines }).columns.assigned.cards.map((card) => card.task!.id);
   expect(order([lane])).toEqual(["staged", "quiet"]);
-  expect(order([{ ...lane, state: "paused", pausedState: "running" } as Pipeline])).toEqual(["quiet", "staged"]);
+  const paused = { ...lane, state: "paused", pausedState: "running" } as Pipeline;
+  // Declared waiting comes before work stopped without a reason.
+  expect(order([paused])).toEqual(["staged", "quiet"]);
+  const held = model(tasks, [quiet], { pipelines: [paused] }).columns.assigned.cards[0]!;
+  expect(held.motion.key).toBe("waiting");
+  expect(cardHasLiveWork(held)).toBe(false);
 });
 
 test("a card's agent work counts every attempt of its lanes, including a stage conversation the board draws nowhere", () => {
@@ -689,6 +700,12 @@ test("a draft stands in Assigned, unless a reader is open in a card there: then 
   expect(draftCard(new Set(["conversation_fixture_9"])).status).toBe("assigned");
   /* The agent in Assigned is open to read: a draft above it would push it out of the window. */
   expect(draftCard(new Set([conversationIdentity(live)])).status).toBe("inbox");
+  /* Nothing has started on a card of drafts alone, in Assigned or in Inbox: it is not stopped, and no reason is missing. */
+  for (const readers of [undefined, new Set([conversationIdentity(live)])]) {
+    const card = draftCard(readers);
+    expect(card.motion.key).toBe("not-started");
+    expect(taskReasonFiltersOfCard(card)).toEqual([]);
+  }
 });
 
 
@@ -716,6 +733,50 @@ test("a launched card with its reader open lands under the agent being read, whe
   /* A reader on a card the page did not launch is never moved. */
   const otherBoth = new Set([conversationIdentity(read), conversationIdentity(other)]);
   expect(order(otherBoth, isLaunched)).toEqual(order(otherBoth));
+});
+
+
+test("a launched card whose turn ended keeps its place under the agent being read while both readers stay open", () => {
+  const working = (startedAt: number) => ({ activity: "live" as const, proc: "running" as const, authoritativeTurn: { state: "busy" as const, source: "lifecycle" as const, terminalAt: null }, lastTurn: { startedAt, endedAt: null } });
+  const read = file(1, { ...working(NOW * 1_000 - 1_000), mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1, activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: "2026-09-14T12:30:00.000Z" } });
+  const other = file(3, { ...working(NOW * 1_000 - 9_000), mtime: NOW - 2_000 });
+  const tasks = [task("read", "assigned", [read.path]), task("launched", "assigned", [launchedFile.path]), task("other", "assigned", [other.path])];
+  const files = [read, launchedFile, other];
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const both = new Set([conversationIdentity(read), conversationIdentity(launchedFile)]);
+  /* The finished card sorts under every working one: without the rule a card stands between it and the card being read. */
+  expect(order(both)).toEqual(["read", "other", "launched"]);
+  expect(order(both, isLaunched)).toEqual(["read", "launched", "other"]);
+  /* Closing the launched card's reader lets it sort as any other. */
+  expect(order(new Set([conversationIdentity(read)]), isLaunched).at(-1)).toBe("launched");
+});
+
+
+test("a launched card with its reader open stands first when no other card is read, above a needs-you card", () => {
+  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000 });
+  const launchedFile = file(2, { mtime: NOW - 1 });
+  const tasks = [task("asking", "assigned", [asking.path]), task("launched", "assigned", [launchedFile.path])];
+  const files = [asking, launchedFile];
+  const base = layout(files);
+  const projection = projectTaskWorkflows([...tasks], [], [], files);
+  const bands = buildTaskBands(base, { tasks, projection, untitled: "Untitled task" });
+  const isLaunched = (entry: FileEntry) => entry.path === launchedFile.path;
+  const order = (openReaders: ReadonlySet<string>, launched?: (entry: FileEntry) => boolean) =>
+    buildKanbanModel({ bands, tasks, pipelines: [], projection, files, openReaders, launched, now: NOW })
+      .columns.assigned.cards.map((card) => card.task!.id);
+  const reading = new Set([conversationIdentity(launchedFile)]);
+  /* The motion order puts the needs-you card first; the launched card being read takes the window's top. */
+  expect(order(new Set())).toEqual(["asking", "launched"]);
+  expect(order(reading)).toEqual(["asking", "launched"]);
+  expect(order(reading, isLaunched)).toEqual(["launched", "asking"]);
+  /* A reader open on the needs-you card keeps the launched card under it. */
+  expect(order(new Set([...reading, conversationIdentity(asking)]), isLaunched)).toEqual(["asking", "launched"]);
 });
 
 
@@ -1123,4 +1184,241 @@ test("done expiry uses the board clock and preserves the seat, fresh decisions a
   expect(later.offBoard.map((task) => task.id)).toEqual(["expired"]);
   const reopened = buildKanbanModel({ ...input, now: NOW + 2, statusOverrides: new Map([["expired", "assigned" as const]]) });
   expect(reopened.columns.assigned.cards.map((card) => card.task!.id)).toEqual(["expired"]);
+});
+
+// A finished conversation must not hide a task that has stopped.
+test("motion identifies stopped assigned work even with finished conversations", () => {
+  const ended = file(990, { activity: "idle" });
+  const board = model([task("t990", "assigned", [ended.path]), task("t991", "blocked")], [ended]);
+  for (const status of ["assigned", "blocked"] as const) {
+    const card = board.columns[status].cards[0]!;
+    expect(card.motion.key).toBe("stopped");
+    expect(cardHasLiveWork(card)).toBe(false);
+  }
+});
+
+
+test("holds and provisioning use one motion in cards, headers and the Overview filter", () => {
+  const hold = { kind: "operator" as const, note: "Choose what to publish", since: "2026-10-02T09:00:00.000Z", by: "agent" as const };
+  const tasks = [task("t901", "blocked", [], { hold }), task("t902", "assigned"), task("t903", "blocked", [], { hold: { ...hold, kind: "worker" } })];
+  const lane = buildingLane("provisioning-lane", "t902", { startedAt: "2026-10-02T09:00:00.000Z" });
+  lane.state = "provisioning";
+  const board = model(tasks, [], { pipelines: [lane] });
+  expect(board.columns.blocked.needsYou).toBe(1);
+  expect(board.columns.assigned.working).toBe(1);
+  expect(board.totals.working).toBe(1);
+  const live = [...board.columns.assigned.cards, ...board.columns.blocked.cards].filter(cardHasLiveWork);
+  expect(live.map(card => card.task!.id).sort()).toEqual(["t901", "t902"]);
+  expect(board.columns.blocked.cards.find(card => card.task!.id === "t903")?.motion.key).toBe("waiting");
+});
+
+test("reason filters expose represented categories and narrow cards without changing counts", () => {
+  const since = "2026-10-02T09:00:00.000Z";
+  const cards = [
+    task("queued-reason", "blocked", [], { hold: { kind: "worker", note: "After capacity frees", since, by: "operator" } }),
+    task("waiting-reason", "blocked", [], { hold: { kind: "pr", ref: "123", note: "After merge", since, by: "operator" } }),
+    task("postponed-reason", "blocked", [], { hold: { kind: "postponed", note: "After checks", since, until: "2026-10-04T09:00:00.000Z", by: "operator" } }),
+    task("bare-reason", "blocked"),
+    task("operator-reason", "blocked", [], { hold: { kind: "operator", note: "Choose a plan", since, by: "operator" } }),
+  ];
+  const all = model(cards, []);
+  expect(new Set(all.columns.blocked.cards.flatMap(card => taskReasonFiltersOfCard(card))).size).toBe(5);
+  expect(all.columns.blocked.noReason).toBe(1);
+  const narrowed = model(cards, [], { reasonFilter: "queued" });
+  expect(narrowed.columns.blocked.shown.map(card => card.task?.id)).toEqual(["queued-reason"]);
+  expect(narrowed.columns.blocked.cards).toHaveLength(5);
+  expect(narrowed.columns.blocked.noReason).toBe(all.columns.blocked.noReason);
+});
+
+test("step pipeline references derive motion and group the remaining reasons", () => {
+  const held = { kind: "worker" as const, note: "When capacity is free", since: "2026-10-02T09:00:00.000Z", by: "agent" as const };
+  const t = task("step-task", "assigned", [], { steps: [
+    { id: "done", text: "Fixed cause", state: "done" },
+    { id: "live", text: "Ship fix", state: "open", ref: "step-lane" },
+    { id: "queued", text: "Remaining cause", state: "open", hold: held },
+  ] });
+  const lane = buildingLane("step-lane", t.id, { startedAt: "2026-10-02T09:00:00.000Z" });
+  const card = model([t], [], { pipelines: [lane] }).columns.assigned.cards[0]!;
+  expect(card.motion.key).toBe("working");
+  expect(card.stepSummary).toMatchObject({ done: 1, total: 3, open: 2, working: 1, needsYou: 0, reasons: [{ kind: "queued", note: "When capacity is free", count: 1 }] });
+  expect(taskReasonFiltersOfCard(card)).toContain("queued");
+  expect(taskReasonFiltersOfCard(card)).not.toContain("no-reason");
+
+  const allWorking = task("all-working", "assigned", [], { steps: [
+    { id: "one", text: "One", state: "open", ref: "all-working-lane", hold: held },
+    { id: "two", text: "Two", state: "open", ref: "all-working-lane", hold: held },
+  ] });
+  const workingLane = buildingLane("all-working-lane", allWorking.id, { startedAt: "2026-10-02T09:00:00.000Z" });
+  const workingCard = model([allWorking], [], { pipelines: [workingLane] }).columns.assigned.cards[0]!;
+  expect(workingCard.stepSummary).toMatchObject({ working: 2, reasons: [] });
+  expect(taskReasonFiltersOfCard(workingCard)).not.toContain("queued");
+  expect(taskReasonFiltersOfCard(workingCard)).not.toContain("no-reason");
+  const pausedTask = task("paused-step-task", "assigned", [], { steps: [{ id: "pause", text: "Wait for review", state: "open", ref: "paused-step-lane" }] });
+  const paused = buildingLane("paused-step-lane", pausedTask.id, { startedAt: "2026-10-02T09:00:00.000Z" });
+  paused.state = "paused";
+  paused.pausedAt = "2026-10-02T09:30:00.000Z";
+  const pausedCard = model([pausedTask], [], { pipelines: [paused] }).columns.assigned.cards[0]!;
+  expect(pausedCard.motion).toMatchObject({ key: "waiting", reason: "paused", since: paused.pausedAt });
+});
+
+
+test("zero-member in-flight and step work agree in header, column and Overview totals", () => {
+  const t = task("t904", "assigned", [], { steps: [{ id: "live", text: "Run the cause", state: "open", ref: "step-work" }] });
+  const stepLane = buildingLane("step-work", t.id, { startedAt: iso(NOW - 60) });
+  const inFlight = task("t905", "assigned");
+  const inFlightLane = buildingLane("in-flight", inFlight.id, { startedAt: iso(NOW - 60) });
+  for (const [entry, lane] of [[t, stepLane], [inFlight, inFlightLane]] as const) {
+    const board = model([entry], [], { pipelines: [lane], cardFilter: cardHasLiveWork });
+    expect(board.columns.assigned.cards[0]!.members).toHaveLength(0);
+    expect(board.columns.assigned.cards[0]!.motion.key).toBe("working");
+    expect(board.totals.working).toBe(1);
+    expect(board.columns.assigned.working).toBe(1);
+    expect(board.columns.assigned.shown).toHaveLength(1);
+  }
+});
+
+test("a step operator hold keeps its note, age, needs-you total and first position", () => {
+  const hold = { kind: "operator" as const, note: "Choose release A or B", since: iso(NOW - 1200), by: "agent" as const };
+  const board = model([task("t906", "blocked"), task("t907", "blocked", [], { steps: [{ id: "ask", text: "Choose release", state: "open", hold }] })], []);
+  const card = board.columns.blocked.cards[0]!;
+  expect(card.task?.id).toBe("t907");
+  expect(card.motion).toMatchObject({ key: "needs-you", reason: hold, since: hold.since });
+  expect(card.stepSummary?.needsYou).toBe(1);
+  expect(board.columns.blocked.needsYou).toBe(1);
+  expect(board.totals.needsYou).toBe(1);
+});
+
+
+test("hidden provisioning work remains in the header but outside the visible columns", () => {
+  const hidden = task("t908", "assigned", [], { groupHidden: { at: iso(NOW), by: "operator", admitted: [] } });
+  const lane = buildingLane("hidden-provisioning", hidden.id, { startedAt: iso(NOW - 60) });
+  lane.state = "provisioning";
+  const board = model([hidden], [], { pipelines: [lane] });
+  expect(board.hiddenGroups).toHaveLength(1);
+  expect(board.hiddenGroups[0]!.motion.key).toBe("working");
+  expect(board.totals.working).toBe(1);
+  expect(board.columns.assigned.working).toBe(0);
+  expect(board.columns.assigned.shown).toHaveLength(0);
+});
+
+test("operator-held steps retain attention across paused and running references", () => {
+  const hold = { kind: "operator" as const, note: "Choose release A or B", since: iso(NOW - 1200), by: "agent" as const };
+  for (const state of ["paused", "running"] as const) {
+    const entry = task("t910", "blocked", [], { steps: [{ id: "ask", text: "Choose release", state: "open", ref: "held-step", hold }] });
+    const lane = buildingLane("held-step", entry.id, { startedAt: iso(NOW - 600) });
+    lane.state = state;
+    lane.pausedAt = iso(NOW - 300);
+    const board = model([task("t909", "blocked"), entry], [], { pipelines: [lane] });
+    const card = board.columns.blocked.cards[0]!;
+    expect(card.task?.id).toBe(entry.id);
+    expect(card.motion).toMatchObject({ key: "needs-you", reason: hold, since: hold.since });
+    expect(card.stepSummary).toMatchObject({ open: 1, needsYou: 1, working: 0 });
+    expect(board.columns.blocked.needsYou).toBe(1);
+    expect(board.totals.needsYou).toBe(1);
+    const phone = buildPhoneKanban({ model: board, now: NOW });
+    expect(phone.columns.blocked.needsYou).toBe(1);
+    expect(phone.columns.blocked.pinned).toHaveLength(1);
+    expect(phone.columns.blocked.pinned[0]!.card.id).toBe(card.id);
+    expect(phone.columns.blocked.pinned[0]!.edge).toBe("warning");
+  }
+});
+
+test("terminal steps do not manufacture work while passed stages await publication", () => {
+  for (const state of ["done", "dropped", "open"] as const) {
+    const entry = task("t911", "done", [], { steps: [{ id: "publish", text: "Publish the fix", state, ref: "unpublished" }] });
+    const lane = buildingLane("unpublished", entry.id, { startedAt: iso(NOW - 600) });
+    lane.cursor!.state = "committing";
+    Object.assign(lane.runs[0]!.attempts[0]!, { state: "passed", verdict: "pass", completedAt: iso(NOW - 60) });
+    const board = model([entry], [], { pipelines: [lane], cardFilter: cardHasLiveWork });
+    const card = board.columns.done.cards[0]!;
+    expect(card.members).toHaveLength(0);
+    expect(card.pipelines[0]!.chips.map(chip => chip.state)).toEqual(["passed", "pending"]);
+    expect(card.motion.key).toBe(state === "open" ? "working" : "done");
+    expect(board.totals.working).toBe(state === "open" ? 1 : 0);
+    expect(board.columns.done.working).toBe(state === "open" ? 1 : 0);
+    expect(board.columns.done.shown).toHaveLength(state === "open" ? 1 : 0);
+    expect(card.stepSummary).toMatchObject({ open: state === "open" ? 1 : 0, working: state === "open" ? 1 : 0 });
+  }
+});
+
+test("known overdue task and step holds stay postponed; unknown reasons agree with counters", () => {
+  const hold = { kind: "postponed" as const, note: "After the acceptance window", since: iso(NOW - 1200), until: iso(NOW - 60), by: "operator" as const };
+  const rows = [
+    task("t912", "blocked", [], { hold }),
+    task("t913", "blocked", [], { steps: [{ id: "later", text: "Run the check", state: "open", hold }] }),
+    task("t914", "blocked"),
+    task("t915", "blocked", [], { hold: { ...hold, kind: "unstated" } }),
+    task("t916", "blocked", [], { steps: [{ id: "bare", text: "Run the check", state: "open" }] }),
+    task("t917", "blocked", [], { steps: [{ id: "unknown", text: "Run the check", state: "open", hold: { ...hold, kind: "unstated" } }] }),
+  ];
+  const board = model(rows, []);
+  for (const id of ["t912", "t913"]) {
+    const card = board.columns.blocked.cards.find(card => card.task?.id === id)!;
+    expect(card.motion).toMatchObject({ key: "stopped", reason: hold, due: true });
+    expect(taskReasonFiltersOfCard(card)).toEqual(["postponed"]);
+  }
+  expect(model(rows, [], { reasonFilter: "postponed" }).columns.blocked.shown.map(card => card.task?.id).sort()).toEqual(["t912", "t913"]);
+  const unknown = model(rows, [], { reasonFilter: "no-reason" }).columns.blocked;
+  expect(unknown.shown.map(card => card.task?.id).sort()).toEqual(["t914", "t915", "t916", "t917"]);
+  expect(unknown.noReason).toBe(unknown.shown.length);
+  expect(board.columns.blocked.noReason).toBe(4);
+});
+
+
+const malformedChecklists: Array<[string, unknown]> = [
+  ["string", "invalid extension"], ["number", 7], ["boolean", true],
+  ["null", null], ["object", { id: "item" }], ["empty array", []],
+  ["null entry", [null]], ["primitive entries", ["bad", 4, false]],
+  ["array entry", [[]]], ["missing fields", [{}]],
+  ["invalid state", [{ id: "item", text: "Item", state: "invalid" }]],
+  ["array state", [{ id: "item", text: "Item", state: ["open"] }]],
+  ["object state", [{ id: "item", text: "Item", state: { toString: null } }]],
+];
+
+test.each(malformedChecklists)("persisted %s checklist retains its task and projects safely on desktop and phone", (_shape, steps) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-checklist-read-"));
+  const file = path.join(directory, "tasks.json");
+  try {
+    fs.writeFileSync(file, JSON.stringify({ tasks: [{ ...task("t930", "blocked"), steps }] }));
+    // First read imports legacy JSON; the second reads the SQLite collection.
+    for (let read = 0; read < 2; read++) {
+      const rows = loadTasks(file);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.id).toBe("t930");
+      const board = model(rows, []);
+      expect(rows[0]!.steps).toBeUndefined();
+      expect(board.columns.blocked.cards).toHaveLength(1);
+      expect(board.columns.blocked.cards[0]!.stepSummary).toBeNull();
+      const phone = buildPhoneKanban({ model: board, now: NOW });
+      expect(phone.columns.blocked.cards).toHaveLength(1);
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a mixed persisted checklist keeps valid entries through both board projections", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-checklist-read-"));
+  const file = path.join(directory, "tasks.json");
+  const valid: NonNullable<BoardTask["steps"]> = [{ id: "done", text: "Fixed cause", state: "done" }, { id: "open", text: "Remaining cause", state: "open" }];
+  try {
+    fs.writeFileSync(file, JSON.stringify({ tasks: [{ ...task("t931", "blocked"), steps: [null, valid[0], {}, "bad", valid[1]] }] }));
+    for (let read = 0; read < 2; read++) {
+      const rows = loadTasks(file);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.steps).toEqual(valid);
+      const board = model(rows, []);
+      expect(board.columns.blocked.cards[0]!.stepSummary).toMatchObject({ done: 1, total: 2, open: 1 });
+      const phone = buildPhoneKanban({ model: board, now: NOW });
+      expect(phone.columns.blocked.cards[0]!.card.stepSummary).toMatchObject({ done: 1, total: 2, open: 1 });
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("a waiting prototype counts once in needs-you and clears after the choice", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z" };
+  const waiting = model([task("prototype", "inbox", [], { prototypeReview: review })], []);
+  expect(waiting.totals.needsYou).toBe(1);
+  expect(waiting.columns.inbox.needsYou).toBe(1);
+  const decided = model([task("prototype", "inbox", [], { prototypeReview: { ...review, waitingReviewId: null } })], []);
+  expect(decided.totals.needsYou).toBe(0);
 });
