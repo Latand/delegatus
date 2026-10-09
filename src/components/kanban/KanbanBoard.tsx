@@ -2800,20 +2800,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
       {props.overview ? (
         /* The Overview keeps the bar it had before the project board's header was put in order
-           (#1801 was the project board only): its three facts, and the tools wrapping under the
-           island on its narrow faces. */
+           (#1801 was the project board only), and the tools wrapping under the island on its
+           narrow faces. Who is working is said once, on the Overview's top line above it; who
+           needs you is said once, by the attention island at the bar's right end, as on a
+           project board. */
         <header className="bar" data-bar="overview">
           <span className="summary">
-            <span className="dot" aria-hidden="true" />
-            <span className="num">{t("kanban.overviewWorking", { count: model.totals.working })}</span>
-            {model.totals.needsYou ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="dot warn" aria-hidden="true" />
-                <span className="num">{t("kanban.overviewNeeds", { count: model.totals.needsYou })}</span>
-              </>
-            ) : null}
-            <span aria-hidden="true">·</span>
             <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
           </span>
           {reachStatus}

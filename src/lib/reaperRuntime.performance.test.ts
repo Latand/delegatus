@@ -114,7 +114,7 @@ test("a sticky owner-authored verdict prevents later full transcript rescans (is
   }
 });
 
-test("stale migration convergence scales linearly with a production-shaped registry", () => {
+test("stale migration convergence scales linearly with a production-shaped registry", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-migration-scale-"));
   const filename = path.join(directory, "agent-registry.json");
   const registry = new AgentRegistry(filename);
@@ -158,7 +158,7 @@ test("stale migration convergence scales linearly with a production-shaped regis
     const seeded = new AgentRegistry(filename);
     const startedAt = performance.now();
 
-    terminalizeStaleUndeliverableHeldDeliveries(seeded, Date.now() + 6 * 60_000);
+    await terminalizeStaleUndeliverableHeldDeliveries(seeded, Date.now() + 6 * 60_000);
 
     /* A benchmark: the measurement is reported, and how fast a shared runner
        happened to be is not asserted (#1761). */

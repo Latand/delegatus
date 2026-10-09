@@ -40,6 +40,15 @@ describe("loop labels decline the round count (#2094)", () => {
   });
 });
 
+describe("a column's working agents read as the board header's", () => {
+  test("Ukrainian declines the column's count with the header's forms", () => {
+    for (const count of [1, 3, 5, 12, 21]) {
+      expect(translate("uk", "kanban.columnWorking", { count })).toBe(translate("uk", "kanban.summaryWorking", { count }));
+    }
+    expect(translate("uk", "kanban.columnWorking", { count: 3 })).toBe("3 працюють");
+  });
+});
+
 describe("degraded account pin copy (#926)", () => {
   test("fallback launches explain the degraded guarantee in both locales", () => {
     expect(translate("en", "spawnCard.pinUnavailableFallback")).toBe("Launched on another account — pin unavailable");

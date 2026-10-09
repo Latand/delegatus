@@ -2,6 +2,7 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 
 afterEach(() => setSystemTime());
 
+import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
 import { StructuredSendRefusedError } from "./engineHost";
 import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import {
@@ -523,6 +524,28 @@ test("queued reconfigures are last-write-wins with one host restart", async () =
     ["switch-two", "applying", undefined],
     ["switch-two", "applied", undefined],
   ]);
+});
+
+test("a reconfigure whose registry write the lock refused stays listed, neither failed nor applied", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C3. */
+  const transitions: Array<[string, string, string | null | undefined]> = [];
+  let holds = 0;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{
+      id: "effect:switch-busy", kind: "runtime.reconfigure", eventSeq: 1,
+      payload: { operationId: "switch-busy", conversationId: "conversation-one", model: "gpt-5.6-sol", effort: "high", fast: false },
+    }],
+    transition: async (operationId, status, details) => { transitions.push([operationId, status, details?.reason]); },
+    holdForFailedSwitch: () => { holds += 1; },
+  }, () => host(async () => ({ outcome: "turn-started", turnId: "unused" })), undefined, undefined, undefined, async () => {
+    throw new Error(REGISTRY_WRITER_BUSY);
+  });
+  await queue.drain();
+  expect(transitions).toEqual([
+    ["switch-busy", "applying", undefined],
+    ["switch-busy", "queued", REGISTRY_WRITER_BUSY],
+  ]);
+  expect(holds).toBe(0);
 });
 
 test("a reconfigure admitted during an active apply supersedes it before publication", async () => {
