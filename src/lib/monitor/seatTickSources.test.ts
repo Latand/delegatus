@@ -226,12 +226,13 @@ function sources(over: {
   /** The liveness plane's verdict for a child, by id (#1465). */
   childRows?: Record<string, AgentLivenessRecord>;
   seatConversationId?: string;
+  seatEpoch?: number;
   retirementJournal?: SeatTickSources["retirementJournal"];
   now?: number;
 }): SeatTickSources {
   return {
     seatFor: () => ({
-      active: over.noSeat ? null : { conversationId: over.seatConversationId ?? CONVERSATION, seatEpoch: 7, path: null } as never,
+      active: over.noSeat ? null : { conversationId: over.seatConversationId ?? CONVERSATION, seatEpoch: over.seatEpoch ?? 7, path: null } as never,
       pending: null,
       history: [],
     }),
@@ -812,6 +813,51 @@ function finishedLane(over: Record<string, unknown> = {}): Record<string, unknow
     ...over,
   });
 }
+
+test.each([CONVERSATION, ["conversation", "5b7729fbc9e0f4c2"].join("_")])("a merge wakes the idle seat after completion was announced, designated seat %s", async (designatedSeat) => {
+  const seatEpoch = designatedSeat === CONVERSATION ? 7 : 8;
+  const completed = finishedLane({ srcConversationId: CONVERSATION });
+  const before = await gather({ pipelines: [completed], openPullRequests: [openPullRequest()] },
+    withCursor(0, { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() }));
+  const completion = seatTickDecision(before);
+  expect(completion.verdict.kind).toBe("wake");
+  const announced = seatTickWakeCommit(completion.state, seatTickWakeCommitPlan(completion.verdict, {
+    fingerprint: before.changeFingerprint, eventsThrough: 0,
+  })!, NOW);
+  expect(announced.announcedLanes).toContain("pipeline_z9:completed");
+  const idle = seatTickDecision(await gather({ pipelines: [completed] }, announced));
+  expect(idle.verdict.kind).toBe("quiet");
+
+  const mergedAt = NOW + 61 * 60_000;
+  const head = "a".repeat(40);
+  const merged = { ...completed, merge: { state: "merged", prNumber: 17, mergedHead: head } };
+  const events = [
+    event(1, { pipelineId: "pipeline_z9", type: "pipeline_merged", at: new Date(mergedAt).toISOString(), summary: "pull request #17 merged by Delegatus" }),
+    event(2, { pipelineId: "pipeline_z9", type: "task_finished", at: new Date(mergedAt).toISOString() }),
+  ];
+  const after = await gather({ pipelines: [merged], events, now: mergedAt, seatConversationId: designatedSeat, seatEpoch }, idle.state);
+  const decision = seatTickDecision(after);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") return;
+  expect(decision.verdict.items).toHaveLength(1);
+  expect(decision.verdict.items[0]).toMatchObject({ kind: "event", id: "pipeline_z9" });
+  expect(decision.verdict.items[0]!.label).toContain("publish the merge queue");
+  expect(decision.verdict.items[0]!.label).toContain("#17");
+  expect(decision.verdict.items[0]!.label).toContain(head);
+  const landed = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: after.changeFingerprint, eventsThrough: 2,
+  })!, mergedAt);
+  const next = seatTickDecision(await gather({ pipelines: [merged], events, now: mergedAt + 61 * 60_000, seatConversationId: designatedSeat, seatEpoch }, landed));
+  expect(next.verdict.kind).toBe("quiet");
+});
+
+test("a merge from another project never wakes this project's seat", async () => {
+  const input = await gather({ pipelines: [finishedLane({ project: "another-project" })],
+    events: [event(1, { pipelineId: "pipeline_z9", project: "another-project", type: "pipeline_merged" })] },
+  withCursor(0, { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() }));
+  expect(input.events).toEqual([]);
+  expect(seatTickDecision(input).verdict.kind).toBe("quiet");
+});
 
 test("an event is marked history exactly when its own lane is no longer open", async () => {
   const input = await gather({
