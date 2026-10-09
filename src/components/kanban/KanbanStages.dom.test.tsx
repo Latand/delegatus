@@ -422,38 +422,52 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   expect(merge.querySelector(".composer2, textarea[disabled], .draft-note")).toBeNull();
 });
 
-test("a reader open on the card moves into its pane and back, the same mounted conversation throughout", async () => {
+/* The agent the window's reader shows, once its first read settled. */
+async function inWindow(host: HTMLElement, file: FileEntry): Promise<HTMLElement> {
+  for (let waited = 0; waited < 3000; waited += 10) {
+    const reader = host.querySelector<HTMLElement>(`[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="${idOf(file)}"]`);
+    if (reader) return reader;
+    await tick(10);
+  }
+  throw new Error(`the agent window never showed ${idOf(file)}`);
+}
+const parked = (host: HTMLElement, file: FileEntry) => host.querySelector<HTMLElement>(`.reader-park [data-kanban-reader="${idOf(file)}"]`);
+
+test("a stage chip opens its agent in the window; its pane in the Stages sheet takes the same mounted conversation from the window", async () => {
   const { host } = mount(searchPipeline());
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
-  await tick();
-  const container = card(host).querySelector<HTMLElement>(`.reader-host[data-reader-key="${verify2.conversationId}"]`);
+  await inWindow(host, verify2);
+  const container = host.querySelector<HTMLElement>(`[data-agent-window] .reader-host[data-reader-key="${verify2.conversationId}"]`);
   expect(container).toBeTruthy();
+  expect(card(host).querySelector(".reader-slot, [data-kanban-reader]")).toBeNull();
+  /* The chip that opened it wears its ring. */
+  expect(card(host).querySelector('.pb-pills [data-stage="verify"]')?.classList.contains("selected")).toBe(true);
   press(card(host).querySelector("[data-open-stages]"));
   await tick();
+  /* The window has it, so the pane says where it is and offers it back. */
+  expect(pane(host, "verify")!.querySelector("[data-pane-away]")).toBeTruthy();
+  click(pane(host, "verify")!.querySelector("[data-pane-away] button"));
+  await tick();
+  expect(host.querySelector("[data-agent-window]")).toBeNull();
   same(pane(host, "verify")!.querySelector(".reader-host"), container);
-  expect(card(host).querySelector(`[data-reader-slot="${verify2.conversationId}"]`)).toBeNull();
   key(sheet(host), "Escape");
   await tick();
   expect(sheet(host)).toBeNull();
-  same(card(host).querySelector(`[data-reader-slot="${verify2.conversationId}"] .reader-host`), container);
+  /* Still open: it waits in the park, the same conversation. */
+  same(parked(host, verify2)?.closest(".reader-host"), container);
   same(document.activeElement, card(host).querySelector("[data-open-stages]"));
 });
 
-test("a shelf column widens for a reader on its card, and narrows again while that reader stands in the Stages sheet", async () => {
+test("a shelf column never widens for an agent opened from its card", async () => {
   const { host } = mount(searchPipeline(), { status: "blocked" });
   await tick();
   const column = () => host.querySelector<HTMLElement>('.column[data-status="blocked"]')!;
-  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
-  await tick();
-  expect(column().classList.contains("reading")).toBe(true);
-  press(card(host).querySelector("[data-open-stages]"));
-  await tick();
-  expect(readerIn(pane(host, "verify"))).toBe(idOf(verify2));
   expect(column().classList.contains("reading")).toBe(false);
-  key(sheet(host), "Escape");
-  await tick();
-  expect(column().classList.contains("reading")).toBe(true);
+  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
+  await inWindow(host, verify2);
+  expect(column().classList.contains("reading")).toBe(false);
+  expect(column().classList.contains("agent")).toBe(false);
 });
 
 test("Collapse finished folds passed stages and lets their readers go; a graph node, or a chip with the graph hidden, opens a folded pane; attempt tabs switch the reader", async () => {
@@ -611,10 +625,12 @@ test("a stage that starts between the check and the write answers 409: the text 
   click([...panel()!.querySelectorAll<HTMLElement>("[data-draft-undelivered] button")].find((button) => button.textContent === "Discard"));
   await tick();
   expect(panel()).toBeNull();
-  expect(card(host).querySelector(`[data-reader-slot="${merge1.conversationId}"]`)).toBeTruthy();
+  /* The stage's agent joins the agent window's list, and the card holds nothing in its place. */
+  expect(parked(host, merge1)).toBeTruthy();
+  expect(card(host).querySelector("[data-kanban-reader], .readers")).toBeNull();
 });
 
-test("Escape cancels an edit and hands focus back to Edit; a panel with nothing unsaved becomes the stage's reader when it starts, folded as it was", async () => {
+test("Escape cancels an edit and hands focus back to Edit; a panel with nothing unsaved leaves the card when its stage starts, and the agent joins the window's list", async () => {
   const { host, route, update } = mount(searchPipeline());
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
@@ -644,8 +660,8 @@ test("Escape cancels an edit and hands focus back to Edit; a panel with nothing 
   update(mergeStarted(), [...baseFiles, merge1]);
   await tick();
   expect(panel()).toBeNull();
-  const reader = card(host).querySelector<HTMLElement>(`[data-kanban-reader="${merge1.conversationId}"]`);
-  expect(reader?.getAttribute("data-folded")).toBe("1");
+  expect(parked(host, merge1)).toBeTruthy();
+  expect(host.querySelector("[data-open-agents-pill] .pill-words")?.textContent).toBe("1 agent");
 });
 
 /* ── Review follow-ups ─────────────────────────────────────────────────── */
@@ -788,7 +804,7 @@ const mergeStartedWith = (prompt: string, attemptOver: Record<string, unknown> =
   prompt,
 );
 
-test("a save with no answer is not confirmed; when the stage starts holding those words the draft goes and the panel becomes its reader", async () => {
+test("a save with no answer is not confirmed; when the stage starts holding those words the draft goes and the agent joins the window's list", async () => {
   const { host, route, update } = mount(searchPipeline());
   await tick();
   const panel = await openMergePanel(host);
@@ -804,7 +820,7 @@ test("a save with no answer is not confirmed; when the stage starts holding thos
   await tick();
   expect(panel()).toBeNull();
   expect(card(host).querySelector("[data-draft-undelivered]")).toBeNull();
-  expect(card(host).querySelector(`[data-kanban-reader="${idOf(merge1)}"]`)).toBeTruthy();
+  expect(parked(host, merge1)).toBeTruthy();
 });
 
 test("an edit opened and left unchanged goes quietly when its stage starts", async () => {
@@ -817,7 +833,7 @@ test("an edit opened and left unchanged goes quietly when its stage starts", asy
   await tick();
   expect(panel()).toBeNull();
   expect(card(host).querySelector("[data-draft-undelivered]")).toBeNull();
-  expect(card(host).querySelector(`[data-kanban-reader="${idOf(merge1)}"]`)).toBeTruthy();
+  expect(parked(host, merge1)).toBeTruthy();
 });
 
 test("a pipeline closed before its stage launched says the edit was never sent, never that the stage started", async () => {
@@ -936,7 +952,8 @@ test("readers of stages that share a role preset carry the stage's name and atte
   const { host } = mount(record, { files: [design1, critique1, critique2] });
   await tick();
   const title = "Restore search results after the index rebuild";
-  const headers = () => [...card(host).querySelectorAll<HTMLElement>(".conv-head .ch-title")];
+  /* Every agent opened from the card: the one in the window and those waiting in the park. */
+  const headers = () => [...host.querySelectorAll<HTMLElement>(".conv-head .ch-title")];
 
   click(card(host).querySelector('.pb-pills [data-stage="design"]'));
   await tick();

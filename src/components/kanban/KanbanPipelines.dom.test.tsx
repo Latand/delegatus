@@ -213,6 +213,16 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   expect(nodes[2]!.className).toContain("has-strip");
 });
 
+/* The agent the agent window shows, once its first read settled. */
+async function inWindow(host: HTMLElement): Promise<string | null> {
+  for (let waited = 0; waited < 3000; waited += 10) {
+    const key = host.querySelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.getAttribute("data-kanban-reader");
+    if (key) return key;
+    await tick(10);
+  }
+  return null;
+}
+
 test("with a helper conversation adopted last on Implement, the graph keeps the engine's budget and attempt count, and the node a click opens is the one marked", async () => {
   const helper = conversation("implement-helper");
   files.push(helper);
@@ -228,8 +238,8 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     expect(card(host).querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')?.dataset.stripFired).toBe("1");
     expect(card(host).querySelector('.pnode[data-stage="implement"] .pattempt')?.textContent).toBe(" · 2");
     click(card(host).querySelector('.pnode[data-stage="implement"]'));
-    await tick();
-    expect(card(host).querySelector("[data-kanban-reader]")?.getAttribute("data-kanban-reader")).toBe("conversation_implement-2");
+    expect(await inWindow(host)).toBe("conversation_implement-2");
+    expect(card(host).querySelector("[data-kanban-reader]")).toBeNull();
     expect(card(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
     /* The helper stays reachable, listed as what it is. */
     const helpers = [...card(host).querySelectorAll('details.history [data-past-kind="helper"] .lbl')].map((node) => node.textContent);
@@ -253,8 +263,7 @@ test("Past attempts lists every finished attempt and settled round, the latest o
   const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verify · 1")!;
   expect(verify.querySelector(".verdict")?.textContent).toBe("failed");
   click(verify.querySelector(".hopen"));
-  await tick();
-  expect(card(host).querySelector("[data-kanban-reader]")?.getAttribute("data-kanban-reader")).toBe("conversation_verify-1");
+  expect(await inWindow(host)).toBe("conversation_verify-1");
 });
 
 test("an edge is marked live only when the stage's own new attempt arrives through it, a helper adoption marks nothing, and the mark clears on time through later changes", async () => {
