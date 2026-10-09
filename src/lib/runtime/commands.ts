@@ -67,6 +67,20 @@ export function parseRuntimeIdleKillFence(value: unknown): import("./contracts")
   return { revision: fence.revision as number, writerClaim: fence.writerClaim };
 }
 
+export function parseRuntimeProviderRecoveryRef(value: unknown): import("./contracts").RuntimeProviderRecoveryRef {
+  const ref = object(value);
+  if (!Number.isSafeInteger(ref.attempt) || (ref.attempt as number) < 1
+    || !Number.isFinite(ref.turnTs) || (ref.turnTs as number) <= 0
+    || ref.controlGeneration === undefined) throw new Error("provider recovery reference is invalid");
+  return {
+    pipelineId: requiredId(ref.pipelineId, "pipelineId"),
+    stageId: requiredId(ref.stageId, "stageId"),
+    attempt: ref.attempt as number,
+    turnTs: ref.turnTs as number,
+    controlGeneration: ref.controlGeneration === null ? null : requiredId(ref.controlGeneration, "controlGeneration"),
+  };
+}
+
 function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copilot"; sessionId: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("sessionKey is invalid");
   const candidate = value as Record<string, unknown>;
@@ -179,6 +193,10 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
     }
     if (policy === "steer-or-queue" && turnId !== undefined) throw new Error("steer-or-queue follows the live turn and takes no fence");
     const runtime = parseRuntimeSendSettings(body.runtime);
+    const onlyIfIdle = body.onlyIfIdle === undefined ? undefined : parseRuntimeIdleKillFence(body.onlyIfIdle);
+    if (onlyIfIdle && (kind !== "send" || policy !== "queue" || turnId !== null)) {
+      throw new Error("idle continuation requires a queued send with an idle turn fence");
+    }
     /* #844: validated here, with the text, so the turn and the card it points at
        are admitted as one fact. A body the validator refuses drops the reference
        and admits the turn anyway — an instruction that arrives without its badge
@@ -195,6 +213,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(policy ? { policy } : {}),
       ...(turnId !== undefined ? { turnId } : {}),
       ...(runtime ? { runtime } : {}),
+      ...(onlyIfIdle ? { onlyIfIdle } : {}),
       ...(selectedContext ? { selectedContext } : {}),
     };
   }
@@ -210,6 +229,9 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
   }
 
   if (kind === "kill") {
+    if (body.providerRecovery !== undefined && body.onlyIfIdle === undefined) {
+      throw new Error("provider recovery requires an idle-only kill");
+    }
     return {
       kind,
       conversationId,
@@ -217,6 +239,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       idempotencyKey,
       sessionKey: runtimeSessionKey(body.sessionKey),
       ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),
+      ...(body.providerRecovery !== undefined ? { providerRecovery: parseRuntimeProviderRecoveryRef(body.providerRecovery) } : {}),
     };
   }
 

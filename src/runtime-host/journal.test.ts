@@ -4179,3 +4179,91 @@ test("a session row records what its named writer published and keeps it through
   expect(journal.snapshot().sessions.find((session) => session.conversationId === "conv-mark")?.writerStatus).toEqual({ ...recorded, turn: "idle", activeTurnId: null });
   journal.close();
 });
+
+
+test.each(["unchanged", "active", "answered", "writer", "queued"] as const)("idle continuation fence checks admission and execution: %s", change => {
+  const dir = sandbox("idle-continuation");
+  let journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_continuation";
+  const key = { engine: "codex" as const, sessionId: "continuation-generation" };
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+  const command = { kind: "send" as const, conversationId, operationId: "automatic", idempotencyKey: "automatic", text: "continue",
+    policy: "queue" as const, turnId: null, onlyIfIdle };
+  expect(journal.executeOperation(command).receipt.status).toBe("queued");
+  journal.close();
+  journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  expect(journal.nativeQueueRead(conversationId)).toHaveLength(0);
+  if (change === "active" || change === "answered") {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "turn-started", payload: { conversationId, turnId: "operator-turn" } });
+    if (change === "answered") journal.append({ scope: { type: "session", id: conversationId }, kind: "turn-completed", payload: { conversationId, turnId: "operator-turn" } });
+  } else if (change === "writer") {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: { conversationId, writerClaim: "fixture:2" } });
+  } else if (change === "queued") {
+    journal.executeOperation({ kind: "send", conversationId, operationId: "operator", idempotencyKey: "operator", text: "my answer", policy: "queue" });
+  }
+  const claimed = journal.transitionOperation("automatic", "delivering");
+  expect(claimed.receipt.status).toBe(change === "unchanged" ? "delivering" : "failed");
+  if (change !== "unchanged") {
+    expect(claimed.receipt.reason).toBe("idle-continuation-pre-execution-refused");
+    expect(journal.executeOperation({ ...command, operationId: "later", idempotencyKey: "later" }).receipt.status).toBe("rejected");
+    expect(journal.effectBatch(100, ["runtime.send"]).some(effect => effect.payload.operationId === "automatic")).toBe(false);
+  }
+  journal.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+test("provider recovery authority survives normalized kill cold journal reopen", () => {
+  const dir = sandbox("provider-retirement");
+  let journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  try {
+    const conversationId = "conversation_provider_retirement";
+    const sessionKey = { engine: "codex" as const, sessionId: "provider-generation" };
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+    } });
+    const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: "fixture-control" };
+    const command = { kind: "kill" as const, conversationId, sessionKey, operationId: "provider-retire", idempotencyKey: "provider-retire",
+      onlyIfIdle: { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" }, providerRecovery };
+    expect(journal.executeOperation(command).receipt.status).toBe("queued");
+    journal.close();
+    journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+    expect(journal.effectBatch(100, ["runtime.kill"])[0]?.payload).toMatchObject({ providerRecovery });
+    expect(journal.executeOperation(command).receipt.operationId).toBe("provider-retire");
+    expect(() => journal.executeOperation({ ...command, providerRecovery: { ...providerRecovery, turnTs: 43 } })).toThrow();
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test.each([false, true])("idle continuation pre-execution proof survives journal reopen (claimed=%s)", claimed => {
+  const dir = sandbox("idle-continuation-proof");
+  const filename = path.join(dir, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const conversationId = "conversation_continuation_proof";
+  const key = { engine: "codex" as const, sessionId: "continuation-generation" };
+  const publish = () => journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  publish();
+  const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+  expect(journal.executeOperation({ kind: "send", conversationId, operationId: "automatic", idempotencyKey: "automatic", text: "continue", policy: "queue", turnId: null, onlyIfIdle }).receipt.status).toBe("queued");
+  if (claimed) expect(journal.transitionOperation("automatic", "delivering").receipt.status).toBe("delivering");
+  publish();
+  const reason = claimed ? "idle-continuation-cancelled" : "idle-continuation-pre-execution-refused";
+  const refused = claimed ? journal.transitionOperation("automatic", "failed", { reason }) : journal.transitionOperation("automatic", "delivering");
+  expect(refused.receipt).toMatchObject({ status: "failed", reason });
+  journal.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  expect(journal.operationResult("automatic")?.receipt).toMatchObject({ status: "failed", reason });
+  expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+  journal.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

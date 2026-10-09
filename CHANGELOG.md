@@ -26,6 +26,32 @@ guarantees for the 1.x series.
   one set of slots, and the merger runs its gates through `scripts/gate-slot.sh`.
 
 ### Fixed
+- **Work cut by a Delegatus restart continues by itself.** A deploy, a
+  self-update or a crash recovery used to leave a pipeline stage that was
+  near the end of its work failed as "completed without a valid final JSON
+  verdict" until someone pressed retry. The release and the booting
+  Delegatus now record every turn they cut. A stage cut that way is retried
+  once in the same worktree, keeping uncommitted work, and its first message
+  says the previous attempt was cut and quotes what it last said; when the
+  next restart cuts that retry too, the stage parks for a decision. A stage
+  whose turn a provider failure had already ended keeps its provider recovery
+  and spends no restart retry. A spawned
+  agent whose turn was cut, including one waiting on a background command the
+  restart killed, gets one message saying so, so it re-checks what it was
+  waiting for. The checkout deploy verdict lists the conversations its
+  restart interrupted, with the pipeline stage when there is one; when those
+  records cannot be read or are incomplete, it says the list is unknown and
+  does not pass. A stage transcript that cannot be read whole is never taken
+  as proof of a cut. Whether a turn was cut is decided from the engine
+  host's own record of the turn it started, so a message accepted moments
+  before the restart, a Codex turn whose shutdown wrote an abort, and work an
+  agent began by itself after a background task reported are all continued.
+  A conversation whose records cannot be read yet is left untouched and
+  asked again within seconds, in the same Delegatus, before anything takes
+  it over. A background command the agent was already told about is never
+  reported a second time, a turn that finishes by itself while Delegatus is
+  still taking the conversation over gets no message, and a damaged record
+  of background work holds the conversation until it can be read.
 - **Telegram never stops an agent from starting, and a connection that can be
   restored is restored by the start itself.** A conversation that holds the
   Telegram tool and whose agent was not running used to refuse every message

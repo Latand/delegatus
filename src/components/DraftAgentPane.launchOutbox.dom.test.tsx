@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { setLocale } from "@/lib/i18n";
 
-import { DraftAgentPane } from "./DraftAgentPane";
+import { DraftAgentPane, setDraftCwd } from "./DraftAgentPane";
 import { adoptOutbox, readOutbox, resetOutboxForTests } from "./conversation/outbox";
 import type { SpawnAttempt } from "./draftSpawn";
 
@@ -55,6 +55,7 @@ function stubFetch(post: (init?: RequestInit) => Response) {
 }
 
 async function launchWithPrompt(prompt: string) {
+  setDraftCwd("seed-draft", "/repo");
   const host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);

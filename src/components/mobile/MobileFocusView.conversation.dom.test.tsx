@@ -286,6 +286,24 @@ test("the meta line names the account the conversation runs on, managed or the l
   mount(legacy, [stageConversation], stageConversation.path);
   await settle();
   expect(dom.document.querySelector("[data-mobile2-chat-account]")?.textContent).toBe("@ default");
+
+  /* A conversation still starting has no transcript to read: its launch record names the account it was
+     launched on, so the header does not say the legacy home between Send and the transcript. */
+  dom.document.body.replaceChildren();
+  const starting = entry({
+    path: "spawn:launch-spare",
+    title: "Rebuild the board status projection",
+    conversationId: "conv-starting",
+    activity: "live",
+    mtime: 9_000,
+    spawn: { launchId: "launch-spare", clientAttemptId: null, accountId: "spare", conversationId: "conv-starting", generation: 1, state: "starting", initialMessage: "queued", retrySafe: false, error: null },
+  });
+  const { host: third } = browser();
+  const launching = createMobileNav(third);
+  detach = launching.attach();
+  mount(launching, [starting], starting.path);
+  await settle();
+  expect(dom.document.querySelector("[data-mobile2-chat-account]")?.textContent).toBe("@ spare");
 });
 
 /* #1846: a pick on the runtime sheet (or any account surface) names the account the next message goes to

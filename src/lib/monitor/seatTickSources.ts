@@ -1,3 +1,4 @@
+import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -45,7 +46,7 @@ import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
-import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { findSeatDeploymentByKey, recoverSeatDeploymentRequests, seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
   lookupOriginalSend,
@@ -461,6 +462,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
@@ -491,6 +493,8 @@ export interface SeatTickSources {
       `deploy_exact_sha` recorded them. Absent reads as none, which is how a
       harness that does not model deploys stays exactly as it was. */
   seatDeployments?: (conversationId: string) => readonly SeatDeploymentRecord[];
+  /** Serialized, read-only recovery of an original deployment admission. */
+  deploymentByKey?: typeof findSeatDeploymentByKey;
   /** One deployment off the ledger by id (#2063). Absent reads as none. */
   deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
@@ -627,6 +631,12 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    seatTurnOutcome: async (conversationId) => {
+      const conversation = agentRegistry().conversation(conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
+      return readSeatTurnOutcome(conversation.engine, generation.path);
+    },
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -649,6 +659,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
+    deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
     diskPressure: () => readDiskPressure(),
     retirementReport: () => {
@@ -991,16 +1002,17 @@ const SEAT_DEPLOY_LIMIT = 5;
  * cannot be read for one deployment leaves it out of this check only; the
  * next check asks again, and nothing is announced that was not seen.
  */
-function settledSeatDeploys(
+async function settledSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   context: { now: number; backlogAfterMs: number },
   sources: SeatTickSources,
-): SeatTickDeployInput[] {
+): Promise<SeatTickDeployInput[]> {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
   const settled: SeatTickDeployInput[] = [];
   let records: readonly SeatDeploymentRecord[];
   try {
+    if (sources.deploymentByKey) await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey);
     records = sources.seatDeployments(seat.conversationId);
   } catch {
     return [];
@@ -2334,7 +2346,7 @@ export async function gatherSeatTickInput(
 
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
   const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
-  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
   let endedMaintenance: readonly MaintenanceRun[] = [];
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }

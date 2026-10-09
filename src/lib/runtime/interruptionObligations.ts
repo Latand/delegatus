@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import type { DeliveryOperationOwner } from "@/lib/agent/registry";
+import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
+import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
@@ -46,10 +47,15 @@ export interface InterruptionObligation {
   boundary: string;
   reason: InterruptionReason;
   recordedAt: string;
-  /** The transcript as the cut left it, for the message and the log. */
-  checkpoint: { lastEventKind: string | null; lastEventAt: number | null };
+  /** The transcript as the cut left it, for the message and the log.
+      `backgroundTasks` names the harness background work a Claude turn was
+      waiting on when a restart took it down with its process. */
+  checkpoint: { lastEventKind: string | null; lastEventAt: number | null; backgroundTasks?: string[] };
   /** The orchestrator seat the conversation held when it was cut. */
   seat: { project: string; seatEpoch: number } | null;
+  /** The pipeline stage attempt the conversation ran, when it ran one. Its
+      controller retries the attempt, so such a record is never delivered. */
+  stage?: InterruptionStage | null;
   state: InterruptionObligationState;
   operationId: string | null;
   attempts: number;
@@ -57,9 +63,30 @@ export interface InterruptionObligation {
   resolution: string | null;
 }
 
+export interface InterruptionStage {
+  pipelineId: string;
+  stageId: string | null;
+  attempt: number | null;
+}
+
+/** Why a cut of a pipeline stage's conversation is owed no continuation. */
+export const STAGE_CUT_RESOLUTION = "a pipeline stage: its controller retries the attempt";
+
+/** The pipeline stage a conversation runs, from its durable membership. */
+export function interruptionStageOf(
+  memberships: RegistryFile["memberships"],
+  conversationId: string,
+): InterruptionStage | null {
+  const pipeline = (memberships[conversationId] ?? []).find((membership) => membership.kind === "pipeline");
+  return pipeline ? { pipelineId: pipeline.containerId, stageId: pipeline.stageId, attempt: pipeline.round } : null;
+}
+
 export type InterruptionObligationInput = Omit<InterruptionObligation,
   "version" | "id" | "recordedAt" | "state" | "operationId" | "attempts" | "resolvedAt" | "resolution"> & {
   recordedAt?: string;
+  /** A cut somebody else answers: recorded already discharged, with the reason,
+      so the record names the cut and owes no continuation. */
+  answeredBy?: string;
 };
 
 export interface InterruptionObligationStore {
@@ -67,6 +94,33 @@ export interface InterruptionObligationStore {
   record(input: InterruptionObligationInput): { obligation: InterruptionObligation; created: boolean };
   update(id: string, patch: Partial<Pick<InterruptionObligation,
     "state" | "operationId" | "attempts" | "resolvedAt" | "resolution">>): InterruptionObligation | null;
+  /** Removes a restart record the evidence no longer supports, from the
+      directory and from the pending journal, so nothing continues it, counts
+      it or lists it. False when no record was there, or when a copy could not
+      be removed: the caller reads the store again to tell which. */
+  withdraw(id: string): boolean;
+}
+
+/** Why a review round's reviewer, cut by a restart, is owed no continuation. */
+export const REVIEWER_CUT_RESOLUTION = "a review flow reviewer: its flow relaunches the round";
+
+/**
+ * Whether a restart record is still a proposal: written from evidence a
+ * predecessor could still move, with nothing yet done about it. The row's
+ * claim epoch is the one the record was written under, so no successor has
+ * taken the row; and the record is still owed, or stands as the witness it was
+ * recorded as. Every pass asks such a row again
+ * (docs/design/restart-cut-recognition.md, "A cut is a proposal until the row
+ * is taken").
+ */
+export function restartCutProposal(
+  obligation: InterruptionObligation,
+  row: { hostKey: string; claimEpoch: number },
+): boolean {
+  return obligation.reason === "viewer-restart" && obligation.seat === null && obligation.owner === null
+    && obligation.hostKey === row.hostKey && obligation.claimEpoch === row.claimEpoch
+    && (obligation.state === "owed" || (obligation.state === "discharged"
+      && (obligation.resolution === STAGE_CUT_RESOLUTION || obligation.resolution === REVIEWER_CUT_RESOLUTION)));
 }
 
 const OBLIGATION_PREFIX = "interruption-continuation-";
@@ -149,14 +203,25 @@ function sameOwner(left: InterruptionOwner | null, right: InterruptionOwner | nu
     as a severed turn — and must still owe one continuation. */
 function coversSameCut(existing: InterruptionObligation, input: InterruptionObligationInput): boolean {
   if (existing.conversationId !== input.conversationId || existing.hostKey !== input.hostKey) return false;
+  /* Between two restart records of a conversation that is no seat, the id is
+     the whole identity: each names its cut by the turn that was cut. */
+  if (restartRecordOfNoSeat(existing) && restartRecordOfNoSeat(input)) return false;
   if (sameOwner(existing.owner, input.owner) && existing.turnRef === input.turnRef) return true;
   if (input.reason !== "viewer-restart") return false;
+  /* A resolved cut was taken up by its continuation or by another message,
+     and either started a turn of its own. A turn the row names other than the
+     one this record cut is that turn, cut again before its transcript showed it. */
+  if (!interruptionObligationUnresolved(existing) && input.turnRef !== null && existing.turnRef !== input.turnRef) return false;
   /* A boot-time severed turn is the same cut as any obligation recorded after
      that turn's last transcript event: the release happened after it. */
   const lastEventAt = input.checkpoint.lastEventAt;
   return lastEventAt === null
     ? interruptionObligationUnresolved(existing)
     : Date.parse(existing.recordedAt) >= lastEventAt;
+}
+
+function restartRecordOfNoSeat(record: Pick<InterruptionObligation, "reason" | "seat">): boolean {
+  return record.reason === "viewer-restart" && !record.seat;
 }
 
 function isObligation(value: unknown): value is InterruptionObligation {
@@ -330,9 +395,26 @@ export function interruptionObligationStore(
   return {
     list,
     record(input) {
-      const covering = list().find((existing) => coversSameCut(existing, input));
-      if (covering) return { obligation: covering, created: false };
       const id = interruptionObligationId(input);
+      /* The id is the cut: a record already under it is this cut's, in
+         whatever state it has reached, and is never written over. */
+      const covering = list().find((existing) => existing.id === id || coversSameCut(existing, input));
+      if (covering) {
+        /* A restart record found standing again after its engine wrote more
+           says when it was last seen: the stage controller counts a cut only
+           when the attempt's newest work precedes the record, and the deploy
+           inventory lists by `recordedAt`. Its state and resolution stay. */
+        const seenAt = input.checkpoint.lastEventAt;
+        if (covering.id === id && restartRecordOfNoSeat(covering) && restartRecordOfNoSeat(input)
+          && seenAt !== null && seenAt > (covering.checkpoint.lastEventAt ?? -Infinity)) {
+          const moved: InterruptionObligation = {
+            ...covering, checkpoint: input.checkpoint, recordedAt: input.recordedAt ?? new Date().toISOString(),
+          };
+          writeJsonDurably(fileFor(id), moved);
+          return { obligation: moved, created: false };
+        }
+        return { obligation: covering, created: false };
+      }
       const obligation: InterruptionObligation = {
         version: 1,
         id,
@@ -348,12 +430,14 @@ export function interruptionObligationStore(
         recordedAt: input.recordedAt ?? new Date().toISOString(),
         checkpoint: input.checkpoint,
         seat: input.seat,
-        state: "owed",
+        ...(input.stage ? { stage: input.stage } : {}),
+        state: input.answeredBy ? "discharged" : "owed",
         operationId: null,
         attempts: 0,
         resolvedAt: null,
-        resolution: null,
+        resolution: input.answeredBy ?? null,
       };
+      if (input.answeredBy) obligation.resolvedAt = obligation.recordedAt;
       try {
         writeJsonDurably(fileFor(id), obligation);
       } catch (first) {
@@ -367,6 +451,36 @@ export function interruptionObligationStore(
         }
       }
       return { obligation, created: true };
+    },
+    withdraw(id) {
+      let removed = false;
+      try {
+        if (fs.existsSync(fileFor(id))) {
+          fs.rmSync(fileFor(id), { force: true });
+          removed = true;
+        }
+      } catch (error) {
+        console.error("[interruption recovery] a withdrawn obligation could not be removed", { obligation: id, error });
+        return false;
+      }
+      /* A record the directory refused waits in the pending journal, and the
+         first read that the directory accepts would import it again. The
+         journal is taken as an import takes it, and every other record goes
+         back to the live journal. */
+      const claims = [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []);
+      if (claims.length === 0) return removed;
+      const pending = claims.flatMap(readJournal);
+      const kept = pending.filter((obligation) => obligation.id !== id);
+      try {
+        if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
+      } catch (error) {
+        /* The claims stay on disk with the record in them; a later read takes
+           them over, and the caller finds the record still listed. */
+        console.error("[interruption recovery] a withdrawn obligation's pending journal could not be rewritten", { obligation: id, claims, error });
+        return false;
+      }
+      for (const claimed of claims) fs.rmSync(claimed, { force: true });
+      return removed || kept.length < pending.length;
     },
     update(id, patch) {
       const current = read(fileFor(id)) ?? readPending().find((pending) => pending.id === id) ?? null;
@@ -407,8 +521,11 @@ export function interruptionContinuationText(obligation: InterruptionObligation)
       turn,
       "You were re-hosted automatically; resume that turn.",
     ];
+  const background = obligation.checkpoint.backgroundTasks ?? [];
+  const waiting = background.length === 0 ? [] : [killedBackgroundWorkNotice(background)];
   return [
     ...opening,
+    ...waiting,
     "Inspect your transcript and your preserved work (files, worktree status, commits) to find where the turn stopped.",
     "Re-run any interrupted operation whose result you do not have; background or external work may or may not have survived, so check it before relying on it.",
     "Run long commands in the foreground.",

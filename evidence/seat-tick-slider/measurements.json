@@ -1,0 +1,840 @@
+{
+ "what": "Seat tick slider prototypes (2026-10-07): measurements of the four variants rendered in the real seat header (kanban fixture ?scenario=seat-head, 1440x900) and the real phone seat sheet (390x844, touch). Prototype code lived in a scratch export and is not in the repository.",
+ "commit": "2fda8a4ee11b0b8986efaf9da404b735d7b2fa2f",
+ "stops": [
+  {
+   "stop": "off",
+   "writes": {
+    "enabled": false
+   }
+  },
+  {
+   "stop": "4h",
+   "writes": {
+    "enabled": true,
+    "wakeIntervalMinutes": 240
+   }
+  },
+  {
+   "stop": "1h (default)",
+   "writes": {
+    "enabled": true,
+    "wakeIntervalMinutes": null
+   }
+  },
+  {
+   "stop": "10m",
+   "writes": {
+    "enabled": true,
+    "wakeIntervalMinutes": 10
+   }
+  }
+ ],
+ "gesture": {
+  "dragThresholdPx": {
+   "mouse": 4,
+   "touchOrPen": 8
+  },
+  "flick": {
+   "minSpeedPxPerMs": 0.4,
+   "windowMs": 80,
+   "carryMs": 90
+  },
+  "keyboardCommitAfterMs": 700
+ },
+ "variants": {
+  "1": {
+   "name": "Rail",
+   "desktop1440": {
+    "en": {
+     "sliderWidthPx": 144,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "every hour, the default. every 60 min · last check 2m ago",
+      "15m": "15 min, not a preset. every 15 min · last check 2m ago"
+     }
+    },
+    "uk": {
+     "sliderWidthPx": 144,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+      "15m": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому"
+     }
+    }
+   },
+   "phone390": {
+    "en": {
+     "off": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 160,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    },
+    "uk": {
+     "off": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 160,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    }
+   },
+   "writes": {
+    "desktopDragFromDefaultTo10m_en": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     }
+    ],
+    "phoneDragFromDefaultToOff_uk": [
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     }
+    ],
+    "clickWithoutMovingWrites": [],
+    "videoDesktop_en_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ],
+    "videoPhone_uk_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ]
+   }
+  },
+  "2": {
+   "name": "Fill",
+   "desktop1440": {
+    "en": {
+     "sliderWidthPx": 104,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "every hour, the default. every 60 min · last check 2m ago",
+      "15m": "15 min, not a preset. every 15 min · last check 2m ago"
+     }
+    },
+    "uk": {
+     "sliderWidthPx": 104,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+      "15m": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому"
+     }
+    }
+   },
+   "phone390": {
+    "en": {
+     "off": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    },
+    "uk": {
+     "off": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 116,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    }
+   },
+   "writes": {
+    "desktopDragFromDefaultTo10m_en": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     }
+    ],
+    "phoneDragFromDefaultToOff_uk": [
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     }
+    ],
+    "clickWithoutMovingWrites": [],
+    "videoDesktop_en_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ],
+    "videoPhone_uk_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ]
+   }
+  },
+  "3": {
+   "name": "Bars",
+   "desktop1440": {
+    "en": {
+     "sliderWidthPx": 83,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "every hour, the default. every 60 min · last check 2m ago",
+      "15m": "15 min, not a preset. every 15 min · last check 2m ago"
+     }
+    },
+    "uk": {
+     "sliderWidthPx": 83,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+      "15m": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому"
+     }
+    }
+   },
+   "phone390": {
+    "en": {
+     "off": {
+      "sliderWidthPx": 107,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 107,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 107,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 129,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    },
+    "uk": {
+     "off": {
+      "sliderWidthPx": 107,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 107,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 107,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 129,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    }
+   },
+   "writes": {
+    "desktopDragFromDefaultTo10m_en": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     }
+    ],
+    "phoneDragFromDefaultToOff_uk": [
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     }
+    ],
+    "clickWithoutMovingWrites": [],
+    "videoDesktop_en_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ],
+    "videoPhone_uk_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ]
+   }
+  },
+  "4": {
+   "name": "Thumb switch",
+   "desktop1440": {
+    "en": {
+     "sliderWidthPx": 124,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "every hour, the default. every 60 min · last check 2m ago",
+      "15m": "15 min, not a preset. every 15 min · last check 2m ago"
+     }
+    },
+    "uk": {
+     "sliderWidthPx": 124,
+     "sliderHeightPx": 24,
+     "controlsRows": {
+      "light": 1,
+      "dark": 1
+     },
+     "pageErrors": 0,
+     "ariaValueText": {
+      "1h": "щогодини, типово. кожні 60 хв · остання перевірка 2 хв тому",
+      "15m": "15 хв, не пресет. кожні 15 хв · остання перевірка 2 хв тому"
+     }
+    }
+   },
+   "phone390": {
+    "en": {
+     "off": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 160,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    },
+    "uk": {
+     "off": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "1h": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "10m": {
+      "sliderWidthPx": 138,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     },
+     "until": {
+      "sliderWidthPx": 160,
+      "sliderHeightPx": 36,
+      "rowHeightPx": 44,
+      "sliderRightPx": 362,
+      "labelTruncated": {
+       "light": false,
+       "dark": false
+      }
+     }
+    }
+   },
+   "writes": {
+    "desktopDragFromDefaultTo10m_en": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     }
+    ],
+    "phoneDragFromDefaultToOff_uk": [
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     }
+    ],
+    "clickWithoutMovingWrites": [],
+    "videoDesktop_en_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "The operator set the activity slider to «every 10 minutes»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ],
+    "videoPhone_uk_drag10m_flickOff_twoArrows": [
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": 10,
+      "untilMinutes": null,
+      "reason": "Оператор поставив повзунок активності на «кожні 10 хвилин»."
+     },
+     {
+      "project": "atlas",
+      "enabled": false,
+      "untilMinutes": null,
+      "reason": "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок."
+     },
+     {
+      "project": "atlas",
+      "enabled": true,
+      "wakeIntervalMinutes": null,
+      "untilMinutes": null,
+      "reason": null
+     }
+    ]
+   }
+  }
+ },
+ "dock360": {
+  "what": "The orchestrator dock at its 360 px floor (issue1681Evidence fixture, ?dock=360, 1280x800, record off the default at 30 min until a set time, stale). The word carries data-seat-tick-face, so the existing incumbent-host container rule hides it there, as it hides today's chip word.",
+  "results": {
+   "v1-en": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 122,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v1-uk": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 122,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v2-en": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 104,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v2-uk": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 104,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v3-en": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 61,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v3-uk": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 61,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v4-en": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 142,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   },
+   "v4-uk": {
+    "overflowPx": -12,
+    "dockWidth": 360,
+    "sliderWidth": 142,
+    "sliderInsideDock": true,
+    "controlsRows": 1,
+    "pageErrors": 0
+   }
+  }
+ }
+}

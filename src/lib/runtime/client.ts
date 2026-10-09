@@ -2,7 +2,7 @@ import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQ
 import net from "node:net";
 import fs from "node:fs";
 import { isNamedPipePath } from "./localEndpoint";
-import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentStartedAt, viewerDeploymentSummary,
+import { parseViewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentPage,
   type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
 
 
@@ -186,7 +186,13 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return this.call("append-session-fenced", { event });
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> { return this.call("command", { command }) as Promise<RuntimeOperationResult>; }
+  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> {
+    // Older hosts silently discard new command fields. A separate wire method
+    // makes them refuse recovery before admitting an unfenced operation.
+    const guarded = command.kind === "send" && command.onlyIfIdle
+      || command.kind === "kill" && command.providerRecovery;
+    return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
+  }
   operationStatus(operationId: string, options: { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {
       operationId,
@@ -283,15 +289,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     // A new-host cursor can name history the old snapshot never retained.
     // Refuse that continuation instead of falsely reporting complete history.
     if (cursor && !cursor[2]) throw new RuntimeHostUnavailableError("deployment list cursor requires the current host; restart the list after hand-over");
-    const rows = (await this.snapshot()).deployments
-      .sort((a, b) => viewerDeploymentStartedAt(b) - viewerDeploymentStartedAt(a) || b.deploymentId.localeCompare(a.deploymentId))
-      .filter(row => !cursor || viewerDeploymentStartedAt(row) < cursor[0]
-        || (viewerDeploymentStartedAt(row) === cursor[0] && row.deploymentId < cursor[1]));
-    const page = rows.slice(0, limit);
-    const last = page.at(-1);
-    return { deployments: options.compact ? page.map(viewerDeploymentSummary) : page, legacySnapshot: true,
-      hasMore: rows.length > limit,
-      nextCursor: rows.length > limit && last ? viewerDeploymentListCursor(viewerDeploymentStartedAt(last), last.deploymentId, true) : null };
+    return { ...viewerDeploymentPage((await this.snapshot()).deployments, limit, cursor, options.compact === true, true), legacySnapshot: true };
   }
 
   admitMcpHealthProbe(capability: string): Promise<boolean> { return this.call("mcp-health-probe-admission", { capability }) as Promise<boolean>; }

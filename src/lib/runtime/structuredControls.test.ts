@@ -1360,6 +1360,30 @@ test("structured reconfigure captures an exact ultrafast rollback profile before
   })]);
 });
 
+test("provider recovery authority reaches the structured kill command", async () => {
+  const fixture = structuredConversation();
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 1, writerClaim: "fixture:1" };
+  const commands: unknown[] = [];
+  const client = { command: async (command: unknown) => {
+    commands.push(command);
+    return { operationId: "provider-retire", receipt: { operationId: "provider-retire", status: "queued" }, replayed: false };
+  } } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId,
+    action: "kill", onlyIfIdle, providerRecovery }, {
+    registry: fixture.registry, client, operationId: () => "provider-retire", enabled: () => true, kick: () => {},
+  });
+  expect(result?.status).toBe(202);
+  expect(commands).toEqual([expect.objectContaining({ kind: "kill", onlyIfIdle, providerRecovery })]);
+});
+
+
+test("provider recovery authority requires the structured idle-only kill", async () => {
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  expect(await dispatchStructuredControl({ path: "", conversationId: "conversation_fixture", action: "kill", providerRecovery },
+    { enabled: () => false })).toMatchObject({ status: 400 });
+});
+
 test("the pipeline switch adapter recognizes receipt-free native reconfigure success", async () => {
   const { runtimeSwitchControlAcknowledgement } = await import("@/lib/pipelines/runtimeSwitch");
   const fixture = profiledConversation();

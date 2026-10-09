@@ -21,6 +21,7 @@ export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 export type ConversationActionRequest = {
   operationId?: string;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
+  providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   conversationId: string;
   transcriptPath: string;
   action: string;
@@ -81,6 +82,9 @@ export async function applyConversationAction(
   request: ConversationActionRequest,
   dependencies: ConversationActionDependencies = productionDependencies,
 ): Promise<ConversationActionResult> {
+  if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
+    return failure("provider recovery requires an idle-only kill", 400);
+  }
   if (!(CONVERSATION_ACTIONS as readonly string[]).includes(request.action)) {
     return failure("unsupported conversation action", 400);
   }
@@ -136,6 +140,7 @@ export async function applyConversationAction(
       action: request.action,
       operationId: request.operationId,
       ...(request.action === "kill" && request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
+      ...(request.action === "kill" && request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}),
       ...(request.action === "permission" ? { decision: request.decision, requestId: request.requestId } : {}),
     });
     if (structured) return structured;
