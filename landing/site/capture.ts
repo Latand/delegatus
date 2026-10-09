@@ -1067,6 +1067,96 @@ if (perfLabel) {
   process.exit(0);
 }
 
+/* `--variants=0,1,2,3` renders the prototype variants of variants.js for the
+   operator's pick, 0 being today's landing. Each PNG carries its variant's
+   number, printed into the page before the shot. */
+const variantsArg = process.argv.find((arg) => arg.startsWith("--variants="))?.slice("--variants=".length);
+async function captureVariant(variant: number, lang: Locale, viewport: (typeof VIEWPORTS)[number]) {
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
+    ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+  });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const key = `v${variant}-${viewport.name}-${lang}`;
+  const label = variant === 0 ? (lang === "uk" ? "СЬОГОДНІ" : "TODAY") : `${lang === "uk" ? "ВАРІАНТ" : "VARIANT"} ${variant}`;
+  const print = (selector: string) => page.evaluate(({ selector, label }) => {
+    const host = document.querySelector<HTMLElement>(selector);
+    if (!host) return;
+    host.querySelector(":scope > .capture-badge")?.remove();
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    const corner = host === document.body ? "left:50%;top:10px;transform:translateX(-50%)" : "right:10px;bottom:10px";
+    const badge = document.createElement("b");
+    badge.className = "capture-badge";
+    badge.textContent = label;
+    badge.style.cssText = `position:absolute;z-index:99;${corner};padding:5px 10px;border-radius:8px;background:#8f88ff;color:#14122b;font:600 15px/1.2 'Martian Mono',monospace;letter-spacing:.04em;pointer-events:none`;
+    host.appendChild(badge);
+  }, { selector, label });
+  const shot = async (selector: string, name: string) => {
+    await print(selector);
+    const element = page.locator(selector).first();
+    await element.scrollIntoViewIfNeeded();
+    await settle(page, 400);
+    await element.screenshot({ path: path.join(out, `${key}-${name}.png`) });
+  };
+  try {
+    await page.goto(`${base}?lang=${lang}${variant ? `&variant=${variant}` : ""}`);
+    const hero = await frameOf(page, ".live-hero");
+    await settle(page, 2500);
+    await print("body");
+    await page.screenshot({ path: path.join(out, `${key}-1-first-screen.png`) });
+    if (viewport.phone) await shot(".hero-head", "2-hero-head");
+
+    /* The script, sent the way a visitor sends it, caught mid-step. */
+    await hero.locator(`[aria-label="${translate(lang, "composer.sendToAgent")}"]`).first().click();
+    await settle(page, 8000);
+    await shot(".hero .stage-wrap", "3-hero-playing");
+
+    for (const selector of [".live-run", ".live-open", ".live-phone"]) {
+      await page.locator(selector).scrollIntoViewIfNeeded();
+      await frameOf(page, selector);
+    }
+    await settle(page, 2500);
+    await shot(".sec-run", "4-run");
+    if (await page.locator(".sec-faq").count()) {
+      await page.locator(".sec-faq details").first().evaluate((item) => { (item as HTMLDetailsElement).open = true; });
+      await shot(".sec-faq", "5-faq");
+    }
+    await shot(".band", "6-footer");
+    if (viewport.phone) {
+      /* Mid-page on the phone: where a bar that stays in reach would show. */
+      await page.locator(".sec-open").scrollIntoViewIfNeeded();
+      await settle(page, 900);
+      await print("body");
+      await page.evaluate(() => {
+        const badge = document.body.querySelector<HTMLElement>(":scope > .capture-badge");
+        if (badge) { badge.style.position = "fixed"; badge.style.top = "70px"; }
+      });
+      await page.screenshot({ path: path.join(out, `${key}-7-mid-page.png`) });
+    }
+    report[key] = {
+      errors,
+      unanswered: await hero.evaluate(() => (window as unknown as { demoUnanswered?: string[] }).demoUnanswered ?? []),
+      overflowX: await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      heroScale: await page.evaluate(() => document.querySelector<HTMLElement>(".live-hero iframe")?.style.transform ?? ""),
+    };
+  } finally { await context.close(); }
+  console.log(`${key}: done`);
+}
+if (variantsArg) {
+  try {
+    for (const variant of variantsArg.split(",").map(Number)) {
+      for (const lang of ["en", "uk"] as Locale[]) {
+        for (const viewport of VIEWPORTS) if (!only || only === `${lang}-${viewport.name}`) await captureVariant(variant, lang, viewport);
+      }
+    }
+    fs.writeFileSync(path.join(out, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  } finally { await browser.close(); server.stop(true); }
+  console.log(`renders in ${out}`);
+  process.exit(0);
+}
+
 if (checkRuns > 0) {
   const failures: string[] = [];
   for (let run = 0; run < checkRuns; run += 1) {

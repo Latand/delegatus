@@ -59,6 +59,18 @@ the frame's area, the control clears the product's own controls, the frame is
 not reloaded, Esc (overlay) and the control (API) leave, and the page's scroll
 position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 
+```
+bun landing/site/capture.ts --variants=0,1,2,3
+```
+
+renders the prototype variants in `variants.js` for the operator's pick
+(`docs/research/landing-onorca.md`), 0 being today's page: the first screen,
+the hero mid-script, each changed section and, at 390, the hero's install
+area and a mid-page screen, in both languages and widths, with the variant's
+number printed into every PNG. `?variant=1`, `2` or `3` on the page turns one
+on; without it the page is today's landing. The chosen variant is folded into
+the page's own files and `variants.js`/`variants.css` are removed.
+
 ## Files
 
 | file | what it holds |
@@ -67,6 +79,7 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 | `styles.css` | the page: type, the product's dark tokens, the frames around the demo |
 | `copy.js` | every visible string of the page in English and Ukrainian, and the two install prompts |
 | `mascot.js` | the mascot's three poses (unchanged from A) |
+| `variants.js`, `variants.css` | the prototype variants behind `?variant=N`, until one is picked |
 | `main.js` | language, install boxes, the legacy giggle, and the controller of the live frames |
 | `demo/demo.tsx` | the demo: the real `Viewer`, the answers to its requests, the scripted steps, the views |
 | `demo/world.ts` | the invented harbor-api world at each step, in both languages |
