@@ -1,4 +1,4 @@
-import { explicitConsent, explicitDelegationRequest, gateSentences, retractsRequest, type OperatorInput } from "./gate";
+import { explicitDelegationRequest, gateSentences, retractsRequest, type OperatorInput } from "./gate";
 
 /** A completed turn that says one of these never asks for the orchestrator. */
 const DECLINED = new Set(["question", "negated", "retracted", "conditional", "quoted"]);
@@ -51,26 +51,6 @@ export function liveProposalRefusal(instruction: string, inputs: readonly Operat
   }
   // The prototype's "no_orchestrator" names a missing seat elsewhere; here it means no request was made.
   return "not_requested";
-}
-
-/**
- * Whether the model's spoken "send" for a confirmation it asked may stand.
- * `answerTurn` is the operator's turn when Live delegated that answer; it must
- * come after the request's own turn, because a request does not confirm
- * itself, and read whole as a plain yes (`explicitConsent`). A question about
- * the board, a condition, a negation or speech about something else sends
- * nothing, whatever the model decided; the card's tap still answers. With no
- * operator speech on record at all the model's reading stands, as it does for
- * a proposal.
- */
-export function liveConsentRefusal(inputs: readonly OperatorInput[], proposalTurn: number | undefined, answerTurn: number | undefined): string | null {
-  if (!inputs.length) return null;
-  const turn = answerTurn ?? inputs.at(-1)?.turn;
-  if (turn !== undefined && proposalTurn !== undefined && turn <= proposalTurn) return "not_confirmed";
-  const answer = turn === undefined ? inputs.slice(-1) : inputs.filter(row => row.turn === turn);
-  if (!answer.length) return "not_confirmed";
-  const verdict = explicitConsent(words(answer));
-  return verdict.admit ? null : verdict.reason;
 }
 
 const QUOTES = /["“”„«»]/u;

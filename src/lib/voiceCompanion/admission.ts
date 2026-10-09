@@ -3,7 +3,7 @@ import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
-import { liveConsentRefusal, liveProposalRefusal, requestText, type EarlierRequest } from "./liveGate";
+import { liveProposalRefusal, requestText, type EarlierRequest } from "./liveGate";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { CompanionStorage, type StoredProposal, type StoredSession } from "./storage";
 
@@ -66,8 +66,7 @@ export type DelegationOutcome =
   | { state: "awaiting"; proposal: Proposal }
   | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed" }
   | { state: "refused"; code: string };
-/** `answerTurn`: the operator's turn when Live delegated a spoken answer. */
-type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech"; answerTurn?: number };
+type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech" };
 export class CompanionAdmission {
   private readonly sending = new Map<string, Promise<void>>();
   private readonly secrets = new Set<string>();
@@ -179,14 +178,6 @@ export class CompanionAdmission {
       : Object.values(this.session(id).proposals).findLast(held => held.state === "pending" && !!held.proposal.confirmation);
     return row?.state === "pending" && !!row.proposal.confirmation && this.now() <= row.expiresAt ? row.proposal : null;
   }
-  /** Why the operator's spoken answer in `answerTurn` does not agree to send
-   * this confirmation, or null when it does. Only a Live confirmation reads it. */
-  spokenConsentRefusal(id: string, proposalId: string, answerTurn: number | undefined): string | null {
-    const session = this.session(id);
-    const row = session.proposals[proposalId];
-    if (!row) return "proposal_unavailable";
-    return session.authority === "live-model" ? liveConsentRefusal(session.inputs, row.sourceTurn, answerTurn) : null;
-  }
   /** The confirmation asked last, whatever became of it: a spoken answer that finds none waiting reports this one. */
   lastAsked(id: string): Proposal | null {
     return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
@@ -242,7 +233,6 @@ export class CompanionAdmission {
    * answer arrives through the model's tool, and "auto" from `delegate`. */
   async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }> | Admit): Promise<void> {
     let refusal = "proposal_unavailable";
-    let unanswered = false;
     const binding = this.storage.change(document => {
       const session = document.sessions[id];
       const row = session?.proposals[command.proposalId];
@@ -251,9 +241,6 @@ export class CompanionAdmission {
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
       if (command.decision === "cancel") { row.state = "cancelled"; row.cancelCode = refusal = "operator_cancelled"; return null; }
-      // A spoken send stands only on the operator's own yes; anything else leaves the confirmation waiting.
-      if (command.via === "speech" && session.authority === "live-model"
-        && liveConsentRefusal(session.inputs, row.sourceTurn, "answerTurn" in command ? command.answerTurn : undefined) !== null) { unanswered = true; return null; }
       const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId)) === null
         : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit;
       if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
@@ -269,7 +256,6 @@ export class CompanionAdmission {
       row.text = `${row.proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;
       return row;
     });
-    if (unanswered) return;
     if (!binding) {
       const row = this.session(id).proposals[command.proposalId];
       if (row) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: command.proposalId,

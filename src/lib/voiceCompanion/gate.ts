@@ -151,33 +151,6 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
   return { admit: true };
 }
 
-/* A spoken yes opens its sentence: an agreement word, or the sending verb itself, after at most one filler
-   word speech puts first ("Well, yes.", "Ну да.", "Ну, надсилай."). */
-const FILLER = String.raw`(?:(?:well|so|oh|ah|hm+|ну|о|ой|хм+),?\s+)?`;
-const EN_CONSENT = String.raw`(?:yes|yeah|yep|yup|sure|ok|okay|alright|all right|correct|right|confirm(?:ed)?|i confirm|go ahead|go for it|do it|send it|send|please do|please send(?: it)?|absolutely|of course|definitely|affirmative|that's right)(?![\w'])`;
-const UK_CONSENT = String.raw`(?:так|да|ага|угу|ок|окей|авжеж|звісно|звичайно|гаразд|добре|згоден|згодна|підтверджую|надсилай|надішли|відправляй|відправ|шли|давай|роби|конечно|подтверждаю|отправляй|отправь|согласен|согласна|хорошо|ладно)(?=[\s,.:;!?…]|$)`;
-const CONSENT = new RegExp(`^${FILLER}(?:${EN_CONSENT}|${UK_CONSENT})`, "u");
-
-/**
- * Whether one utterance, read whole, agrees to send a request the companion
- * asked about. A sentence must open with a yes ("Yes, send it.", "Так,
- * надсилай."), and nothing beside it may take that back, make it conditional,
- * negate it or ask something: "Yes, if the tests pass." and "Not yet." refuse,
- * and so does speech about something else.
- */
-export function explicitConsent(utterance: string): GateVerdict {
-  const all = gateSentences(utterance);
-  if (!all.length) return { admit: false, reason: "no_input" };
-  if (QUOTES.test(utterance)) return { admit: false, reason: "quoted" };
-  for (const sentence of all) {
-    if (RETRACTION.test(sentence)) return { admit: false, reason: "retracted" };
-    if (NEGATION.test(sentence)) return { admit: false, reason: "negated" };
-    if (CONDITION.test(sentence) || FOLLOWUP_CONDITION.test(sentence)) return { admit: false, reason: "conditional" };
-    if (sentence.includes("?")) return { admit: false, reason: "question" };
-  }
-  return all.some((sentence) => CONSENT.test(sentence)) ? { admit: true } : { admit: false, reason: "not_confirmed" };
-}
-
 /**
  * Whether a delegation may be raised, and whether a confirmation that waits
  * may still stand. Raised: its source is the operator's last input in this
