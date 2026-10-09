@@ -67,7 +67,7 @@ async function flushPromises() {
 }
 
 describe("child exit while command output is draining", () => {
-  test.each([false, true])("a child with no exit notification and alive=%s settles before or at its deadline", async (staysAlive) => {
+  test.each(["lost", "alive", "recovered"])("a %s child with no exit notification settles at its deadline", async (presence) => {
     const child = Object.assign(new EventEmitter(), {
       pid: process.pid, stdout: new PassThrough(), stderr: new PassThrough(),
     });
@@ -88,24 +88,24 @@ describe("child exit while command output is draining", () => {
       const run = runner.start(TARGET);
       await flushPromises();
       jest.advanceTimersByTime(15);
-      alive = staysAlive;
+      alive = presence === "alive";
       jest.advanceTimersByTime(5);
       await flushPromises();
       expect(runner.state.state).toBe("running");
-      // One further poll lets a queued exit notification supply its status.
+      // Repeated missing-PID polls cannot establish an absent exit status.
       jest.advanceTimersByTime(10);
       await flushPromises();
-      expect(runner.state.state).toBe(staysAlive ? "running" : "failed");
-      if (staysAlive) {
-        jest.advanceTimersByTime(69);
-        await flushPromises();
-        expect(runner.state.state).toBe("running");
-        jest.advanceTimersByTime(1);
-      }
+      expect(runner.state.state).toBe("running");
+      jest.advanceTimersByTime(30);
+      if (presence === "recovered") alive = true;
+      jest.advanceTimersByTime(39);
+      await flushPromises();
+      expect(runner.state.state).toBe("running");
+      jest.advanceTimersByTime(1);
       await run;
       expect(runner.state.steps[0]).toMatchObject({
         state: "failed", exitCode: null,
-        failure: staysAlive ? { kind: "timeout", minutes: 100 / 60_000 } : { kind: "interrupted" },
+        failure: presence === "lost" ? { kind: "interrupted" } : { kind: "timeout", minutes: 100 / 60_000 },
       });
       expect(runner.state.steps.slice(1).every((step) => step.state === "pending")).toBe(true);
       // A late status cannot overwrite the failure already reported.
@@ -113,7 +113,7 @@ describe("child exit while command output is draining", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       await flushPromises();
       expect(runner.state.state).toBe("failed");
-      expect(runner.state.steps[0]?.failure?.kind).toBe(staysAlive ? "timeout" : "interrupted");
+      expect(runner.state.steps[0]?.failure?.kind).toBe(presence === "lost" ? "interrupted" : "timeout");
     } finally {
       child.stdout.end(); child.stderr.end(); child.emit("close", 0, null);
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -121,7 +121,7 @@ describe("child exit while command output is draining", () => {
     }
   });
 
-  test.each([[0, 15], [23, 15], [0, 25], [23, 25]])("exit %i delivered at %i ms keeps its exit status", async (code, eventAt) => {
+  test.each([15, 25, 35, 85].flatMap((eventAt) => [0, 23].map((code) => [code, eventAt])))("exit %i delivered at %i ms keeps its exit status", async (code, eventAt) => {
     const child = Object.assign(new EventEmitter(), {
       pid: process.pid, exitCode: null as number | null, signalCode: null,
       stdout: new PassThrough(), stderr: new PassThrough(),
@@ -129,6 +129,7 @@ describe("child exit while command output is draining", () => {
     let alive = true;
     const spawn = spyOn(childProcess, "spawn").mockImplementation((() => child) as unknown as typeof childProcess.spawn);
     const sameProcess = spyOn(pid, "sameProcess").mockImplementation(() => alive);
+    const identity = spyOn(pid, "readStartIdentity").mockReturnValue("fixture-start");
     const real = realPorts(() => {});
     const { runner, logDir } = harness({}, {
       run: (command, options) => command.includes("fetch") ? real.run(["fixture"], { ...options, cwd: logDir, env: { TMPDIR: logDir } }) : Promise.resolve(0),
@@ -150,12 +151,14 @@ describe("child exit while command output is draining", () => {
       await flushPromises();
       // The PID is gone, but stdout/stderr still hold the run promise open.
       expect(runner.state.steps[0]?.state).toBe("running");
-      jest.advanceTimersByTime(5);
-      if (eventAt === 25) {
+      if (eventAt > 15) {
+        jest.advanceTimersByTime(eventAt - 20);
+        await flushPromises();
+        expect(runner.state.steps[0]?.state).toBe("running");
         child.exitCode = code;
         child.emit("exit", code, null);
       }
-      jest.advanceTimersByTime(15);
+      jest.advanceTimersByTime(10);
       await flushPromises();
       // The recorded status wins even after several polls of a missing PID.
       expect(runner.state.steps[0]?.state).toBe("running");
@@ -171,7 +174,7 @@ describe("child exit while command output is draining", () => {
       child.stdout.destroy(); child.stderr.destroy();
       child.emit("close", code, null);
       await new Promise<void>((resolve) => setImmediate(resolve));
-      jest.useRealTimers(); spawn.mockRestore(); sameProcess.mockRestore();
+      jest.useRealTimers(); spawn.mockRestore(); sameProcess.mockRestore(); identity.mockRestore();
     }
   });
 
@@ -226,6 +229,47 @@ describe("child exit while command output is draining", () => {
       state: code === 0 ? "done" : "failed", exitCode: code,
       failure: code === 0 ? null : { kind: "exit", code }, tail: ["final output"],
     });
+  });
+
+  test.skipIf(process.platform !== "linux").each([0, 23])("a real child exiting %i before multiple polls retains its queued status", async (code) => {
+    const spawn = spyOn(childProcess, "spawn");
+    const real = realPorts(() => {});
+    const { runner, logDir } = harness({}, {
+      run: (command, options) => command.includes("fetch")
+        ? real.run([process.execPath, "-e", `console.log("final output"); process.exit(${code});`], { ...options, cwd: logDir, env: { TMPDIR: logDir } })
+        : Promise.resolve(0),
+      childAlive: real.childAlive,
+    }, { fetch: 5_000 }, 10);
+    let child: childProcess.ChildProcess | undefined;
+    jest.useFakeTimers();
+    try {
+      const run = runner.start(TARGET);
+      await flushPromises();
+      child = spawn.mock.results[0]?.value as childProcess.ChildProcess | undefined;
+      expect(child?.pid).toBeDefined();
+      // Let the OS finish the child while JS cannot dispatch its exit event.
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      const deadline = performance.now() + 5_000;
+      while (pid.isAlive(child!.pid!) && performance.now() < deadline) Atomics.wait(pause, 0, 0, 5);
+      expect(pid.isAlive(child!.pid!)).toBe(false);
+      expect(child!.exitCode).toBeNull();
+      for (let poll = 0; poll < 4; poll += 1) {
+        jest.advanceTimersByTime(10);
+        await flushPromises();
+      }
+      expect(runner.state.steps[0]?.state).toBe("running");
+      await run;
+      expect(runner.state.steps[0]).toMatchObject({
+        state: code === 0 ? "done" : "failed", exitCode: code,
+        failure: code === 0 ? null : { kind: "exit", code }, tail: ["final output"],
+      });
+    } finally {
+      jest.useRealTimers();
+      // The only process this test may clean up is the child it just spawned.
+      if (child?.pid && pid.isAlive(child.pid)) child.kill("SIGKILL");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      spawn.mockRestore();
+    }
   });
 
   test.skipIf(process.platform === "win32")("a real child killed by a signal is interrupted", async () => {

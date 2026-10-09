@@ -37,9 +37,10 @@ export interface StepPorts {
   publish(release: Release): void | Promise<void>;
   now(): number;
   abort?(): void;
-  /** False when the child ended or is confirmed lost without an exit status.
-      A recorded status remains valid while run() drains output and settles. */
-  childAlive?(): boolean;
+  /** False for an authoritative end without an exit status; null for a
+      missing PID whose exit notification is still pending. A recorded exit
+      code remains valid while run() drains output and settles. */
+  childAlive?(): boolean | null;
   /** The commit whose build passed the ready check in this directory, when
       the directory records one; a new build withdraws the record first. */
   builtRevision?(dir: string): string | null;
@@ -183,8 +184,13 @@ export class UpdateRunner {
           this.runStep(name, push),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => {
+              // PID disappearance cannot settle a pending exit notification.
+              // Bound that wait by the step deadline, then classify the loss.
+              const alive = this.ports.childAlive?.();
               this.ports.abort?.();
-              reject(new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
+              reject(alive === null || alive === false
+                ? new StepError({ kind: "interrupted" }, `${name} child process ended without an exit status before the deadline`)
+                : new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
             }, limit);
             timer.unref?.();
           }),
@@ -312,7 +318,7 @@ export interface RealPorts extends StepPorts { abort(): void }
 export function realPorts(publish: (release: Release) => void | Promise<void>,
   cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
-  let completion: { ended: boolean; code: number | null; missing: boolean } | null = null;
+  let completion: { ended: boolean; code: number | null } | null = null;
   let waiting: AbortController | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
@@ -329,7 +335,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         } finally { waiting = null; }
       }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-      const result = { ended: false, code: null as number | null, missing: false };
+      const result = { ended: false, code: null as number | null };
       completion = result;
       const exited = new Promise<number | null>((resolve) => {
         const finish = (code: number | null) => {
@@ -367,16 +373,9 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       if (waiting) return true;
       if (completion === null) return true;
       if (completion.ended) return completion.code !== null;
-      if (!current || sameProcess(current)) {
-        completion.missing = false;
-        return true;
-      }
-      // A PID can disappear before its exit event is delivered. Confirm its
-      // loss at the next poll, giving that event a chance to supply a status.
-      // Open pipes cannot keep an unreported loss running until the deadline.
-      if (completion.missing) return false;
-      completion.missing = true;
-      return true;
+      // Missing-PID polls carry no exit status, however often they run.
+      // Wait for exit/close, or let the deadline settle an unreported loss.
+      return !current || sameProcess(current) ? true : null;
     },
     memAvailableMb,
     async revParse(ref, cwd) {
