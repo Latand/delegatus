@@ -10,6 +10,13 @@
     "scheme": "light",
     "taskId": "t-search",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -96,8 +103,96 @@
   {
     "lang": "en",
     "scheme": "light",
+    "taskId": "t-search",
+    "width": 390,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 11:30Saved and sent to the orchestrator",
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
     "taskId": "t-upload",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Prototype review",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": 390,
@@ -166,6 +261,13 @@
     "scheme": "light",
     "taskId": "t-links",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -252,8 +354,96 @@
   {
     "lang": "en",
     "scheme": "light",
+    "taskId": "t-links",
+    "width": 390,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered9 Oct, 11:30Saved and sent to the orchestrator",
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
     "taskId": "t-disk",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -322,6 +512,13 @@
     "scheme": "light",
     "taskId": "t-export",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 11:29Keep the recommended defaults.Saved and sent to the orchestrator",
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -401,6 +598,13 @@
     "scheme": "dark",
     "taskId": "t-search",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -487,8 +691,96 @@
   {
     "lang": "en",
     "scheme": "dark",
+    "taskId": "t-search",
+    "width": 390,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 11:30Saved and sent to the orchestrator",
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
     "taskId": "t-upload",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Prototype review",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": 390,
@@ -557,6 +849,13 @@
     "scheme": "dark",
     "taskId": "t-links",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -643,8 +942,96 @@
   {
     "lang": "en",
     "scheme": "dark",
+    "taskId": "t-links",
+    "width": 390,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered9 Oct, 11:30Saved and sent to the orchestrator",
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
     "taskId": "t-disk",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -713,6 +1100,13 @@
     "scheme": "dark",
     "taskId": "t-export",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 11:29Keep the recommended defaults.Saved and sent to the orchestrator",
+    "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -792,6 +1186,13 @@
     "scheme": "light",
     "taskId": "t-search",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -878,8 +1279,96 @@
   {
     "lang": "uk",
     "scheme": "light",
+    "taskId": "t-search",
+    "width": 390,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 11:30Збережено й надіслано оркестратору",
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
     "taskId": "t-upload",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Огляд прототипів",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": 390,
@@ -948,6 +1437,13 @@
     "scheme": "light",
     "taskId": "t-links",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -1034,8 +1530,96 @@
   {
     "lang": "uk",
     "scheme": "light",
+    "taskId": "t-links",
+    "width": 390,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли9 жовт., 11:30Збережено й надіслано оркестратору",
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
     "taskId": "t-disk",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -1104,6 +1688,13 @@
     "scheme": "light",
     "taskId": "t-export",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 11:29Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -1183,6 +1774,13 @@
     "scheme": "dark",
     "taskId": "t-search",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -1269,8 +1867,96 @@
   {
     "lang": "uk",
     "scheme": "dark",
+    "taskId": "t-search",
+    "width": 390,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 11:30Збережено й надіслано оркестратору",
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
     "taskId": "t-upload",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Огляд прототипів",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": 390,
@@ -1339,6 +2025,13 @@
     "scheme": "dark",
     "taskId": "t-links",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -1425,8 +2118,96 @@
   {
     "lang": "uk",
     "scheme": "dark",
+    "taskId": "t-links",
+    "width": 390,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли9 жовт., 11:30Збережено й надіслано оркестратору",
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
     "taskId": "t-disk",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,
@@ -1495,6 +2276,13 @@
     "scheme": "dark",
     "taskId": "t-export",
     "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 11:29Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
     "stageWidth": null,

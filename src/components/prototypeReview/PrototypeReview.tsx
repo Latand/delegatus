@@ -374,7 +374,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     }
   };
 
-  const title = t("proto.title");
+  const title = t(hasQuestions && !hasVariants ? "proto.questions" : "proto.title");
   const variantSlides = variant ? slides.filter((entry) => entry.variant === variant) : [];
   const firstOf = (target: Variant) => slides.findIndex((entry) => entry.variant === target);
 
@@ -701,6 +701,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       return { questionId, options, ...(question.multiple && answer.other ? { other: true as const } : {}) };
     }) }));
   };
+  /* An answered or retired questionnaire no longer asks: the choices left
+     unpicked fade and the "choose any" hint goes, so it reads as a record. */
+  const closed = !open;
   const questionBlock = !hasQuestions ? null : (
     <section data-prototype-questions="" aria-label={t("proto.questions")} className={`flex min-h-0 min-w-0 flex-col gap-3 ${phone ? "px-4 py-2" : `overflow-y-auto p-4 ${hasVariants ? "w-[360px] shrink-0 border-l border-border" : "flex-1"}`}`}>
       <p className="m-0 text-label font-semibold text-secondary">{t("proto.questions")}</p>
@@ -710,16 +713,17 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           const checked = index === "other" ? Boolean(answer?.other) : Boolean(answer?.options.includes(index));
           return <button key={index} type="button" role={question.multiple ? "checkbox" : "radio"} aria-checked={checked} disabled={!open}
             {...(index === "other" ? { "data-prototype-other": question.id } : { "data-prototype-option": `${question.id}:${index}` })}
-            className={`flex min-h-11 w-full items-start gap-2 rounded-control border px-2.5 py-2 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${checked ? "border-accent/50 bg-accent-soft text-accent" : "border-border bg-canvas text-primary enabled:hover:border-accent/45"}`}
+            className={`flex min-h-11 w-full items-start gap-2 rounded-control border px-2.5 py-2 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${checked ? "border-accent/50 bg-accent-soft text-accent" : closed ? "border-transparent bg-transparent text-muted opacity-60" : "border-border bg-canvas text-primary enabled:hover:border-accent/45"}`}
             onClick={() => selectAnswer(question.id, index)}>
-            <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border text-caption font-bold ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken text-muted"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : index === "other" ? "+" : String.fromCharCode(97 + index)}</span>
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}{recommended ? <span data-prototype-recommended="" className="ml-1.5 inline-block whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}</span>
+            <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : null}</span>
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}</span>
+            {recommended ? <span data-prototype-recommended="" className="shrink-0 self-start whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}
           </button>;
         };
         return <fieldset key={question.id} data-prototype-question={question.id} className="m-0 min-w-0 rounded-control border border-border bg-card p-3">
           <legend className="sr-only">{question.text}</legend>
           <p className="m-0 mb-2 text-ui font-semibold text-primary [overflow-wrap:anywhere]"><span className="mr-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span>{question.text}</p>
-          {question.multiple ? <p className="m-0 mb-2 text-label text-muted">{t("proto.q.multiple")}</p> : null}
+          {question.multiple && !closed ? <p data-prototype-hint="" className="m-0 mb-2 text-label text-muted">{t("proto.q.multiple")}</p> : null}
           <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className="flex flex-col gap-1.5">
             {question.options.map((option, index) => choice(index, option.label, option.recommended))}
             {question.other ? choice("other", t("proto.q.other")) : null}
@@ -732,14 +736,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const footer = !round ? null : round.decision ? (
     <div data-prototype-decision={round.id} className="flex min-w-0 flex-1 flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-label font-semibold text-secondary">{t(hasQuestions ? "proto.row.answered" : "proto.chosen")}</span>
+        <span {...(round.decision.skipped ? { "data-prototype-skipped": "" } : {})} className="text-label font-semibold text-secondary">{t(!hasQuestions ? "proto.chosen" : round.decision.skipped ? "proto.q.skipped" : "proto.q.answered")}</span>
         {chosenChips(round.decision.chosen)}
         <time dateTime={round.decision.at} className="ml-auto shrink-0 text-caption tabular-nums text-muted">{when(round.decision.at, locale)}</time>
       </div>
-      {round.decision.skipped ? <p data-prototype-skipped="" className="m-0 text-label text-muted">{t("proto.q.skipped")}</p> : null}
       {round.decision.comment ? (
         <p data-prototype-comment="" className="m-0 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-control border border-border bg-canvas px-2.5 py-1.5 text-ui text-primary">{round.decision.comment}</p>
-      ) : (
+      ) : hasQuestions ? null : (
         <p className="m-0 text-label text-muted">{t("proto.noComment")}</p>
       )}
       {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}

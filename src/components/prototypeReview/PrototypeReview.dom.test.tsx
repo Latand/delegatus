@@ -589,4 +589,28 @@ describe("short questionnaire", () => {
     expect(document.querySelector("[data-prototype-skipped]")).not.toBeNull();
     expect(document.querySelector<HTMLButtonElement>('[data-prototype-option="place:0"]')?.disabled).toBe(true);
   });
+  test("marks carry no letters and the recommended pill sits beside the words", async () => {
+    await mountQuestions();
+    for (const mark of document.querySelectorAll("[data-prototype-mark]")) expect(mark.textContent).toBe("");
+    for (const pill of document.querySelectorAll("[data-prototype-recommended]")) expect(pill.parentElement?.tagName).toBe("BUTTON");
+  });
+  test("a questions-only review is titled Questions, not Prototype review", async () => {
+    await mountQuestions();
+    expect(document.querySelector("[role=dialog] header p")?.textContent).toBe("Questions · Layout task");
+    expect(document.body.textContent).not.toContain("Prototype review");
+  });
+  test("an answered questionnaire fades unpicked options, drops the hint and shows one status line", async () => {
+    await mountQuestions(false, true);
+    expect(document.querySelector('[data-prototype-option="place:1"]')?.className).toContain("opacity-60");
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.className).not.toContain("opacity-60");
+    expect(document.body.textContent).not.toContain("Choose any");
+    const footer = document.querySelector("[data-prototype-decision]")!;
+    expect(footer.textContent).toContain("Skipped, recommended answers taken");
+    expect(footer.textContent).not.toMatch(/answered|No comment/i);
+  });
+  test("an open questionnaire keeps the hint and unfaded options", async () => {
+    await mountQuestions();
+    expect(document.body.textContent).toContain("Choose any");
+    expect(document.querySelector('[data-prototype-option="place:1"]')?.className).not.toContain("opacity-60");
+  });
 });

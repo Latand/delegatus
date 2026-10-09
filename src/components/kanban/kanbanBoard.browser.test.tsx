@@ -24082,6 +24082,9 @@ describe("short questionnaire rendered evidence", () => {
             expect(reading.sideways).toBeLessThanOrEqual(1);
             expect(reading.pillOverflow).toBe(0);
             expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
+            expect(reading.heightExcess).toBeLessThanOrEqual(1);
+            expect(reading.markLetters).toBe(0);
+            if (reading.stageWidth === null) expect(reading.title).toContain(lang === "uk" ? "Питання" : "Questions");
             for (const mark of reading.marks) expect(mark.multiple ? mark.radius < mark.width / 2 : mark.radius >= mark.width / 2).toBe(true);
             expect(reading.marks.some(m => !m.multiple) || taskId === "t-links").toBe(true);
             expect(reading.actions.every(a => a.visible)).toBe(true);
@@ -24097,12 +24100,21 @@ describe("short questionnaire rendered evidence", () => {
               await page.waitForSelector('[data-prototype-decision]');
               const posted = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[] }> }> }).protoPosts.at(-1));
               expect(posted?.answers[0]?.options).toEqual([0,1]);
+              const settled = await capturePrototypeQuestions(page, false);
+              expect(settled.hints).toBe(0); expect(settled.unpickedFaded).toBe(true);
+              expect(settled.statusLine).toBe(lang === "uk" ? "Відповіли" : "Answered");
+              expect(settled.decisionText).not.toMatch(/Без коментаря|No comment/);
+              readings.push({ lang, scheme, taskId, width: 1440, state: "answered", ...settled });
               await page.screenshot({ path: path.join(out, `${label}-answered.png`) });
             }
             if (taskId === "t-search") {
               await page.locator('[data-prototype-skip]').click();
               await page.waitForSelector('[data-prototype-skipped]');
-              expect((await capturePrototypeQuestions(page, false)).readonly).toBe(true);
+              const skipped = await capturePrototypeQuestions(page, false);
+              expect(skipped.readonly).toBe(true); expect(skipped.hints).toBe(0); expect(skipped.unpickedFaded).toBe(true);
+              expect(skipped.statusLine).toBe(lang === "uk" ? "Пропущено, взято рекомендовані" : "Skipped, recommended answers taken");
+              expect(skipped.decisionText).not.toMatch(/Без коментаря|No comment/);
+              readings.push({ lang, scheme, taskId, width: 1440, state: "skipped", ...skipped });
               await page.screenshot({ path: path.join(out, `${label}-skipped.png`) });
             }
             expect(pageErrors).toEqual([]);
