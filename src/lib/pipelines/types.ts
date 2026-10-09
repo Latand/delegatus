@@ -43,7 +43,7 @@ export type PipelineRoleId =
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
- * `confirm: "deploy"` gate (resolveSpawnRole / DraftAgentPane) that a pipeline —
+ * `confirm: "deploy"` gate (resolveSpawnRole) that a pipeline —
  * which spawns its stages automatically, without a per-stage confirmation — has
  * no way to honor, so it is excluded from the builder and rejected by the API.
  */
@@ -413,7 +413,13 @@ export type PipelineStageAttempt = {
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
   /** Recovery expenditure survives condition changes and host relaunches. */
-  providerRecoveryBudget?: { tries: number; startedAt: string };
+  providerRecoveryBudget?: {
+    tries: number; startedAt: string; engine?: FlowEngine; triedAccounts?: string[];
+    /** Auth and exhausted target failures remain excluded across quota resets. */
+    failedAccounts?: string[];
+  };
+  /** Unknown-reset fallback is spent across automatic stage replacements. Manual retry starts anew. */
+  providerFallbackRetries?: number;
   providerWait?: {
     condition: import("./providerConditions").ProviderCondition;
     text: string;
@@ -424,9 +430,15 @@ export type PipelineStageAttempt = {
     resumeAt: string;
     resetsAt: number | null;
     actionAt?: string;
+    /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
+    continuationRequestedAt?: string;
     switchedAccountId?: string;
     failedAccounts?: string[];
     capacityProbes?: number;
+    retryCancelled?: boolean;
+    /** A parked quota cut owes a fresh retry-stage after resumeAt. An operator
+        control change or a different park cancels this obligation. */
+    stageRetry?: { controlGeneration: string | null; detail: string; fallback?: boolean };
   };
   providerRecoveries?: Array<{
     at: string;
@@ -508,7 +520,14 @@ export type PipelineStageAttempt = {
   };
   /** Prompt context for a fresh attempt created after this attempt was interrupted.
       `cause` is absent on records written before causes were told apart. */
-  restartContext?: { previousAttempt: number; transcriptPath: string; cause?: PipelineStageInterruptionCause };
+  restartContext?: {
+    previousAttempt: number;
+    /** Null when the attempt was cut before its transcript was discovered. */
+    transcriptPath: string | null;
+    cause?: PipelineStageInterruptionCause;
+    /** The interrupted attempt's newest message, bounded, for the replacement's first message. */
+    lastReport?: string;
+  };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
@@ -539,6 +558,32 @@ export type PipelineStageAttempt = {
     messageTs: number;
     requestedAt?: string;
     clientMessageId?: string;
+  };
+  /** The one repair the controller asked this attempt for after a repository
+      hook refused the commit of its passed work; the stage repairs its files
+      or reports a blocked verdict, which parks. `detail` is the park text that refusal would have produced and
+      `messageTs` the stage's last message when it was refused, so the repair
+      is over on the first completed turn after it. `sendingAt` is stored
+      before a request leaves and kept until the delivery surface answers, so a
+      replay after a crash keeps it; only an outright refusal clears it, and
+      never after `sendUncertain` recorded an answer that may have followed an
+      admission; `requestedAt` takes that moment once the
+      surface accepted the request. `outcome` and `settledAt` checkpoint the
+      accepted or rejected repair before final settlement, so a rejected repair
+      replays as parked with its reason. `refusedAt` bounds the whole wait. A
+      refusal that finds this record already written parks. */
+  commitRepair?: {
+    refusedAt: string;
+    detail: string;
+    paths: string[];
+    messageTs: number | null;
+    sendingAt?: string;
+    sendUncertain?: true;
+    requestedAt?: string;
+    clientMessageId?: string;
+    /** Missing on older settled repairs, which already permitted a commit. */
+    outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
+    settledAt?: string;
   };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
@@ -780,6 +825,11 @@ export type PipelinePublicationFailure = {
   changedFiles?: number;
   /** The command budget the step ran past, when that is what ended it. */
   timedOutMs?: number;
+  /** The push budget at which the repository hook stopped a check that was
+      still running, so the push carries no verdict. */
+  hookBudgetMs?: number;
+  /** The check the hook named as stopped without a verdict. */
+  hookStoppedCheck?: string;
 };
 
 export type PipelinePublicationResult = (
@@ -978,6 +1028,7 @@ export type Pipeline = {
   /** Who cleared the lane off the queue at `dismissedAt`, attributed on the
       server (docs/design/needs-attention.md §5). Absent on a dismissal written
       before attribution existed. */
+  dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined

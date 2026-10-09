@@ -1,3 +1,4 @@
+import "@/lib/testing/fixtureLifetime";
 /**
  * A stand-in for `claude -p --input-format stream-json --output-format
  * stream-json --permission-prompt-tool stdio` that raises one tool permission

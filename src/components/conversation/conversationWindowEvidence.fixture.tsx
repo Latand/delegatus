@@ -39,9 +39,12 @@ import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { conversationIdentity } from "@/lib/accounts/identity";
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { ACTIVE_DELIVERY_PHASES, isDeliveryWaitReason, type DeliveryWaitReason } from "@/lib/runtime/deliveryWaitReason";
 import { relayMessageText } from "@/lib/orchestrator/relayText";
 
 import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
@@ -86,6 +89,7 @@ const ECHO = `You are the Orchestrator. Drive work through the production Viewer
 
 export type ConversationWindowCase =
   | "delivery-settlement"
+  | "delivery-stalled"
   | "delivery-check-card"
   | "lifecycle"
   | "long-history"
@@ -106,6 +110,7 @@ export type ConversationWindowCase =
   | "agent-images"
   | "image-viewers"
   | "own-message-steps"
+  | "payload-notice"
   | "prototype-notice";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -1062,6 +1067,68 @@ function mountPrototypeNotice(root: HTMLElement): void {
   }) as typeof fetch;
 }
 
+/* The operator's report, 2026-10-07: «Автоматичну перевірку зупинено» in a
+   box over the composer, under a «Перевірити доставку» that did nothing. Two
+   messages are retained in this browser's storage before the production
+   composer mounts: one whose delivery ended while the tab was away, whose
+   record answers `delivered` at once, and one whose record has no ending yet.
+   The driver flips the second through `window.payloadNotice.deliver()`; every
+   read of an operation record is counted in `[data-fixture-operation-reads]`. */
+const PAYLOAD_NOTICE = {
+  earlier: { key: "payload-notice-earlier", operationId: "op-payload-notice-earlier", text: "Merge the release branch once the checks are green." },
+  owed: { key: "payload-notice-owed", operationId: "op-payload-notice-owed", text: "Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond." },
+};
+const payloadNoticeState = { delivered: false, reads: [] as string[] };
+
+function PayloadNoticeFixture() {
+  useFakeHost();
+  const [ready, setReady] = useState(false);
+  const [reads, setReads] = useState(0);
+  useEffect(() => {
+    const conversationId = conversationIdentity(lifeFile());
+    void (async () => {
+      for (const seed of [PAYLOAD_NOTICE.earlier, PAYLOAD_NOTICE.owed]) {
+        const ref = await composerSubmissionPayloads.retain({ conversationId, key: seed.key }, { text: seed.text, images: [], files: [] });
+        await composerSubmissionPayloads.seal(ref, { route: "runtime", body: { conversationId, text: seed.text, idempotencyKey: seed.key } });
+        await composerSubmissionPayloads.beginAttempt(ref);
+        composerSubmissionPayloads.consumeAttempt(ref);
+        await composerSubmissionPayloads.observe(ref, { operationId: seed.operationId, idempotencyKey: seed.key, conversationId,
+          revision: 1, status: "queued", at: "2026-10-07T18:00:00.000Z" });
+      }
+      setReady(true);
+    })();
+    const timer = setInterval(() => setReads(payloadNoticeState.reads.length), 50);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div data-evidence-case="payload-notice" className="flex min-h-dvh flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
+          paused={false} follow setFollow={() => undefined} />
+      </div>
+      {ready ? <TmuxComposer file={lifeFile()} /> : null}
+      <span data-fixture-operation-reads hidden>{reads}</span>
+    </div>
+  );
+}
+
+function mountPayloadNotice(root: HTMLElement): void {
+  mountLifecycle(root, <PayloadNoticeFixture />);
+  (window as unknown as { payloadNotice: { deliver(): void } }).payloadNotice = { deliver: () => { payloadNoticeState.delivered = true; } };
+  const transport = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const match = /^\/api\/runtime\/operations\/([^/?]+)$/.exec(url);
+    if (!match) return transport(input, init);
+    const operationId = decodeURIComponent(match[1]!);
+    payloadNoticeState.reads.push(operationId);
+    const seed = Object.values(PAYLOAD_NOTICE).find((candidate) => candidate.operationId === operationId);
+    if (!seed || (seed === PAYLOAD_NOTICE.owed && !payloadNoticeState.delivered)) return Response.json({ error: "no ending recorded" }, { status: 404 });
+    return Response.json({ receipt: { operationId, idempotencyKey: seed.key, conversationId: conversationIdentity(lifeFile()), kind: "send",
+      status: "delivered", resend: "not-needed", text: seed.text, at: "2026-10-07T18:01:00.000Z", revision: 2 } });
+  }) as typeof fetch;
+}
+
 function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture />): void {
   setRuntimeUiEnabledForTests(false);
   setLogFeedDependenciesForTests({
@@ -1288,6 +1355,59 @@ function DeliverySettlementFixture() {
       <span data-fixture-sends>{sends}</span>
     </div>
   </div>;
+}
+
+/* One hung hand-over as the delivery queue records it (incident 2026-10-06),
+   served the way `/api/runtime/delivery-progress` serves it: handing over from
+   the moment of admission, and marked stalled once the queue's four-second
+   stall bound and one watchdog second have passed. Nothing tells the page; the
+   production row reads it on its own poll and nobody touches it. */
+const STALLED_OPERATION = "evidence-stalled-operation";
+const STALL_RECORDED_AFTER_MS = 5_000;
+
+/** What the hung hand-over waits on (`?reason=`): `dispatching` by default,
+    `evidence-unreadable` for a lost admission acknowledgement or a startup
+    continuation whose journal cannot be read, `awaiting-turn` for an entry
+    Codex acknowledged into its own queue. The queue marks only an active
+    phase stalled, and so does this record. */
+function stalledReason(): DeliveryWaitReason {
+  const requested = params.get("reason");
+  return isDeliveryWaitReason(requested) ? requested : "dispatching";
+}
+
+function installStalledProgress(startedAt: number): void {
+  const transport = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (!url.startsWith("/api/runtime/delivery-progress")) return transport(input, init);
+    const at = (ms: number) => new Date(startedAt + ms).toISOString();
+    const reason = stalledReason();
+    const stalled = ACTIVE_DELIVERY_PHASES.has(reason) && Date.now() - startedAt >= STALL_RECORDED_AFTER_MS;
+    return Response.json({ records: [{
+      operationId: STALLED_OPERATION, conversationId: "conversation_stalled", originalKey: "evidence-stalled-key", kind: "send",
+      waitReason: reason, detail: null, attempt: 1, admittedAt: at(0), phaseSince: at(0), lastProgressAt: at(0),
+      deadlineAt: null, deadlinePolicy: null, nextWakeAt: null, stalledSince: stalled ? at(STALL_RECORDED_AFTER_MS) : null,
+      wakeLostAt: null, executorId: "evidence-executor", terminal: null, updatedAt: at(stalled ? STALL_RECORDED_AFTER_MS : 0),
+    }] });
+  }) as typeof fetch;
+}
+
+function DeliveryStalledFixture({ startedAt }: { startedAt: number }) {
+  const { t } = useLocale();
+  const text = "Please check the release.";
+  return (
+    <div data-evidence-case="delivery-stalled" data-fixture-started={startedAt} className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <OutboxBubblesView
+        entries={[{ id: "evidence-stalled-key", text, images: 0, at: startedAt, state: "delivering",
+          dispatchedAt: startedAt, operationId: STALLED_OPERATION } as OutboxEntry]}
+        t={t}
+        nowMs={startedAt}
+        onCancel={() => undefined}
+        onRetry={() => undefined}
+        session={{ host: "hosted", turn: "idle" }}
+      />
+    </div>
+  );
 }
 
 /* The operator's report: an English handoff relayed by another project's
@@ -1673,9 +1793,14 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "prototype-notice") mountPrototypeNotice(root);
+else if (root && requested === "payload-notice") mountPayloadNotice(root);
 else if (root && requested === "long-history") mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
-else if (root) {
+else if (root && requested === "delivery-stalled") {
+  const startedAt = Date.now();
+  installStalledProgress(startedAt);
+  createRoot(root).render(<DeliveryStalledFixture startedAt={startedAt} />);
+} else if (root) {
   if (requested === "image-viewers") installCaptureBytes();
   createRoot(root).render(<Fixture id={requested} />);
 }

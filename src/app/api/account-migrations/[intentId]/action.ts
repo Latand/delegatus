@@ -5,6 +5,11 @@ import { requestAccountMigrationTick } from "@/lib/accounts/migration/controller
 import { authorizeCodexForkRetry } from "@/lib/accounts/migration/provider";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
+/** A write the registry lock refused: nothing changed, and asking again is safe. */
+function busy(error: string): NextResponse {
+  return NextResponse.json({ error, retryable: true }, { status: 503 });
+}
+
 export async function updateMigrationAction(
   req: NextRequest,
   { params }: { params: Promise<{ intentId: string }> },
@@ -19,8 +24,12 @@ export async function updateMigrationAction(
   const { intentId } = await params;
   try {
     if (body.action === "stop") {
-      const stopped = registry.setMigrationIntentState(intentId, "stopped", body.expectedRevision as number | undefined);
-      return NextResponse.json(stopped);
+      /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); a
+         refusal changes nothing and the intent keeps draining. */
+      const stopped = await registry.deliveryWrite({ label: "migration.stop" },
+        () => registry.setMigrationIntentState(intentId, "stopped", body.expectedRevision as number | undefined));
+      if (!stopped.acquired) return busy("the stop could not be recorded; nothing changed");
+      return NextResponse.json(stopped.value);
     }
     const snapshot = registry.readOnlySnapshot();
     const intent = snapshot.migrationIntents[intentId];
@@ -34,7 +43,13 @@ export async function updateMigrationAction(
       if (conversation.engine === "codex" && migration.errorCode === "codex-fork-outcome-unknown") {
         await authorizeForkRetry(migration.operationId, conversation.id);
       }
-      retried.push(registry.retryConversationMigration(conversation.id, migration.revision));
+      const retry = await registry.deliveryWrite({ label: "migration.retry", operationId: migration.operationId },
+        () => registry.retryConversationMigration(conversation.id, migration.revision));
+      if (!retry.acquired) {
+        if (retried.length > 0) requestTick();
+        return busy("the retry could not be recorded; try again");
+      }
+      retried.push(retry.value);
     }
     if (retried.length > 0) requestTick();
     return NextResponse.json({ intent, retried: retried.length });

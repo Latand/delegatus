@@ -7,6 +7,7 @@ import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import {
   agentRegistry,
+  RegistryWriterBusyError,
   type AgentRegistry,
   type ConversationObservation,
   type MigrationScope,
@@ -23,6 +24,7 @@ import {
 } from "@/lib/board/store";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { tryConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import type { DeliveryWaitReason } from "@/lib/runtime/deliveryWaitReason";
 import { procBackend } from "@/lib/proc";
 import { listFiles } from "@/lib/scanner";
 import { recordTranscriptComposerRelease, transcriptTurnResult, type TranscriptTurnResult } from "@/lib/scanner/activity";
@@ -34,7 +36,8 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { isStructuredDeliveryControllerUnavailable } from "@/lib/runtime/structuredDeliveryController";
 import { SEND_SETTLEMENT_WINDOW_MS } from "@/lib/runtime/sendSettlement";
 
-import { requestAccountMigrationTick } from "./controllerSignal";
+import { ADVANCEMENT_LEASE_MS, HELD_DRAIN_PASS_BUDGET_MS, requestAccountMigrationTick } from "./controllerSignal";
+import { migrationLane, startMigrationLane, withAdvancementPermit } from "./lanes";
 import {
   emptyLaunchProfile,
   migrationSuccessorLaunchProfile,
@@ -69,17 +72,49 @@ export interface HeldDeliveryDeferral {
   cause: string;
 }
 
-export type HeldDeliveryAttemptOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldDeliveryDeferral;
+/** A payload the host cannot take, refused before any command (Note 2). */
+export interface HeldDeliveryRejection {
+  outcome: "rejected";
+  cause: string;
+}
+
+export type HeldDeliveryAttemptOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldDeliveryDeferral | HeldDeliveryRejection;
 
 export interface HeldDeliveryPort {
   /* `lease` is the drain's hold on the conversation's actuation section: a delivery that must claim again inside it
      passes the lease on rather than waiting for a section it already holds. */
   deliver(input: { delivery: HeldDelivery; path: string; clientMessageId: string; lease?: ActuationLease }): Promise<HeldDeliveryAttemptOutcome>;
   reconcileUncertain?(input: { delivery: HeldDelivery; path: string; clientMessageId: string }): Promise<HeldDeliveryAttemptOutcome>;
+  /** Records a wait the drain decided itself on the send's progress record. An
+      observer's note leaves the acting operation's record alone. */
+  wait?(input: { delivery: HeldDelivery; registry: AgentRegistry; reason: DeliveryWaitReason; detail?: string | null; observer?: boolean }): void;
+  /** Whether this process claims and acts on a held send at all. One that
+      cannot record the waits of its attempt (the inventory sidecar, which owns
+      no progress store) claims nothing and leaves the send to the Viewer's
+      pass (docs/design/delivery-progress-and-drain.md, P9). */
+  actuates?(): boolean;
 }
 
 export interface DrainHeldDeliveriesOptions {
   now?: () => number;
+}
+
+/** One registry write the coordinator makes, waited for off the event loop
+    and correlated with the operation it is made for (rule c). Null when the
+    lock stayed held: nothing was written. */
+async function offLoop<T>(
+  registry: AgentRegistry,
+  label: string,
+  operationId: string | null,
+  write: () => T,
+): Promise<{ value: T } | null> {
+  const written = await registry.deliveryWrite({ label, operationId }, write);
+  return written.acquired ? { value: written.value } : null;
+}
+
+/** {@link offLoop} for a step that cannot continue without its write. */
+function offLoopOrBusy<T>(registry: AgentRegistry, label: string, operationId: string | null, write: () => T): Promise<T> {
+  return registry.deliveryWriteOrBusy({ label, operationId }, write);
 }
 
 /**
@@ -808,9 +843,11 @@ async function repairCommittedBoardSuccessions(
       return;
     }
   }
-  registry.markMigrationBoardPlacementProjects(
+  /* A mark the lock refused stays unwritten; the next pass derives the same
+     plan from the durable migration and writes it then. */
+  if (!await offLoop(registry, "migration.board", plans[0]?.operationId ?? null, () => registry.markMigrationBoardPlacementProjects(
     plans.map((plan) => ({ id: plan.conversationId, operationId: plan.operationId, project: plan.project })),
-  );
+  ))) return;
   const byProject = new Map<string, BoardRepairPlan[]>();
   await forEachCooperatively(plans, (plan) => {
     const projectPlans = byProject.get(plan.project) ?? [];
@@ -838,7 +875,7 @@ async function repairCommittedBoardSuccessions(
       });
     }
   });
-  registry.markMigrationBoardProjects(converged);
+  await offLoop(registry, "migration.board", converged[0]?.operationId ?? null, () => registry.markMigrationBoardProjects(converged));
 }
 
 /** The caller's account fence, as a target the switch can no longer use. */
@@ -862,15 +899,22 @@ async function cleanupDiscardedSuccessor(
   const ownsCommittedHost = current?.host !== null && current?.host !== undefined
     && sameGenerationHostEvidence(current.host, receipt.host);
   if (committed && current?.id === receipt.nativeId && current.path === receipt.path && ownsCommittedHost) {
-    registry.completeSuccessorCleanup(receipt.operationId);
+    await offLoop(registry, "migration.cleanup", receipt.operationId, () => registry.completeSuccessorCleanup(receipt.operationId));
     return;
   }
-  registry.queueSuccessorCleanup(latest.id, receipt);
+  /* A queue write the lock refused still runs the provider's cleanup; only a
+     cleanup that also fails leaves the discarded successor as a crash before
+     the queue write would. A refused completion or failure record leaves the
+     pending row, which the next pass's cleanup finishes. */
+  if (!await offLoop(registry, "migration.cleanup", receipt.operationId, () => registry.queueSuccessorCleanup(latest.id, receipt))) {
+    console.warn("[account-migration] successor cleanup could not be queued", { operationId: receipt.operationId });
+  }
   try {
     await provider.cleanup?.(receipt);
-    registry.completeSuccessorCleanup(receipt.operationId);
+    await offLoop(registry, "migration.cleanup", receipt.operationId, () => registry.completeSuccessorCleanup(receipt.operationId));
   } catch (error) {
-    registry.recordSuccessorCleanupFailure(receipt.operationId, error instanceof Error ? error.message : String(error));
+    await offLoop(registry, "migration.cleanup", receipt.operationId,
+      () => registry.recordSuccessorCleanupFailure(receipt.operationId, error instanceof Error ? error.message : String(error)));
   }
 }
 
@@ -922,9 +966,21 @@ export async function advanceConversationMigration(
   if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
   let migration = conversation.migration;
+  /* Every write that advances the switch waits for the lock off the loop and
+     is correlated with the switch's operation (rule c). One the lock refused
+     wrote nothing: the switch keeps its phase at its revision and the next
+     pass repeats the step from there. */
+  const advance = <T>(label: string, write: () => T) => offLoopOrBusy(registry, label, migration.operationId, write);
   if (migration.phase === "waiting-turn") {
     if (!successorCreationReady(conversation, registry)) return conversation;
-    conversation = registry.transitionConversationMigration(conversation.id, migration.revision, ["waiting-turn"], { phase: "requested" });
+    const waiting = conversation;
+    try {
+      conversation = await advance("migration.transition",
+        () => registry.transitionConversationMigration(waiting.id, migration.revision, ["waiting-turn"], { phase: "requested" }));
+    } catch (error) {
+      if (error instanceof RegistryWriterBusyError) return waiting;
+      throw error;
+    }
     migration = conversation.migration!;
   }
   if (migration.phase === "committed") {
@@ -945,16 +1001,16 @@ export async function advanceConversationMigration(
     } else {
       if (!successorCreationReady(conversation, registry)) return conversation;
       const creationFencePhase = migration.phase;
-      const restoreCreationFence = (current: RegistryConversation): RegistryConversation => {
+      const restoreCreationFence = async (current: RegistryConversation): Promise<RegistryConversation> => {
         const currentMigration = current.migration ?? migration;
         if (currentMigration.phase !== creationFencePhase
           && (currentMigration.phase === "preparing" || currentMigration.phase === "successor-starting")) {
-          return registry.transitionConversationMigration(
+          return advance("migration.transition", () => registry.transitionConversationMigration(
             current.id,
             currentMigration.revision,
             [currentMigration.phase],
             { phase: creationFencePhase },
-          );
+          ));
         }
         return current;
       };
@@ -968,32 +1024,39 @@ export async function advanceConversationMigration(
            applying reconfigure owns its own switch and ends it itself. */
         if (conversation.reconfigure?.status !== "applying"
           && sourceNeverStarted(registry, conversation, source)) {
-          return registry.rollbackConversationMigration(conversation.id, migration.revision);
+          const neverStarted = conversation;
+          return advance("migration.rollback", () => registry.rollbackConversationMigration(neverStarted.id, migration.revision));
         }
         return conversation;
       }
       if (migration.phase === "requested") {
-        conversation = registry.transitionConversationMigration(conversation.id, migration.revision, ["requested"], { phase: "preparing" });
+        const requested = conversation;
+        conversation = await advance("migration.transition",
+          () => registry.transitionConversationMigration(requested.id, migration.revision, ["requested"], { phase: "preparing" }));
         migration = conversation.migration!;
       }
       if (migration.phase === "preparing") {
-        conversation = registry.transitionConversationMigration(conversation.id, migration.revision, ["preparing"], { phase: "successor-starting" });
+        const preparing = conversation;
+        conversation = await advance("migration.transition",
+          () => registry.transitionConversationMigration(preparing.id, migration.revision, ["preparing"], { phase: "successor-starting" }));
         migration = conversation.migration!;
       }
       conversation = registry.conversation(conversation.id) ?? conversation;
       migration = conversation.migration ?? migration;
-      if (!successorCreationReady(conversation, registry)) return restoreCreationFence(conversation);
+      if (!successorCreationReady(conversation, registry)) return await restoreCreationFence(conversation);
       source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
         ?? conversation.generations.at(-1);
       if (!source) throw new Error("conversation has no source generation");
-      if (!completeProviderTurnObservation(conversation, source, successorProvider.virtualSource === true, registry)) return restoreCreationFence(conversation);
+      if (!completeProviderTurnObservation(conversation, source, successorProvider.virtualSource === true, registry)) return await restoreCreationFence(conversation);
       if (!migration.successorLaunchProfile) {
-        conversation = registry.transitionConversationMigration(
-          conversation.id,
+        const starting = conversation;
+        const startingSource = source;
+        conversation = await advance("migration.transition", () => registry.transitionConversationMigration(
+          starting.id,
           migration.revision,
           ["successor-starting"],
-          { successorLaunchProfile: migrationSuccessorLaunchProfile(source.launchProfile) },
-        );
+          { successorLaunchProfile: migrationSuccessorLaunchProfile(startingSource.launchProfile) },
+        ));
         migration = conversation.migration!;
       }
       const conversationId = conversation.id;
@@ -1009,12 +1072,18 @@ export async function advanceConversationMigration(
         conversationId,
         source: successorSource,
         targetAccountId: migration.targetId,
-        recordContinuityPath(pathname) {
-          registry.recordMigrationContinuityPath(conversationId, pathname, creationOwner);
+        /* A path the lock refused throws before the provider goes on, so
+           `create` fails busy and the next pass calls it again for the same
+           operation, which returns the same successor. */
+        async recordContinuityPath(pathname) {
+          await offLoopOrBusy(registry, "migration.continuity", creationOwner.operationId,
+            () => registry.recordMigrationContinuityPath(conversationId, pathname, creationOwner));
         },
       });
       if (receipt.operationId !== creationOwner.operationId) throw new Error("successor receipt operation does not match");
-      conversation = registry.persistMigrationProviderReceipt(conversationId, creationOwner.revision, creationOwner.operationId, receipt);
+      const created = receipt;
+      conversation = await offLoopOrBusy(registry, "migration.receipt", creationOwner.operationId,
+        () => registry.persistMigrationProviderReceipt(conversationId, creationOwner.revision, creationOwner.operationId, created));
       migration = conversation.migration!;
       receipt = migration.providerReceipt ?? receipt;
     }
@@ -1098,14 +1167,18 @@ export async function advanceConversationMigration(
       }
       return registry.conversation(publicationConversationId) ?? publishOwner ?? conversation;
     }
-    const committed = registry.commitSuccessor(publicationConversationId, {
+    /* A commit the lock refused leaves the switch verifying and its held sends
+       held; the next pass publishes again, idempotently per operation, and
+       commits. */
+    const targetId = migration.targetId;
+    const committed = await offLoopOrBusy(registry, "migration.commit", publicationOperationId, () => registry.commitSuccessor(publicationConversationId, {
       id: publicationReceipt.nativeId,
       path: publicationReceipt.path,
-      accountId: migration.targetId,
+      accountId: targetId,
       launchProfile: successorProfile,
       historyHash: publicationReceipt.historyHash,
       host: publicationReceipt.host,
-    }, publicationRevision, publicationOperationId, publicationReceipt);
+    }, publicationRevision, publicationOperationId, publicationReceipt));
     if (!options.deferBoardRepair) await repairCommittedBoardSuccessions(
       [committed],
       registry,
@@ -1116,6 +1189,7 @@ export async function advanceConversationMigration(
   } catch (error) {
     const latest = registry.conversation(conversation.id);
     if (error instanceof SuccessorPendingError) return latest ?? conversation;
+    if (error instanceof RegistryWriterBusyError) return latest ?? conversation;
     if (isStructuredDeliveryControllerUnavailable(error)) return latest ?? conversation;
     const durableReceipt = latest?.migration?.providerReceipt;
     const fencedByDurableReceipt = receipt !== null && durableReceipt !== null && durableReceipt !== undefined
@@ -1146,11 +1220,20 @@ export async function advanceConversationMigration(
     const safe = error instanceof CodexForkOutcomeUnknownError
       ? { message: "Codex fork outcome is awaiting recovery", code: "codex-fork-outcome-unknown" }
       : sanitizeProviderError(error);
-    const failed = registry.transitionConversationMigration(conversation.id, migration.revision, ["requested", "preparing", "successor-starting", "verifying"], {
-      phase: "failed-recoverable",
-      error: safe.message,
-      errorCode: safe.code,
-    });
+    const failing = conversation;
+    let failed: RegistryConversation;
+    try {
+      failed = await advance("migration.transition", () => registry.transitionConversationMigration(failing.id, migration.revision, ["requested", "preparing", "successor-starting", "verifying"], {
+        phase: "failed-recoverable",
+        error: safe.message,
+        errorCode: safe.code,
+      }));
+    } catch (transitionError) {
+      /* The lock refused the failure: a pass with no change, and the next one
+         meets the provider failure again. */
+      if (transitionError instanceof RegistryWriterBusyError) return latest ?? conversation;
+      throw transitionError;
+    }
     await cleanupDiscardedSuccessor(successorProvider, receipt, failed, registry);
     return failed;
   }
@@ -1169,59 +1252,118 @@ export async function drainHeldDeliveries(
     const reconciling = item.state === "delivery-uncertain";
     if (reconciling && !delivery.reconcileUncertain) return;
     if (!reconciling && (item.state !== "assigned" || item.generationId !== current.id)) return;
+    const operationId = item.command.operationId;
     if (item.payloadKind !== "text" && item.payloadKind !== "runtime-images") {
-      registry.recordDeliveryOutcome(item.id, "failed", "request-local delivery requires client retry");
+      /* Refused for the lock: it stays, and the next pass fails it. */
+      await offLoop(registry, "delivery.settle", operationId,
+        () => registry.recordDeliveryOutcome(item.id, "failed", "request-local delivery requires client retry"));
       return;
     }
+    /* Nothing claimed and nothing read: the Viewer's pass, woken by the
+       send's record, delivers or reconciles it. */
+    if (delivery.actuates && !delivery.actuates()) return;
     /* #1709: a claim and its delivery run in the conversation's actuation section, like every other actuator's.
        A send holding the section is not waited for here, so one slow send never delays this pass for other
        conversations: this delivery is left for the tick requested when the section frees. A later delivery of the
        same conversation cannot go first meanwhile, because its claim is refused while this one is assigned. */
     const attempt = await tryConversationActuation(conversationId, async (lease) => {
-      const claimed = reconciling ? item : registry.beginDeliveryAttempt(item.id, current.id);
+      lease.act(operationId);
+      let claimed: HeldDelivery | null = item;
+      if (!reconciling) {
+        /* Waited for off the loop (rule c). A claim the lock refused claimed
+           nothing: the reservation stays assigned for the next pass. */
+        const claim = await offLoop(registry, "delivery.claim", operationId, () => registry.beginDeliveryAttempt(item.id, current.id));
+        if (!claim) {
+          delivery.wait?.({ delivery: item, registry, reason: "checking", detail: "the writer claim waited past its lock deadline" });
+          return;
+        }
+        claimed = claim.value;
+      }
       if (!claimed) return;
-      const clientMessageId = claimed.clientMessageId ?? `migration:${claimed.id}`;
+      const settled = claimed;
+      const clientMessageId = settled.clientMessageId ?? `migration:${settled.id}`;
       try {
-        const input = { delivery: claimed, path: current.path, clientMessageId, lease };
+        const input = { delivery: settled, path: current.path, clientMessageId, lease };
         const outcome = reconciling
           ? await delivery.reconcileUncertain!(input)
           : await delivery.deliver(input);
         if (reconciling && outcome === "delivery-uncertain") return;
+        if (typeof outcome === "object" && outcome.outcome === "rejected") {
+          /* Not dispatched by this attempt: it ends with the payload's
+             rejection, and an assigned send that never went out may be sent
+             again. A reconciled one may have gone out earlier, so it proves
+             nothing about that. Refused for the lock, it stays claimed, and
+             the next pass reaches the same rejection before any command. */
+          const cause = outcome.cause;
+          await offLoop(registry, "delivery.reject", operationId,
+            () => registry.recordDeliveryOutcome(settled.id, "failed", cause, reconciling ? undefined : "lost"));
+          return;
+        }
         if (outcome === "held" || typeof outcome === "object") {
           if (!reconciling) {
             /* A bare `held` is progress (a resume that just published, or a runtime
                host briefly out of reach), so only a deferral with a cause is bounded. */
-            const priorDeferralCause = claimed.error === "delivery started; recovery requires an explicit outcome"
+            const priorDeferralCause = settled.error === "delivery started; recovery requires an explicit outcome"
               ? null
-              : claimed.error;
+              : settled.error;
             const cause = priorDeferralCause ?? (typeof outcome === "object" ? outcome.cause : null);
-            const failure = cause ? unactuatedFailure(claimed, cause, (options.now ?? Date.now)()) : null;
-            if (failure) registry.recordDeliveryOutcome(claimed.id, "failed", failure, "lost");
-            else registry.requeueUnactuatedDelivery(claimed.id, cause ?? undefined);
+            const failure = cause ? unactuatedFailure(settled, cause, (options.now ?? Date.now)()) : null;
+            /* Either write refused for the lock leaves the send claimed and
+               `delivery-uncertain`, reconciled under its original key (Note 1). */
+            if (failure) await offLoop(registry, "delivery.settle", operationId, () => registry.recordDeliveryOutcome(settled.id, "failed", failure, "lost"));
+            else await offLoop(registry, "delivery.requeue", operationId, () => registry.requeueUnactuatedDelivery(settled.id, cause ?? undefined));
           }
         }
-        else registry.recordDeliveryOutcome(claimed.id, outcome, outcome === "failed" ? "delivery failed and remains recoverable" : null);
+        else await offLoop(registry, "delivery.settle", operationId,
+          () => registry.recordDeliveryOutcome(settled.id, outcome, outcome === "failed" ? "delivery failed and remains recoverable" : null));
       } catch {
-        registry.recordDeliveryOutcome(claimed.id, "delivery-uncertain", "delivery result is uncertain and remains recoverable");
+        /* A refused write leaves it `delivery-uncertain`, which the claim already made it. */
+        await offLoop(registry, "delivery.settle", operationId,
+          () => registry.recordDeliveryOutcome(settled.id, "delivery-uncertain", "delivery result is uncertain and remains recoverable"));
       }
     });
-    if (!attempt.acquired) void attempt.released.then(() => requestAccountMigrationTick());
+    if (!attempt.acquired) {
+      delivery.wait?.({ delivery: item, registry, reason: "conversation-busy", observer: true });
+      void attempt.released.then(() => requestAccountMigrationTick());
+    }
   });
 }
 
+export interface ReconcileMigrationsOptions extends MigrationCoordinatorOptions {
+  /** How long the pass waits for its lanes ({@link HELD_DRAIN_PASS_BUDGET_MS}). */
+  passBudgetMs?: number;
+  /** How long one lane keeps the advancement permit ({@link ADVANCEMENT_LEASE_MS}). */
+  advancementLeaseMs?: number;
+}
+
+/**
+ * One coordinator pass (docs/design/delivery-progress-and-drain.md, B1).
+ *
+ * Every conversation with work gets its own lane, started and not awaited:
+ * successor cleanups owed for it, reconciliation of an uncertain attempt,
+ * orphan and rollback cancellations, advancement, and the drains after it, in
+ * that order. The pass waits for its lanes until its budget, so one
+ * conversation whose delivery or provider never answers delays no other's. A
+ * lane that outlives the pass keeps its conversation; a later pass skips it
+ * and the lane asks for another pass when it ends. Advancement holds the one
+ * leased permit, so successors are still created one at a time while
+ * providers answer.
+ */
 export async function reconcileMigrations(
   provider: SuccessorProviderPort,
   delivery: HeldDeliveryPort,
   registry: AgentRegistry = agentRegistry(),
-  options: MigrationCoordinatorOptions = {},
+  options: ReconcileMigrationsOptions = {},
 ): Promise<void> {
+  const { passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS, advancementLeaseMs = ADVANCEMENT_LEASE_MS, ...coordinatorOptions } = options;
   const orphanedDeliveryReason =
     `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} its upgrade-era reservation has no durable owner evidence; send again to authorize a fresh delivery action`;
   const before = registry.readOnlySnapshot();
-  await forEachCooperatively(Object.values(before.pendingSuccessorCleanups), async (pending) => {
-    const owner = registry.conversation(pending.conversationId);
-    if (owner) await cleanupDiscardedSuccessor(provider, pending.receipt, owner, registry);
-  });
+  const cleanups = new Map<ViewerConversationId, RegistryFile["pendingSuccessorCleanups"][string][]>();
+  for (const pending of Object.values(before.pendingSuccessorCleanups)) {
+    const id = registry.canonicalConversationId(pending.conversationId);
+    cleanups.set(id, [...cleanups.get(id) ?? [], pending]);
+  }
   const pendingDeliveries = new Set<ViewerConversationId>();
   const uncertainDeliveries = new Set<ViewerConversationId>();
   const currentlyAssignedDeliveries = new Set<ViewerConversationId>();
@@ -1246,7 +1388,8 @@ export async function reconcileMigrations(
       await drainHeldDeliveries(parked.id, delivery, registry);
     }
   };
-  await forEachCooperatively(Object.values(before.conversations), async (snapshotConversation) => {
+  /* Whether the conversation has delivery or switch work this pass. */
+  const hasWork = (snapshotConversation: RegistryConversation): boolean => {
     // A keyed delivery read may assemble grant provenance across the registry.
     // Inventory already tells us which conversations need that read (#1983).
     const hasDelivery = pendingDeliveries.has(snapshotConversation.id);
@@ -1256,10 +1399,12 @@ export async function reconcileMigrations(
     // residue stays parked without a read.
     if (snapshotConversation.migration?.phase === "failed-recoverable"
       && !uncertainDeliveries.has(snapshotConversation.id)
-      && !currentlyAssignedDeliveries.has(snapshotConversation.id)) return;
+      && !currentlyAssignedDeliveries.has(snapshotConversation.id)) return false;
     const activeMigration = snapshotConversation.migration !== null
       && !terminalMigrationPhase(snapshotConversation.migration.phase);
-    if (!hasDelivery && !activeMigration) return;
+    return hasDelivery || activeMigration;
+  };
+  const drainConversation = async (snapshotConversation: RegistryConversation) => {
     let conversation = registry.conversation(snapshotConversation.id) ?? snapshotConversation;
     let drained = false;
     if (conversation.migration
@@ -1277,7 +1422,11 @@ export async function reconcileMigrations(
         if ((item.state === "held" || item.state === "assigned")
           && item.recoveryIntent !== "reclaimed-host"
           && !deliveryHasDurableClaimOwner(before, conversation, item)) {
-          registry.terminalizeHeldDelivery(item.id, orphanedDeliveryReason);
+          /* A cancellation the lock refused leaves the reservation as it was,
+             and this conversation is not drained this pass: nothing it would
+             have cancelled may be delivered first. */
+          if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
+            () => registry.terminalizeHeldDelivery(item.id, orphanedDeliveryReason))) return;
         }
       }
       if (pending.some((item) =>
@@ -1291,13 +1440,14 @@ export async function reconcileMigrations(
       /* Reconciliation can reach rolled-back residue before the hygiene sweep
          clears it. Apply the same latest-admission ownership fence here so an
          exact resend cannot be cancelled through its older reservation. */
+      const intentId = conversation.migration.intentId;
       for (const item of registry.pendingDeliveries(conversation.id)) {
         if (item.state !== "held" && item.state !== "assigned" && item.state !== "delivery-uncertain") continue;
-        registry.terminalizeRolledBackMigrationDelivery(
+        if (!await offLoop(registry, "delivery.cancel", item.command.operationId, () => registry.terminalizeRolledBackMigrationDelivery(
           item.id,
-          conversation.migration.intentId,
+          intentId,
           "delivery cancelled because its owning account migration was rolled back; send again to authorize a fresh delivery action",
-        );
+        ))) return;
       }
       if (registry.pendingDeliveries(conversation.id).some((item) =>
         item.state === "assigned"
@@ -1322,10 +1472,13 @@ export async function reconcileMigrations(
     const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
       ?? conversation.generations.at(-1);
     if (source?.accountId === null && !migration.providerReceipt) {
-      registry.rollbackConversationMigration(conversation.id, migration.revision);
+      /* Refused for the lock: the migration stays as it was for the next pass. */
+      await offLoop(registry, "migration.rollback", migration.operationId,
+        () => registry.rollbackConversationMigration(conversation.id, migration.revision));
       return;
     }
-    const advanced = await advanceConversationMigration(conversation.id, registry, provider, { ...options, deferBoardRepair: true });
+    const advanced = await withAdvancementPermit(advancementLeaseMs,
+      () => advanceConversationMigration(conversation.id, registry, provider, { ...coordinatorOptions, deferBoardRepair: true }));
     if ((advanced.migration?.phase === "committed" || advanced.migration?.phase === "rolled-back")
       && registry.pendingDeliveries(advanced.id).some((item) =>
         item.state === "assigned"
@@ -1333,14 +1486,70 @@ export async function reconcileMigrations(
       await drainHeldDeliveries(advanced.id, delivery, registry);
     }
     if (!drained && advanced.migration?.phase === "failed-recoverable") await drainParkedSwitch(advanced);
+  };
+  const lane = async (snapshotConversation: RegistryConversation, owed: RegistryFile["pendingSuccessorCleanups"][string][], work: boolean) => {
+    for (const pending of owed) {
+      const owner = registry.conversation(pending.conversationId);
+      if (owner) await cleanupDiscardedSuccessor(provider, pending.receipt, owner, registry);
+    }
+    if (work) await drainConversation(snapshotConversation);
+  };
+  const lanes: Promise<void>[] = [];
+  const start = (conversationId: ViewerConversationId, run: () => Promise<void>) => {
+    const running = migrationLane(conversationId);
+    if (running) {
+      /* The conversation is its lane's until that lane ends: its other
+         assigned sends say so, and the acting one keeps its own record. */
+      running.rerun = true;
+      for (const item of registry.pendingDeliveries(conversationId)) {
+        if (item.state === "assigned") delivery.wait?.({ delivery: item, registry, reason: "conversation-busy", observer: true });
+      }
+      return;
+    }
+    lanes.push(startMigrationLane(conversationId, async () => {
+      try {
+        await run();
+      } catch (error) {
+        if (!(error instanceof RegistryWriterBusyError)) {
+          console.error("[account-migration] conversation lane failed", { conversationId, error: safeProviderDiagnostic(error) });
+        }
+      }
+    }, (ended) => {
+      if (ended.rerun || ended.outlived) requestAccountMigrationTick();
+    }));
+  };
+  await forEachCooperatively(Object.values(before.conversations), (snapshotConversation) => {
+    const owed = cleanups.get(snapshotConversation.id) ?? [];
+    cleanups.delete(snapshotConversation.id);
+    const work = hasWork(snapshotConversation);
+    if (!work && owed.length === 0) return;
+    start(snapshotConversation.id, () => lane(snapshotConversation, owed, work));
   });
+  /* Cleanups owed for a conversation the snapshot no longer lists under its id. */
+  for (const [conversationId, owed] of cleanups) {
+    const owner = registry.conversation(conversationId);
+    if (owner) start(owner.id, () => lane(owner, owed, false));
+  }
+  const started = lanes.slice();
+  let budget: ReturnType<typeof setTimeout> | null = null;
+  const finished = await Promise.race([
+    Promise.allSettled(started).then(() => true),
+    new Promise<false>((resolve) => { budget = setTimeout(() => resolve(false), passBudgetMs); }),
+  ]);
+  if (budget) clearTimeout(budget);
+  if (!finished) {
+    for (const conversation of Object.values(before.conversations)) {
+      const running = migrationLane(conversation.id);
+      if (running) running.outlived = true;
+    }
+  }
   await yieldToRuntime();
   const after = registry.readOnlySnapshot();
   await repairCommittedBoardSuccessions(
     Object.values(after.conversations),
     registry,
-    options.remapBoardPaths ?? remapDurableBoardPaths,
-    options.transferBoardPathPlacements ?? transferDurableBoardPathPlacements,
+    coordinatorOptions.remapBoardPaths ?? remapDurableBoardPaths,
+    coordinatorOptions.transferBoardPathPlacements ?? transferDurableBoardPathPlacements,
   );
   const conversationsByIntent = new Map<string, RegistryConversation[]>();
   await forEachCooperatively(Object.values(after.conversations), (conversation) => {
@@ -1350,17 +1559,22 @@ export async function reconcileMigrations(
     owned.push(conversation);
     conversationsByIntent.set(intentId, owned);
   });
-  await forEachCooperatively(Object.values(after.migrationIntents), (intent) => {
+  await forEachCooperatively(Object.values(after.migrationIntents), async (intent) => {
     if (intent.state !== "draining") return;
     const owned = conversationsByIntent.get(intent.id) ?? [];
     if (!owned.length || owned.every((conversation) => ["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration?.phase ?? ""))) {
-      registry.setMigrationIntentState(intent.id, "complete");
-      /* A conversation-scoped reseat (issue #97) settles one thread: it must
-         not book an engine-wide balance outcome nor start the auto-balance
-         cooldown that would suppress a real engine drain. */
-      if (intent.scope === "conversation") return;
-      const outcome = owned.some((conversation) => conversation.migration?.phase === "failed-recoverable") ? "failed-partial" : "complete";
-      registry.recordAutoBalanceOutcome(intent.engine, outcome, intent.evidence, new Date(Date.now() + AUTO_BALANCE_COOLDOWN_MS).toISOString());
+      /* The outcome is written first: a completion the lock refused leaves the
+         intent draining, and the next pass repeats both writes, the outcome's
+         idempotently, so neither is lost. A conversation-scoped reseat (issue
+         #97) settles one thread: it must not book an engine-wide balance
+         outcome nor start the auto-balance cooldown that would suppress a real
+         engine drain. */
+      if (intent.scope !== "conversation") {
+        const outcome = owned.some((conversation) => conversation.migration?.phase === "failed-recoverable") ? "failed-partial" : "complete";
+        if (!await offLoop(registry, "migration.intent", null,
+          () => registry.recordAutoBalanceOutcome(intent.engine, outcome, intent.evidence, new Date(Date.now() + AUTO_BALANCE_COOLDOWN_MS).toISOString()))) return;
+      }
+      await offLoop(registry, "migration.intent", null, () => registry.setMigrationIntentState(intent.id, "complete"));
     }
   });
 }

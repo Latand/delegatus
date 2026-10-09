@@ -78,8 +78,8 @@ import {
  *   its own is the history in front of the cursor: an event nothing is owed on
  *   is discharged by the look that established that, never by a wake (#1285).
  * - **A wake names what is owed NOW, and silence means nothing is.** Both
- *   directions of that are here. An event about a lane that has itself finished
- *   is not an obligation, however far the cursor has fallen behind; a lane that
+ *   directions of that are here. A recent merge remains owed after its lane
+ *   finishes; other events of finished lanes are history. A lane that
  *   finished and left its pull request unmerged IS one, however quiet the board
  *   otherwise looks (#1289). Where the two pull against each other the rarer,
  *   truer wake wins over the earlier one.
@@ -312,14 +312,24 @@ function hasOpenWork(input: SeatTickCheckInput): boolean {
 /**
  * A pending event that is still a present obligation.
  *
- * Two filters, and the second is the one #1285 adds: the event has to be
- * terminal and high-signal (routine progress has never woken anyone on its
- * own), and the lane it names must not have reached a terminal state itself.
+ * Routine progress never wakes on its own. Recent merges are owed until a
+ * delivered wake names them, whichever conversation launched the lane.
+ * Other high-signal events retain #1285's terminal-lane filter.
  * A `stage_completed` for a pipeline that closed yesterday is a fact about the
  * past — nothing is owed on it, and a wake that carries it spends a resumed
  * host and a paid turn establishing exactly that.
  */
-function isOwedEvent(event: SeatTickEventInput): boolean {
+function mergeEventVersion(seq: number): string {
+  return `merge-event:${seq}`;
+}
+
+function isOwedEvent(event: SeatTickEventInput, input: SeatTickCheckInput): boolean {
+  if (event.type === "pipeline_merged") {
+    const at = Date.parse(event.at);
+    return event.pipelineId !== null && Number.isFinite(at)
+      && input.now - at < input.policy.backlogAfterMs
+      && !(input.state.itemsShown ?? []).includes(mergeEventVersion(event.seq));
+  }
   return isTerminalHighSignalEvent(event.type) && !event.pipelineTerminal;
 }
 
@@ -328,8 +338,8 @@ function isOwedEvent(event: SeatTickEventInput): boolean {
  *
  * The page is walked oldest-first and stops at the first event that is still
  * owed, so the seal covers exactly the history in front of it: routine progress
- * and terminal events whose lanes have finished. Null means the very first
- * pending event is owed and the cursor stays where it is.
+ * and finished-lane events other than unannounced recent merges. Null means
+ * the very first pending event is owed and the cursor stays where it is.
  *
  * This is what stops a backlog from costing one resume per page. The bound that
  * makes a wake cheap — {@link SeatTickPolicy.itemsPerWake} items, once per
@@ -338,10 +348,10 @@ function isOwedEvent(event: SeatTickEventInput): boolean {
  * next one could be read. A page of history is discharged by one look instead,
  * and a check costs nothing.
  */
-function dischargedThrough(events: readonly SeatTickEventInput[], cursor: number | null): number | null {
+function dischargedThrough(input: SeatTickCheckInput, cursor: number | null): number | null {
   let sealed = cursor;
-  for (const event of events) {
-    if (isOwedEvent(event)) break;
+  for (const event of input.events) {
+    if (isOwedEvent(event, input)) break;
     /* A floor, never a subtraction: the cursor may only ever move forwards,
        whatever order a page reaches this. */
     sealed = Math.max(sealed ?? event.seq, event.seq);
@@ -1127,7 +1137,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const base: SeatTickProjectState = reportLedger(input, {
     ...unchanged,
     seatEpoch: input.seat.seatEpoch,
-    eventsThrough: dischargedThrough(input.events, unchanged.eventsThrough),
+    eventsThrough: dischargedThrough(input, unchanged.eventsThrough),
   });
   const stalled = stalledLanes(input);
   const stalledKids = stalledChildren(input);
@@ -1254,12 +1264,13 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     };
   }
 
-  const laneEvents = input.events.filter(isOwedEvent);
+  const laneEvents = input.events.filter(event => isOwedEvent(event, input));
+  const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
   const candidates: SeatTickWakeReason[] = [];
   if (wakeDue) {
     /* A verdict the seat cannot decide without leads the wake — and waits for
        the wake like everything else. Routine progress never wakes on its own,
-       and neither does an event whose lane has finished.
+       and recent merges remain owed after their lane finishes.
 
        The count beside it is what the seat reads as "how much is there", so it
        counts what is owed and nothing else (#1285): "and 18 more" over a page
@@ -1292,16 +1303,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       const more = laneEvents.length > 1 ? ` and ${laneEvents.length - 1} more` : "";
       candidates.push({ kind: "lane-event", detail: `${first.type} since the last delivered wake${more}` });
     }
-    /* A finished standalone child (#1465), the lane event's counterpart for a
-       seat with no lanes: "your worker finished, go harvest it", once. Once,
-       because the cursor that discharges it is written by a DELIVERED wake and
-       the gather removes what the cursor names; a wake that never landed leaves
-       the child here for the next check. Same interval, same guard. */
-    if (harvest.length > 0) {
-      const first = harvest[0]!;
-      const more = harvest.length > 1 ? ` and ${harvest.length - 1} more` : "";
-      candidates.push({ kind: "child-terminal", detail: `a spawned child ${first.child.outcome ?? "finished"} and its outcome is unharvested${more}` });
-    }
+  }
+  // A newly owed outcome is due on the next check, including after a recent
+  // interval wake. Delivery accounting still discharges it exactly once.
+  if (harvest.length > 0) {
+    const first = harvest[0]!;
+    const more = harvest.length > 1 ? ` and ${harvest.length - 1} more` : "";
+    candidates.push({ kind: "child-terminal", detail: `a spawned child ${first.child.outcome ?? "finished"} and its outcome is not yet announced by a delivered seat-tick wake${more}. Reading the transcript alone does not acknowledge this announcement` });
+  }
+  if (wakeDue) {
     /* The mirror image (#1289), and it is a wake reason rather than a silence
        for one reason: a lane that finished with its pull request unmerged is
        the seat's next obligation, and the tick could not see one. It takes no
@@ -1349,7 +1359,6 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        the filtered list composed above, not the raw one. An agenda whose only
        entry is a child the same check has already declined to name carries
        nothing, and a wake carrying nothing is what this clause refuses. */
-    const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
     if (openWork && intervalAgenda && candidates.length === 0) {
       candidates.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
     }
@@ -1360,21 +1369,29 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     candidates.unshift({ kind: "disk-pressure", detail: "free space on a volume Delegatus writes to is below the warning threshold" });
   }
 
+  const periodicLaneIds = new Set(input.pipelines.filter(isOpenLane).map(lane => lane.id));
+  const periodicChildIds = new Set(liveChildren.map(child => child.conversationId));
+  const periodicItem = (item: SeatTickItem) => (item.kind === "pipeline" && periodicLaneIds.has(item.id) && !item.stallToken)
+    || (item.kind === "child" && periodicChildIds.has(item.id) && !item.outcomeIds?.length && !item.stallToken);
+  const hasPeriodicWork = periodicLaneIds.size > 0 || periodicChildIds.size > 0;
   const shownItems = new Set(input.state.itemsShown ?? []);
-  const all = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted })
+  const composed = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted })
     .map(item => {
       const itemVersion = agendaVersion(item, input);
       return itemVersion ? { ...item, itemVersion } : item;
-    })
-    .filter(item => !item.itemVersion || !shownItems.has(item.itemVersion)
-      // A newly owed settlement remains deliverable even if its PR was shown.
-      || (item.laneAnnouncement && !input.state.announcedLanes.includes(item.laneAnnouncement)));
+    });
+  const pendingItems = composed.filter(item => !item.itemVersion || !shownItems.has(item.itemVersion)
+    // A newly owed settlement remains deliverable even if its PR was shown.
+    || (item.laneAnnouncement && !input.state.announcedLanes.includes(item.laneAnnouncement)));
+  // Unseen obligations retain their place ahead of routine live-work repeats.
+  const all = [...pendingItems, ...composed.filter(item => periodicItem(item) && !pendingItems.includes(item))];
   const forReason = (kind: SeatTickWakeReasonKind): SeatTickItem[] => all.filter(item => {
     switch (kind) {
       case "unmerged-pr": return item.kind === "pull-request";
       case "unstarted-task": return item.kind === "task";
       case "permission-request": return item.kind === "permission";
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
+      case "lane-event": return item.mergeEventSeq !== undefined;
       case "own-lane-settled": return !!item.laneAnnouncement;
       case "stalled": return !!item.stallToken || (item.kind === "pipeline" && persistedStalls.some(entry => entry.pipeline.id === item.id)) || (item.kind === "child" && persistedChildStalls.some(entry => entry.child.conversationId === item.id));
       case "interval": return true;
@@ -1394,7 +1411,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        versioned work remains eligible to initialize it past an exhausted
        whole-reason retry guard. */
     const unseenPage = pending.some(item => item.itemVersion && !shownItems.has(item.itemVersion));
-    if (!unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
+    if (!(reason.kind === "interval" && hasPeriodicWork) && !unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
       guardHeld += 1;
       cards.push({
         ref: seatTickRetryGuardRef(reason.kind),
@@ -1411,6 +1428,17 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       const more = pending.length > input.policy.itemsPerWake ? `; ${pending.length - input.policy.itemsPerWake} more await a later wake` : "";
       reasons.push({ ...reason, detail: `${named}${more}${reason.kind === "unstarted-task" && backlog > 0 ? `; ${backlog} older than the backlog bound` : ""}` });
     } else reasons.push(reason);
+  }
+
+  // Delivered or guarded obligations cannot cancel the live-work cadence.
+  // This reminder carries current work only; it does not reannounce outcomes.
+  let offered = all;
+  if (wakeDue && openWork && reasons.length === 0 && hasPeriodicWork) {
+    const current = all.filter(periodicItem);
+    if (current.length > 0) {
+      reasons.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
+      offered = current;
+    }
   }
 
   // An unchanged reason can disappear while another open lane has moved.
@@ -1461,14 +1489,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      The guard and the interval are untouched by any of it: the reasons here
      passed both, and a gap adds none. */
   if (reasons.length > 0) {
-    const items = all.slice(0, input.policy.itemsPerWake);
+    const items = offered.slice(0, input.policy.itemsPerWake);
     const lines = seatTickReportLines(input, state, items, reasons);
     return {
       verdict: {
         kind: "wake",
         reasons,
         items,
-        deferred: Math.max(0, all.length - input.policy.itemsPerWake),
+        pendingMergeSeqs: laneEvents.filter(event => event.type === "pipeline_merged").map(event => event.seq),
+        deferred: Math.max(0, offered.length - input.policy.itemsPerWake),
         skippedChildren,
         unreadableChildren: unreadable.named,
         gaps,
@@ -1527,10 +1556,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         cards: [],
       };
     }
-    return { verdict: { kind: "quiet", detail: `the board is done and the proposal slot is not due${unplaced}` }, state: idle, cards: [] };
+    return { verdict: { kind: "quiet", detail: `no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due${unplaced}` }, state: idle, cards: [] };
   }
 
-  return { verdict: { kind: "quiet", detail: `nothing owed${unplaced}` }, state: { ...quiet(state, at), idleSince: null }, cards: [] };
+  return { verdict: { kind: "quiet", detail: `${intervalAgenda ? "nothing owed" : "no eligible interval agenda: unparented workers and inbox cards alone do not qualify"}${unplaced}` }, state: { ...quiet(state, at), idleSince: null }, cards: [] };
 }
 
 /* ── The report ledger (docs/design/orchestrator-reports.md §5.1) ─────────── */
@@ -1847,7 +1876,8 @@ function wakeItems(context: {
     items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane), laneAnnouncement: `${lane.id}:${lane.settled}` });
   }
   for (const event of context.laneEvents) {
-    items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}` });
+    items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}`,
+      ...(event.type === "pipeline_merged" ? { mergeEventSeq: event.seq } : {}) });
   }
   /* Oldest outcome first (#1465), so the per-wake bound holds back the newest
      and the child that has waited longest is harvested first. Only the items
@@ -1868,7 +1898,7 @@ function wakeItems(context: {
          so a dead host's open turn does not name the child again (#1881). */
       stateTokens: [childStateToken(child, child.outcomeId ?? null), childStateToken(child, null), ...(readable ? [] : [unreadableToken(child)])],
       label: readable
-        ? `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome unharvested`
+        ? `${child.title} — spawned child ${child.outcome ?? "finished"}, outcome announcement owed`
         : `${child.title} — spawned child ${child.outcome ?? "finished"}, transcript not readable: ${seatTickTranscriptGapClause(child.transcriptReason)}`,
       ...(readable && child.transcriptPath ? { finalMessageFrom: { path: child.transcriptPath, engine: child.engine ?? null } } : {}),
     });
@@ -1975,6 +2005,11 @@ export function seatTickWakeCommitPlan(
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
   const items = framed === null ? verdict.items : verdict.items.filter(item =>
     framed.includes(`\n${redactMonitorText(seatTickBullet(item))}\n`));
+  // Delivery advances past only the merges its complete bullets carried.
+  // A merge held back by the item or text bound keeps the cursor in front of it.
+  const deliveredMerges = new Set(items.flatMap(item => item.mergeEventSeq === undefined ? [] : [item.mergeEventSeq]));
+  const heldMerge = verdict.pendingMergeSeqs?.find(seq => !deliveredMerges.has(seq));
+  const deliveredThrough = heldMerge === undefined ? eventsThrough : Math.min(eventsThrough, heldMerge - 1);
   const terminal = new Set(context.terminalChildren ?? []);
   /* What each child line SHOWS, for the clause that asks whether anything has
      moved since (#1783 round two). It is recorded by the landing and by
@@ -2027,7 +2062,7 @@ export function seatTickWakeCommitPlan(
     if (framed === null || framed.includes(`\n${line}\n`)) acknowledgmentLines.push({ key: `shown:${child.stateToken}`, line });
   }
   return {
-    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
+    proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
     itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
     itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
@@ -2162,6 +2197,7 @@ function childrenShown(before: readonly string[], shown: readonly string[]): str
  * Permission requests keep their reminder behavior: equal labels do not prove
  * equal requests, and this projection has no durable request identity. */
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
+  if (item.mergeEventSeq !== undefined) return mergeEventVersion(item.mergeEventSeq);
   if (!["pipeline", "provisioning", "task", "pull-request", "signal"].includes(item.kind)) return undefined;
   const kind = item.kind === "provisioning" ? "pipeline" : item.kind;
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");

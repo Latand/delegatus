@@ -16,6 +16,7 @@ import type { MessageOrigin } from "./messageOrigin";
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -37,9 +38,18 @@ export interface StructuredRecoveryRequest {
 
 /** No successor receipt exists yet; callers keep the original message queued. */
 export class StructuredRecoveryHeldForUpdateError extends Error {
-  constructor() {
-    super("new autonomous recovery is held for the automatic update");
+  constructor(message = "new autonomous recovery is held for the automatic update") {
+    super(message);
     this.name = "StructuredRecoveryHeldForUpdateError";
+  }
+}
+
+/** Startup holds a predecessor's row until its restart cut evidence is decided
+    (docs/design/restart-cut-recognition.md): nothing retires or replaces it
+    before then, whoever asks. The caller keeps its message queued. */
+function assertRestartCutEvidenceDecided(key: SessionKey): void {
+  if (restartCutEvidenceHolds(sessionKeyId(key))) {
+    throw new StructuredRecoveryHeldForUpdateError("recovery is held until the conversation's restart cut evidence is decided");
   }
 }
 
@@ -370,6 +380,8 @@ async function recoverCandidate(
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {
     await assertOwnership();
+    /* Again under the lock: a startup pass may have held the row meanwhile. */
+    assertRestartCutEvidenceDecided(candidate.key);
     const park = dependencies.park ?? defaultParkResolver;
     let current = candidateFor(registry, request, Boolean(ownership), park);
     if (!current) return null;
@@ -450,13 +462,15 @@ async function recoverCandidate(
     try {
       await assertOwnership();
     } catch (error) {
-      registry.failSpawn(begun.receipt.launchId, "structured recovery operation was superseded");
+      await registry.failSpawnOffLoop(begun.receipt.launchId, "structured recovery operation was superseded");
       throw error;
     }
     try {
       await assertAccountAuthorized();
     } catch (error) {
-      registry.failSpawn(begun.receipt.launchId, "structured recovery account is no longer allowed");
+      /* Off the loop (rule c). Refused for the lock, the launch is left to the
+         stale-launch convergence (C5) and the held send to the next pass. */
+      await registry.failSpawnOffLoop(begun.receipt.launchId, "structured recovery account is no longer allowed");
       throw error;
     }
     const response = await (dependencies.spawn ?? spawnStructuredConversation)({
@@ -511,6 +525,7 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  assertRestartCutEvidenceDecided(candidate.key);
   const recoveryKey = dependencies.ownership
     ? `${registry.filename}:${candidate.conversationId}:${dependencies.ownership.operationId}:${dependencies.ownership.revision}`
     : `${registry.filename}:${candidate.conversationId}:${request.operationId ?? "operator"}`;

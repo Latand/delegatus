@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 import { GIB, planAgentMemory, setAgentMemoryPortsForTests, wrapAgentCommand } from "./agentMemory";
 import { invalidateCpuContainmentProbe, planAgentCpu, setCpuPortsForTests, wrapWorkCommand, type CpuPorts } from "./cpuPlacement";
@@ -121,9 +123,10 @@ console.log((await import("node:os")).availableParallelism());`], { env: childEn
   expect([runtime.status, runtime.stderr, runtime.stdout.trim()]).toEqual([0, "", "1"]);
   expect(sliceMax()).toBe(expected);
   lower();
-  const gate = spawnSync(taskset!, ["-c", allowedCpu!, "/bin/bash", path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", `nproc; ${REPORT}`], { env: childEnv, encoding: "utf8" });
+  const gate = spawnSync(taskset!, ["-c", allowedCpu!, "/bin/bash", path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", REPORT], { env: childEnv, encoding: "utf8" });
   expect(gate.status).toBe(0);
-  expect(gate.stdout.split("\n")[0]).toBe("1");
+  // The user manager starts the owned service independently of caller affinity.
+  expect(report(gate.stdout).group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.pinned}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
   expect(report(gate.stdout).parentMax).toBe(expected);
 }, 30_000);
 
@@ -195,7 +198,7 @@ scopeTest("gate-slot runs a gate in the work slice with the same quotas", () => 
     env: { ...process.env, ...env, DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLICE: slices.work, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1" } });
   expect(result.status).toBe(0);
   const seen = report(result.stdout);
-  expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/run-[^/]+\\.scope$`));
+  expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
   expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
 });
 
@@ -241,7 +244,7 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   expect(result.output).toContain("taken"); // the gate holds the shared slot while its command runs
   expect(fs.readFileSync(marker, "utf8")).toBe("run\n");
   const seen = report(result.output);
-  expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/run-[^/]+\\.scope$`));
+  expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
   expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
 }, 30_000);
 
@@ -362,8 +365,8 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
   const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, LLV_AGENT_CPU: process.env.LLV_AGENT_CPU, LLV_AGENT_MEMORY: process.env.LLV_AGENT_MEMORY, LLV_WORK_CPU_QUOTA: process.env.LLV_WORK_CPU_QUOTA };
   const tmuxEnv = { ...process.env, TMUX_TMPDIR: tmuxTmpdir, HOME: sandbox, SHELL: "/bin/bash" };
   const tmux = (...args: string[]) => spawnSync("tmux", args, { env: tmuxEnv, encoding: "utf8" });
-  let serverPid: number | null = null;
-  const pids: number[] = [];
+  let serverIdentity: ProcessIdentity | null = null;
+  const identities: ProcessIdentity[] = [];
   try {
     // The server runs in an agent's scope, as one an agent started does, and
     // cannot reach the user bus itself, as when its own pane move times out
@@ -374,8 +377,8 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
     expect(spawnSync("systemd-run", ["--user", "--scope", "--quiet", "--collect", `--slice=${slices.top}`, `--unit=${serverUnit}`, "--",
       "env", "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent", "XDG_RUNTIME_DIR=/nonexistent",
       "tmux", "-f", "/dev/null", "new-session", "-d", "-x", "160", "-y", "40", "-s", "agents"], { env: tmuxEnv }).status).toBe(0);
-    serverPid = Number(tmux("display-message", "-p", "#{pid}").stdout.trim());
-    expect(cgroupOf(serverPid)).toEndWith(`/${serverUnit}`);
+    serverIdentity = captureProcessIdentity(Number(tmux("display-message", "-p", "#{pid}").stdout.trim()));
+    expect(cgroupOf(serverIdentity.pid)).toEndWith(`/${serverUnit}`);
     for (const name of ["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]) {
       const value = process.env[name];
       if (value) expect(tmux("set-environment", "-g", name, value).status).toBe(0);
@@ -394,7 +397,7 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
       const pane = await spawnAgentWithPrompt(spec, `cpu placement ${name}`, begun.receipt, options.workload ? { workload: options.workload } : {});
       const read = (suffix: string) => Number(fs.readFileSync(`${out}.${suffix}`, "utf8").trim());
       const agent = read("agent"), descendant = read("descendant"), orphan = read("orphan");
-      pids.push(pane.panePid!, agent, descendant, orphan);
+      identities.push(...[pane.panePid!, agent, descendant, orphan].map(pid => captureProcessIdentity(pid)));
       const group = cgroupOf(pane.panePid!);
       units.push(path.basename(group));
       expect(ppid(descendant)).toBe(agent);
@@ -427,8 +430,7 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
   } finally {
     setCpuPortsForTests(null);
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-    for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ } }
-    if (serverPid) { try { process.kill(serverPid, "SIGTERM"); } catch { /* Private server exited. */ } }
+    await Promise.all([...identities, ...(serverIdentity ? [serverIdentity] : [])].map(identity => stopFixtureIdentity(identity)));
     fs.rmSync(tmuxTmpdir, { recursive: true, force: true });
   }
 }, 60_000);

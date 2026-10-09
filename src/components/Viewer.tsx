@@ -75,6 +75,7 @@ import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
+import { workingAgentCounts } from "./workingAgents";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
 import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
@@ -303,9 +304,12 @@ function ViewerApp() {
       return catalogPin?.hydrated && lastOpenedRow?.path === pinnedPath ? [...folded, lastOpenedRow] : folded;
     }
     if (!isArchivedPredecessor(pinned)) return folded;
-    const currentGenerationPresent = Boolean(pinned.conversationId)
-      && folded.some((file) => file.conversationId === pinned.conversationId);
-    return currentGenerationPresent ? folded : [...folded, pinned];
+    /* Another archived row standing in for the same conversation gives way to
+       the pinned one, so the focus it was opened for stays on the board as the
+       conversation's one card until a current generation arrives. */
+    const standing = pinned.conversationId ? folded.find((file) => file.conversationId === pinned.conversationId) : undefined;
+    if (!standing) return [...folded, pinned];
+    return isArchivedPredecessor(standing) ? folded.map((file) => file === standing ? pinned : file) : folded;
   }, [allFiles, catalogPin, lastOpenedRow]);
   /* The paths the plain catalog carries: the payload without the rows only a
      pin admitted. */
@@ -965,7 +969,7 @@ function ViewerApp() {
      rows and the phone's ⚠ badge all read `needsYou`, so the header counts the
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
-  const updateFeed = useSelfUpdateFeed(true);
+  const updateFeed = useSelfUpdateFeed(true, false);
   const updateDecision = updateFeed.snapshot?.auto?.decision;
   /* The update surface names the work it waits on by project name and
      conversation title; the server sends keys and ids. */
@@ -985,7 +989,7 @@ function ViewerApp() {
   /* The panel's and the sheet's sections follow the rail's project order, the
      rail's own summaries over the same inputs the rail is handed. */
   const railOrder = useMemo(
-    () => railProjectOrder(buildProjectSummaries(files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject), crownedProjects, archivedProjects),
+    () => railProjectOrder(buildProjectSummaries(files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject, workingAgentCounts(files, clock)), crownedProjects, archivedProjects),
     [files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject, crownedProjects, archivedProjects],
   );
   useEffect(() => {

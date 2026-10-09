@@ -1,4 +1,5 @@
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { measureBlocking } from "@/lib/blockingWaits";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
@@ -351,7 +352,18 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   };
 }
 
+const cooperativeOpen = Symbol("cooperative journal open");
+
+export interface RuntimeJournalStartupProgress {
+  subphase: "schema" | "receipt-backfill" | "integrity-check" | "hash-chain";
+  done: number;
+  total: number;
+  committedBatches: number;
+}
+
 export interface RuntimeJournalOptions {
+  startupBatchRows?: number;
+  onStartupProgress?: (progress: RuntimeJournalStartupProgress) => void;
   maxEvents?: number;
   now?: () => number;
   structuredHosts?: boolean;
@@ -370,9 +382,33 @@ export class RuntimeJournal {
   // Only the full and summary representations are retained. Targeted voice
   // reads must not evict either hot representation or accumulate per-card JSON.
   private snapshotCaches = new Map<string, { changes: number; expiresAt: number | null; json: string }>();
+  /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
+  snapshotCacheHits = 0;
+  snapshotRebuilds = 0;
   private receiptSweepCursor = 0;
 
-  constructor(filename: string, options: RuntimeJournalOptions = {}) {
+  private readonly startupOptions: RuntimeJournalOptions;
+  private readonly initialization: Generator<void>;
+
+  static async open(filename: string, options: RuntimeJournalOptions = {}): Promise<RuntimeJournal> {
+    const journal = new RuntimeJournal(filename, { ...options, [cooperativeOpen]: true });
+    try {
+      while (!journal.initialization.next().done) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      return journal;
+    } catch (error) {
+      journal.close();
+      throw error;
+    }
+  }
+
+  constructor(filename: string, options: RuntimeJournalOptions & { [cooperativeOpen]?: boolean } = {}) {
+    if (options.startupBatchRows !== undefined && (!Number.isSafeInteger(options.startupBatchRows) || options.startupBatchRows < 1)) {
+      throw new Error("runtime journal startup batch size is invalid");
+    }
+    this.startupOptions = options;
+    this.startupProgress("schema", 0, 1);
     this.db = new Database(filename, { create: true, strict: true });
     this.maxEvents = options.maxEvents ?? 20_000;
     this.now = options.now ?? (() => Date.now());
@@ -436,22 +472,7 @@ export class RuntimeJournal {
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
     this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
-    // Missing receipts share one durable commit; per-row FULL sync delays the
-    // runtime socket and stable Viewer port for large retained journals.
-    this.db.transaction(() => {
-      const insert = this.db.query("INSERT INTO producer_receipts(producer_kind, producer_key, event_json) VALUES (?, ?, ?) ON CONFLICT(producer_kind, producer_key) DO NOTHING");
-      for (const row of this.db.query<EventRow, []>(`
-        SELECT events.* FROM events
-        WHERE producer_key IS NOT NULL AND NOT EXISTS (
-          SELECT 1 FROM producer_receipts
-          WHERE producer_receipts.producer_kind = events.producer_kind
-            AND producer_receipts.producer_key = events.producer_key
-        )
-      `).iterate()) {
-        insert.run(row.producer_kind, row.producer_key, stableJson(toEvent(row)));
-      }
-    }).immediate();
-    this.db.exec("DROP INDEX IF EXISTS events_producer_key; CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
     this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
     this.metaSetDefault("seq", "0");
     this.metaSetDefault("published_seq", this.metaOr("seq", "0"));
@@ -461,12 +482,112 @@ export class RuntimeJournal {
     this.metaSetDefault("host_epoch", "1");
     this.metaSetDefault("health", "ready");
     this.metaSetDefault("files_revision", "0");
-    this.verify();
     this.sessionHostMetadata = new SessionHostMetadata(this.db);
+    this.initialization = this.initialize();
+    if (!options[cooperativeOpen]) {
+      try { while (!this.initialization.next().done) { /* synchronous compatibility */ } }
+      catch (error) { this.close(); throw error; }
+    }
+  }
+
+  private *initialize(): Generator<void> {
+    this.startupProgress("schema", 1, 1);
+    yield;
+    yield* this.backfillProducerReceipts();
+    yield* this.verify();
     if (!this.fault) {
       this.db.exec(`CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`);
       this.sessionHostMetadata.start();
     }
+  }
+
+  private startupProgress(subphase: RuntimeJournalStartupProgress["subphase"], done: number, total: number, committedBatches = 0): void {
+    this.startupOptions.onStartupProgress?.({ subphase, done, total, committedBatches });
+  }
+
+  private *backfillProducerReceipts(): Generator<void> {
+    const versionKey = "producer_receipts_backfill_version";
+    const cursorKey = "producer_receipts_backfill_cursor";
+    if (this.metaOr(versionKey, "") === "1") {
+      this.startupProgress("receipt-backfill", 0, 0);
+      return;
+    }
+    const batchSize = this.startupOptions.startupBatchRows ?? 512;
+    type Key = { producer_kind: string; producer_key: string };
+    const keys = this.db.query<Key, [string, string, number]>(
+      "SELECT producer_kind, producer_key FROM events INDEXED BY events_producer_key WHERE producer_key IS NOT NULL AND (producer_kind, producer_key) > (?, ?) ORDER BY producer_kind, producer_key LIMIT ?",
+    );
+    const total = this.db.query<{ n: number }, []>("SELECT count(*) AS n FROM events WHERE producer_key IS NOT NULL").get()!.n;
+    this.startupProgress("receipt-backfill", 0, total * 2);
+    // An older journal can have no receipts at all. Find the numeric newest
+    // engine key before inserting, so lexical order never resurrects stale keys.
+    const newest = new Map<string, number>();
+    let cursor: [string, string] = ["", ""];
+    let done = 0;
+    let batches = 0;
+    for (;;) {
+      const rows = keys.all(...cursor, batchSize);
+      if (!rows.length) break;
+      for (const row of rows) {
+        const engine = engineProducerCursor(row.producer_kind, row.producer_key);
+        if (engine) {
+          const group = `${row.producer_kind}\0${engine.prefix}`;
+          if (!newest.has(group)) {
+            const receipt = this.db.query<{ producer_key: string }, [string, string, string, string]>(
+              "SELECT producer_key FROM producer_receipts WHERE producer_kind = ? AND producer_key >= ? AND producer_key < ? ORDER BY CAST(substr(producer_key, length(?) + 1) AS INTEGER) DESC LIMIT 1",
+            ).get(row.producer_kind, engine.prefix, `${engine.prefix}\uffff`, engine.prefix);
+            newest.set(group, receipt ? engineProducerCursor(row.producer_kind, receipt.producer_key)?.sequence ?? -1 : -1);
+          }
+          newest.set(group, Math.max(newest.get(group)!, engine.sequence));
+        }
+      }
+      const last = rows.at(-1)!;
+      cursor = [last.producer_kind, last.producer_key];
+      done += rows.length;
+      if (++batches % 32 === 0) this.startupProgress("receipt-backfill", done, total * 2);
+      yield;
+    }
+    cursor = JSON.parse(this.metaOr(cursorKey, '["",""]')) as [string, string];
+    let committedBatches = 0;
+    const exists = this.db.query<{ n: number }, [string, string]>("SELECT 1 AS n FROM producer_receipts WHERE producer_kind = ? AND producer_key = ?");
+    const event = this.db.query<EventRow, [string, string]>("SELECT * FROM events WHERE producer_kind = ? AND producer_key = ?");
+    const insert = this.db.query("INSERT INTO producer_receipts(producer_kind, producer_key, event_json) VALUES (?, ?, ?) ON CONFLICT(producer_kind, producer_key) DO NOTHING");
+    for (;;) {
+      const rows = keys.all(...cursor, batchSize);
+      if (!rows.length) break;
+      const missing = rows.filter((row) => {
+        if (exists.get(row.producer_kind, row.producer_key)) return false;
+        const engine = engineProducerCursor(row.producer_kind, row.producer_key);
+        return !engine || engine.sequence === newest.get(`${row.producer_kind}\0${engine.prefix}`);
+      });
+      const last = rows.at(-1)!;
+      cursor = [last.producer_kind, last.producer_key];
+      if (missing.length) {
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          for (const row of missing) insert.run(row.producer_kind, row.producer_key, stableJson(toEvent(event.get(row.producer_kind, row.producer_key)!)));
+          this.metaSet(cursorKey, JSON.stringify(cursor));
+          this.db.exec("COMMIT");
+          committedBatches++;
+        } catch (error) {
+          this.db.exec("ROLLBACK");
+          throw error;
+        }
+      }
+      done += rows.length;
+      // Expose the first three durable boundaries for interrupted-upgrade
+      // diagnostics, then keep evidence proportional to 32 scan batches.
+      if (++batches % 32 === 0 || (missing.length && committedBatches <= 3)) this.startupProgress("receipt-backfill", done, total * 2, committedBatches);
+      yield;
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.metaSet(versionKey, "1");
+      this.db.query("DELETE FROM journal_meta WHERE key = ?").run(cursorKey);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.startupProgress("receipt-backfill", total * 2, total * 2, committedBatches + 1);
+    yield;
   }
 
   append(rawInput: RuntimeEventInput): RuntimeEvent {
@@ -589,7 +710,7 @@ export class RuntimeJournal {
 
   private nativeCommandAtAdmission(command: RuntimeOperationCommand, operationId: string): NativeQueueCommand | null {
     if (command.kind === "native-queue") return { ...command, operationId };
-    if (command.kind !== "send" || command.policy !== "queue") return null;
+    if (command.kind !== "send" || command.policy !== "queue" || command.onlyIfIdle) return null;
     const session = this.entity<RuntimeSession>("session", command.conversationId);
     if (!session?.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
     return { kind: "native-queue", action: "add", conversationId: command.conversationId, operationId,
@@ -842,6 +963,17 @@ export class RuntimeJournal {
           || (previous.status !== "delivering" && this.retirementInProgress(command.conversationId))) {
           status = "failed";
           details = { ...details, reason: "idle-retirement-deferred" };
+        }
+      }
+      if (status === "delivering" && command.kind === "send" && command.onlyIfIdle) {
+        const session = this.entity<RuntimeSession>("session", command.conversationId);
+        if (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
+          || this.retirementBlocked(command.conversationId, operationId)
+          || this.retirementInProgress(command.conversationId)) {
+          status = "failed";
+          // Only an unclaimed effect proves that host execution never began.
+          const unclaimed = previous.status === "pending" || previous.status === "queued";
+          details = { ...details, reason: unclaimed ? "idle-continuation-pre-execution-refused" : "idle-continuation-cancelled" };
         }
       }
       const queueing = status === "queued"
@@ -1195,8 +1327,15 @@ export class RuntimeJournal {
     const changes = this.totalChanges();
     const now = this.now();
     const cached = this.snapshotCaches.get(scope);
-    if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) return cached.json;
-    const json = JSON.stringify(this.snapshotAt(now, voiceBodiesFor));
+    if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) {
+      this.snapshotCacheHits += 1;
+      return cached.json;
+    }
+    /* Collection and serialization are measured apart: the two have different
+       fixes, and a cache hit above costs neither. */
+    this.snapshotRebuilds += 1;
+    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => this.snapshotAt(now, voiceBodiesFor));
+    const json = measureBlocking("snapshot-serialize", "runtime-journal", () => JSON.stringify(snapshot));
     if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
       this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
     return json;
@@ -1940,6 +2079,7 @@ export class RuntimeJournal {
     if (command.operationId !== undefined && (!command.operationId.trim() || command.operationId.includes(":") || /\s/.test(command.operationId))) throw new Error("operationId is invalid");
     if (Buffer.byteLength(JSON.stringify(command)) > 256 * 1024) throw new Error("runtime operation exceeds 256 KiB");
     if (command.kind === "send" || command.kind === "steer") {
+      if (command.onlyIfIdle !== undefined) parseRuntimeCommand(command.kind, command);
       if (!command.text.trim() && !command.images?.length) throw new Error("message content is required");
       if (!command.contentDigest) throw new Error("message content digest is required");
     }
@@ -2034,6 +2174,11 @@ export class RuntimeJournal {
     if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
       status = "rejected";
       reason = "idle-retirement-in-progress";
+    } else if (command.kind === "send" && command.onlyIfIdle
+      && (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
+        || this.retirementBlocked(command.conversationId))) {
+      status = "rejected";
+      reason = "idle-continuation-cancelled";
     } else if (command.kind === "native-queue") {
       turnId = command.turnId ?? null;
       if (!this.structuredHosts || !session || session.host !== "hosted") {
@@ -2247,13 +2392,14 @@ export class RuntimeJournal {
 
   /** Keyed, durable work evidence; the eight displayed receipts cannot prove
       an empty queue. Unknown outcomes also retain their work obligation. */
-  private retirementBlocked(conversationId: string): boolean {
-    const operation = this.db.query<{ present: number }, [string]>(`
+  private retirementBlocked(conversationId: string, excludeOperationId: string | null = null): boolean {
+    const operation = this.db.query<{ present: number }, [string, string | null, string | null]>(`
       SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND (? IS NULL OR operation_id <> ?)
         AND json_extract(request_json, '$.kind') <> 'kill'
         AND json_extract(receipt_json, '$.status') IN ('pending', 'queued', 'delivering', 'applying', 'uncertain')
       LIMIT 1
-    `).get(conversationId);
+    `).get(conversationId, excludeOperationId, excludeOperationId);
     if (operation) return true;
     return !!this.db.query<{ present: number }, [string]>(`
       SELECT 1 AS present FROM native_queue_entries WHERE conversation_id = ?
@@ -2905,20 +3051,39 @@ export class RuntimeJournal {
     for (const waiter of [...this.waiters]) waiter();
   }
 
-  private verify(): void {
+  private *verify(): Generator<void> {
     try {
-      for (const table of ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "consumer_cursors", "viewer_deployments"]) {
+      const tables = ["journal_meta", "events", "scope_revisions", "projections", "entities", "outbox", "operations", "delivery_operation_actions", "native_queue_entries", "native_queue_operation_holds", "consumer_checkpoints", "consumer_cursors", "viewer_deployments"];
+      this.startupProgress("integrity-check", 0, tables.length);
+      for (const [index, table] of tables.entries()) {
         const check = this.db.query<{ quick_check: string }, []>(`PRAGMA quick_check(${table})`).get();
         if (check?.quick_check !== "ok") throw new RuntimeJournalFault(`runtime journal SQLite check failed: ${table}`);
+        if (index === tables.length - 1) this.startupProgress("integrity-check", tables.length, tables.length);
+        yield;
       }
       let previous = this.meta("anchor_hash");
       let expected = Number(this.meta("anchor_seq")) + 1;
-      for (const row of this.db.query<EventRow, []>("SELECT * FROM events ORDER BY seq").all()) {
-        if (row.seq !== expected || row.prev_hash !== previous || row.hash !== recordHash(previous, row)) throw new RuntimeJournalFault("runtime journal hash chain is corrupt");
-        previous = row.hash;
-        expected += 1;
+      const first = expected;
+      const total = Number(this.meta("seq")) - first + 1;
+      this.startupProgress("hash-chain", 0, total);
+      const query = this.db.query<EventRow, [number]>("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT 4096");
+      let batches = 0;
+      // Read the actual first row, including any wrongly retained rows at or
+      // below the anchor. Starting at the anchor would hide that corruption.
+      let rows = this.db.query<EventRow, []>("SELECT * FROM events ORDER BY seq LIMIT 4096").all();
+      for (;;) {
+        if (!rows.length) break;
+        for (const row of rows) {
+          if (row.seq !== expected || row.prev_hash !== previous || row.hash !== recordHash(previous, row)) throw new RuntimeJournalFault("runtime journal hash chain is corrupt");
+          previous = row.hash;
+          expected += 1;
+        }
+        if (++batches % 32 === 0) this.startupProgress("hash-chain", expected - first, total);
+        yield;
+        rows = query.all(expected - 1);
       }
       if (previous !== this.meta("hash") || Number(this.meta("seq")) !== expected - 1) throw new RuntimeJournalFault("runtime journal tail is corrupt");
+      this.startupProgress("hash-chain", total, total);
     } catch (error) {
       this.fault = error instanceof Error ? error.message : "runtime journal verification failed";
       this.metaSet("health", "read_only_fault");

@@ -1,3 +1,4 @@
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
@@ -15,6 +16,7 @@ import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 import { workingSince } from "@/components/workingSince";
+import { isWorkingAgent, workingAgentCount } from "@/components/workingAgents";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
@@ -111,6 +113,7 @@ export interface KanbanCard {
   holdTarget?: { title: string; done: boolean };
   motion: TaskMotion;
   stepSummary: TaskStepsSummary | null;
+  /** Its members working now, by the rule every «working» count uses (`isWorkingAgent`). */
   working: number;
   /** Something on the card needs the operator: `reasons` is not empty. */
   needsYou: boolean;
@@ -193,6 +196,7 @@ export interface KanbanColumn {
   cards: KanbanCard[];
   /** The cards the current search keeps, in the same order. */
   shown: KanbanCard[];
+  /** Agents working on the column's cards (`isWorkingAgent`). */
   working: number;
   needsYou: number;
   stopped: number;
@@ -245,6 +249,8 @@ export interface KanbanModel {
   totals: {
     tasks: number;
     onBoard: number;
+    /** Agents working now in the files the board carries: the number the
+        sidebar row of the same project shows (`workingAgentCount`). */
     working: number;
     needsYou: number;
   };
@@ -294,7 +300,6 @@ const IN_FLIGHT_STAGES: ReadonlySet<StageChipState> = new Set(["running", "revie
 /* Only a flagged reason needs the operator; a stalled or rate-limited member
    keeps its word and counts as neither (docs/design/needs-attention.md §3). */
 const NEEDS_STATES: ReadonlySet<MobileRowStateKey> = new Set(["waiting"]);
-const WORKING_STATES: ReadonlySet<MobileRowStateKey> = new Set(["working", "held"]);
 
 function parseMs(iso: string | undefined | null): number {
   const ms = iso ? Date.parse(iso) : NaN;
@@ -306,12 +311,12 @@ function descriptionOf(text: string): string {
   return newline < 0 ? "" : text.slice(newline).trim();
 }
 
-/** The stage conversations working right now, by the row state the card's
+/** The stage conversations working right now, by the rule the card's
     «N working» reads. Only a stage's own transcripts are asked. */
 function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Set<string> {
   const working = new Set<string>();
   for (const file of files) {
-    if (!stagePaths.has(file.path) || !WORKING_STATES.has(mobileRowState(file, now).key)) continue;
+    if (!stagePaths.has(file.path) || !isWorkingAgent(file, now)) continue;
     working.add(file.path);
     if (file.conversationId) working.add(file.conversationId);
   }
@@ -343,7 +348,7 @@ function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string,
     state: row.key,
     needsYou: NEEDS_STATES.has(row.key),
     need: conversationNeed(file, now)?.need ?? null,
-    working: WORKING_STATES.has(row.key),
+    working: isWorkingAgent(file, now),
     latest: nowFragment(file),
     stage: stageByPath.get(file.path) ?? null,
   };
@@ -374,7 +379,9 @@ export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "memb
  * place right under the last card the operator is reading in the column. The
  * draft waited in Inbox beside that card; the launch writes a task that sorts
  * above it, and the card being read would drop below the new card's reader and
- * out of the window. With no other card read, the launched card stands first:
+ * out of the window. When the launched agent's turn ends its card sorts below
+ * the working ones, and it keeps the same place under the card being read
+ * instead. With no other card read, the launched card stands first:
  * the motion order would put it under a needs-you card, below the window's
  * edge, where the draft it replaced stood in view. Closing either reader lets
  * the launched card sort as any other. Reorders `cards` in place.
@@ -383,17 +390,11 @@ export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<strin
   if (!reading?.size || !launched) return;
   const held = (card: KanbanCard) => card.members.some((member) => reading.has(conversationIdentity(member.file)));
   const landing = (card: KanbanCard) => held(card) && card.members.some((member) => launched(member.file));
-  let anchor = -1;
-  cards.forEach((card, index) => { if (held(card) && !landing(card)) anchor = index; });
-  if (anchor < 0) {
-    const first = cards.filter(landing);
-    if (first.length) cards.splice(0, cards.length, ...first, ...cards.filter((card) => !landing(card)));
-    return;
-  }
-  const above = cards.slice(0, anchor + 1);
-  const moved = above.filter(landing);
+  const moved = cards.filter(landing);
   if (!moved.length) return;
-  cards.splice(0, anchor + 1, ...above.filter((card) => !landing(card)), ...moved);
+  const rest = cards.filter((card) => !landing(card));
+  const anchor = rest.findLastIndex(held);
+  cards.splice(0, cards.length, ...rest.slice(0, anchor + 1), ...moved, ...rest.slice(anchor + 1));
 }
 
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
@@ -673,7 +674,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const workingSinceMs = working > 0 || inFlight.length > 0
       ? Math.max(0, ...inFlight, ...members.filter((member) => member.working).map((member) => memberStartMs(member.file)))
       : null;
-    const needsYou = reasons.length > 0 || !!task?.prototypeReview?.waitingReviewId;
+    const needsYou = reasons.length > 0 || prototypeWaitsOnOperator(task?.prototypeReview);
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     /* A card holding only an agent draft is where its launch will land: the task
@@ -796,7 +797,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       status,
       cards: inColumn,
       shown: inColumn.filter((card) => keeps(card)),
-      working: inColumn.filter(card => card.motion.key === "working").length,
+      working: inColumn.reduce((sum, card) => sum + card.working, 0),
       needsYou: inColumn.filter((card) => card.motion.key === "needs-you").length,
       stopped: inColumn.filter((card) => card.motion.key === "stopped").length,
       noReason: inColumn.filter(cardHasUnknownReason).length,
@@ -825,9 +826,11 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     totals: {
       tasks: tasks.length - seatOnly.size,
       onBoard: recorded.length,
-      /* Agents of a hidden group keep working, and the header says so; a
-         decision the operator hid is not counted as waiting on them. */
-      working: cards.filter((card) => card.motion.key === "working").length,
+      /* Every agent working in the project, the sidebar row's own selector over
+         the same files: a hidden group's agents and the seat keep working, and
+         the header says so. A decision the operator hid is not counted as
+         waiting on them. */
+      working: workingAgentCount(input.files ?? [], now),
       needsYou: cards.filter((card) => card.motion.key === "needs-you" && !card.hide.hidden).length,
     },
   };

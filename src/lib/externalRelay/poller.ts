@@ -211,7 +211,7 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
   }
 }
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
-export const CLAIM_FEATURES = ["requester_context"];
+export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions"];
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 async function poll(
   relay: PairedRelay,

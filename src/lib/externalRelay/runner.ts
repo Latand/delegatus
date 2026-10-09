@@ -12,14 +12,19 @@ import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
 import { relayCall, ExternalRelayError } from "./client";
 import {
   answerSchema,
+  replyAnswerSchema,
   checkedAnswer,
+  checkedRound,
+  roundSchema,
+  type ExternalRelayDecision,
   handoffAnswerSchema,
   offersHandoff,
   requestSchema,
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
 } from "./protocol";
-import { answerPrompt } from "./prompt";
+import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
+import { answerPrompt, toolRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
 import { answerRecorder, countMemberAnswers, type RelayAnswerDelivery } from "./answers";
@@ -132,6 +137,10 @@ async function complete(
           body = failed(body.lease_id, "invalid_answer");
           continue;
         }
+        if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
+          body = failed(body.lease_id, "invalid_answer");
+          continue;
+        }
         if ([400, 401, 404, 409, 413, 426].includes(error.status))
           return { body, delivery: "refused" };
       }
@@ -146,7 +155,7 @@ export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime & { timeoutMs?: number },
+  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number },
 ): Promise<ExternalRelayCompletion | null> {
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
@@ -176,6 +185,9 @@ export async function runClaimedRequest(
     requester: request?.input.requester ?? null,
     input: rawRequest.input,
   });
+  let rounds = 0;
+  let loop: ReturnType<typeof createToolLoop> | null = null;
+  const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
     // Persist the local decision before any delivery wait: a restart must
     // leave the generated answer and early declines inspectable.
@@ -191,6 +203,7 @@ export async function runClaimedRequest(
             ? { action: "handoff", text: "", reply_to: null }
             : null,
       delivery: "unconfirmed",
+      ...loopRecord(),
     });
     const sent = await complete(relay, requestId, body, () => heartbeatAt, stallMs);
     const completion = sent.body;
@@ -247,6 +260,8 @@ export async function runClaimedRequest(
   let recorded = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
   let runFinished = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   try {
     runDir = fs.mkdtempSync(
@@ -294,63 +309,14 @@ export async function runClaimedRequest(
     let pendingBeat: Promise<void> | null = null;
     let seq = 0;
     let nextBeatAt = 0;
+    let acked = false;
     const started = Date.now();
-    try {
-      if (activeDrain()) return await finish(declined(leaseId, "busy"));
-      run = runEphemeralAgent({
-        key: `external-relay:${requestId}`,
-        engine: target.engine,
-        model: target.model,
-        effort: target.effort,
-        account: selection.account,
-        ["prompt"]: answerPrompt(request),
-        schema: offersHandoff(request) ? handoffAnswerSchema : answerSchema,
-        runDir,
-        hardCapMs: target.hardCapMinutes * 60_000,
-        webSearch: profile.webSearch,
-        runtime,
-        onEvent: (event) => {
-          const progress = progressForEvent(event);
-          if (progress && request.answer.progress === "notes") {
-            newestProgress = progress;
-            noteRelayProgress(relay.id, target.id, progress);
-          }
-        },
-      });
-      void run.done.then(() => { runFinished = true; });
-    } catch (error) {
-      if (error instanceof EphemeralProfileError)
-        return await finish(declined(leaseId, "profile_error"));
-      throw error;
-    }
-    const launchedRun = run;
-    if (!launchedRun) throw new Error("external relay launch unavailable");
-    // Capacity, drain and profile declines never ran an agent. Count only
-    // a launched child, including one still running or destined to fail.
-    if (launchedRun.pid) recorder?.begin(target.engine, target.model, profile);
-    changeRun(requestId, (current) => ({
-      ...current,
-      childPid: launchedRun.pid,
-      childIdentity: launchedRun.identity,
-    }));
-    if (launchedRun.pid && !launchedRun.identity)
-      for (const delay of [100, 500, 2000]) {
-        const timer = setTimeout(() => {
-          const identity = procBackend.processIdentity(launchedRun.pid!);
-          if (identity)
-            changeRun(requestId, (current) => ({
-              ...current,
-              childIdentity: identity,
-            }));
-        }, delay);
-        timer.unref();
-        identityTimers.push(timer);
-      }
     const stallMs = request.liveness.stall_window_s * 1000;
     const cancelStalledRun = () => {
       if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
         leaseUnavailable = true;
-        launchedRun.cancel();
+        run?.cancel();
+        callAbort.abort();
       }
     };
     const beat = async () => {
@@ -367,6 +333,7 @@ export async function runClaimedRequest(
           { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
         );
         if (newestProgress === sentProgress) newestProgress = null;
+        acked = true;
         heartbeatAt = Date.now();
         nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
       } catch (error) {
@@ -376,7 +343,8 @@ export async function runClaimedRequest(
             (error.status === 409 && error.code === "lease_lost"))
         ) {
           leaseUnavailable = true;
-          launchedRun.cancel();
+          run?.cancel();
+          callAbort.abort();
         }
       } finally {
         if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
@@ -384,25 +352,106 @@ export async function runClaimedRequest(
         cancelStalledRun();
       }
     };
-    pendingBeat = beat();
-    await pendingBeat;
-    const timer = setInterval(() => {
-      if (!beatBusy) cancelStalledRun();
-      if (!beatBusy && !leaseUnavailable && Date.now() >= nextBeatAt)
+    const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
+    if (callableTools(request).length) loop = createToolLoop(relay, request, {
+      signal: callAbort.signal, lose,
+      ack: async () => {
+        while (!acked && !leaseUnavailable) {
+          if (pendingBeat) await pendingBeat;
+          if (acked || leaseUnavailable) break;
+          await toolSleep(1000, callAbort.signal);
+          if (!beatBusy) pendingBeat = beat();
+        }
+        return acked && !leaseUnavailable;
+      },
+    }, runtime, (tool, done, failed) => {
+      if (request.answer.progress === "notes") {
+        newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
+          status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
+        noteRelayProgress(relay.id, target.id, newestProgress);
+      }
+    });
+    let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
+    let completion: ExternalRelayDecision | null = null;
+    for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
+      const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
+      runFinished = false;
+      try {
+        if (rounds === 1 && activeDrain()) return await finish(declined(leaseId, "busy"));
+        run = runEphemeralAgent({
+          key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
+          engine: target.engine,
+          model: target.model,
+          effort: target.effort,
+          account: selection.account,
+          ["prompt"]: loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request),
+          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
+          runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
+          hardCapMs: target.hardCapMinutes * 60_000,
+          webSearch: profile.webSearch,
+          runtime,
+          onEvent: (event) => {
+            const progress = progressForEvent(event);
+            if (progress && request.answer.progress === "notes") {
+              newestProgress = progress;
+              noteRelayProgress(relay.id, target.id, progress);
+            }
+          },
+        });
+        void run.done.then(() => { runFinished = true; });
+      } catch (error) {
+        if (error instanceof EphemeralProfileError)
+          return await finish(declined(leaseId, "profile_error"));
+        throw error;
+      }
+      const launchedRun = run;
+      if (!launchedRun) throw new Error("external relay launch unavailable");
+      // Capacity, drain and profile declines never ran an agent. Count only
+      // a launched child, including one still running or destined to fail.
+      if (launchedRun.pid && !recorder?.begun) recorder?.begin(target.engine, target.model, profile);
+      changeRun(requestId, (current) => ({
+        ...current,
+        childPid: launchedRun.pid,
+        childIdentity: launchedRun.identity,
+      }));
+      if (launchedRun.pid && !launchedRun.identity)
+        for (const delay of [100, 500, 2000]) {
+          const timer = setTimeout(() => {
+            const identity = procBackend.processIdentity(launchedRun.pid!);
+            if (identity && run === launchedRun)
+              changeRun(requestId, (current) => ({
+                ...current,
+                childIdentity: identity,
+              }));
+          }, delay);
+          timer.unref();
+          identityTimers.push(timer);
+        }
+      if (rounds === 1) {
         pendingBeat = beat();
-    }, 1000);
-    timer.unref();
-    let result;
-    try {
+        await pendingBeat;
+        heartbeatTimer = setInterval(() => {
+          if (!beatBusy) cancelStalledRun();
+          if (!beatBusy && !leaseUnavailable && Date.now() >= nextBeatAt) pendingBeat = beat();
+        }, 1000);
+        heartbeatTimer.unref();
+      }
+      if (leaseUnavailable) launchedRun.cancel();
       result = await launchedRun.done;
-    } finally {
-      clearInterval(timer);
+      if (pendingBeat) await pendingBeat;
+      cancelStalledRun();
+      if (leaseUnavailable) return null;
+      const decision = result?.status === "done"
+        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
+        : null;
+      if (!decision || !("kind" in decision)) { completion = decision; break; }
+      await loop!.runCalls(decision.calls, rounds);
+      if (leaseUnavailable) return null;
     }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (pendingBeat) await pendingBeat;
     cancelStalledRun();
     if (leaseUnavailable) return null;
-    const completion =
-      result.status === "done" ? checkedAnswer(result.answer, request) : null;
     // A hand-off returns the request to the service, which answers it with
     // its own agent (§A.8); it carries no text from this install.
     const body: ExternalRelayCompletion = completion?.action === "handoff"
@@ -416,18 +465,20 @@ export async function runClaimedRequest(
         }
       : failed(
           leaseId,
-          result.status === "violation"
+          result?.status === "violation"
             ? "profile_violation"
-            : result.status === "timeout"
+            : result?.status === "timeout"
               ? "hard_cap"
-              : result.status === "done"
+              : result?.status === "done"
                 ? "invalid_answer"
-                : result.status === "cancelled"
+                : result?.status === "cancelled"
                   ? "cancelled"
                   : "agent_error",
         );
     return await finish(body, request.liveness.stall_window_s * 1000);
   } catch {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (callAbort.signal.aborted) return null;
     if (run) {
       if (!runFinished) run.cancel();
       await run.done;
@@ -437,10 +488,12 @@ export async function runClaimedRequest(
       request.liveness.stall_window_s * 1000,
     );
   } finally {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    callAbort.abort();
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.
     if (recorder?.begun && !recorder.finished)
-      recorder.finish({ outcome: "lease_lost", answer: null, delivery: null });
+      recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
     try {
       if (recorded) dropRun(requestId);
     } catch (error) {

@@ -1,0 +1,2766 @@
+{
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=stages",
+  "readings": {
+    "1440x900-en-light": {
+      "01-seat": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1246,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1174,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1210,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1282,
+            "y": 67,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 agent",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1246,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1174,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1210,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1282,
+            "y": 67,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 256,
+          "y": 56,
+          "width": 1176,
+          "height": 836
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Orchestrator",
+        "readerComposers": 1,
+        "readerPlaceholder": "what should get done in atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Orchestrator",
+            "current": true
+          }
+        ],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1246,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1174,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1210,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1282,
+            "y": 67,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      }
+    },
+    "1000x900-en-light": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 798,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 agent",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 798,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 884
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Orchestrator",
+        "readerComposers": 1,
+        "readerPlaceholder": "what should get done in atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Orchestrator",
+            "current": true
+          }
+        ],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 798,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1000x700-en-light": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 81,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 agent",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 81,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 684
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Orchestrator",
+        "readerComposers": 1,
+        "readerPlaceholder": "what should get done in atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Orchestrator",
+            "current": true
+          }
+        ],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 81,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1440x900-uk-light": {
+      "01-seat": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1219,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1147,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1183,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1255,
+            "y": 67,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 агент",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1219,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1147,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1183,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1255,
+            "y": 67,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 256,
+          "y": 56,
+          "width": 1176,
+          "height": 836
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Оркестратор",
+        "readerComposers": 1,
+        "readerPlaceholder": "що зробити в atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Оркестратор",
+            "current": true
+          }
+        ],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1219,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1147,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1183,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1255,
+            "y": 67,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      }
+    },
+    "1000x900-uk-light": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 771,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 агент",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 771,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 884
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Оркестратор",
+        "readerComposers": 1,
+        "readerPlaceholder": "що зробити в atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Оркестратор",
+            "current": true
+          }
+        ],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 771,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1000x700-uk-light": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 108,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 агент",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 108,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 684
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Оркестратор",
+        "readerComposers": 1,
+        "readerPlaceholder": "що зробити в atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Оркестратор",
+            "current": true
+          }
+        ],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 108,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1440x900-en-dark": {
+      "01-seat": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1246,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1174,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1210,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1282,
+            "y": 67,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 agent",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1246,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1174,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1210,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1282,
+            "y": 67,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 256,
+          "y": 56,
+          "width": 1176,
+          "height": 836
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Orchestrator",
+        "readerComposers": 1,
+        "readerPlaceholder": "what should get done in atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Orchestrator",
+            "current": true
+          }
+        ],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1246,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1174,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1210,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1282,
+            "y": 67,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      }
+    },
+    "1000x900-en-dark": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 798,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 agent",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 798,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 884
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Orchestrator",
+        "readerComposers": 1,
+        "readerPlaceholder": "what should get done in atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Orchestrator",
+            "current": true
+          }
+        ],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 798,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 69,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1000x700-en-dark": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 81,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 agent",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 81,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 684
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Orchestrator",
+        "readerComposers": 1,
+        "readerPlaceholder": "what should get done in atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Orchestrator",
+            "current": true
+          }
+        ],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 870,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Open in the agent window",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 834,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 906,
+            "y": 142,
+            "width": 81,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 agents",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1440x900-uk-dark": {
+      "01-seat": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1219,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1147,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1183,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1255,
+            "y": 67,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 агент",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1219,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1147,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1183,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1255,
+            "y": 67,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 256,
+          "y": 56,
+          "width": 1176,
+          "height": 836
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Оркестратор",
+        "readerComposers": 1,
+        "readerPlaceholder": "що зробити в atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Оркестратор",
+            "current": true
+          }
+        ],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 1219,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 1147,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1183,
+            "y": 67,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 1255,
+            "y": 67,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 569,
+            "y": 1380,
+            "width": 454,
+            "height": 207
+          },
+          "t-export": {
+            "x": 569,
+            "y": 1122,
+            "width": 454,
+            "height": 246
+          }
+        }
+      }
+    },
+    "1000x900-uk-dark": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 771,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 агент",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 771,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 884
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Оркестратор",
+        "readerComposers": 1,
+        "readerPlaceholder": "що зробити в atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Оркестратор",
+            "current": true
+          }
+        ],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 675
+        },
+        "head": "full",
+        "headHeight": 73,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 771,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 96,
+            "height": 28
+          }
+        ],
+        "seatComposers": 1,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 1427,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 1181,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    },
+    "1000x700-uk-dark": {
+      "01-seat": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 108,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "1 агент",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "02-window": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": false,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 108,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": {
+          "x": 8,
+          "y": 8,
+          "width": 984,
+          "height": 684
+        },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": "conversation_orchestrator",
+        "readerRole": "orchestrator",
+        "readerTitle": "Оркестратор",
+        "readerComposers": 1,
+        "readerPlaceholder": "що зробити в atlas?",
+        "skeleton": false,
+        "rows": [
+          {
+            "key": "conversation_rounds-build",
+            "role": "builder",
+            "name": "Build",
+            "current": false
+          },
+          {
+            "key": "conversation_orchestrator",
+            "role": "orchestrator",
+            "name": "Оркестратор",
+            "current": true
+          }
+        ],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      },
+      "03-closed": {
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "width": 728,
+          "height": 42
+        },
+        "head": "strip",
+        "headHeight": 40,
+        "button": {
+          "box": {
+            "x": 843,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          "label": "Відкрити у вікні агента",
+          "glyph": "lucide lucide-maximize2 lucide-maximize-2",
+          "next": true,
+          "firstRow": true,
+          "focused": true,
+          "ring": false
+        },
+        "iconButtons": [
+          {
+            "x": 807,
+            "y": 142,
+            "width": 28,
+            "height": 28
+          },
+          {
+            "x": 879,
+            "y": 142,
+            "width": 108,
+            "height": 28
+          }
+        ],
+        "seatComposers": 0,
+        "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
+        "shown": null,
+        "readerRole": null,
+        "readerTitle": null,
+        "readerComposers": 0,
+        "readerPlaceholder": null,
+        "skeleton": false,
+        "rows": [],
+        "pill": "2 агенти",
+        "cards": {
+          "t-rounds": {
+            "x": 273,
+            "y": 389,
+            "width": 702,
+            "height": 207
+          },
+          "t-export": {
+            "x": 273,
+            "y": 143,
+            "width": 702,
+            "height": 234
+          }
+        }
+      }
+    }
+  },
+  "failures": []
+}

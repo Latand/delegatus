@@ -117,6 +117,7 @@ const ACTIVE_DELIVERY_RECEIPTS = new Set(["pending", "delivering", "applying", "
 const EMPTY_MANUAL: FileEntry[] = [];
 const EMPTY_DRAFTS: string[] = [];
 const EMPTY_TASKS: BoardTask[] = [];
+const NO_READING_PATHS: readonly string[] = [];
 const EMPTY_LAUNCHED: ReadonlyMap<string, string> = new Map();
 
 interface Props {
@@ -576,6 +577,9 @@ function ProjectDashboardView({
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
+  /* Counts the highlights asked for: the board opens on each request, and a
+     second request for the path still highlighted changes nothing else. */
+  const [highlightNonce, setHighlightNonce] = useState(0);
   /* Jump targets the scheme would otherwise skip (a stalled root builds no
      automatic group; a stalled branch hides inside a mini stack) materialize
      as ephemeral nodes: React state only, never written to prefs, gone on
@@ -626,7 +630,18 @@ function ProjectDashboardView({
   );
   /* Only active execution cursors receive pipeline expansion protection.
      Completed prior stages remain reachable through compact history. */
-  const protectedCollapsePaths = useMemo(() => pipelineCursorStagePaths(pipelines, files), [pipelines, files]);
+  /* A conversation open as a reader on the kanban board stays in its card when
+     its work finishes: folding it would take the reader out from under the
+     operator. Closing the reader lets it fold as any finished conversation. */
+  const [readingPaths, setReadingPaths] = useState<readonly string[]>(NO_READING_PATHS);
+  const holdReaders = useCallback((paths: readonly string[]) => {
+    setReadingPaths((held) => (held.length === paths.length && held.every((path, index) => path === paths[index]) ? held : paths));
+  }, []);
+  const protectedCollapsePaths = useMemo(() => {
+    const paths = pipelineCursorStagePaths(pipelines, files);
+    for (const path of readingPaths) paths.add(path);
+    return paths;
+  }, [pipelines, files, readingPaths]);
   /* The subagent-tray projection measures transcript freshness and attention
      TTLs against `mtime`, which is SECONDS. It takes the seconds clock
      straight from the shared hook rather than a conversion of `nowMs` — the
@@ -1122,6 +1137,7 @@ function ProjectDashboardView({
     /* A task card is a board object, not a conversation screen. */
     if (isMobile && !path.startsWith("task::")) showMobileConversation(path);
     setHighlight(path);
+    setHighlightNonce((nonce) => nonce + 1);
     /* A focused task card stays full-size while it is the focus target. */
     setFocusedTaskId(path.startsWith("task::") ? path.slice("task::".length) : null);
     if (highlightTimer.current) window.clearTimeout(highlightTimer.current);
@@ -2566,11 +2582,13 @@ function ProjectDashboardView({
                 catalogFailures={catalogFailures}
                 selection={board.selection}
                 focus={highlight}
+                focusNonce={highlightNonce}
                 onConversationOpened={markPathSeen}
                 projectCwd={projectCwd}
                 seatRefs={seatRefsForBoard}
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
+                onReadersChange={holdReaders}
                 seat={(boardId) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}

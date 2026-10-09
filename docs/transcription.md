@@ -14,7 +14,8 @@ agents — the tmux composer (`TmuxComposer`) and the draft-agent pane
 - **idle** — a mic icon. Click it to start recording (the browser asks for
   microphone permission the first time).
 - **rec** — a live input-level meter and an elapsed timer, plus an `X` to
-  cancel. Recording stops automatically after 2 minutes.
+  cancel. Recording stops automatically after 10 minutes (600 seconds, matching
+  `CAP_SECONDS` in `src/lib/dictationTimer.ts`).
 - **busy** — a spinner shown while a finished recording is being transcribed
   (only in the record-then-transcribe path; see below).
 
@@ -85,7 +86,7 @@ effect on the next dictation without restarting the server.
 
 Everything runs on your machine and no audio leaves it.
 
-**Requirements:** Python 3 and a one-time setup that creates a virtualenv with
+**Requirements:** Python 3.11 or newer and a one-time setup that creates a virtualenv with
 [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) and pre-downloads
 the model.
 
@@ -96,9 +97,19 @@ scripts/setup-whisper.sh
 ```
 
 This creates the venv at `~/.cache/delegatus/whisper-venv`, installs
-`faster-whisper`, and downloads the model so the first dictation is not the slow
-one. The model is fetched on first load if you skip this step, but the first
-recording then blocks while the download runs.
+the pinned runtime set from `scripts/whisper-requirements.txt`, and downloads
+the model so the first dictation is not the slow one. Setup then generates a
+one-second WAV in a temporary directory and transcribes it, consuming the
+segment iterator before reporting success. A failed smoke step exits non-zero
+and preserves the underlying Python error. The temporary audio is removed on
+success and failure. The model is fetched on first load if you skip this step,
+but the first recording then blocks while the download runs.
+
+The pins were checked against PyPI on 2026-10-09:
+[`faster-whisper` 1.2.1](https://pypi.org/project/faster-whisper/1.2.1/) was
+current, and [`av` 19.0.1](https://pypi.org/project/av/19.0.1/) was current.
+Setup pins [`av` 18.1.0](https://pypi.org/project/av/18.1.0/) because it accepts
+the `metadata_errors` argument faster-whisper 1.2.1 passes to `av.open`.
 
 **Defaults and overrides** (all optional environment variables):
 
@@ -305,9 +316,10 @@ the whole board.
 | "no microphone access"                                   | Browser denied microphone permission.                           | Grant mic permission for the site and retry.                        |
 | "server unavailable"                                     | The `/api/transcribe` request failed to reach the server.       | Check the app is running and reachable.                             |
 | "silence — nothing recognized"                           | Recording contained no recognisable speech.                     | Speak up / check the mic; the input-level meter should move.        |
-| "audio too large (16 MB limit)"                          | Upload exceeded the 16 MB cap.                                  | Record a shorter clip (the 2-minute auto-stop normally prevents this). |
+| "audio too large (16 MB limit)"                          | Upload exceeded the 16 MB cap.                                  | Record a shorter clip; the 10-minute auto-stop and the byte limit apply independently. |
 | Error mentioning `scripts/setup-whisper.sh`              | Local backend selected but the whisper venv/Python is missing.  | Run `scripts/setup-whisper.sh`.                                     |
 | "faster-whisper missing…"                                | The venv exists but `faster-whisper` is not installed in it.    | Re-run `scripts/setup-whisper.sh`.                                  |
+| `open() got an unexpected keyword argument 'metadata_errors'` | faster-whisper 1.2.1 passes an argument removed in PyAV 19. | Re-run `scripts/setup-whisper.sh` to install the committed pins, including PyAV 18.1.0, and pass the transcription smoke step. |
 | "no Codex ChatGPT token (~/.codex/auth.json)…"           | ChatGPT backend selected but no Codex login found.              | Log in with Codex, then retry.                                      |
 | "ChatGPT token expired…"                                 | The stored Codex token is stale.                                | Open Codex so it refreshes the token, then retry.                   |
 | "no ElevenLabs key…"                                     | ElevenLabs backend selected but no key found.                   | Set `ELEVENLABS_API_KEY` or write the key file (see above).         |

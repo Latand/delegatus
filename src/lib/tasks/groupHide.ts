@@ -70,6 +70,12 @@ export function isSeatConversation(seat: SeatRefs | null | undefined, ref: { con
   return Boolean(path && (seat.paths.includes(path) || seat.previous.paths.includes(path) || seat.deputies?.paths.includes(path)));
 }
 
+/** The conversation holds the project's current seat, whatever the record's previous seats. */
+export function isCurrentSeatConversation(seat: SeatRefs | null | undefined, ref: { conversationId?: string | null; path?: string | null }): boolean {
+  if (!seat) return false;
+  return Boolean((ref.conversationId && seat.conversationIds.includes(ref.conversationId)) || (ref.path && seat.paths.includes(ref.path)));
+}
+
 /**
  * A task that exists only because a seat launch minted it (#1841): every live
  * assignment names a seat conversation and no pipeline runs under it. The

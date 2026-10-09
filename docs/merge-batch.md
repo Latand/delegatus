@@ -80,8 +80,21 @@ A behaviour conflict stops the pass. A clearing omission names the responsible
 PR; multiple clearing omissions report `integration: needs both`. If no single
 omission clears it, combined removals find a minimal clearing set. If all
 implementation removals leave a failure, attribution cannot be proven: the gate
-names the failing tests, retains their detectors and refuses publication. Test
-authorship and literal assertion syntax supply no attribution or exemption.
+names the failing tests, retains their detectors and refuses publication, and
+its message names that rule. Test authorship and literal assertion syntax supply
+no attribution or exemption.
+
+A PR's reviewed tree supplies every selected test file, including files its
+patch never touched; such a copy is the version at the PR's review base. When
+main changed that file after the base, the copy is a stale reviewed detector: it
+judges main's newer code with the branch's older assertions, so no removal can
+clear it. A failure of a stale copy that the all-removed control keeps red
+defers only that PR, with `stale reviewed detector: branch predates <main
+commit> that changed <file>; merge main into the branch`, and the rest of the
+batch is validated again; `resolve N` merges main into it after landing. The
+report lists these under "Stale reviewed detectors". A file the PR itself
+changed keeps the rules above, and a failure that is neither narrowed nor stale
+still stops the batch.
 A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and
 the rest is validated again.
@@ -137,6 +150,19 @@ resolution in this pass. The seat assigns an independent branch review,
 including `git show --remerge-diff <sha>`, before listing its newly reviewed
 head in the next batch. A failed resolution gate can be retried after its
 cause is addressed, with the recorded resolution kept for inspection.
+
+Resolution tests use the batch gate's shared native-main comparison and bounded
+confirmation. Each selected file runs alone in a fresh isolated home, temp and
+state root on the resolution and on the exact main merged into it. The baseline
+is sampled anew for every resolution attempt; the earlier batch baseline supplies
+no evidence here. Pre-existing assertions and file faults permit publication;
+confirmed new failures withhold the original branch push. Between-test and file
+errors are judged from the file's standalone run, so a bundled-only error is
+rerun alone before any verdict. Incomplete main files use the same named-case
+probes as the batch gate. Dependencies, types, lint and privacy keep their gates.
+The report records each resolution's main and tip, selected files, pre-existing,
+intermittent and uncompared results, and confirmed new failures, including a
+failed attempt kept for inspection.
 
 The report separates pre-existing, intermittent and attributed test failures,
 including confirmation and omission evidence. It has one row per input: `merged <main sha>`, `needs-review <sha>`,

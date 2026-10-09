@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
+
 import { expect, test } from "bun:test";
 
 import {
@@ -42,17 +44,19 @@ test("an account-migration successor is recognised so bulk kills leave it alone"
 });
 
 test("only the stamp this viewer writes marks a process as its own host", async () => {
-  const stamped = spawn("/bin/sh", ["-c", "sleep 30"], {
+  const stamped = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30"], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env, [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp() },
-  });
-  const foreign = spawn("/bin/sh", ["-c", "sleep 30"], {
+  }));
+  const foreign = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30"], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env, [STRUCTURED_HOST_STAMP_ENV]: "/some/other/viewer/state" },
-  });
-  const bare = spawn("/bin/sh", ["-c", "sleep 30"], { detached: true, stdio: "ignore" });
+  }));
+  const bareEnvironment = { ...process.env };
+  delete bareEnvironment[STRUCTURED_HOST_STAMP_ENV];
+  const bare = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30"], { detached: true, stdio: "ignore", env: bareEnvironment }));
   const children = [stamped, foreign, bare];
   try {
     /* The environment is written before exec, so it is readable as soon as
@@ -64,12 +68,6 @@ test("only the stamp this viewer writes marks a process as its own host", async 
     expect(stampOf(foreign)).not.toBe(structuredHostStamp());
     expect(stampOf(bare)).toBeNull();
   } finally {
-    for (const child of children) {
-      try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
+    for (const child of children) await stopFixtureTree(child);
   }
 });

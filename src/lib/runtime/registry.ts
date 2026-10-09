@@ -22,6 +22,7 @@ import type { CopilotAcpHost } from "./copilotAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 
 export { structuredHostsEnabled };
 
@@ -411,10 +412,11 @@ export function reconcileDeadStructuredRegistryHost(
 
 /** Bounded reconciliation pass for completed conversation rows. Active conversation
     recovery stays demand-driven. `shouldRetain` protects rows the same startup
-    pass will re-host; every other terminal row releases its dead process claim. */
+    pass will re-host; every other terminal row releases its dead process claim.
+    By default a row startup holds for its restart cut evidence is retained. */
 export function reconcileDeadStructuredRegistryHosts(
   registry: AgentRegistry,
-  shouldRetain: StructuredHostAdoptionFilter = () => false,
+  shouldRetain: StructuredHostAdoptionFilter = (entry) => restartCutEvidenceHolds(sessionKeyId(entry.key)),
 ): void {
   const snapshot = registry.readOnlySnapshot();
   for (const conversation of Object.values(snapshot.conversations)) {

@@ -1,3 +1,4 @@
+import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -45,7 +46,7 @@ import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
-import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { findSeatDeploymentByKey, recoverSeatDeploymentRequests, seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
   lookupOriginalSend,
@@ -461,6 +462,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
@@ -491,6 +493,8 @@ export interface SeatTickSources {
       `deploy_exact_sha` recorded them. Absent reads as none, which is how a
       harness that does not model deploys stays exactly as it was. */
   seatDeployments?: (conversationId: string) => readonly SeatDeploymentRecord[];
+  /** Serialized, read-only recovery of an original deployment admission. */
+  deploymentByKey?: typeof findSeatDeploymentByKey;
   /** One deployment off the ledger by id (#2063). Absent reads as none. */
   deployment?: typeof ledgerDeployment;
   retirementReport: () => StructuredHostRetirementReport | null;
@@ -611,11 +615,20 @@ export async function settleRecordFromJournal(
   /* Only what {@link journalWakeState} would act on: the settlement's own
      unverified `failed` classifies as lost here and is not one. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
+  /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
+     it answers null like an undecidable verdict, and the next tick reads it
+     again. */
   try {
+    const correlation = { label: "delivery.settle", operationId: target.operationId };
     if (verdict.state === "delivered") {
-      registry.recordDeliveryOutcomeForOperation(target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered");
+      const written = await registry.deliveryWrite(correlation, () => registry.recordDeliveryOutcomeForOperation(
+        target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered"));
+      if (!written.acquired) return null;
     } else if (target.deliveryId) {
-      registry.recordDeliveryOutcome(target.deliveryId, "failed", receipt.reason ?? verdict.reason, "lost");
+      const deliveryId = target.deliveryId;
+      const written = await registry.deliveryWrite(correlation,
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+      if (!written.acquired) return null;
     } else {
       return null;
     }
@@ -627,6 +640,12 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    seatTurnOutcome: async (conversationId) => {
+      const conversation = agentRegistry().conversation(conversationId as never);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
+      return readSeatTurnOutcome(conversation.engine, generation.path);
+    },
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -649,6 +668,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     lifecycleJournal: readLifecycleJournal,
     latestDeployment: latestLedgerDeployment,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
+    deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
     diskPressure: () => readDiskPressure(),
     retirementReport: () => {
@@ -674,8 +694,14 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!delivery) return "unknown";
       if (delivery.state === "delivered") return "too-late";
       if (delivery.state !== "held") return "unknown";
-      agentRegistry().terminalizeHeldDelivery(delivery.id, reason);
-      return "withdrawn";
+      /* Off the loop; refused, the withdrawal is undecided. The row is asked
+         again inside the write: an attempt may have claimed it while the
+         writer was held, and then it is not withdrawn. */
+      const registry = agentRegistry();
+      const operationId = registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null;
+      const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
+        () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
+      return withdrawn.acquired ? withdrawn.value : "unknown";
     },
     now: () => Date.now(),
     refreshLifecycle: (pipelines) => {
@@ -991,16 +1017,17 @@ const SEAT_DEPLOY_LIMIT = 5;
  * cannot be read for one deployment leaves it out of this check only; the
  * next check asks again, and nothing is announced that was not seen.
  */
-function settledSeatDeploys(
+async function settledSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   context: { now: number; backlogAfterMs: number },
   sources: SeatTickSources,
-): SeatTickDeployInput[] {
+): Promise<SeatTickDeployInput[]> {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
   const settled: SeatTickDeployInput[] = [];
   let records: readonly SeatDeploymentRecord[];
   try {
+    if (sources.deploymentByKey) await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey);
     records = sources.seatDeployments(seat.conversationId);
   } catch {
     return [];
@@ -1502,6 +1529,7 @@ function eventsSince(
   project: string,
   cursor: number | null,
   openPipelineIds: ReadonlySet<string>,
+  pipelines: readonly Pipeline[],
   sources: SeatTickSources,
 ): { events: SeatTickEventInput[]; cursor: number } {
   const journal = sources.lifecycleJournal();
@@ -1518,21 +1546,28 @@ function eventsSince(
      is the seat's, and it moves only when a wake lands. */
   if (cursor === null) return { events: [], cursor: head };
   const page = pageFromEvents(journal, { project, afterSeq: cursor, limit: EVENT_PAGE });
+  const merged = new Map(pipelines.filter(lane => lane.merge?.state === "merged").map(lane => [lane.id, lane]));
   return {
-    events: page.events.map((event) => ({
-      seq: event.seq,
-      at: event.at,
-      type: event.type,
-      summary: event.summary,
-      pipelineId: event.pipelineId,
-      /* An open lane is always in the hot store; the archive only ever takes
-         SETTLED records. So a pipeline id the store no longer lists names a
-         lane that ended long enough ago to have been archived, and reading it
-         as terminal is the same answer arrived at from the other side. An event
-         that names no pipeline is never terminal here — nothing about a deploy
-         outcome or a held delivery has finished (#1285). */
-      pipelineTerminal: event.pipelineId !== null && !openPipelineIds.has(event.pipelineId),
-    })),
+    events: page.events.map((event) => {
+      const lane = event.pipelineId ? merged.get(event.pipelineId) : undefined;
+      return {
+        seq: event.seq,
+        at: event.at,
+        type: event.type,
+        // Enrich older journal summaries from the durable lane while it is hot.
+        summary: event.type === "pipeline_merged" && lane
+          ? `pull request #${lane.merge!.prNumber} merged, head ${lane.merge!.mergedHead ?? "unavailable"} — ${redactBounded(lane.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT)}`
+          : event.summary,
+        pipelineId: event.pipelineId,
+        /* An open lane is always in the hot store; the archive only ever takes
+           SETTLED records. So a pipeline id the store no longer lists names a
+           lane that ended long enough ago to have been archived, and reading it
+           as terminal is the same answer arrived at from the other side. An event
+           that names no pipeline is never terminal here — nothing about a deploy
+           outcome or a held delivery has finished (#1285). */
+        pipelineTerminal: event.pipelineId !== null && !openPipelineIds.has(event.pipelineId),
+      };
+    }),
     cursor,
   };
 }
@@ -2334,7 +2369,7 @@ export async function gatherSeatTickInput(
 
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
   const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
-  const settledDeploys = settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
   let endedMaintenance: readonly MaintenanceRun[] = [];
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
@@ -2352,7 +2387,7 @@ export async function gatherSeatTickInput(
   } catch (error) {
     console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
   }
-  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
+  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* The children source's run of failures (#1465), kept exactly as the
      pull-request source's: advanced by a check that could not account for

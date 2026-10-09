@@ -1,9 +1,9 @@
 "use client";
 
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import { ArrowRight, ArrowUpToLine, Check, ChevronRight, Layers, Loader2, Play, X } from "@/components/icons";
+import { ArrowRight, ArrowUpToLine, Check, ChevronRight, Layers, Loader2, Play, RotateCw, Trash2, X } from "@/components/icons";
 import { ContextToggle } from "./ContextToggle";
 import { turnReading, useContextMode } from "./composerContextMode";
 import { CircleAlert, RotateCcw } from "lucide-react";
@@ -19,6 +19,8 @@ import { interruptRuntime, useRuntimeBusState, type CommandResult, type RuntimeS
 import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { useViewerSelectedContext, viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
+import { useDeliveryProgress } from "@/hooks/useDeliveryProgress";
+import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
 import { useHostTarget } from "@/hooks/useHostTarget";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -404,6 +406,7 @@ export function RuntimeComposerReceipts({
   payloadRecoveryKeys = NO_DISMISSED,
   localRecoveryKeys = NO_DISMISSED,
   onRecheck,
+  progress: pinnedProgress,
 }: {
   receipts: RuntimeReceipt[];
   actionsDisabled?: boolean;
@@ -431,6 +434,9 @@ export function RuntimeComposerReceipts({
   /** Complete local submissions whose admission has no server operation yet. */
   localRecoveryKeys?: ReadonlySet<string>;
   onRecheck?: (receipt?: RuntimeReceipt) => void;
+  /** What the delivery queue recorded each unsettled message is waiting on
+      (incident 2026-10-06). Production reads it itself; a test pins it. */
+  progress?: ReadonlyMap<string, DeliveryProgressRecord>;
 }) {
   const { t } = useLocale();
   const statusId = useId();
@@ -464,6 +470,14 @@ export function RuntimeComposerReceipts({
     return () => clearInterval(timer);
   }, [pinnedNow, unsettled]);
   const now = nowMs ?? tick;
+  const unsettledOperations = visibleAttempts
+    .filter((receipt) => deliveryWaitPossible(receipt.status) && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))
+    .map((receipt) => receipt.operationId);
+  const polledProgress = useDeliveryProgress(unsettledOperations, !pinnedProgress && !pinnedNow && unsettledOperations.length > 0);
+  const progress = pinnedProgress ?? polledProgress.records;
+  /* Each read re-renders the row, and the record is measured from it; a
+     pinned clock stays pinned. */
+  const progressNow = pinnedNow ? now : Math.max(now, polledProgress.readAt);
   const alternateRetry = (receipt: RuntimeReceipt) => localRecoveryKeys.has(receipt.idempotencyKey) || !payloadRecoveryKeys.has(receipt.idempotencyKey);
   const editable = (receipt: RuntimeReceipt) => alternateRetry(receipt) && isMessageReceipt(receipt)
     && (receipt.status === "failed" || receipt.status === "rejected")
@@ -481,13 +495,17 @@ export function RuntimeComposerReceipts({
      keeps it from ever crossing the uncertain bound. Automatic and explicit
      unknown-fate retries keep the same operation, so one stamp covers the
      whole time this logical message is owed. */
-  const waitFor = (group: DeliveryAttemptGroup): DeliveryWait | null => deliveryWaitFor({
-    status: group.current.status,
-    host: session?.host ?? null,
-    turn: session?.turn ?? null,
-    admittedAt: group.current.admittedAt ?? group.current.at,
-    nowMs: now,
-  });
+  const waitFor = (group: DeliveryAttemptGroup): DeliveryWait | null => {
+    const wait = deliveryWaitFor({
+      status: group.current.status,
+      host: session?.host ?? null,
+      turn: session?.turn ?? null,
+      admittedAt: group.current.admittedAt ?? group.current.at,
+      nowMs: now,
+    });
+    const recorded = progress.get(group.current.operationId);
+    return wait && recorded ? { ...wait, progress: recorded, nowMs: progressNow } : wait;
+  };
   const unknownStatusText = (receipt: RuntimeReceipt): string => t(receipt.status === "failed"
     ? "composer.deliveryCheckEnded" : "composer.deliveryChecking");
   const handoverActive = (receipt: RuntimeReceipt): boolean => receipt.status === "delivering" || receipt.status === "applying";
@@ -621,10 +639,6 @@ export function RuntimeComposerReceipts({
   const summaryAriaLabel = noticeLine
     ? `${disclosureLabel}. ${noticeLine}${noticeAttemptLabel ? `. ${noticeAttemptLabel}` : ""}`
     : `${disclosureLabel}. ${receiptSummaryLabel}`;
-  /* On a phone the notice's actions keep the 44px hit area in a 32px box (the
-     composer's own icon-button pattern: the hit extends through `before:`),
-     so the terse cause keeps its width beside them at 390px. */
-  const noticeActionClass = "relative inline-flex h-11 w-8 shrink-0 items-center justify-center rounded-control text-muted before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-6 sm:w-6 sm:before:hidden";
 
   /* Send-latency slice 3: routine delivery bookkeeping is no longer a second
      status surface. While every attempt is simply moving — admitted, queued
@@ -1593,6 +1607,23 @@ export function restoreOutboxDraft(id: string, entry: OutboxEntry): void {
   appendComposerDraft(id, text);
 }
 
+/* On a phone the notice's actions keep the 44px hit area in a 32px box (the
+   composer's own icon-button pattern: the hit extends through `before:`),
+   so the terse cause keeps its width beside them at 390px. */
+const noticeActionClass = "relative inline-flex h-11 w-8 shrink-0 items-center justify-center rounded-control text-muted before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-6 sm:w-6 sm:before:hidden";
+
+/** A retained message's state, and the short form it takes once a Re-check
+    has answered and left the line in place: the same state with the time. */
+const PAYLOAD_STATUS_CHECKED = {
+  "composer.payloadLocal": "composer.payloadLocalAt",
+  "composer.deliveryNotDelivered": "composer.deliveryNotDeliveredAt",
+  "composer.deliveryCheckEnded": "composer.deliveryCheckEndedAt",
+} as const;
+
+/** The dismissal id of a retained message's notice, kept with the receipt
+    dismissals and apart from every operation id. */
+const payloadNoticeDismissId = (key: string) => `composer-payload-notice:${key}`;
+
 const hhmm = (at: number) =>
   new Date(at).toLocaleTimeString(getLocale() === "uk" ? "uk-UA" : "en-US", { hour12: false, hour: "2-digit", minute: "2-digit" });
 
@@ -2289,18 +2320,27 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* Every share this composer holds, so hide, inactivity and unmount release
      the forced Check status read as well as the periodic ones. */
   const heldOperationReads = useRef(new Map<string, () => void>());
-  const readOperationBack = (item: OperationReconciliation, force = false) => {
-    if (documentHidden() || heldOperationReads.current.has(item.operationId)) return;
+  /* What a held read settles to, so a caller that asks while one is already
+     out (a Re-check tap during a periodic read) waits for that answer. */
+  const operationReadsSettled = useRef(new Map<string, Promise<void>>());
+  const readOperationBack = (item: OperationReconciliation, force = false): Promise<void> => {
+    if (documentHidden()) return Promise.resolve();
+    if (heldOperationReads.current.has(item.operationId)) {
+      return operationReadsSettled.current.get(item.operationId) ?? Promise.resolve();
+    }
     const read = readOperationShared(item.operationId, nowMs(), { force });
-    if (!read) return;
+    if (!read) return Promise.resolve();
     const held = heldOperationReads.current;
     held.set(item.operationId, read.release);
-    void read.result.then((answer) => {
+    const settled = read.result.then((answer) => {
       const current = held.get(item.operationId) === read.release;
       if (current) held.delete(item.operationId);
+      if (operationReadsSettled.current.get(item.operationId) === settled) operationReadsSettled.current.delete(item.operationId);
       read.release();
       if (current && answer) applyOperationReadRef.current(item, answer);
     });
+    operationReadsSettled.current.set(item.operationId, settled);
+    return settled;
   };
   const liveTailRef = useRef(runtimeReceipts);
   const applyOperationReadRef = useRef(applyOperationRead);
@@ -2309,6 +2349,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     applyOperationReadRef.current = applyOperationRead;
   });
   const operationReadsActive = viewActive && !pollPaused;
+  /* Retained copies whose admitted operation has not ended. A copy outlives the
+     live tail's few recent receipts, so its own record is read back on the same
+     schedule as the queue's rows. */
+  const payloadOperationReads = useRef<OperationReconciliation[]>([]);
   const readOperationBackRef = useRef(readOperationBack);
   useLayoutEffect(() => {
     readOperationBackRef.current = readOperationBack;
@@ -2326,6 +2370,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const now = nowMs();
       for (const item of operationsToReconcile(readOutbox(cardId), displayedRuntimeReceiptsRef.current, liveTailRef.current,
         (operationId) => !held.has(operationId) && operationReadDue(operationId, now), now)) readOperationBackRef.current(item);
+      for (const item of payloadOperationReads.current) {
+        if (!held.has(item.operationId) && operationReadDue(item.operationId, now)) void readOperationBackRef.current(item);
+      }
     };
     const onVisibility = () => (documentHidden() ? releaseAll() : pass());
     document.addEventListener("visibilitychange", onVisibility);
@@ -2391,10 +2438,65 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      row's own affordance (send-latency slice 3). This panel keeps exactly what
      the row cannot speak for: a copy whose queue entry is gone, a submission
      made in another tab, a storage error. */
+  /* A dismissed notice stays hidden for its message only; the copy and its
+     observer stay until the operation ends. An unknown fate the receipt card
+     above the composer already states, with its own Re-check, is not said
+     twice. */
+  const unownedReceipts = displayedRuntimeReceipts.filter(receipt => !rowOwnedKeys.has(receipt.idempotencyKey));
   const visiblePayloadRows = payloadRows.filter(row => !rowOwnedKeys.has(row.ref.key)
+    && !dismissedReceipts.has(payloadNoticeDismissId(row.ref.key))
+    && !payloadReceiptEvidence({ conversationId: row.ref.conversationId, key: row.ref.key, operationId: row.operationId }, unownedReceipts)
+      .slice(-1).some(receiptHasUnknownFate)
     && (row.operationId || !dismissedReceipts.has(unconfirmedReceiptOperationId(row.ref.key))));
-  const payloadDiagnostics = visiblePayloadRows.length > 0
-    || pendingDeliveries.current.some(entry => entry.payloadComplete === false && !rowOwnedKeys.has(entry.key));
+  const incompleteNoticeShown = (entry: PendingDelivery) => entry.payloadComplete === false
+    && !rowOwnedKeys.has(entry.key)
+    && !dismissedReceipts.has(payloadNoticeDismissId(entry.key))
+    && !payloadRows.some(row => row.ref.key === entry.key);
+  const payloadDiagnostics = visiblePayloadRows.length > 0 || pendingDeliveries.current.some(incompleteNoticeShown);
+  const payloadOperationItem = (row: RestoredComposerSubmission): OperationReconciliation | null => {
+    if (!row.operationId || row.operationId.includes(":")) return null;
+    if (row.receipt && (row.receipt.status === "delivered" || row.receipt.reason === "delivery-discarded")) return null;
+    return { operationId: row.operationId, idempotencyKey: row.ref.key, original: {
+      operationId: row.operationId, idempotencyKey: row.ref.key, conversationId: cardId, kind: "send",
+      status: (row.receipt?.status ?? "pending") as RuntimeReceipt["status"], text: row.submission.text,
+      at: row.receipt?.at ?? new Date(row.ref.savedAt).toISOString(), revision: row.receipt?.revision ?? 0,
+      reason: row.receipt?.reason ?? null,
+    } };
+  };
+  useLayoutEffect(() => {
+    payloadOperationReads.current = payloadRows.flatMap(row => payloadOperationItem(row) ?? []);
+  });
+  /* A copy restored from storage is read back at once rather than at the next
+     pass, so a delivery that ended while this tab was away clears on open. */
+  useEffect(() => {
+    if (!operationReadsActive) return;
+    const now = nowMs();
+    for (const item of payloadOperationReads.current) {
+      if (!heldOperationReads.current.has(item.operationId) && operationReadDue(item.operationId, now)) void readOperationBack(item);
+    }
+  }, [payloadRows, operationReadsActive]);
+  /* Re-check: the message's own operation, or for a copy with no admitted
+     operation yet, the send key's admission record. Keys map to `null` while
+     the check runs and to the time it finished after. */
+  const [payloadChecks, setPayloadChecks] = useState<ReadonlyMap<string, number | null>>(() => new Map());
+  const recheckPayload = async (key: string, check: () => Promise<unknown>) => {
+    const owner = cardId;
+    setPayloadChecks(current => new Map(current).set(key, null));
+    try {
+      await Promise.all([check().catch(() => undefined), runtimeDependencies.refreshRuntime().catch(() => false)]);
+      await refreshPayloads();
+    } finally {
+      if (payloadOwner.current === owner) setPayloadChecks(current => new Map(current).set(key, nowMs()));
+    }
+  };
+  const recheckPayloadRow = (row: RestoredComposerSubmission) => recheckPayload(row.ref.key, async () => {
+    const item = payloadOperationItem(row);
+    if (item) return readOperationBack(item, true);
+    if (row.operationId || !row.envelope) return;
+    const conversationId = typeof row.envelope.body.conversationId === "string" ? row.envelope.body.conversationId : cardId;
+    const answer = await runtimeDependencies.lookupRuntimeAdmission(conversationId, row.ref.key);
+    if (answer.outcome === "admitted" && answer.receipt) await composerSubmissionPayloads.observe(row.ref, answer.receipt);
+  });
   const hasPayloadRecovery = payloadDiagnostics || payloadStorageError !== null;
   const renderedAccessorySurfaces = (callPanelDocked ? 1 : 0) + (queuePanelRendered ? 1 : 0)
     + (sent.length || echoedReceipts.length ? 1 : 0) + (hasPayloadRecovery || displayedRuntimeReceipts.length ? 1 : 0);
@@ -5093,9 +5195,70 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* #1846: a message held by a failed account move gets its own line above the row, with its two ways on. */
   const switchHeld = caps.surface === "structured" && file.switchHold ? <RuntimeSwitchHold file={file} /> : null;
 
+  /* One line per retained message the operator is still owed an answer for
+     (2026-10-07: the boxed panel read «Automatic checking has stopped» under a
+     Re-check that only refreshed the live tail, which no longer carried the
+     message, so a tap changed nothing). The line names the state and the
+     message; the diagnostic sentence rides on hover; the quiet icon actions are
+     the receipt notice's own. */
+  const payloadNoticeLine = ({ itemKey, incomplete, status, preview, detail, checking, checkedAt, actions, onRecheck }: {
+    itemKey: string; incomplete?: boolean; status: keyof typeof PAYLOAD_STATUS_CHECKED; preview: string; detail: string; checking: boolean; checkedAt: number | null;
+    actions?: ReactNode; onRecheck: () => void;
+  }) => (
+    <div key={itemKey} {...(incomplete ? { "data-payload-incomplete": itemKey } : { "data-payload-key": itemKey })} className="flex w-full min-w-0 items-center gap-1 px-1.5 text-caption text-secondary sm:gap-1.5">
+      <CircleAlert className="h-3 w-3 shrink-0 text-warning" aria-hidden />
+      <span className="min-w-0 flex-1 truncate" data-payload-reason title={detail}>
+        {/* A check that leaves the line in place answers in the status
+            itself, the one part a 390 px phone always shows: the state in its
+            short form with the time of the check, no wider than the state it
+            replaces, so the excerpt keeps its room. */}
+        {checking
+          ? <span className="font-semibold text-warning" role="status">{t("composer.deliveryChecking")}</span>
+          : checkedAt !== null
+            ? <span className="font-semibold tabular-nums text-warning" role="status" data-payload-checked>{t(PAYLOAD_STATUS_CHECKED[status], { time: hhmm(checkedAt) })}</span>
+            : <span className="font-semibold text-warning" role="status">{t(status)}</span>}
+        <span data-payload-excerpt>{` — ${preview}`}</span>
+        <span className="sr-only">{` · ${detail}`}</span>
+      </span>
+      <span className="-mr-1 flex shrink-0 items-center sm:mr-0">
+        <button type="button" data-payload-recheck aria-label={t("composer.payloadRecheck")} title={t("composer.payloadRecheck")}
+          disabled={checking} className={`${noticeActionClass} hover:text-accent`} onClick={onRecheck}>
+          <RotateCw className={`h-3 w-3 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden />
+          <span className="sr-only">{t("composer.payloadRecheck")}</span>
+        </button>
+        {actions}
+        <button type="button" data-payload-dismiss aria-label={t("runtime.receipt.dismiss")} title={t("runtime.receipt.dismiss")}
+          className={`${noticeActionClass} hover:text-danger`} onClick={() => dismissReceipts([payloadNoticeDismissId(itemKey)])}>
+          <X className="h-3 w-3" aria-hidden />
+        </button>
+      </span>
+    </div>
+  );
+  /* A generation restored with only its metadata, beside the retained copies. */
+  const incompleteNotice = (entry: PendingDelivery) => {
+    const check = payloadChecks.get(entry.key);
+    const receipt = displayedRuntimeReceipts.find(candidate => candidate.idempotencyKey === entry.key);
+    const operationId = receipt?.operationId ?? entry.operationId;
+    return payloadNoticeLine({
+      itemKey: entry.key,
+      incomplete: true,
+      status: "composer.deliveryCheckEnded",
+      preview: `${entry.text || t("composer.payloadAttachments")} · ${t("composer.payloadIncomplete")}`,
+      detail: `${receipt?.reason ?? t("composer.payloadUnknown")} ${t("composer.payloadMissing")}`,
+      checking: check === null,
+      checkedAt: check ?? null,
+      onRecheck: () => void recheckPayload(entry.key, async () => {
+        if (!operationId || operationId.includes(":")) return;
+        return readOperationBack({ operationId, idempotencyKey: entry.key, original: receipt ?? {
+          operationId, idempotencyKey: entry.key, conversationId: cardId, kind: "send", status: "pending",
+          text: entry.text, at: new Date().toISOString(), revision: 0,
+        } }, true);
+      }),
+    });
+  };
   const payloadRecovery = hasPayloadRecovery ? (
-    <section data-testid="composer-payload-recovery" className="flex flex-col gap-2 text-caption" aria-label={t("composer.payloadRecovery")}>
-      {payloadStorageError ? <p role="alert">{payloadStorageError}</p> : null}
+    <section data-testid="composer-payload-recovery" className="flex w-full min-w-0 flex-col gap-1" aria-label={t("composer.payloadRecovery")}>
+      {payloadStorageError ? <p role="alert" className="truncate px-1.5 text-caption text-warning" title={payloadStorageError}>{payloadStorageError}</p> : null}
       {visiblePayloadRows.map(row => {
         const persisted = row.receipt ? { ...row.receipt, kind: "send", at: row.receipt.at ?? "", text: row.submission.text } as RuntimeReceipt : undefined;
         const tail = payloadReceiptEvidence({ conversationId: row.ref.conversationId, key: row.ref.key, operationId: row.operationId },
@@ -5108,19 +5271,23 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         /* A recorded refusal of the latest attempt is durable proof that no
            attempt is in flight, whatever a reloaded queue entry still guesses. */
         const retryable = Boolean(row.envelope) && !newer && row.retry !== null;
-        return <details key={row.ref.key} data-payload-key={row.ref.key} className="rounded border border-border p-2">
-          <summary className="cursor-pointer">{row.submission.text.length > 160 ? row.submission.text.slice(0, 160) + "…" : row.submission.text || t("composer.payloadAttachments")} · {t("composer.payloadSaved")}</summary>
-          <p>{t("composer.payloadImages", { count: row.submission.images.length })} · {t("composer.payloadFiles", { count: row.submission.files.length })}</p>
-          <p data-payload-reason>{row.refusal && !receipt
+        const check = payloadChecks.get(row.ref.key);
+        const text = stripTaskReferenceLines(row.submission.text).replace(/\s+/g, " ").trim();
+        const counts = row.submission.images.length || row.submission.files.length
+          ? ` (${t("composer.payloadImages", { count: row.submission.images.length })} · ${t("composer.payloadFiles", { count: row.submission.files.length })})` : "";
+        return payloadNoticeLine({
+          itemKey: row.ref.key,
+          status: !row.envelope ? "composer.payloadLocal" : retryable ? "composer.deliveryNotDelivered" : "composer.deliveryCheckEnded",
+          preview: text || t("composer.payloadAttachments"),
+          detail: (row.refusal && !receipt
             ? t("composer.payloadRefused", { reason: row.refusal.reason })
-            : receipt?.reason ?? t(row.envelope ? "composer.payloadUnknown" : "composer.payloadLocal")}</p>
-          <p>{t(receiptReconciliations.current.has(row.ref.key) ? "composer.payloadChecking" : "composer.payloadNotChecking")}</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="min-h-9 rounded border border-border px-2" onClick={() => void runtimeDependencies.refreshRuntime().then(() => refreshPayloads())}>{t("composer.payloadRecheck")}</button>
-            {!row.envelope || row.retry === "resend" ? <button type="button" data-payload-discard className="min-h-9 rounded border border-border px-2"
-              onClick={() => void composerSubmissionPayloads.discardUnprepared(row.ref).then(() => refreshPayloads())
-                .catch(() => setPayloadStorageError(t("composer.payloadCorrupt")))}>{t("composer.payloadDiscardPreparation")}</button> : null}
-            {retryable ? <button type="button" data-payload-retry className="min-h-9 rounded border border-border px-2" disabled={busy || voiceSending}
+            : receipt?.reason ?? t(row.envelope ? "composer.payloadUnknown" : "composer.payloadLocal")) + counts,
+          checking: check === null || receiptReconciliations.current.has(row.ref.key),
+          checkedAt: check ?? null,
+          onRecheck: () => void recheckPayloadRow(row),
+          actions: <>
+            {retryable ? <button type="button" data-payload-retry aria-label={t("composer.payloadRetry")} title={t("composer.payloadRetry")}
+              disabled={busy || voiceSending} className={`${noticeActionClass} hover:text-accent`}
               onClick={() => void withComposerSubmission(cardId, async () => {
                 if (row.retry === "operation") {
                   const fresh = await composerSubmissionPayloads.restore(row.ref);
@@ -5133,21 +5300,19 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                 updateOutbox(cardId, row.ref.key, { state: "failed", needsReattach: undefined, originalOperationOnly: undefined, deliveryUncertain: undefined });
                 retryOutbox(cardId, row.ref.key);
                 await refreshPayloads();
-              }).catch(() => setPayloadStorageError(t("composer.payloadCorrupt")))}>{t("composer.payloadRetry")}</button> : null}
-          </div>
-        </details>;
+              }).catch(() => setPayloadStorageError(t("composer.payloadCorrupt")))}>
+              <RotateCcw className="h-3 w-3" aria-hidden />
+            </button> : null}
+            {!row.envelope || row.retry === "resend" ? <button type="button" data-payload-discard aria-label={t("composer.payloadDiscardPreparation")}
+              title={t("composer.payloadDiscardPreparation")} className={`${noticeActionClass} hover:text-danger`}
+              onClick={() => void composerSubmissionPayloads.discardUnprepared(row.ref).then(() => refreshPayloads())
+                .catch(() => setPayloadStorageError(t("composer.payloadCorrupt")))}>
+              <Trash2 className="h-3 w-3" aria-hidden />
+            </button> : null}
+          </>,
+        });
       })}
-      {pendingDeliveries.current.filter(entry => entry.payloadComplete === false
-        && !rowOwnedKeys.has(entry.key)
-        && !payloadRows.some(row => row.ref.key === entry.key)).map(entry => (
-        <details key={entry.key} data-payload-incomplete className="rounded border border-border p-2">
-          <summary>{entry.text || t("composer.payloadAttachments")} · {t("composer.payloadIncomplete")}</summary>
-          <p>{t("composer.payloadMissing")}</p>
-          <p>{displayedRuntimeReceipts.find(receipt => receipt.idempotencyKey === entry.key)?.reason ?? t("composer.payloadUnknown")}</p>
-          <p>{t(receiptReconciliations.current.has(entry.key) ? "composer.payloadChecking" : "composer.payloadNotChecking")}</p>
-          <button type="button" className="min-h-9 rounded border border-border px-2" onClick={() => void runtimeDependencies.refreshRuntime().then(() => refreshPayloads())}>{t("composer.payloadRecheck")}</button>
-        </details>
-      ))}
+      {pendingDeliveries.current.filter(incompleteNoticeShown).map(incompleteNotice)}
     </section>
   ) : null;
   const composerBar = (
@@ -5495,12 +5660,17 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       {chipProject ? <PrototypeNoticeRow project={chipProject} /> : null}
       {chipProject ? <TaskChipRow project={chipProject} /> : null}
       {/* Proactive hold hint: while the card is switching accounts, the next
-          send is queued for the successor rather than delivered live. Shown
+          send is queued for the successor rather than delivered live. It says
+          a message is held only while one of this card's messages is still
+          undelivered; with nothing sent it speaks of the next one (2026-10-07:
+          "message held" for 8 s on a switch where nothing was sent). Shown
           identically under the desktop and mobile composers. */}
       {heldSwitchHint || holdsSends ? (
         <div role="status" aria-live="polite" className="flex items-center gap-1.5 rounded-control border border-warning/45 bg-warning-soft px-2 py-1 text-label font-semibold text-warning">
           <ArrowUpToLine className="h-3 w-3 shrink-0" aria-hidden />
-          <span data-composer-switch-hint className="min-w-0 whitespace-normal break-words">{heldSwitchHint ?? t("migrate.heldSend")}</span>
+          <span data-composer-switch-hint className="min-w-0 whitespace-normal break-words">
+            {heldSwitchHint ?? t(outbox.some((entry) => entry.state === "queued" || entry.state === "delivering") ? "migrate.heldSend" : "migrate.nextSendHeld")}
+          </span>
         </div>
       ) : null}
       {pipComposerSlot

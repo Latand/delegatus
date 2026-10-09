@@ -479,7 +479,7 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
     // "gone" is no longer offered and "added" waits for its settings.
     expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }]);
     // The claim lists what this install implements (§A.2 rule 11).
-    expect(features[0]).toEqual(["requester_context"]);
+    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");
   } finally {
     stopExternalRelayPollers();

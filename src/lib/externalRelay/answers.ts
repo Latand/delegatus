@@ -23,7 +23,14 @@ const safeId = /^[A-Za-z0-9_-]{1,64}$/;
 export type RelayAnswerDelivery = "accepted" | "refused" | "unconfirmed";
 /** Who asked, as the service's requester block says. Recorded, never trusted for access. */
 export type RelayAnswerRequester = ExternalRelayRequester;
+export type RelayToolCallRecord = {
+  effect?: "action";
+  round: number; tool: string; page: boolean; status: string; code: string | null;
+  audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
+};
 export type RelayAnswerRecord = {
+  rounds?: number;
+  toolCalls?: RelayToolCallRecord[];
   v: 1;
   requestId: string;
   relayId: string;
@@ -160,7 +167,7 @@ export function answerRecorder(base: {
         logFailure("write", error);
       }
     },
-    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery">) {
+    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls">>) {
       if (finished) return;
       finished = true;
       const now = Date.now();
@@ -323,6 +330,7 @@ export function countMemberAnswers(scope: {
   requesterKey: string;
   sinceMs: number;
 }): { count: number; oldestMs: number | null } {
+  const counted = new Set<string>();
   let count = 0;
   let oldestMs: number | null = null;
   if (!safeId.test(scope.relayId) || !safeId.test(scope.targetId)) return { count, oldestMs };
@@ -338,7 +346,10 @@ export function countMemberAnswers(scope: {
       exemptFromMemberLimit(record.requester) ||
       (record.chatKey ?? null) !== scope.chatKey
     ) continue;
-    count += 1;
+    if (!counted.has(record.requestId)) {
+      counted.add(record.requestId);
+      count += 1;
+    }
     oldestMs = started;
   }
   return { count, oldestMs };
