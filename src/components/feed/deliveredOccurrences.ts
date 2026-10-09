@@ -83,6 +83,7 @@ function provenanceOf(occurrence: DeliveredMessageOccurrence): DeliveredMessageP
     ...(occurrence.senderConversationId ? { senderConversationId: occurrence.senderConversationId } : {}),
     ...(occurrence.selectedContext ? { selectedContext: occurrence.selectedContext } : {}),
     ...(occurrence.mandate ? { mandate: occurrence.mandate } : {}),
+    ...(occurrence.channel ? { channel: occurrence.channel } : {}),
   };
 }
 

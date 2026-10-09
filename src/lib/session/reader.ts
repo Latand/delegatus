@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
+import { nativeCompaction } from "./compaction";
+
 import { yieldToRuntime } from "@/lib/cooperative";
 import { globalCache } from "@/lib/scanner/caches";
 import type { Engine } from "@/lib/types";
@@ -143,6 +145,10 @@ function normalizeClaudeLine(obj: Record<string, unknown>): NormalizedSessionLin
   const records: NormalizedSessionLine[] = [];
   const add = (record: SessionRecord): void => { records.push({ record }); };
   const ts = tsOf(obj);
+  if (nativeCompaction(obj)) {
+    add({ kind: "trace", role: "system", ts, name: "compact", text: "Context compacted" });
+    return records;
+  }
   if (obj.type === "user") {
     const content = rec(obj.message).content;
     if (isClaudeTaskNotification(obj)) {
@@ -175,7 +181,7 @@ function normalizeClaudeLine(obj: Record<string, unknown>): NormalizedSessionLin
     }
     return records;
   }
-  if (obj.type === "summary" || obj.type === "compact") {
+  if (obj.type === "summary") {
     add({ kind: "trace", role: "system", ts, name: str(obj.type), text: textFromContent(obj.summary) || JSON.stringify(obj) });
   }
   return records;
@@ -299,7 +305,6 @@ function codexThreadItemRecord(item: Record<string, unknown>, ts: string | null)
   if (kind === "subagentactivity") return { kind: "trace", role: "system", ts, name: itemType, text: str(item.kind) || "Sub-agent activity" };
   if (kind === "sleep") return { kind: "trace", role: "system", ts, name: itemType, text: item.durationMs === undefined ? "Sleep" : `Sleep ${String(item.durationMs)} ms` };
   if (kind === "enteredreviewmode" || kind === "exitedreviewmode") return { kind: "trace", role: "system", ts, name: itemType, text: str(item.review) || itemType };
-  if (kind === "contextcompaction") return { kind: "trace", role: "system", ts, name: itemType, text: "Context compacted" };
   return { kind: "trace", role: "system", ts, name: itemType, text: compactRecordText(item) || itemType };
 }
 
@@ -310,6 +315,10 @@ function normalizeCodexLine(obj: Record<string, unknown>): NormalizedSessionLine
   };
   const payload = rec(obj.payload);
   const ts = codexEnvelopeTs(payload) ?? tsOf(obj);
+  if (nativeCompaction(obj)) {
+    add({ kind: "trace", role: "system", ts, name: "compact", text: "Context compacted" });
+    return records;
+  }
   const payloadType = str(payload.type);
   const nestedThreadItem = recordOrNull(payload.item);
   const lifecycle = codexThreadItemKind(payloadType);

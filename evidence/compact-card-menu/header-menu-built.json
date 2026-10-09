@@ -3,10 +3,11 @@
   "block": "the header's menu, built",
   "bound": {
     "desktop": 360,
+    "settings": 380,
     "phone": 743
   },
   "tallest": {
-    "desktop": 355.2,
+    "desktop": 379,
     "phone": 661
   },
   "reached": {
@@ -91,7 +92,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -199,7 +200,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -289,7 +290,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -415,7 +416,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -523,7 +524,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -631,7 +632,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -721,7 +722,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -847,7 +848,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1225,7 +1226,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1333,7 +1334,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1423,7 +1424,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1549,7 +1550,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1657,7 +1658,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1765,7 +1766,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1855,7 +1856,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -1981,7 +1982,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2359,7 +2360,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2467,7 +2468,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2557,7 +2558,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2683,7 +2684,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2791,7 +2792,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2899,7 +2900,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -2989,7 +2990,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -3115,7 +3116,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -3493,7 +3494,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -3601,7 +3602,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -3691,7 +3692,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -3817,7 +3818,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -3925,7 +3926,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -4033,7 +4034,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -4123,7 +4124,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,
@@ -4249,7 +4250,7 @@
         7,
         36.5,
         232,
-        349
+        379
       ],
       "scrolls": false,
       "inside": true,

@@ -208,8 +208,8 @@ test("the byte fallback counts each base64 image at a fixed cost, never at its e
   const gathered = readOrchestratorTranscriptFacts(file, null);
   expect(gathered.reportedContextTokens).toBeNull();
   const context = contextReading({ policy: OPUS, facts: gathered });
-  expect(context).toMatchObject({ tokens, estimated: true, percent: 2 });
-  expect(context.basis).toContain("inline image");
+  expect(context).toMatchObject({ tokens: null, estimated: true, percent: null });
+  expect(context.basis).toContain("UNCONFIRMED");
   expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy: OPUS }))
     .toMatchObject({ recommended: false, level: "none", advisory: null });
 });
@@ -335,13 +335,13 @@ test("the recommendation is structurally incapable of acting: plain data, bounde
   expect(JSON.parse(JSON.stringify(recommendation))).toEqual(recommendation);
 });
 
-test("secondary wear signals still produce an ordinary (non-strong) recommendation", () => {
+test("compactions and transcript size remain information without advice", () => {
   const policy = contextWindowPolicyFor("claude", "opus-4-8");
-  const worn = facts({ compactionCount: 3, reportedContextTokens: 10_000 });
+  const worn = facts({ compactionCount: 3, transcriptBytes: 40 * 1024 * 1024, reportedContextTokens: 10_000 });
   const context = contextReading({ policy, facts: worn });
   const recommendation = rotationRecommendation({ context, facts: worn, activity: "live", policy });
-  expect(recommendation.recommended).toBe(true);
-  expect(recommendation.level).toBe("recommend");
+  expect(recommendation.recommended).toBe(false);
+  expect(recommendation.level).toBe("none");
   expect(recommendation.advisory).toBeNull();
 });
 
@@ -360,11 +360,99 @@ test("every reason has its cause as data, in the same order, for a surface that 
   const recommendation = rotationRecommendation({ context, facts: worn, activity: "dead", policy });
   expect(recommendation.causes).toEqual([
     { kind: "context", tokens: 620_000, estimated: false, thresholdTokens: policy!.rotationThresholdTokens, windowTokens: policy!.windowTokens },
-    { kind: "compactions", count: 3, threshold: 2 },
-    { kind: "transcript", megabytes: 9, thresholdMegabytes: 8 },
     { kind: "host_gone" },
   ]);
   expect(recommendation.causes).toHaveLength(recommendation.reasons.length);
   /* The agent's sentence keeps naming its tool; the cause carries no words. */
   expect(recommendation.reasons.at(-1)).toContain("send_message_to_orchestrator");
+});
+
+test("fresh usage ignores byte-heavy transcripts at 2, 8, 20 and 40 MiB", () => {
+  for (const size of [2, 8, 20, 40]) for (const attachments of [false, true]) {
+    const file = transcript([
+      { type: "user", message: { content: attachments ? [{ type: "image", source: { data: "a".repeat(size * 1024 * 1024) } }] : "words ".repeat(Math.ceil(size * 1024 * 1024 / 6)) } },
+      { type: "assistant", message: { usage: { input_tokens: 49_000 } } },
+    ]);
+    const gathered = readOrchestratorTranscriptFacts(file, { messages: 2, tools: 0, compactions: 2 });
+    expect(rotationRecommendation({ context: contextReading({ policy: OPUS, facts: gathered }), facts: gathered, activity: "live", policy: OPUS }))
+      .toMatchObject({ recommended: false, causes: [], level: "none" });
+  }
+});
+
+test("usage search stops at native compaction even across backward-read chunks", () => {
+  for (const boundary of [
+    { type: "system", subtype: "compact_boundary", compactMetadata: { postTokens: 1_249 } },
+    { type: "response_item", payload: { type: "ContextCompaction", id: "compact-a" } },
+    { type: "compacted", replacement_history: [] },
+  ]) {
+    const file = transcript([
+      { type: "assistant", message: { usage: { input_tokens: 980_000 } } },
+      boundary,
+      { type: "user", message: { content: "words ".repeat(60_000) } },
+    ]);
+    const gathered = readOrchestratorTranscriptFacts(file, null);
+    expect(lastReportedContextTokens(file, fs.statSync(file).size)).toBeNull();
+    expect(gathered.afterCompaction).toBe(true);
+    const reading = contextReading({ policy: OPUS, facts: gathered });
+    expect(reading.tokens).toBe(boundary.type === "system" ? 1_249 : null);
+    expect(reading.estimated).toBe(true);
+    expect(rotationRecommendation({ context: reading, facts: gathered, activity: "live", policy: OPUS }).level).toBe("none");
+    fs.appendFileSync(file, JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 510_000 } } }) + "\n");
+    expect(lastReportedContextTokens(file, fs.statSync(file).size)).toBe(510_000);
+  }
+});
+
+test("CLI postTokens above threshold remains an estimate; absent postTokens stays unknown", () => {
+  for (const postTokens of [undefined, 700_000]) {
+    const file = transcript([
+      { type: "assistant", message: { usage: { input_tokens: 980_000 } } },
+      { type: "system", subtype: "compact_boundary", compactMetadata: { postTokens } },
+    ]);
+    const gathered = readOrchestratorTranscriptFacts(file, null);
+    const reading = contextReading({ policy: OPUS, facts: gathered });
+    expect(reading.tokens).toBe(postTokens ?? null);
+    expect(reading.basis).toContain("UNCONFIRMED");
+    expect(rotationRecommendation({ context: reading, facts: gathered, activity: "live", policy: OPUS }).level).toBe(postTokens ? "recommend" : "none");
+  }
+});
+
+test("49/50/51 percent use the runtime capacity for 200k and 1M", () => {
+  for (const windowTokens of [200_000, 1_000_000]) for (const percent of [49, 50, 51]) {
+    const file = transcript([{ type: "assistant", message: { model: "opus", context_window: windowTokens, usage: { input_tokens: windowTokens * percent / 100 } } }]);
+    const gathered = readOrchestratorTranscriptFacts(file, null);
+    const policy = contextWindowPolicyFor("claude", "opus[1m]", gathered);
+    expect(policy?.windowTokens).toBe(windowTokens);
+    const context = contextReading({ policy, facts: gathered });
+    expect(context.percent).toBe(percent);
+    expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy }).level).toBe(percent < 50 ? "none" : "strongly_recommend");
+  }
+  expect(contextWindowPolicyFor("claude", "sonnet-4-5[1m]")?.windowTokens).toBe(1_000_000);
+  expect(contextWindowPolicyFor("codex", "gpt-6.1-sol", { runtimeWindow: 200_000 })).toBeNull();
+});
+
+test("an unproven active segment never falls back to whole-history bytes", () => {
+  const file = transcript([
+    { type: "system", subtype: "compact_boundary" },
+    ...Array.from({ length: 5_000 }, () => ({ type: "user", message: { content: "text ".repeat(200) } })),
+  ]);
+  const gathered = readOrchestratorTranscriptFacts(file, null);
+  expect(gathered.estimatedContextTokens).toBeNull();
+  const context = contextReading({ policy: OPUS, facts: gathered });
+  expect(context).toMatchObject({ tokens: null, estimated: true });
+  expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy: OPUS }).recommended).toBe(false);
+});
+
+test("fresh usage beyond a registry window leaves capacity and rotation threshold unknown", () => {
+  for (const tokens of [200_000, 200_001, 240_000]) {
+    const file = transcript([{ type: "assistant", message: { model: "claude-sonnet-4-5", usage: { input_tokens: tokens } } }]);
+    const gathered = readOrchestratorTranscriptFacts(file, null);
+    const policy = contextWindowPolicyFor("claude", "sonnet-4-5", gathered);
+    const context = contextReading({ policy, facts: gathered });
+    const overflow = tokens > 200_000;
+    expect(context).toMatchObject({ tokens, limit: overflow ? null : 200_000, percent: overflow ? null : 100, estimated: false });
+    expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy })).toMatchObject({
+      level: overflow ? "none" : "strongly_recommend", thresholdUnknown: overflow,
+      ...(overflow ? { threshold: null, causes: [], reasons: [] } : {}),
+    });
+  }
 });

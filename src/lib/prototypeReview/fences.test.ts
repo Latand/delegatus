@@ -28,7 +28,7 @@ function request(url: string,body?: unknown) {
 }
 async function directory(parent: string,prefix: string) { const root = await fs.realpath(await fs.mkdtemp(path.join(parent,prefix))); roots.push(root); return root; }
 const source = () => directory(process.env.HOME!,"prototype-source-");
-async function input(key: string): Promise<PublishPrototypeInput> {
+async function input(key: string): Promise<PublishPrototypeInput & { variants: NonNullable<PublishPrototypeInput["variants"]> }> {
   const root = await source();
   await fs.writeFile(path.join(root,"new.png"),Buffer.concat([PNG,Buffer.from("inside!!")]));
   await fs.writeFile(path.join(root,"clip.webm"),WEBM);
