@@ -374,6 +374,8 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   contentDigest?: string;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  /** Automatic continuation requires this same idle revision and writer at admission and execution. */
+  onlyIfIdle?: RuntimeIdleKillFence;
   runtime?: RuntimeSendSettings;
   /** The Viewer card selected when this turn was submitted (#844). Admitted
       atomically with the text and never re-read afterwards, so board movement
@@ -415,6 +417,15 @@ export interface RuntimeIdleKillFence {
   writerClaim: string;
 }
 
+/** Engine recovery authority for one provider-cut attempt. Requires an idle fence. */
+export interface RuntimeProviderRecoveryRef {
+  pipelineId: string;
+  stageId: string;
+  attempt: number;
+  turnTs: number;
+  controlGeneration: string | null;
+}
+
 export function runtimeIdleKillMatches(
   session: RuntimeSession | null | undefined,
   key: RuntimeKillCommand["sessionKey"],
@@ -430,6 +441,7 @@ export function runtimeIdleKillMatches(
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
   onlyIfIdle?: RuntimeIdleKillFence;
+  providerRecovery?: RuntimeProviderRecoveryRef;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
 }
 
@@ -1004,7 +1016,7 @@ export interface RuntimeReplay {
 
 export interface RuntimeSocketRequest {
   id: string;
-  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
