@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 42, and a v41 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
+test("the default mandate is at version 43, and a v42 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(43);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -110,7 +110,8 @@ test("the default mandate is at version 42, and a v41 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. v40 (#2518)
      adds the ask-first bug report and the seat-to-seat rule for another
      project's work. v41 points the operator to a task's prototype review
-     instead of describing variants in prose. */
+     instead of describing variants in prose. v42 completes spent reviews and
+     files their findings as a follow-up. v43 freezes budgets chosen at creation. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -123,7 +124,8 @@ test("the default mandate is at version 42, and a v41 seat reads as stale", () =
   expect(orchestratorMandateStale(39)).toBe(true);
   expect(orchestratorMandateStale(40)).toBe(true);
   expect(orchestratorMandateStale(41)).toBe(true);
-  expect(orchestratorMandateStale(42)).toBe(false);
+  expect(orchestratorMandateStale(42)).toBe(true);
+  expect(orchestratorMandateStale(43)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -172,6 +174,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
   42: "06da17c971ed719c2aabd559f2978273f199dc1cd5176ed5095e13eabd24d4a7",
+  43: "ad1de2a46b878f24f3da88cea5e6ce3015cec0280c519125c3d17f0bd94afaea",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -943,10 +946,10 @@ test("the mandate directs prototype review to the task", () => {
 });
 
 
-test("the mandate caps cumulative rounds and merges spent budgets with a follow-up", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
+test("the mandate freezes chosen rounds and merges spent budgets with a follow-up", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(43);
   expect(orchestratorMandateStale(41)).toBe(true);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never more than 5 per gate, grants included.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Pick rounds at creation; they never grow.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A spent budget's kept findings become a follow-up task.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain('fail parks with "budget spent');
 });

@@ -52,7 +52,7 @@ type Scheme = "light" | "dark";
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
 describe("terminal review budget continuation", () => {
-  browserTest("fresh and recovered parks show the bounded grant on desktop and phone in both languages", async () => {
+  browserTest("fresh and recovered parks retain findings without offering a new grant on desktop and phone", async () => {
     const out = path.resolve(".artifacts/terminal-review-continuation");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -80,7 +80,7 @@ describe("terminal review budget continuation", () => {
           }, legacy);
           if (width === 390) await page.locator(selector).click();
           const lane = page.locator(width === 390 ? '[data-phone-task-lane="p-stop-once"]' : selector);
-          await lane.locator('[data-answer-action="continue-review"]').waitFor();
+          await lane.locator("[data-review-stop]").waitFor();
           await lane.scrollIntoViewIfNeeded();
           const reading = await lane.evaluate((element) => {
             const buttons = [...element.querySelectorAll<HTMLButtonElement>("[data-answer-action]")];
@@ -92,8 +92,8 @@ describe("terminal review budget continuation", () => {
               findings: element.querySelector(".stage-findings")?.textContent,
             };
           });
-          expect(reading.actions).toEqual(["continue-review"]);
-          expect(reading.labels).toEqual([translate(lang, "pipelineBlock.answer.reviewAgain")]);
+          expect(reading.actions).toEqual([]);
+          expect(reading.labels).toEqual([]);
           expect(reading.clipped).toBe(false);
           expect(reading.reason).toBeTruthy();
           expect(reading.findings).toBeTruthy();
@@ -8245,7 +8245,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
     { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
     /* A spent review budget answers «Accept as is» or «Review again» (#2187 S2). */
-    { id: "p-review-spent", name: "review", current: "critique", answers: ["accept-head", "continue-review"], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: ["accept-head"], fold: null, completed: false, motion: null },
     { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
   ] as const;
 
@@ -10215,7 +10215,7 @@ describe("#2187 a lane parked on a review says why in one line and answers in pl
   const OUT = path.resolve(process.env.REVIEW_STOPS_PNG_DIR ?? ".artifacts/review-stops");
   const EVIDENCE = path.resolve("evidence/review-stops");
   const LANES = [
-    { task: "t-stop-fix", kind: "stop-after-fix", reason: "pipelineBlock.stop.afterFix", answers: [["accept-head", "pipelineBlock.answer.acceptAsIs"], ["continue-review", "pipelineBlock.answer.reviewAgain"]] },
+    { task: "t-stop-fix", kind: "stop-after-fix", reason: "pipelineBlock.stop.afterFix", answers: [["accept-head", "pipelineBlock.answer.acceptAsIs"]] },
     { task: "t-stop-park", kind: "park", reason: "pipelineBlock.stop.park", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
     { task: "t-stop-once", kind: "once", reason: "pipelineBlock.stop.once", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
     { task: "t-stop-legacy", kind: "legacy", reason: "pipelineBlock.stop.legacy", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
@@ -23846,6 +23846,43 @@ describe("orchestrator wire routing across the board's layouts", () => {
   }, 1_800_000);
 });
 
+
+describe("creation-time review budget controls", () => {
+  browserTest("draft budgets above five and traversed lowering stay readable on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/review-budget-controls");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) for (const state of ["draft", "running"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-budget-controls&lane-state=${state}`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          const surface = page.locator("[data-stage-edges]");
+          await surface.waitFor();
+          const input = surface.locator('input[type="number"]');
+          expect(await input.isEnabled()).toBe(true);
+          expect(await input.inputValue()).toBe("7");
+          expect(await input.getAttribute("max")).toBe(state === "draft" ? "9" : "7");
+          if (state === "running") {
+            expect(await surface.locator("select").nth(1).isDisabled()).toBe(true);
+            expect(await surface.locator("select").nth(2).isDisabled()).toBe(true);
+          } else {
+            expect(await surface.locator("select").nth(1).isEnabled()).toBe(true);
+            expect(await surface.locator("select").nth(2).isEnabled()).toBe(true);
+          }
+          const reading = await surface.evaluate(element => ({ text: element.textContent, width: element.clientWidth, clipped: element.scrollWidth > element.clientWidth + 1 }));
+          expect(reading.clipped).toBe(false);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, width, state, ...reading });
+          await surface.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/review-budget", { recursive: true });
+    fs.writeFileSync("evidence/review-budget/controls.json", JSON.stringify(readings, null, 2) + "\n");
+  }, 120_000);
+});
 
 describe("spent review budget", () => {
   browserTest("spent budget pending and filed render without clipping in both languages", async () => {

@@ -1220,10 +1220,10 @@ export type PatchPipelineRequest = {
   expectedRevision?: string;
   /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
   answer?: string;
-  /** for continue-review (#1938): review rounds to add, 1..MAX_REVIEW_ROUNDS. */
+  /** for continue-review (#1938): review rounds to add, 1..MAX_FAIL_EDGE_ROUNDS. */
   addRounds?: number;
   /** for preview/convert-legacy-review: the finite review limit to convert to,
-      1..MAX_REVIEW_ROUNDS; absent, the stage's recorded limit is used. */
+      1..MAX_FAIL_EDGE_ROUNDS; absent, the stage's recorded limit is used. */
   reviewLimit?: number;
   /** for preview/convert-legacy-review: the run stage whose role the fixer
       copies, when more than one run passes into the review. */

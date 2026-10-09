@@ -12,6 +12,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
+import { StageEdgeControls } from "@/components/pipelines/StageEdgeControls";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
@@ -3672,10 +3673,19 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
+const reviewBudgetControlsDraft = new URLSearchParams(location.search).get("lane-state") === "draft";
+const reviewBudgetControlLane = pipeline("budget-controls", "Chosen review budget", "budget-task",
+  reviewBudgetControlsDraft ? "draft" : "running",
+  [stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 7 } }), stage("fix", "builder", "review")],
+  [{ stageId: "review", attempts: [] }, { stageId: "fix", attempts: reviewBudgetControlsDraft ? [] : [attempt(1, "running", null, { activatedBy: { stageId: "review", attempt: 1, edge: "fail" } })] }], null);
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 createRoot(document.getElementById("root")!).render(diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
+  </div>
+) : SCENARIO === "review-budget-controls" ? (
+  <div className="bg-panel p-3" style={{ width: "100%", maxWidth: 520 }}>
+    <StageEdgeControls pipeline={reviewBudgetControlLane} stage={reviewBudgetControlLane.stages[0]!} />
   </div>
 ) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>

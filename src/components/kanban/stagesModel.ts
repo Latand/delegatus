@@ -1,6 +1,6 @@
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { latestAttempt, stageFailEdgeRoundsUsed, stagePromptExtra, type StageChipState } from "@/components/pipelines/pipelineModel";
-import { failEdgeMaxRounds, terminalReviewBudgetSpent, terminalReviewContinuationAvailable } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeMaxRounds, terminalReviewBudgetSpent } from "@/lib/pipelines/failEdgeBudget";
 
 import { graphOrder, operationalAttempts, type StageView } from "./pipelineGraph";
 
@@ -122,7 +122,7 @@ export type PipelineActionKind = "pause" | "resume" | "retry-stage" | "skip-stag
 export interface PipelineActionOption {
   action: PipelineActionKind;
   /** Why the engine would refuse it now, or null when it would accept it. */
-  refusal: "draft" | "ended" | "no-decision" | "no-review" | "other-stage" | "no-merge" | null;
+  refusal: "draft" | "ended" | "no-decision" | "no-review" | "budget-fixed" | "other-stage" | "no-merge" | null;
   /** The stage retry and skip act on: the one the pipeline waits on. */
   stageId: string | null;
   /** The `n` of that stage's latest own attempt, which retry and skip expect; `0` when it has none yet. */
@@ -134,8 +134,8 @@ export interface PipelineActionOption {
  * own preconditions would give (`patchPipeline`): a draft is only started or
  * edited elsewhere, an ended pipeline takes nothing, pause and resume swap,
  * retry and skip apply to the stage a `needs_decision` pipeline waits on, and
- * one more review round (`continue-review`, #1938) and taking the head as it
- * is (`accept-head`, #2187) to a `needs_review` one.
+ * taking the head as it is (`accept-head`, #2187) applies to `needs_review`.
+ * New continuation grants are refused by the creation-time budget rule.
  */
 export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[] {
   const ended = pipelineEnded(pipeline);
@@ -151,7 +151,7 @@ export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[
     { action: "retry-stage", refusal: general ?? (terminalReviewBudgetSpent(decisionAttempt, true) ? "no-decision" : decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
     { action: "skip-stage", refusal: general ?? (terminalReviewBudgetSpent(decisionAttempt) ? "no-decision" : decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
     { action: "close", refusal: general, stageId: null, attempt: null },
-    { action: "continue-review", refusal: general ?? (pipeline.state === "needs_review" || terminalReviewContinuationAvailable(pipeline) ? null : "no-review"), stageId: null, attempt: null },
+    { action: "continue-review", refusal: general ?? "budget-fixed", stageId: null, attempt: null },
     { action: "accept-head", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
     /* A completed lane's stopped merge (#2187 §4.6): tried again, or left
        with its PR open, which is a dismissal of the need. */

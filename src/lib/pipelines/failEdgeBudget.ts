@@ -71,8 +71,8 @@ export function failEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): nu
   return edgeRoundsUsed(pipeline, { from: stage.id, to: stage.onFail.to, kind: "fail" });
 }
 
-/** The rounds a stage's fail edge may spend: its frozen `maxRounds` plus every
-    round a `continue-review` granted it since (#1938). */
+/** The rounds a stage's fail edge may spend: its frozen `maxRounds` plus
+    historical continuation grants, which remain readable (#1938). */
 export function failEdgeMaxRounds(pipeline: Pipeline, stage: PipelineStage): number {
   if (!stage.onFail) return 0;
   const granted = (pipeline.reviewGrants ?? [])
@@ -88,8 +88,8 @@ export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExha
 /** Whether this stage has already handed findings along its spent fail edge.
     Read from the stage's own attempts, so the handoff happens once per stage:
     when another stage's fail edge later loops back through this one and it
-    fails again, it parks as budget exhausted. Each `continue-review` grant
-    (#1938) buys one more handoff, at the end of the rounds it added. */
+    fails again, it parks as budget exhausted. Each historical grant
+    (#1938) records one more handoff, at the end of the rounds it added. */
 export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): boolean {
   const run = pipeline.runs.find((candidate) => candidate.stageId === stage.id);
   const handoffs = run?.attempts.filter((attempt) => !attempt.historical && attempt.budgetSpent).length ?? 0;

@@ -7,7 +7,7 @@ import { readSetting } from "@/components/MergeOnReviewRow";
 import { useLocale } from "@/lib/i18n";
 import { finishesTask } from "@/lib/pipelines/taskFinish";
 import type { LegacyReviewPreview } from "@/lib/pipelines/legacyReviewDefinition";
-import { MAX_REVIEW_ROUNDS, MIN_STARTED_PIPELINE_STAGES } from "@/lib/pipelines/limits";
+import { MAX_FAIL_EDGE_ROUNDS, MIN_STARTED_PIPELINE_STAGES } from "@/lib/pipelines/limits";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { patchPipeline } from "./pipelineModel";
@@ -247,7 +247,7 @@ function LegacyReviewConversion({ pipeline }: { pipeline: Pipeline }) {
             </label>
           ) : null}
           <label className="flex flex-col gap-1"><span className={fieldLabel}>{t("groupOverride.legacyReview.limit")}</span>
-            <input type="number" min={1} max={MAX_REVIEW_ROUNDS} className={inputBase} placeholder={t("groupOverride.legacyReview.limitRecorded")} value={limit} onChange={(event) => { setLimit(event.target.value); setRead(null); }} />
+            <input type="number" min={1} max={MAX_FAIL_EDGE_ROUNDS} className={inputBase} placeholder={t("groupOverride.legacyReview.limitRecorded")} value={limit} onChange={(event) => { setLimit(event.target.value); setRead(null); }} />
           </label>
           {candidates.length > 1 ? (
             <label className="flex flex-col gap-1"><span className={fieldLabel}>{t("groupOverride.legacyReview.implementer")}</span>

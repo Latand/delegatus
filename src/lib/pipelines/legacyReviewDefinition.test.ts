@@ -320,8 +320,7 @@ test("the loading path never reaches the converter", () => {
 });
 
 
-test("legacy conversion refuses a six-round budget", () => {
-  const result = refused(previewLegacyReviewConversion(FIVE_DRAFT(), { reviewLimit: 6 }));
-  expect(result.refusals[0]!.code).toBe("limit-out-of-range");
-  expect(result.refusals[0]!.message).toContain("1–5");
+test("legacy conversion accepts the creator's six-round budget", () => {
+  const result = previewLegacyReviewConversion(FIVE_DRAFT(), { reviewLimit: 6 });
+  expect(result.ok).toBe(true);
 });

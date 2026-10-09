@@ -1,7 +1,7 @@
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 
-import { MAX_REVIEW_ROUNDS, MAX_PIPELINE_STAGES } from "./limits";
+import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_STAGES } from "./limits";
 import { pipelineRoleLookup, resolvePipelineRole, type PipelineRoleLookup } from "./roles";
 import { graphDigest } from "./stageDigest";
 import type {
@@ -252,9 +252,9 @@ export function previewLegacyReviewConversion(
   if (limit.value === 0) {
     reviewLimit = null;
     refusals.push({ code: "unlimited-limit", message: `the review limit is unlimited; choose a finite limit (recommended ${RECOMMENDED_REVIEW_LIMIT})` });
-  } else if (!Number.isInteger(limit.value) || limit.value < 1 || limit.value > MAX_REVIEW_ROUNDS) {
+  } else if (!Number.isInteger(limit.value) || limit.value < 1 || limit.value > MAX_FAIL_EDGE_ROUNDS) {
     reviewLimit = null;
-    refusals.push({ code: "limit-out-of-range", message: `review limit ${limit.value} is outside 1–${MAX_REVIEW_ROUNDS} and is not clamped; choose a finite limit (recommended ${RECOMMENDED_REVIEW_LIMIT})` });
+    refusals.push({ code: "limit-out-of-range", message: `review limit ${limit.value} is outside 1–${MAX_FAIL_EDGE_ROUNDS} and is not clamped; choose a finite limit (recommended ${RECOMMENDED_REVIEW_LIMIT})` });
   }
 
   if (pipeline.stages.length + 1 > MAX_PIPELINE_STAGES) {

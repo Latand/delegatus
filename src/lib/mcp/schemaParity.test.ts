@@ -1153,17 +1153,18 @@ test("Codex tier is published on all launch surfaces and preserved through MCP d
   });
 });
 
-test("MCP pipeline tools describe default 3 and cap every round input at 5", async () => {
+test("MCP pipeline tools describe chosen budgets and retain the finite schema bound", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const { tools } = await client.listTools();
     for (const name of ["create_pipeline", "pipeline_action"]) {
       const tool = tools.find((tool) => tool.name === name)!;
       expect(tool.description).toContain("defaults to 3");
-      expect(JSON.stringify(tool.inputSchema)).toContain("default 3");
+      expect(JSON.stringify(tool.inputSchema)).toContain("at creation");
+      expect(JSON.stringify(tool)).not.toContain("at most 5");
     }
   });
   const action = { clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix" };
-  for (const [rounds, success] of [[5, true], [6, false]] as const) {
+  for (const [rounds, success] of [[0, false], [1, true], [6, true], [7, true], [9, true], [10, false]] as const) {
     expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, maxRounds: rounds }).success).toBe(success);
     expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, action: "continue-review", addRounds: rounds }).success).toBe(success);
     expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, action: "convert-legacy-review", reviewLimit: rounds }).success).toBe(success);
