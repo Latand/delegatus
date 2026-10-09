@@ -3108,6 +3108,13 @@ function conversationMessagesSince(value: unknown): string | undefined {
   return value;
 }
 
+/** Narrow read path for the voice companion. No MCP inventory or caller
+ * supplied path, role, cursor or expansion flags cross this boundary. */
+export async function voiceConversationTail(conversationId: string, dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> = productionDomainDependencies): Promise<Array<{ role: string; text: string }>> {
+  const result = await conversationMessages({ conversationId, kinds: ["message"], roles: ["user", "assistant"], limit: 4, maxChars: 320 }, dependencies);
+  return (result.records ?? []) as Array<{ role: string; text: string }>;
+}
+
 async function conversationMessages(
   args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext">,

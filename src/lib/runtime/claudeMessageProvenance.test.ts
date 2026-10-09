@@ -161,3 +161,14 @@ test("an operation the registry cannot name carries no submission", () => {
   const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => emptySnapshot() });
   expect(map["engine-uuid-unknown"]).toEqual({ origin: "operator" });
 });
+
+test("voice channel survives a reopened Claude delivery ledger into feed provenance", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "voice-claude-ledger-"));
+  tmpDirs.push(directory);
+  const ledger = new FileClaudeDeliveryLedger(directory);
+  ledger.recordQueued(SESSION_ID, { id: "voice-operation", text: "Review the plan", origin: { kind: "operator", channel: "voice-delegatus" } }, "turn-started");
+  ledger.confirmDelivered(SESSION_ID, "voice-operation", "voice-engine-message");
+  const reopened = new FileClaudeDeliveryLedger(directory);
+  expect(claudeMessageProvenance(TRANSCRIPT, { ledger: reopened, registrySnapshot: () => emptySnapshot() })["voice-engine-message"])
+    .toEqual({ origin: "operator", channel: "voice-delegatus" });
+});

@@ -295,8 +295,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 264 files: 175 with asynchronous primitives and
-89 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 266 files: 176 with asynchronous primitives and
+90 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -316,6 +316,7 @@ repeated for this inventory correction.
 
 | File | Async launch sites | Disposition |
 | --- | --- | --- |
+| `src/app/api/attention/needs-you/route.test.ts` | 70 | owned; preload records the child handle before it runs; its exit is awaited and the runner contains descendants from fork time |
 | `bin/__fixtures__/cli-self-update.ts` | 50, 240, 281 | contained helper |
 | `bin/cli.exposure.integration.test.ts` | 262, 284, 317, 336, 355, 389, 417, 444, 469, 496 | owned |
 | `bin/cli.selfUpdate.coldRecovery.integration.test.ts` | 100 | owned |
@@ -494,6 +495,7 @@ repeated for this inventory correction.
 
 | File | Synchronous launch sites | Disposition |
 | --- | --- | --- |
+| `src/lib/voiceCompanion/companion.test.ts` | 39 | synchronous; the Node gate probe has a five-second deadline and a bounded output; the runner contains descendants if interrupted |
 | `bin/agent-binaries.test.ts` | 75, 93 | synchronous |
 | `bin/envAlias.test.ts` | 65, 121 | synchronous |
 | `bin/install-cpu-placement.test.ts` | 37, 42 | synchronous; isolated installer queries are awaited and the runner contains interrupted descendants |

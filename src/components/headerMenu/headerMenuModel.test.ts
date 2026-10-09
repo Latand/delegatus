@@ -12,10 +12,12 @@ const placements = (surface: HeaderSurface): HeaderItem[] => {
 /* Variant 3's presses from the closed menu: its first level is two, Settings and Help are three. */
 const VARIANT_3_PRESSES: Record<HeaderItem, number> = {
   activity: 2, team: 2, qr: 2, update: 2, signOut: 2,
-  language: 3, push: 3, sound: 3, awake: 3, memory: 3, key: 3, mapping: 3, dictation: 3, linked: 3, relay: 3, ping: 3, guide: 3, walk: 3,
+  language: 3, push: 3, sound: 3, awake: 3, memory: 3, key: 3, mapping: 3, dictation: 3, voice: 3, linked: 3, relay: 3, ping: 3, guide: 3, walk: 3,
 };
 /* Where the phone keeps what its menu does not hold: the drawer header and the Team page. */
 const PHONE_ELSEWHERE: HeaderItem[] = ["language", "qr", "push", "signOut"];
+/* Desktop surfaces with no phone row: the voice companion (#2519) is not on the phone at all. */
+const DESKTOP_ONLY: HeaderItem[] = ["voice"];
 /* The desktop keeps the device rows in the board's ⋯. */
 const DESKTOP_ELSEWHERE: HeaderItem[] = ["sound", "awake"];
 
@@ -23,7 +25,7 @@ for (const surface of ["desktop", "phone"] as const) {
   test(`${surface}: every entry appears once, and nothing reachable today is dropped`, () => {
     const placed = placements(surface);
     expect(new Set(placed).size).toBe(placed.length);
-    const elsewhere = surface === "phone" ? PHONE_ELSEWHERE : DESKTOP_ELSEWHERE;
+    const elsewhere = surface === "phone" ? [...PHONE_ELSEWHERE, ...DESKTOP_ONLY] : DESKTOP_ELSEWHERE;
     expect([...placed, ...elsewhere].sort()).toEqual([...HEADER_ITEMS].sort());
   });
 

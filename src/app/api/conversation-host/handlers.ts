@@ -245,6 +245,11 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
+  const voiceBinding = (body as { voiceDelegatus?: { sessionId?: unknown; proposalId?: unknown } }).voiceDelegatus;
+  if (voiceBinding !== undefined && (body.orchestratorRelayProject === undefined || !voiceBinding
+    || typeof voiceBinding.sessionId !== "string" || typeof voiceBinding.proposalId !== "string")) {
+    return NextResponse.json({ error: "voice delegation requires a confirmed orchestrator proposal", code: "voice_admission_refused" }, { status: 400 });
+  }
   let relay: Extract<ReturnType<typeof admitOrchestratorRelay>, { ok: true }> | null = null;
   if (body.orchestratorRelayProject !== undefined) {
     if (typeof body.orchestratorRelayProject !== "string" || !body.orchestratorRelayProject.trim() || body.action !== undefined) {
@@ -260,19 +265,21 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     const admitted = admitOrchestratorRelay(req, body.orchestratorRelayProject,
       typeof body.conversationId === "string" ? body.conversationId : "",
       typeof body.text === "string" ? body.text : "",
-      typeof body.clientMessageId === "string" ? body.clientMessageId : undefined);
+      typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
+      voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined);
     if (!admitted.ok) {
       return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
     }
     relay = admitted;
     // Terminal evidence answers before either transport can recover a host or
     // reserve again, including the adopted legacy recipient's fallback path.
-    if (relay.terminalReceipt) {
-      const receipt = relay.terminalReceipt;
+    if (relay.terminalReceipt || relay.voiceRecoveryReceipt) {
+      const receipt = (relay.terminalReceipt ?? relay.voiceRecoveryReceipt)!;
       const response = {
         target: relay.recipient,
         operationId: receipt.operationId, receipt: runtimeReceiptForSend(receipt),
       };
+      if (receipt.state === "in-flight") return NextResponse.json({ ...response, ok: true as const, outcome: "queued" as const });
       return receipt.state === "delivered"
         ? NextResponse.json({ ...response, ok: true as const, outcome: "delivered" as const })
         : NextResponse.json({ ...response, ok: false, outcome: receipt.state, error: receipt.reason ?? "delivery failed", resend: receipt.resend }, { status: 409 });
