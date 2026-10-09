@@ -314,10 +314,11 @@ export function ownerCensusReader(
     const held = heldHosts();
     // One replay per probe, only when an own journal statement needs ordering.
     // Keep only deciding events; payloads from live output are never retained.
-    let history: Promise<{ events: RuntimeEvent[]; incomplete: boolean; engineCursors: Map<string, number> }> | null = null;
+    let history: Promise<{ events: RuntimeEvent[]; incomplete: boolean; engineCursors: Map<string, number>; sessionRevisions: Map<string, number> }> | null = null;
     const events = () => (history ??= (async () => {
       const result: RuntimeEvent[] = [];
       const engineCursors = new Map<string, number>();
+      const sessionRevisions = new Map<string, number>();
       let cursor = 0;
       let page = await readEvents(cursor);
       const incomplete = page.reset;
@@ -325,6 +326,9 @@ export function ownerCensusReader(
       while (true) {
         if (page.reset) throw new Error("runtime turn history changed during drain probe");
         for (const event of page.events) {
+          // Every producer advances the session revision, including native
+          // admissions whose operation keys carry no engine sequence number.
+          if (event.scope.type === "session") sessionRevisions.set(event.scope.id, event.revision);
           if (["session-status", "turn-started", "turn-ended"].includes(event.kind)) result.push(event);
           // Include output in replay coverage without retaining its payload.
           const engine = /^(engine-host:.+:)(\d+)$/.exec(event.producer.eventKey ?? "");
@@ -333,7 +337,7 @@ export function ownerCensusReader(
             engineCursors.set(key, Math.max(engineCursors.get(key) ?? 0, Number(engine[2])));
           }
         }
-        if (!page.events.length) return { events: result, incomplete, engineCursors };
+        if (!page.events.length) return { events: result, incomplete, engineCursors, sessionRevisions };
         const next = page.events.at(-1)!.seq;
         if (next <= cursor) throw new Error("runtime turn history did not advance");
         cursor = next;
@@ -439,6 +443,7 @@ export function ownerCensusReader(
           }
           reading.handle = handle;
           reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
+          reading.tail = await tail(owner.artifactPath, owner.engine);
           if (owner.writerEpoch !== null) {
             const rows = await rowsFor(owner);
             const history = await events();
@@ -447,12 +452,23 @@ export function ownerCensusReader(
             const cursor = history.incomplete && kind ? await readProducerCursor(kind, `engine-host:${owner.entryKey}:`) : null;
             const replayCursor = history.engineCursors.get(`${kind}\0engine-host:${owner.entryKey}:`) ?? 0;
             reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor, replayCursor);
+            if (reading.journal === "idle") {
+              // Terminal release also needs coverage of native admissions.
+              // Read after the engine cursor and tail: the earlier snapshot
+              // and engine high-water mark cannot fence an operation producer.
+              for (const row of rows) {
+                const current = await readSession({ conversationId: row.conversationId });
+                if (!current || history.sessionRevisions.get(row.conversationId) !== current.revision) {
+                  reading.journal = "unattributed";
+                  break;
+                }
+              }
+            }
           } else if (owner.entry && ["starting", "live", "handoff"].includes(owner.entry.status)) {
             // Another prompt can be accepted without changing updatedAt or
             // the tail. Only this owner's idle state or death ends ambiguity.
             reading.standaloneClaim = true;
           }
-          reading.tail = await tail(owner.artifactPath, owner.engine);
         }
         owners.push(reading);
       });

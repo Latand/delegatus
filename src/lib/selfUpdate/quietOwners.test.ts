@@ -1963,6 +1963,44 @@ test.each(["minimal", "production"])("retention ordering: a start acknowledged a
   expect((await probe(p)).quiet).toBe(true);
 }, 120_000);
 
+test.each(["minimal", "production"])("retention ordering: native admission after replay holds until own settlement under %s retention", async (retention) => {
+  const { c, worker, claim } = await retainedCompletion(retention);
+  publish(c.id, c.key, c.path, claim.fence, null, 30);
+  const operationId = "post-replay-send";
+  const admitted = f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+    conversationId: c.id, text: "continue", policy: "queue" });
+  expect(["pending", "queued"]).toContain(admitted.receipt.status);
+  await fallback();
+  let injected = false;
+  const p = ports({ owners: ownerCensusReader(productionLivenessSources, {
+    readEvents: async (after) => {
+      const page = f.journal.replay(after);
+      if (!page.reset && !page.events.length && !injected) {
+        injected = true;
+        f.journal.completeOperation(operationId, "turn-started", { turnId: "native-next-turn" });
+      }
+      return page;
+    },
+    readProducerCursor: async (kind, prefix) => f.journal.producerCursor(kind, prefix),
+    readSession: (query) => f.client.readSession!(query),
+  }) });
+  const version = p.dispatchVersion?.();
+  const result = await probe(p);
+  expect(injected).toBe(true);
+  expect(p.dispatchVersion?.()).toBe(version);
+  expect(f.journal.producerCursor("codex-app-server", `engine-host:${sessionKeyId(c.key)}:`)).toBe(30);
+  expect(row(c.id)).toMatchObject({ turn: "running", activeTurnId: "native-next-turn" });
+  expect(await probe(ports(), Date.now() + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  publish(c.id, c.key, c.path, claim.fence, "native-next-turn", 40);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "native-next-turn", seq: 50, status: "completed" } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 50);
+  expect(await probe(ports())).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe(p)).quiet).toBe(true);
+  expect(result).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+}, 120_000);
+
 test.each(["minimal", "production"])("retention ordering: a queued older busy publisher preserves completion under %s retention", async (retention) => {
   const { c, worker, claim } = await retainedCompletion(retention);
   const held = heldHost(worker.child.pid, { status: "active", activeTurnRef: "current-turn", eventCursor: 20 });
