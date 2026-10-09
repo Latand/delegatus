@@ -2,11 +2,14 @@ import { expect, test } from "bun:test";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { getCloneableBody } from "next/dist/server/body-streams";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 
-import nextConfig from "../../next.config";
+import configureNext from "../../next.config";
 import { MAX_INBOX_FILES_TOTAL_BYTES } from "./filePolicy";
 import { admitRuntimeImagePayload } from "./runtime/runtimeImageAdmission";
 import { MAX_STRUCTURED_IMAGE_TOTAL_BYTES } from "./runtime/runtimeImageStore";
+
+const nextConfig = configureNext(PHASE_DEVELOPMENT_SERVER);
 
 function png(bytes: number) {
   const data = Buffer.alloc(bytes);

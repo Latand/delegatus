@@ -33,7 +33,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 /** Files that change what every path below resolves to, or how it runs. */
-export const ALWAYS_IN_SCOPE = ["package.json", "bun.lock", "bunfig.toml", "tsconfig.json", "scripts/ci-platform-scope.ts"];
+export const ALWAYS_IN_SCOPE = ["package.json", "bun.lock", "bunfig.toml", "tsconfig.json", "tsconfig.production.json", "scripts/ci-platform-scope.ts"];
 
 const SOURCE_EXTENSIONS = ["", ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", "/index.ts", "/index.tsx", "/index.js"];
 const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)["'`]([^"'`$]+)["'`]/g;
