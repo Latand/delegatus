@@ -4065,6 +4065,8 @@ export const en = {
   "pipelineBlock.remote.pausedTail": "resume it on {host}",
   "pipelineBlock.remote.asOf": "as of {time}",
   "kanban.remoteAgo": "{minutes} min ago",
+  "kanban.finding.count": "Seen {count} times",
+  "kanban.finding.lastSeen": "last",
   "kanban.motion.needs-you": "Needs you",
   "kanban.motion.working": "Working",
   "kanban.motion.workingN": "Working · {count}",

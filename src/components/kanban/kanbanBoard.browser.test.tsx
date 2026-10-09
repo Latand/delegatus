@@ -53,6 +53,98 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("finding recurrence (#2648)", () => {
+  browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
+    const out = path.resolve(".artifacts/finding-recurrence");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=finding-recurrence`, { width, height: width === 1000 ? 700 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          for (const [id, count] of [["t-finding", 3], ["t-finding-held", 12]] as const) {
+            const status = id === "t-finding" ? "inbox" : "blocked";
+            if (width === 390) await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
+            else {
+              await page.locator("[data-kanban-board]").waitFor();
+              const tab = page.locator(`.tabs-nav [data-tab="${status}"]`);
+              if (await tab.isVisible()) await tab.click();
+            }
+            const selector = width === 390 ? `[data-phone-card="task:${id}"]` : card(id);
+            const target = page.locator(selector);
+            const line = target.locator("[data-finding-recurrence]");
+            await line.waitFor();
+            await target.scrollIntoViewIfNeeded();
+            const reading = await line.evaluate((element, lang) => {
+              const container = element.closest(".motion-line")!;
+              const box = container.getBoundingClientRect();
+              // Text-node ranges include every rendered fragment, including
+              // fragments hidden by the container's two-line clamp.
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const fragments = [...range.getClientRects()];
+              const holdReason = element.nextElementSibling;
+              const holdRange = document.createRange();
+              if (holdReason) holdRange.selectNodeContents(holdReason);
+              const holdFragments = holdReason ? [...holdRange.getClientRects()] : [];
+              const time = element.querySelector("time")!;
+              const dateTime = time.getAttribute("datetime")!;
+              const expectedDate = new Date(dateTime).toLocaleString(lang === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+              return { text: element.textContent, dateTime: element.querySelector("time")?.getAttribute("datetime"),
+                timeText: time.textContent, timeTitle: time.getAttribute("title"), expectedDate,
+                holdReason: holdReason?.textContent ?? null,
+                holdReasonVisible: holdFragments.length > 0 && holdFragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
+                title: container.getAttribute("title"),
+                horizontalClipped: container.scrollWidth > container.clientWidth + 1,
+                verticalClipped: container.scrollHeight > container.clientHeight + 1,
+                scrollHeight: container.scrollHeight, clientHeight: container.clientHeight,
+                recurrenceVisible: fragments.length > 0 && fragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
+                left: Math.min(...fragments.map(rect => rect.left)), right: Math.max(...fragments.map(rect => rect.right)) };
+            }, lang);
+            expect(reading.text).toContain(translate(lang, "kanban.finding.count", { count }));
+            expect(reading.text).toContain(translate(lang, "kanban.finding.lastSeen"));
+            const lastSeenAt = await page.evaluate(id => (window as unknown as { evidence: { storedTask(id: string): { finding: { lastSeenAt: string } } } }).evidence.storedTask(id).finding.lastSeenAt, id);
+            expect(reading.dateTime).toBe(lastSeenAt);
+            expect(reading.timeText).toBe(translate(lang, "time.agoMin", { n: 20 }));
+            expect(reading.timeTitle).toBe(reading.expectedDate);
+            expect(reading.timeTitle).not.toBe(lastSeenAt);
+            expect(reading.horizontalClipped).toBe(false);
+            expect(reading.recurrenceVisible).toBe(true);
+            if (id === "t-finding") expect(reading.verticalClipped).toBe(false);
+            else {
+              expect(reading.title).toContain(reading.text!.trim());
+              expect(reading.title).toContain(translate(lang, "kanban.hold.worker"));
+              expect(reading.holdReason).toContain(translate(lang, "kanban.hold.worker"));
+              if (width === 1440) expect(reading.holdReasonVisible).toBe(true);
+            }
+            if (lang === "en") expect(reading.text).not.toContain("last seen");
+            expect(reading.left).toBeGreaterThanOrEqual(0);
+            expect(reading.right).toBeLessThanOrEqual(width);
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, width, id, ...reading });
+            await target.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}-${id}.png`) });
+            // A first observation adds no visible line to a quiet inbox card;
+            // the held card still keeps its existing hold state.
+            await page.evaluate((id) => {
+              const evidence = (window as unknown as { evidence: { storedTask(id: string): { status: "inbox" | "blocked"; finding: { count: number } }; setTaskStatus(id: string, status: "inbox" | "blocked"): void } }).evidence;
+              const task = evidence.storedTask(id);
+              task.finding.count = 1;
+              evidence.setTaskStatus(id, task.status);
+            }, id);
+            await line.waitFor({ state: "detached" });
+            expect(await line.count()).toBe(0);
+            expect(await target.locator(".motion-line").count()).toBe(id === "t-finding" ? 0 : 1);
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/finding-recurrence", { recursive: true });
+      fs.writeFileSync("evidence/finding-recurrence/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("terminal review budget continuation", () => {
   browserTest("fresh and recovered parks show the bounded grant on desktop and phone in both languages", async () => {
     const out = path.resolve(".artifacts/terminal-review-continuation");
