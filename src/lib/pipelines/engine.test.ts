@@ -21676,6 +21676,9 @@ test("continuation grants total at most five and accepted grants replay", async 
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 3, h.beforeBuildPass);
   const parked = loadPipelines()[0]!;
+  const tooLarge = await continueReview(parked, "would-be-six", 3);
+  expect(tooLarge).toMatchObject({ status: 409, field: "addRounds" });
+  expect(tooLarge.error).toContain("3 more would make 6");
   const accepted = await continueReview(parked, "cap-grant", 2);
   expect(accepted.error).toBeUndefined();
   expect((await continueReview(parked, "cap-grant", 2)).replayed).toBe(true);

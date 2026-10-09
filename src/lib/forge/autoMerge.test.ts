@@ -721,6 +721,7 @@ describe("rollup reading", () => {
 
 test.each([true, false])("spent re-check enters merge queue only with setting on (%s)", async (enabled) => {
   const spent = lane("spent", { reviews: [{ n: 2, state: "failed" }] });
+  spent.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.verdict = { status: "fail", findings: ["P0 retained finding"] };
   expect(mergeEligible(spent)).toBe(false);
   spent.reviewBudgetSpent = { stageId: "review", attempt: 2, findings: 1, head: HEAD_A, at: spent.closedAt! };
   expect(mergeEligible(spent)).toBe(true);
