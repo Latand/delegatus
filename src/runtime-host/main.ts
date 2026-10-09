@@ -28,6 +28,7 @@ const { serveRuntimeHost } = await import("./socket");
 const { ViewerDeploymentCoordinator } = await import("./deployment");
 const { HostCommandViewerDeploymentAdapter } = await import("./deploymentAdapter");
 const {
+  listenViewerEntry,
   readViewerGatewayConfig,
   serveViewerDeploymentProxy,
   serveViewerLocalEntry,
@@ -88,7 +89,6 @@ if (process.env.LLV_RUNTIME_LEGACY_SCHEDULER === "1" && process.env.LLV_ACCOUNT_
 const fence = new RuntimeHostFence(
   process.env.LLV_RUNTIME_HOST_FENCE?.trim() || runtimeHostFencePath(socketPath, stateDir()),
 );
-const bootGeneration = currentRuntimeHostGeneration();
 const bootContainer = process.env[RUNTIME_HOST_CONTAINER_ENV];
 const processStartIdentity = procBackend.processIdentity(process.pid);
 if (!processStartIdentity) throw new Error("runtime-host process start identity is unavailable");
@@ -148,12 +148,84 @@ const rollbackResumed = rollbackGeneration
 await acquireRuntimeHostFence({
   acquire: () => fence.acquire(),
   plan: runtimeHostFenceWaitPlan(process.env),
+  // A staged successor takes over an entry its predecessor has just closed.
+  // Bound the retry contribution to that transfer independently of history.
+  pollMs: 25,
   container: process.env[RUNTIME_HOST_CONTAINER_ENV],
   report: (line) => console.error(line),
 });
 startup.record("fence-acquired");
+// The predecessor publishes the successor record before releasing the fence.
+const bootGeneration = currentRuntimeHostGeneration();
+const deploymentsEnabled = process.env.LLV_VIEWER_DEPLOYMENTS === "1";
+const deploymentAdapterPath = deploymentsEnabled
+  ? process.env.LLV_VIEWER_DEPLOY_ADAPTER?.trim() || "/app/scripts/runtime-host-viewer-adapter.ts"
+  : undefined;
+if (deploymentsEnabled && !deploymentAdapterPath) {
+  throw new Error("LLV_VIEWER_DEPLOY_ADAPTER is required when Viewer deployments are enabled");
+}
+const viewerReleaseTarget = process.env.LLV_VIEWER_DEPLOY_TARGET || statePath("viewer-release.json");
+const viewerFrontPort = Number(process.env.LLV_VIEWER_PORT || 8898);
+/* #1547: a gateway file in the state directory makes the stable port the
+   local entry and binds the authenticated remote entry beside it. Which kind
+   of listener the stable port is gets decided here, once; whether the local
+   entry vouches is the file's `localEntry`, read per request. No file, or a
+   file that is not a configuration, is the raw pipe as before. */
+const viewerGatewayFile = statePath(VIEWER_GATEWAY_FILE);
+const viewerGateway = deploymentAdapterPath ? readViewerGatewayConfig(viewerGatewayFile, viewerFrontPort) : null;
+if (viewerGateway?.problem) {
+  console.error(`[runtime host] viewer gateway ${viewerGatewayFile} ignored, stable listener stays the plain pipe: ${viewerGateway.problem}`);
+}
+const viewerGatewayConfig = viewerGateway?.present && viewerGateway.problem === null ? viewerGateway.config : null;
+const deploymentProxy = !deploymentAdapterPath
+  ? null
+  : viewerGatewayConfig
+    ? serveViewerLocalEntry(viewerReleaseTarget, viewerFrontPort, "127.0.0.1", {
+      deferListen: true,
+      gatewayFile: viewerGatewayFile,
+      releaseCredential: viewerReleaseCredentialResolver(stateDir(), process.env),
+      report: (line) => console.error(line),
+    })
+    : serveViewerDeploymentProxy(viewerReleaseTarget, viewerFrontPort, "127.0.0.1", { deferListen: true });
+const remoteEntryProxy = viewerGatewayConfig?.remoteEntryPort
+  ? serveViewerDeploymentProxy(viewerReleaseTarget, viewerGatewayConfig.remoteEntryPort, "127.0.0.1", { deferListen: true })
+  : null;
+/* The remote entry failing to bind must not take down the host that owns the
+   stable port and every agent behind it: the tailnet fails closed instead. */
+remoteEntryProxy?.on("error", (error) => {
+  console.error(`[runtime host] viewer gateway remote entry 127.0.0.1:${viewerGatewayConfig?.remoteEntryPort} is unavailable, tailnet access fails closed: ${error.message}`);
+});
+/* What actually listens, for whoever points something at these entries (the
+   phone step's tailnet mapping, #2024): a release container is told neither
+   port, and the gateway file may change after this read. Rewritten as each
+   listener comes up; a remote entry that never binds is recorded as absent. */
+const recordBoundViewerEntries = () => {
+  if (!deploymentProxy?.listening) return;
+  try {
+    recordViewerEntries(statePath(VIEWER_ENTRIES_FILE), {
+      stablePort: viewerFrontPort,
+      stableEntry: viewerGatewayConfig ? "local-entry" : "pipe",
+      remoteEntryPort: remoteEntryProxy?.listening ? viewerGatewayConfig?.remoteEntryPort ?? null : null,
+    });
+  } catch (error) {
+    console.error(`[runtime host] could not record the bound viewer entries: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+deploymentProxy?.once("listening", recordBoundViewerEntries);
+remoteEntryProxy?.once("listening", recordBoundViewerEntries);
+if (viewerGatewayConfig) {
+  console.error(`[runtime host] viewer gateway: local entry 127.0.0.1:${viewerFrontPort} is ${viewerGatewayConfig.localEntry} at boot (re-read per request); remote entry ${viewerGatewayConfig.remoteEntryPort ? `127.0.0.1:${viewerGatewayConfig.remoteEntryPort}` : "none"}`);
+}
+if (deploymentProxy) {
+  await listenViewerEntry(deploymentProxy, viewerFrontPort);
+  startup.stableEntryListening();
+}
+if (remoteEntryProxy && viewerGatewayConfig?.remoteEntryPort) {
+  void listenViewerEntry(remoteEntryProxy, viewerGatewayConfig.remoteEntryPort).catch(() => { /* remote entry fails closed */ });
+}
+
 const journalFilename = process.env.LLV_RUNTIME_JOURNAL || statePath("runtime-events.sqlite");
-const journal = new RuntimeJournal(journalFilename);
+const journal = await RuntimeJournal.open(journalFilename, { onStartupProgress: (progress) => startup.progress(progress) });
 if (rollbackResumed && !journal.isWritable()) {
   throw new Error("runtime-host rollback cannot complete while the deployment journal is read-only");
 }
@@ -180,17 +252,8 @@ if (rollbackResumed && rollbackGeneration) {
     clearIntent: () => clearRuntimeHostRollbackIntent(runtimeHostRollbackIntentFile()),
   });
 }
-const deploymentsEnabled = process.env.LLV_VIEWER_DEPLOYMENTS === "1";
-const deploymentAdapterPath = deploymentsEnabled
-  ? process.env.LLV_VIEWER_DEPLOY_ADAPTER?.trim() || "/app/scripts/runtime-host-viewer-adapter.ts"
-  : undefined;
-if (deploymentsEnabled && !deploymentAdapterPath) {
-  throw new Error("LLV_VIEWER_DEPLOY_ADAPTER is required when Viewer deployments are enabled");
-}
-/* #518: the generation record staged with this process's own image, read once
-   at boot. Bun loads modules exactly once, so a later deploy can only reach a
-   successor process — a missing record is the legacy fixed-tag image and is
-   never provably current. */
+/* Capture this generation after the fence; the staged process initially sees
+   its predecessor record while waiting. Later deployments require a successor. */
 const mcpHealthProbeAdmissions = new McpHealthProbeAdmissions();
 const deploymentAdapter = deploymentAdapterPath
   ? HostCommandViewerDeploymentAdapter.fromExecutable(deploymentAdapterPath, { mcpHealthProbeAdmissions })
@@ -223,57 +286,6 @@ const host = new RuntimeHost(
   mcpHealthProbeAdmissions,
   () => startup.readyEvidence(),
 );
-const viewerReleaseTarget = process.env.LLV_VIEWER_DEPLOY_TARGET || statePath("viewer-release.json");
-const viewerFrontPort = Number(process.env.LLV_VIEWER_PORT || 8898);
-/* #1547: a gateway file in the state directory makes the stable port the
-   local entry and binds the authenticated remote entry beside it. Which kind
-   of listener the stable port is gets decided here, once; whether the local
-   entry vouches is the file's `localEntry`, read per request. No file, or a
-   file that is not a configuration, is the raw pipe as before. */
-const viewerGatewayFile = statePath(VIEWER_GATEWAY_FILE);
-const viewerGateway = deployments ? readViewerGatewayConfig(viewerGatewayFile, viewerFrontPort) : null;
-if (viewerGateway?.problem) {
-  console.error(`[runtime host] viewer gateway ${viewerGatewayFile} ignored, stable listener stays the plain pipe: ${viewerGateway.problem}`);
-}
-const viewerGatewayConfig = viewerGateway?.present && viewerGateway.problem === null ? viewerGateway.config : null;
-const deploymentProxy = !deployments
-  ? null
-  : viewerGatewayConfig
-    ? serveViewerLocalEntry(viewerReleaseTarget, viewerFrontPort, "127.0.0.1", {
-      gatewayFile: viewerGatewayFile,
-      releaseCredential: viewerReleaseCredentialResolver(stateDir(), process.env),
-      report: (line) => console.error(line),
-    })
-    : serveViewerDeploymentProxy(viewerReleaseTarget, viewerFrontPort);
-const remoteEntryProxy = viewerGatewayConfig?.remoteEntryPort
-  ? serveViewerDeploymentProxy(viewerReleaseTarget, viewerGatewayConfig.remoteEntryPort)
-  : null;
-/* The remote entry failing to bind must not take down the host that owns the
-   stable port and every agent behind it: the tailnet fails closed instead. */
-remoteEntryProxy?.on("error", (error) => {
-  console.error(`[runtime host] viewer gateway remote entry 127.0.0.1:${viewerGatewayConfig?.remoteEntryPort} is unavailable, tailnet access fails closed: ${error.message}`);
-});
-/* What actually listens, for whoever points something at these entries (the
-   phone step's tailnet mapping, #2024): a release container is told neither
-   port, and the gateway file may change after this read. Rewritten as each
-   listener comes up; a remote entry that never binds is recorded as absent. */
-const recordBoundViewerEntries = () => {
-  if (!deploymentProxy?.listening) return;
-  try {
-    recordViewerEntries(statePath(VIEWER_ENTRIES_FILE), {
-      stablePort: viewerFrontPort,
-      stableEntry: viewerGatewayConfig ? "local-entry" : "pipe",
-      remoteEntryPort: remoteEntryProxy?.listening ? viewerGatewayConfig?.remoteEntryPort ?? null : null,
-    });
-  } catch (error) {
-    console.error(`[runtime host] could not record the bound viewer entries: ${error instanceof Error ? error.message : String(error)}`);
-  }
-};
-deploymentProxy?.once("listening", recordBoundViewerEntries);
-remoteEntryProxy?.once("listening", recordBoundViewerEntries);
-if (viewerGatewayConfig) {
-  console.error(`[runtime host] viewer gateway: local entry 127.0.0.1:${viewerFrontPort} is ${viewerGatewayConfig.localEntry} at boot (re-read per request); remote entry ${viewerGatewayConfig.remoteEntryPort ? `127.0.0.1:${viewerGatewayConfig.remoteEntryPort}` : "none"}`);
-}
 if (journal.isWritable()) await host.recoverConsumers();
 startup.record("consumers-recovered");
 const server = serveRuntimeHost(socketPath, host);
@@ -343,10 +355,10 @@ function stop(): void {
   if (legacyTimer) clearInterval(legacyTimer);
   if (receiptSweepTimer) clearInterval(receiptSweepTimer);
   if (journalMaintenanceTimer) clearInterval(journalMaintenanceTimer);
-  deploymentProxy?.close();
-  remoteEntryProxy?.close();
   server.close(() => {
     journal.close();
+    deploymentProxy?.close();
+    remoteEntryProxy?.close();
     fence.release();
   });
 }
@@ -387,15 +399,17 @@ function handOffToStagedSuccessor(context: { deploymentId: string; revision: str
   if (legacyTimer) clearInterval(legacyTimer);
   if (receiptSweepTimer) clearInterval(receiptSweepTimer);
   if (journalMaintenanceTimer) clearInterval(journalMaintenanceTimer);
-  deploymentProxy?.close();
-  remoteEntryProxy?.close();
   server.close(() => {
     journal.close();
+    deploymentProxy?.close();
+    remoteEntryProxy?.close();
     fence.release();
     process.exit(0);
   });
   const forcedExit = setTimeout(() => {
     try { journal.close(); } catch { /* crash-safe journal recovery owns this path */ }
+    deploymentProxy?.close();
+    remoteEntryProxy?.close();
     fence.release();
     process.exit(0);
   }, HANDOFF_EXIT_GRACE_MS);
