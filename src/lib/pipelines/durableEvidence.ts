@@ -1,5 +1,10 @@
 import fs from "node:fs";
 
+import { claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
+import { RECOVERY_NOTICE_ORIGIN } from "@/lib/runtime/recoveryNotices";
+import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
+
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
@@ -26,6 +31,23 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
+  /** Delivered prompts in this verified tail. Harness wakes and controller
+      continuations retain quota recovery; external prompts withdraw it. */
+  prompts?: Array<{ ts: number; origin: "external" | "harness" | "pipeline" }>;
+  /** First cut of the open chain: the provider cuts after this attempt's last
+      agent output. Null when agent output follows every cut. */
+  firstProviderCutAt?: number | null;
+  /** Prompts after the open chain's first cut, in verified record order.
+      Omitted when no chain is open. */
+  externalPromptAfterCut?: boolean;
+  automaticPromptAfterCut?: boolean;
+  /** Whether the requested cut is still in the open chain. A requested cut of
+      0 names the chain a zero-time successor inherited, open from the attempt
+      start. False once agent output follows it; omitted when the verified read
+      cannot place it. */
+  requestedCutOpen?: boolean;
+  /** False if the bounded verified read could not cover the open chain. */
+  promptHistoryComplete?: boolean;
   /** The newest assistant prose of a turn a native shutdown marker closed.
       `message` drops it, since unfinished output never settles a verdict; a
       fresh attempt is told it as what the cut attempt last said. */
@@ -74,6 +96,50 @@ export type StageTurnEvidence = {
 
 function recordTs(record: RecordLike, fallbackTs: number): number {
   return Date.parse(String(record.timestamp ?? "")) || fallbackTs;
+}
+
+/** A record the agent authored after the provider accepted a turn. */
+function agentOutput(record: RecordLike, codex: boolean): boolean {
+  if (codex) {
+    const payload = recordValue(record.payload);
+    const type = stringValue(payload?.type) ?? "";
+    return type === "agent_message" || type === "agent_reasoning" || type === "reasoning"
+      || type === "message" && payload?.role === "assistant" || type.endsWith("_call")
+      || type === "item_completed" && /^(?:agent_?message|reasoning)$/i.test(stringValue(recordValue(payload?.item)?.type) ?? "");
+  }
+  const message = recordValue(record.message);
+  return record.type === "assistant" && record.isApiErrorMessage !== true && message?.model !== "<synthetic>"
+    && recordsValue(message?.content).some(part => part.type === "tool_use" || part.type === "thinking"
+      || part.type === "text" && !!stringValue(part.text)?.trim());
+}
+
+/** Track the open cut chain in physical record order: agent output closes it,
+    and the next native provider cut of this attempt opens a new one. */
+function cutChain(codex: boolean, startedAt: number, requestedAt: number | undefined, fallbackTs: number) {
+  let firstCutAt: number | null = null;
+  let requestedOpen: boolean | undefined;
+  return {
+    feed(record: RecordLike): "output" | "first-cut" | "cut" | null {
+      const at = recordTs(record, fallbackTs);
+      if (requestedAt === 0 && requestedOpen === undefined && at > 0 && !(at < startedAt)) requestedOpen = true;
+      if (agentOutput(record, codex)) {
+        firstCutAt = null;
+        if (requestedOpen) requestedOpen = false;
+        return "output";
+      }
+      const failure = at > 0 && !(at < startedAt) ? terminalProviderMessageFromRecords([record], codex, 0) : null;
+      // The same record ends a stage attempt in the tick's turn reading.
+      if (!failure || failure.errorClass === "turn_aborted"
+        || turnStateFromRecords([record], codex ? "codex" : "claude").state !== "terminal"
+          && (codex || !claudeApiErrorClosedAttempt([record]))) return null;
+      if (requestedAt && at === requestedAt) requestedOpen = true;
+      if (firstCutAt !== null) return "cut";
+      firstCutAt = at;
+      return "first-cut";
+    },
+    firstCutAt: () => firstCutAt,
+    requestedOpen: () => requestedOpen,
+  };
 }
 
 function claudeAssistantText(record: RecordLike): string {
@@ -422,6 +488,57 @@ function claudeApiErrorClosedAttempt(records: RecordLike[]): boolean {
   return stop === "end_turn" || stop === "stop_sequence";
 }
 
+function codexNativeUserPrompt(record: RecordLike) {
+  const payload = recordValue(record.payload);
+  if (!payload) return null;
+  const item = recordValue(payload.item);
+  const family = payload.type === "user_message" ? "event"
+    : payload.type === "message" && payload.role === "user" ? "response"
+    : payload.type === "item_completed" && (item?.type === "UserMessage" || item?.type === "userMessage") ? "item" : null;
+  if (!family) return null;
+  const user = family === "item" ? item! : payload;
+  const text = stringValue(user.message) ?? stringValue(user.text) ?? stringValue(user.content)
+    ?? (Array.isArray(user.content) ? user.content.map(part => typeof part === "string" ? part
+      : stringValue(recordValue(part)?.text) ?? stringValue(recordValue(part)?.content) ?? "").join("") : "");
+  return { text };
+}
+
+/** Tool results and metadata never stand in for a delivered prompt. SDK
+    envelopes need the broker's authorship join: human and controller sends
+    share that envelope in production. Missing provenance stays external. */
+function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: string): Array<NonNullable<StageTurnEvidence["prompts"]>[number] & { recordIndex: number }> {
+  const provenance = codex ? {} : claudeMessageProvenance(transcriptPath);
+  return records.flatMap<NonNullable<StageTurnEvidence["prompts"]>[number] & { recordIndex: number }>((record, recordIndex) => {
+    const ts = recordTs(record, 0);
+    // A native row without time still participates in physical prompt order.
+    if (codex) {
+      const prompt = codexNativeUserPrompt(record);
+      if (!prompt) return [];
+      let automatic = false;
+      try {
+        const origin = decodeCodexStructuredUserText(prompt.text).origin;
+        automatic = origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role);
+      } catch { /* Unavailable metadata leaves this prompt external. */ }
+      return [{ ts, recordIndex, origin: automatic ? "pipeline" as const : "external" as const }];
+    }
+    if (record.type !== "user") return [];
+    const text = claudeUserText(recordValue(record.message)?.content).trim();
+    if (!text && !recordsValue(recordValue(record.message)?.content).some(part => part.type === "image")) return [];
+    const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
+    const author = provenance[stringValue(record.uuid) ?? ""];
+    const human = kind === "human" || kind === "operator" || record.promptSource === "typed" || author?.origin === "operator";
+    if (!human && (kind === "task" || kind === "task-notification" || kind === "scheduled-trigger"
+      || record.turnOrigin === "task_notification" || record.turnOrigin === "scheduled")) return [{ ts, recordIndex, origin: "harness" as const }];
+    // Native human rows may have no authorship fields. Their prose alone
+    // cannot establish a harness wake or a metadata envelope.
+    const metadata = record.isMeta === true || record.isCompactSummary === true || "interruptedMessageId" in record
+      || record.promptSource === "command" || record.promptSource === "system"
+      || record.interruptedByShutdown === true && isClaudeInterruptSentinelText(text);
+    if (!human && metadata && isClaudeTurnWindowMeta(record)) return [];
+    return [{ ts, recordIndex, origin: !human && author?.origin === "agent" && (author.senderRole === "pipeline" || author.senderRole === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
+  });
+}
+
 /** Whether a Claude transcript's turn ended on a provider failure the CLI gave
     up on, read past the bookkeeping a shutdown appends after it. A service
     restart did not cut such a turn: the provider had ended it already. */
@@ -429,10 +546,83 @@ export function claudeTurnClosedByProviderFailure(records: RecordLike[]): boolea
   return claudeApiErrorClosedAttempt(providerTurnRecords(records, false));
 }
 
-/** The widest verified read spent looking for a reported attempt's prose. A
-    brief is relayed at 60 KiB at most, so a window this size holds it with
-    room for the tool output written after the report. */
+/** Bound for verified reads of report prose and prompts since a provider cut.
+    A brief is relayed at 60 KiB at most; oversized history remains unknown
+    when this window cannot cover the requested boundary. */
 export const MAX_REPORT_EVIDENCE_BYTES = 8 * 1024 * 1024;
+
+function transcriptSnapshot(pathname: string): string | null {
+  try {
+    const stat = fs.statSync(pathname, { bigint: true });
+    return stat.isFile() ? [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":") : null;
+  } catch { return null; }
+}
+
+/** Verify history in physical order while retaining only the open cut chain.
+    Older rows are validated too: backdated context cannot hide a cut or the
+    output that closed it. The byte bound counts from the chain's first cut, so
+    a record of any size before it is parsed and dropped. An open chain over
+    the bound returns no records; the stable scan still places its first cut
+    and the requested position. */
+async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: number, requestedAt: number | undefined,
+  fallbackTs: number, snapshot: string | null,
+): Promise<{ records: RecordLike[] | null; firstCutAt: number | null; requestedCutOpen?: boolean } | null> {
+  if (!snapshot) return null;
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(pathname, "r");
+    const stat = await handle.stat({ bigint: true });
+    if ([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":") !== snapshot) return null;
+    const size = Number(stat.size);
+    if (!Number.isSafeInteger(size)) return null;
+    const chain = cutChain(codex, startedAt, requestedAt, fallbackTs);
+    let records: RecordLike[] = [];
+    let retainedBytes = 0;
+    // A line spanning reads is kept as its parts and joined once at its end.
+    let pending: Buffer[] = [];
+    const consume = (bytes: Buffer): boolean => {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+      if (!text) return true;
+      const value = JSON.parse(text);
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const record = value as RecordLike;
+      const step = chain.feed(record);
+      if (step === "output" || step === "first-cut") {
+        records = [];
+        retainedBytes = 0;
+      }
+      // An open chain over the bound stays unknown unless later output closes it.
+      if (chain.firstCutAt() !== null && retainedBytes <= MAX_REPORT_EVIDENCE_BYTES) {
+        retainedBytes += bytes.length + 1;
+        if (retainedBytes <= MAX_REPORT_EVIDENCE_BYTES) records.push(record);
+        else records = [];
+      }
+      return true;
+    };
+    for (let offset = 0; offset < size;) {
+      const buffer = Buffer.alloc(Math.min(65536, size - offset));
+      const read = await handle.read(buffer, 0, buffer.length, offset);
+      if (read.bytesRead !== buffer.length) return null;
+      offset += read.bytesRead;
+      let begin = 0;
+      for (let end = buffer.indexOf(10); end >= 0; end = buffer.indexOf(10, begin)) {
+        const line = buffer.subarray(begin, end);
+        if (!consume(pending.length ? Buffer.concat([...pending, line]) : line)) return null;
+        pending = [];
+        begin = end + 1;
+      }
+      if (begin < buffer.length) pending.push(buffer.subarray(begin));
+    }
+    if (pending.length && !consume(Buffer.concat(pending))) return null;
+    const after = await handle.stat({ bigint: true });
+    if ([after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
+      || transcriptSnapshot(pathname) !== snapshot) return null;
+    const requestedCutOpen = chain.requestedOpen();
+    return { records: retainedBytes > MAX_REPORT_EVIDENCE_BYTES ? null : records, firstCutAt: chain.firstCutAt(),
+      ...(requestedCutOpen === undefined ? {} : { requestedCutOpen }) };
+  } catch { return null; }
+  finally { await handle?.close().catch(() => undefined); }
+}
 
 export async function durableStageTurnEvidence(
   engine: FlowEngine,
@@ -440,7 +630,9 @@ export async function durableStageTurnEvidence(
   reportAt?: string | null,
   attemptStartedAt?: string | null,
   readTail: typeof readStableTailRecords = readStableTailRecords,
+  afterCutAt?: number,
 ): Promise<StageTurnEvidence | null> {
+  const snapshot = transcriptSnapshot(transcriptPath);
   const artifactBefore = await fs.promises.stat(transcriptPath, { bigint: true }).catch(() => null);
   const read = await readTail(transcriptPath);
   if (read.integrity !== "complete") return null;
@@ -454,7 +646,10 @@ export async function durableStageTurnEvidence(
   }
   const reportTime = reportAt ? Date.parse(reportAt) : NaN;
   const startedTime = attemptStartedAt ? Date.parse(attemptStartedAt) : NaN;
+  const cutTime = afterCutAt && afterCutAt > 0 ? afterCutAt : NaN;
+  let promptBoundary = cutTime;
   let evidenceRead = read;
+  let recoveryWindowVerified = false;
   let evidenceBytes = 131_072;
   let reportProse: string | null = null;
   let turnRecords = evidenceRead.records;
@@ -464,6 +659,14 @@ export async function durableStageTurnEvidence(
     turnRecords = providerTurnRecords(evidenceRead.records, codex);
     message = lastAssistantMessageFromRecords(turnRecords, codex ? "codex-sessions" : "claude-projects", fallbackTs);
     turn = turnStateFromRecords(turnRecords, codex ? "codex" : "claude");
+    // Before a wait has been saved, the attempt's history owns cancellation.
+    // Expand only for a provider failure that ends the attempt, read as the
+    // final turn below reads it; ordinary stages keep their cheap tail read.
+    if (!Number.isFinite(promptBoundary) && Number.isFinite(startedTime)
+      && (turn.state === "terminal" || !codex && claudeApiErrorClosedAttempt(turnRecords))
+      && terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs)) {
+      promptBoundary = startedTime;
+    }
     if (Number.isFinite(reportTime)) {
       reportProse = lastAssistantMessageFromRecords(
         turnRecords.filter((record) => {
@@ -474,13 +677,14 @@ export async function durableStageTurnEvidence(
         fallbackTs,
       )?.text ?? null;
     }
-    if (!Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
-      || (reportProse !== null && message !== null && turn.state !== "unknown")) break;
-    /* Once the window reaches back to the attempt's start, an older record
-       cannot belong to this attempt: an agent that wrote no prose before its
-       report is answered here, without reading the whole transcript. */
-    const oldestAt = evidenceRead.records.map((record) => recordTs(record, 0)).find((ts) => ts > 0);
-    if (Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime) break;
+    const oldestAt = evidenceRead.records.map(record => recordTs(record, 0)).find(ts => ts > 0);
+    const reportCovered = !Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
+      || reportProse !== null && message !== null && turn.state !== "unknown"
+      || Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime;
+    // Backdated context cannot prove coverage of the cancellation boundary.
+    // The verified recovery window must cover the open cut chain.
+    const promptsCovered = !Number.isFinite(promptBoundary) || !evidenceRead.prefixTruncated;
+    if (reportCovered && promptsCovered) break;
     if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
     // A JSONL line crossing the tail boundary is discarded. Grow the
     // verified window until both the final and pre-report messages are read.
@@ -497,14 +701,59 @@ export async function durableStageTurnEvidence(
   // start must remain recoverable even when final-output evidence hits its cap.
   if (turnStartedAt === null && evidenceRead.prefixTruncated && Number.isFinite(startedTime)
     && reportTime === startedTime && artifactBefore) turnStartedAt = await recoverNativeTurnStart(transcriptPath, codex, startedTime, artifactBefore);
+  let windowRequestedCutOpen: boolean | undefined;
+  let overflow: { firstCutAt: number | null; requestedCutOpen?: boolean } | null = null;
+  if (evidenceRead.prefixTruncated && Number.isFinite(promptBoundary) && readTail === readStableTailRecords) {
+    const window = await readRecoveryWindow(transcriptPath, codex, startedTime, afterCutAt, fallbackTs, snapshot);
+    if (window?.records) {
+      evidenceRead = { integrity: "complete", prefixTruncated: true, records: window.records };
+      recoveryWindowVerified = true;
+      windowRequestedCutOpen = window.requestedCutOpen;
+      // Terminal and reset evidence stays with the verified tail, which also
+      // contains quota observations immediately before the physical cut.
+    } else if (window) overflow = window;
+  }
   const terminalNotice = terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs);
   const nativeCut = terminalNotice?.errorClass === "turn_aborted";
   const terminal = nativeCut || turn.state === "terminal" || (!codex && claudeApiErrorClosedAttempt(turnRecords));
   const newest = turnRecords.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
+  const chain = cutChain(codex, startedTime, afterCutAt, fallbackTs);
+  let cutIndex = -1;
+  evidenceRead.records.forEach((record, recordIndex) => {
+    const step = chain.feed(record);
+    if (step === "output") cutIndex = -1;
+    else if (step === "first-cut") cutIndex = recordIndex;
+  });
+  // An open chain over the read bound keeps its prompts unknown. Its first cut
+  // and whether agent output closed the requested cut are known from the
+  // stable scan of the whole artifact.
+  const firstProviderCutAt = overflow ? overflow.firstCutAt : chain.firstCutAt();
+  const historyComplete = !evidenceRead.prefixTruncated || recoveryWindowVerified;
+  // A partial tail proves a requested position closed, never still open.
+  const requestedCutOpen = recoveryWindowVerified ? windowRequestedCutOpen
+    : overflow ? overflow.requestedCutOpen
+      : afterCutAt === 0 && !historyComplete && chain.requestedOpen() ? undefined : chain.requestedOpen();
+  const prompts = stagePrompts(evidenceRead.records, codex, transcriptPath);
+  // Native prompt rows and their authorship join must describe one snapshot
+  // whenever recovery reads them. A raced append cannot turn a confirmed
+  // automatic prompt into human input.
+  if ((Number.isFinite(promptBoundary) || afterCutAt !== undefined)
+    && (snapshot === null || transcriptSnapshot(transcriptPath) !== snapshot)) return null;
+  const afterCut = cutIndex < 0 ? [] : prompts.filter(prompt => prompt.recordIndex > cutIndex);
   return {
     turn: terminal ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
+    // Shutdown normalization may remove a human prompt whose turn was interrupted.
+    // Cancellation evidence must retain that prompt even when terminal evidence does not.
+    prompts: prompts.map(prompt => ({ ts: prompt.ts, origin: prompt.origin })),
+    firstProviderCutAt,
+    ...(cutIndex < 0 ? {} : {
+      externalPromptAfterCut: afterCut.some(prompt => prompt.origin === "external"),
+      automaticPromptAfterCut: afterCut.some(prompt => prompt.origin !== "external"),
+    }),
+    ...(requestedCutOpen === undefined ? {} : { requestedCutOpen }),
+    promptHistoryComplete: historyComplete,
     ...(nativeCut ? { cutProse: message?.text ?? null } : {}),
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,

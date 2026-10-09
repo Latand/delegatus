@@ -186,7 +186,13 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return this.call("append-session-fenced", { event });
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> { return this.call("command", { command }) as Promise<RuntimeOperationResult>; }
+  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> {
+    // Older hosts silently discard new command fields. A separate wire method
+    // makes them refuse recovery before admitting an unfenced operation.
+    const guarded = command.kind === "send" && command.onlyIfIdle
+      || command.kind === "kill" && command.providerRecovery;
+    return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
+  }
   operationStatus(operationId: string, options: { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {
       operationId,

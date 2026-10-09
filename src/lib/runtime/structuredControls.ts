@@ -62,6 +62,7 @@ export interface StructuredControlRequest {
   action: string;
   operationId?: string;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
+  providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   reconfiguration?: Partial<AgentReconfiguration>;
   /** `permission` only (#2215): allow once or deny. */
   decision?: string;
@@ -207,6 +208,9 @@ export async function dispatchStructuredControl(
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
   } = {},
 ): Promise<StructuredControlResult | null> {
+  if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
+    return { status: 400, body: { error: "provider recovery requires an idle-only kill" } };
+  }
   if (!request.action) return null;
   if (!(dependencies.enabled ?? (() => structuredHostsEnabled()))()) return null;
   const registry = dependencies.registry ?? agentRegistry();
@@ -440,7 +444,9 @@ export async function dispatchStructuredControl(
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
-      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}) }
+      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey,
+          ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
+          ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
       /* #862: a compact command carries a generation fence and nothing else.
          There is no text field to fill, so no caller's text can ride this
          control into the conversation — the Claude host's `/compact` is the

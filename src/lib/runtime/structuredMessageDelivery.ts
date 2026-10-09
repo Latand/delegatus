@@ -31,6 +31,7 @@ import {
   type RuntimeOperationResult,
   type RuntimeSendSettings,
   type RuntimeSession,
+  runtimeIdleKillMatches,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
@@ -55,6 +56,7 @@ export interface StructuredMessageRequest {
   kind?: "send" | "steer" | "inject";
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   text: string;
   images?: RuntimeImageUpload[];
   imageRefs?: StructuredImageRef[];
@@ -95,6 +97,8 @@ export type StructuredMessageResult =
   | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
+  /** Controller-only eligibility, checked after runtime reads and before admission. */
+  idleContinuationAllowed?: () => boolean | Promise<boolean>;
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
       explicitly; without it the send waits for the section like any other actuator. */
   actuationLease?: ActuationLease;
@@ -288,6 +292,7 @@ function commandInput(request: StructuredMessageRequest) {
     ...(request.kind ? { kind: request.kind } : {}),
     ...(request.policy ? { policy: request.policy } : {}),
     ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+    ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
     ...(request.cohortAt ? { cohortAt: request.cohortAt } : {}),
   };
@@ -827,7 +832,7 @@ export async function deliverHeldStructuredMessage(
       kind: command.kind,
       operationId: command.operationId,
       conversationId: request.runtimeConversationId ?? request.conversationId,
-      idempotencyKey: request.clientMessageId,
+      idempotencyKey: continuationJournalKey(command, request.clientMessageId),
       text: content.content.text,
       ...(refs.length ? { images: refs } : {}),
       contentDigest: content.contentDigest,
@@ -836,6 +841,7 @@ export async function deliverHeldStructuredMessage(
          holds were refused would die here too. */
       ...(command.kind === "inject" ? {} : { policy: command.policy }),
       ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+      ...(command.onlyIfIdle ? { onlyIfIdle: command.onlyIfIdle } : {}),
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
@@ -854,10 +860,50 @@ export async function deliverHeldStructuredMessage(
   }
 }
 
+/* A confirmed admission refusal has no effect to replay. Its replacement
+   reservation owns a fresh journal key, while the caller's key still resolves
+   the durable reservation. Unknown-fate retries keep that reservation intact. */
+const IDLE_CONTINUATION_RETRY_PREFIX = "idle-continuation-retry_";
+
+function continuationJournalKey(command: HeldDeliveryCommand, clientMessageId: string): string {
+  return command.onlyIfIdle && command.operationId.startsWith(IDLE_CONTINUATION_RETRY_PREFIX)
+    ? command.operationId : clientMessageId;
+}
+
+function idleContinuationRefusedBeforeExecution(result: RuntimeOperationResult | null): boolean {
+  if (result?.receipt.kind !== "send") return false;
+  return result?.receipt.status === "rejected" && result.receipt.reason === "idle-continuation-cancelled"
+    || result?.receipt.status === "failed" && result.receipt.reason === "idle-continuation-pre-execution-refused";
+}
+
+/** Positive journal proof for retrying one unchanged automatic continuation.
+    Unknown outcomes and operations that began execution grant no authority. */
+export async function idleContinuationDeliveryRetryable(conversationId: string, clientMessageId: string,
+  dependencies: Pick<StructuredMessageDependencies, "registry" | "client"> = {}): Promise<boolean> {
+  try {
+    const registry = (dependencies.registry ?? agentRegistry)();
+    const evidence = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
+    if (evidence.outcome !== "admitted" || evidence.state !== "failed") return false;
+    const previous = registry.conversationDeliverySnapshot({ conversationId }).heldDeliveries[evidence.deliveryId];
+    const captured = previous?.command.onlyIfIdle;
+    const client = (dependencies.client ?? runtimeHostClient)();
+    if (!client || !previous || !captured || !["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return false;
+    const session = await readRuntimeSession(client, { conversationId });
+    if (!session || captured.writerClaim !== session.writerClaim || previous.generationId !== session.sessionKey.sessionId
+      || captured.revision === session.revision || !runtimeIdleKillMatches(session, session.sessionKey,
+        { revision: session.revision, writerClaim: captured.writerClaim })) return false;
+    const result = await client.operationStatus(previous.command.operationId);
+    return result?.operationId === previous.command.operationId && idleContinuationRefusedBeforeExecution(result);
+  } catch { return false; } // Unconfirmed receipt or owner remains pending.
+}
+
 export async function enqueueStructuredMessage(
   request: StructuredMessageRequest,
   dependencies: StructuredMessageDependencies = {},
 ): Promise<StructuredMessageResult | null> {
+  const continuationRefused = () => refusedBeforeReservation({ ok: false, structured: true, outcome: "failed",
+    error: "automatic continuation cancelled because the stage or idle conversation changed", status: 409 });
+  if (dependencies.idleContinuationAllowed && !await dependencies.idleContinuationAllowed()) return continuationRefused();
   /* A seat's deputy takes its one ask and nothing after it, whoever sends and
      whether it is live or ended (docs/design/ghost-seat.md §4). Refused before
      anything is reserved, so no host is resumed for it. The one exception is
@@ -883,6 +929,7 @@ export async function enqueueStructuredMessage(
   }
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
+    if (dependencies.idleContinuationAllowed) return continuationRefused();
     return holdDuringRuntimeSynchronization(
       request,
       registry,
@@ -896,6 +943,7 @@ export async function enqueueStructuredMessage(
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
     console.error("[structured delivery] runtime session read failed", error);
+    if (dependencies.idleContinuationAllowed) return continuationRefused();
     return holdDuringRuntimeSynchronization(
       request,
       registry,
@@ -903,6 +951,38 @@ export async function enqueueStructuredMessage(
       false,
       synchronizationImageAdmission(dependencies, rawImages),
     );
+  }
+  if (dependencies.idleContinuationAllowed) {
+    if (!session?.writerClaim || !runtimeIdleKillMatches(session, session.sessionKey,
+      { revision: session.revision, writerClaim: session.writerClaim })
+      || !await dependencies.idleContinuationAllowed()) return continuationRefused();
+    let fence = { revision: session.revision, writerClaim: session.writerClaim };
+    const key = request.clientMessageId?.trim();
+    if (key) {
+      const evidence = registry.deliveryAdmissionForKey(session.conversationId, key);
+      if (evidence.outcome === "unknown") return continuationRefused();
+      if (evidence.outcome === "admitted") {
+        const previous = registry.conversationDeliverySnapshot({ conversationId: session.conversationId }).heldDeliveries[evidence.deliveryId];
+        const captured = previous?.command.onlyIfIdle;
+        if (!captured || captured.writerClaim !== session.writerClaim
+          || previous.generationId !== session.sessionKey.sessionId) return continuationRefused();
+        if (previous.state === "failed") {
+          if (!["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "") || captured.revision === session.revision) return continuationRefused();
+          /* The journal proves either admission rejection or refusal before
+             claiming the effect. Other execution failures and missing replies
+             retain their key. Stage evidence is rechecked at actuation. */
+          let rejected: RuntimeOperationResult | null;
+          try { rejected = await client.operationStatus(previous.command.operationId); }
+          catch { return continuationRefused(); }
+          if (rejected?.operationId !== previous.command.operationId || !idleContinuationRefusedBeforeExecution(rejected)) return continuationRefused();
+          request = { ...request, operationId: `${IDLE_CONTINUATION_RETRY_PREFIX}${crypto.randomUUID()}` };
+        } else {
+          fence = captured;
+          request = { ...request, operationId: previous.command.operationId };
+        }
+      }
+    }
+    request = { ...request, policy: "queue", turnId: null, onlyIfIdle: fence };
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
@@ -1278,6 +1358,10 @@ export async function enqueueStructuredMessage(
     /* #1709: the claim and the command's admission to the journal run in the conversation's actuation section,
        so a send claimed after another reaches the journal after it. */
     const admitted = await withConversationActuation(conversation.id, async () => {
+      if (dependencies.idleContinuationAllowed && !await dependencies.idleContinuationAllowed()) {
+        registry.recordDeliveryOutcome(assigned.id, "failed", "automatic continuation cancelled after newer stage activity");
+        return "continuation-cancelled" as const;
+      }
       const claimed = registry.beginDeliveryAttempt(assigned.id, assigned.generationId);
       if (!claimed) return null;
       claimedReservationId = claimed.id;
@@ -1286,7 +1370,7 @@ export async function enqueueStructuredMessage(
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
         conversationId: assigned.runtimeConversationId,
-        idempotencyKey,
+        idempotencyKey: continuationJournalKey(assigned.command, idempotencyKey),
         text: content.content.text,
         ...(refs.length ? { images: refs } : {}),
         contentDigest: content.contentDigest,
@@ -1297,12 +1381,14 @@ export async function enqueueStructuredMessage(
            was for every other kind. */
         ...(assigned.command.kind === "inject" ? {} : { policy: request.policy ?? "interrupt-active" }),
         ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+        ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
         ...(request.runtime ? { runtime: request.runtime } : {}),
         ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);
+    if (admitted === "continuation-cancelled") return continuationRefused();
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order. */
       registry.requeueHeldDelivery(reservation.id);
