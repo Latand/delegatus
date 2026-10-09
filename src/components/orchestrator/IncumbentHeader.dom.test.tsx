@@ -7,6 +7,7 @@ import { resetLocaleForTests, setLocale, translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import { installActEnv } from "@/test-helpers/actEnv";
 
+import type { IncumbentContext } from "./incumbent";
 import { IncumbentHeader } from "./IncumbentHeader";
 
 /* The seat header names the model and the tier the way the composer's pill
@@ -47,7 +48,7 @@ afterEach(async () => {
   resetLocaleForTests();
 });
 
-async function render(model: string, effort: string, engine: "claude" | "codex" = "claude"): Promise<HTMLElement> {
+async function render(model: string, effort: string, engine: "claude" | "codex" = "claude", context: IncumbentContext | null = null): Promise<HTMLElement> {
   globalThis.fetch = (async () => new Response("{}", { status: 404, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -56,7 +57,7 @@ async function render(model: string, effort: string, engine: "claude" | "codex" 
     <IncumbentHeader
       project="repo-alpha"
       projectName="Alpha"
-      incumbent={{ designated: true, engine, model, effort, accountId: null, context: null } as never}
+      incumbent={{ designated: true, engine, model, effort, accountId: null, context } as never}
       promptVersion={null}
       file={{ path: "/tmp/seat.jsonl", engine, model } as FileEntry}
       catalog={null}
@@ -90,4 +91,12 @@ test("a Codex model keeps its stored id", async () => {
   setLocale("en");
   const scope = await render("gpt-6.1-sol", "xhigh", "codex");
   expect(modelNode(scope).textContent).toBe(`gpt-6.1-sol · ${translate("en", "reasoningTier.xhigh")}`);
+});
+
+for (const locale of ["en", "uk"] as const) test(`the ${locale} seat labels post-compaction usage unconfirmed`, async () => {
+  setLocale(locale);
+  const scope = await render("opus", "high", "claude", { tokens: 1_249, limit: 1_000_000, percent: 0, estimated: true, basis: "CLI estimate" });
+  const meter = scope.querySelector('[data-orchestrator-context="unconfirmed"]');
+  expect(meter?.textContent).toBe(translate(locale, "orchPanel.ctxUnconfirmed"));
+  expect(meter?.getAttribute("title")).toBe("CLI estimate");
 });
