@@ -83,7 +83,7 @@ function read<T>(file: string, fallback: () => T): T {
     throw error;
   }
 }
-function write(file: string, data: unknown): void {
+export function writeRelayFile(file: string, data: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -129,7 +129,7 @@ function readStoredRelays(): RelayStore {
     !Array.isArray(store.pending)
   )
     throw new Error("invalid relay store");
-  if (!existed) write(file, store);
+  if (!existed) writeRelayFile(file, store);
   return store;
 }
 export function updateRelayStore(
@@ -138,7 +138,7 @@ export function updateRelayStore(
   const file = externalRelayFile("relays");
   return withFileLock(file, () => {
     const next = withoutExpired(change(withoutExpired(readStoredRelays())));
-    write(file, next);
+    writeRelayFile(file, next);
     return next;
   });
 }
@@ -157,11 +157,11 @@ export function updateRunLedger(
   const file = externalRelayFile("runs");
   return withFileLock(file, () => {
     const next = change(readRunLedger());
-    write(file, next);
+    writeRelayFile(file, next);
     return next;
   });
 }
-function withFileLock<T>(file: string, action: () => T): T {
+export function withFileLock<T>(file: string, action: () => T): T {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;

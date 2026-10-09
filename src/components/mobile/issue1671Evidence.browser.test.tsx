@@ -8712,3 +8712,35 @@ describe("prototype review on the phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+browserTest("external relay: paired card uses existing pairing at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture(); const browser = await launchChromium();
+  const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
+  const readings: Record<string, unknown>[] = [];
+  try {
+    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+      await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+      const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+      try {
+        await page.goto(`${base}/?relay=paired`);
+        await page.locator(width === 390 ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
+        const card = page.locator("[data-external-relay=relay-1]"); await card.waitFor();
+        const reading = await card.evaluate((element) => ({ overflow: element.scrollWidth > element.clientWidth, passwordFields: element.querySelectorAll('input[type="password"]').length,
+          targets: element.querySelectorAll("[data-external-relay-target]").length }));
+        expect(reading.overflow).toBe(false); expect(reading.passwordFields).toBe(0); expect(reading.targets).toBe(3);
+        const frames = [];
+        for (const position of ["top", "bottom"]) {
+          if (position === "bottom") await card.locator("button").last().scrollIntoViewIfNeeded();
+          const frame = `variant-1-paired-${position}-${width}-${locale}.png`;
+          await page.screenshot({ path: path.join(out, frame) }); frames.push(frame);
+        }
+        readings.push({ locale, width, ...reading, frames });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.resolve("evidence/external-relay/conversation-settings.json"), JSON.stringify({ readings }, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 90000);

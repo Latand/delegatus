@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
 
 import { effortTierLabel } from "@/components/builderCopy";
 import { accountConnected } from "@/components/onboarding/EnginesStep";
@@ -121,6 +121,7 @@ const DELIVERY_KEYS = {
 export function outcomeText(t: TFunction, outcome: string): string {
   const [kind, reason] = outcome.split(":");
   if (kind === "targets") return t("externalRelay.outcome.targets", { reason: relayErrorText(t, reason ?? "") });
+  if (kind === "compacted" && ["compacted", "started_fresh", "nothing_to_compact"].includes(reason ?? "")) return t(`externalRelay.compact.${reason}` as Parameters<TFunction>[0]);
   if (kind === "answered") return t("externalRelay.outcome.answered");
   if (kind === "lease_lost") return t("externalRelay.outcome.leaseLost");
   if (kind === "local_error") return t("externalRelay.outcome.localError");

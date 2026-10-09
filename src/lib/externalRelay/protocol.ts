@@ -184,13 +184,13 @@ export const toolCallResultSchema = z.object({
 });
 export type ToolCallResult = z.infer<typeof toolCallResultSchema>;
 export type RoundCall = { tool: string; arguments: string; cursor: string | null };
-export function roundSchema(tools: ExternalRelayTool[]) {
+export function roundSchema(tools: ExternalRelayTool[], options: { handoff: boolean } = { handoff: true }) {
   return {
     ...handoffAnswerSchema,
     required: ["action", "text", "reply_to", "calls"],
     properties: {
       ...handoffAnswerSchema.properties,
-      action: { type: "string", enum: ["reply", "ignore", "handoff", "call"] },
+      action: { type: "string", enum: options.handoff ? ["reply", "ignore", "handoff", "call"] : ["reply", "ignore", "call"] },
       calls: { type: "array", items: {
         type: "object", additionalProperties: false,
         required: ["tool", "arguments", "cursor"],
@@ -203,11 +203,11 @@ export function roundSchema(tools: ExternalRelayTool[]) {
     },
   };
 }
-export function checkedRound(value: unknown, request: ExternalRelayRequest):
+export function checkedRound(value: unknown, request: ExternalRelayRequest, options: { handoff: boolean; ignore: boolean } = { handoff: true, ignore: true }):
   ExternalRelayDecision | { kind: "calls"; calls: RoundCall[] } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const answer = value as Record<string, unknown>;
-  if (answer.action !== "call") return checkedAnswer(value, request);
+  if (answer.action !== "call") return checkedAnswer(value, request, options);
   if (typeof answer.text !== "string" || (answer.reply_to !== null && typeof answer.reply_to !== "string")) return null;
   if (!Array.isArray(answer.calls) || !answer.calls.every((call) =>
     call && typeof call === "object" && typeof call.tool === "string" &&
@@ -237,6 +237,10 @@ export const handoffAnswerSchema = {
     action: { type: "string", enum: ["reply", "ignore", "handoff"] },
   },
 } as const;
+export const replyAnswerSchema = {
+  ...answerSchema,
+  properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply"] } },
+} as const;
 /** Hand-off is offered only for a request whose service listed its tools. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
   (request.input.tools?.length ?? 0) > 0;
@@ -251,13 +255,15 @@ export type ExternalRelayDecision =
 export function checkedAnswer(
   value: unknown,
   request: ExternalRelayRequest,
+  options: { handoff: boolean; ignore: boolean } = { handoff: true, ignore: true },
 ): ExternalRelayDecision | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const answer = value as Record<string, unknown>;
   if (answer.action === "handoff")
-    return offersHandoff(request)
+    return options.handoff && offersHandoff(request)
       ? { action: "handoff", text: "", reply_to: null }
       : null;
+  if (answer.action === "ignore" && !options.ignore) return null;
   if (
     (answer.action !== "reply" && answer.action !== "ignore") ||
     typeof answer.text !== "string" ||
@@ -288,6 +294,7 @@ export type ExternalRelayProgress = {
   at: string;
 };
 export type ExternalRelayCompletion =
+  | { lease_id: string; outcome: "compacted"; reason: CompactReason; detail: string | null; duration_ms: number }
   | {
       lease_id: string;
       outcome: "answered";
@@ -307,3 +314,17 @@ export type ExternalRelayCompletion =
       reason: string;
       detail: string | null;
     };
+
+export const compactRequestSchema = z.object({ request_id: id, lease_id: leaseId,
+  kind: z.literal("compact"), target_id: id, claimed_at: time, liveness: livenessSchema,
+  chat: z.object({ key: chatKey }), input: z.object({ requester: requesterSchema }) });
+export type CompactRequest = z.infer<typeof compactRequestSchema>;
+export type CompactReason = "compacted" | "started_fresh" | "nothing_to_compact";
+export const compactCompletionSchema = z.union([
+  z.object({ lease_id: leaseId, outcome: z.literal("compacted"),
+    reason: z.enum(["compacted", "started_fresh", "nothing_to_compact"]), detail: boundedString(200).nullable(), duration_ms: z.number().int().nonnegative() }),
+  z.object({ lease_id: leaseId, outcome: z.literal("declined"),
+    reason: z.enum(["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff", "member_limit"]),
+    detail: boundedString(200).nullable(), retry_after_s: z.number().int().nonnegative().nullable() }),
+  z.object({ lease_id: leaseId, outcome: z.literal("failed"), reason: z.enum(["agent_error", "invalid_answer", "profile_violation", "hard_cap", "install_restarted", "cancelled"]), detail: boundedString(200).nullable() }),
+]);

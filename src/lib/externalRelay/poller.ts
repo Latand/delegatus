@@ -1,3 +1,5 @@
+import { sweepConversations } from "./conversations";
+import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -109,6 +111,7 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
     settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery);
     dropRun(run.requestId);
   }
+  sweepConversations(readRelayStore().relays, readRunLedger().runs);
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once
@@ -211,7 +214,12 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
   }
 }
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
-export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls"];
+export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions"];
+export function relayClaimCapabilities() {
+  const switches = readRelaySwitches();
+  return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
+    features: switches.chat_conversations ? [...CLAIM_FEATURES, "chat_conversations"] : CLAIM_FEATURES };
+}
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 async function poll(
   relay: PairedRelay,
@@ -230,8 +238,7 @@ async function poll(
         "POST",
         {
           wait_s: Math.min(25, relay.limits.max_wait_s),
-          kinds: ["answer"],
-          features: CLAIM_FEATURES,
+          ...relayClaimCapabilities(),
           slots: advertisedSlots(relay),
         },
         relay.credential,
@@ -314,6 +321,7 @@ async function sweepAndRefresh(): Promise<void> {
   ) {
     controller.prunedAt = Date.now();
     pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
+    sweepConversations(readRelayStore().relays, readRunLedger().runs);
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {
