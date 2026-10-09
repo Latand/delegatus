@@ -34,6 +34,15 @@ unrestricted tier and the persistent conversation per chat with compaction
 are deferred to the next slice; the requester is already the input of the
 profile choice and of the record, so that tier can branch on it.
 
+Revision of 2026-10-08, **[rt]** (slice 2a): `relay_tool_calls` is implemented
+as a runner-driven loop of direct reads. The install advertises
+`["requester_context", "relay_tool_calls"]`; it does not advertise
+`relay_tool_actions`. The normative closed wire list and implementation/test
+mapping are in [relay-slice2-tool-loop.md](relay-slice2-tool-loop.md), including
+the operator's go. Requests without callable reads keep the slice 1 prompt,
+schema, completion and record bytes. The service switch stays dark until X2
+is copied byte for byte and both final heads are cross-checked.
+
 ## Originating requirement of this revision
 
 Operator, 2026-09-29, pinned on the task "Relay contract delta: one-tap
@@ -660,6 +669,7 @@ where an unnoticed stranger surfaces, and "Not me" ends it.
 | 11 | `DELETE {api}/pairing` | credential | — | 204 | 401 |
 | 12 | **[delta]** `GET {api}/targets/{target_id}/chats?limit=&cursor=` | credential | — | 200 `Chats` | 400 `malformed`, 400 `cursor_expired`, 401, 404, 429 |
 | 13 | **[delta]** `PATCH {api}/targets/{target_id}/chats/{chat_key}` | credential | `ChatPatch` | 200 `Chat` | 400, 401, 404, 429 |
+| 14 | **[rt]** `POST {api}/requests/{request_id}/tool-calls` | credential | `ToolCall` | 200 `ToolCallResult` | 400, 401, 404, 409, 413, 426, 429 |
 
 Rows 12 and 13 exist only when the descriptor lists `chat_list` (§A.2 rule
 11).
@@ -763,6 +773,16 @@ Semantics beyond the schemas:
   credential answers 404, the same as one that does not exist.
 
 ## A.5 Schemas
+
+**[rt]** Additive schemas are defined in `src/lib/externalRelay/protocol.ts`
+and [slice 2a §9](relay-slice2-tool-loop.md#9-the-wire-list-item-by-item):
+`Tool` gains optional `effect`, `parameters` (object, ≤8192 compact UTF-8 bytes)
+and `audience`; `Input` gains optional nullable `tool_guidance` (≤24000 code
+points). `ToolCall` has `{lease_id, call_id, tool, arguments}` or
+`{lease_id, call_id, cursor}`. `ToolCallResult` carries the required call/tool,
+status/output, truncation, effect/delivery/replay flags and remaining calls,
+plus optional denial code, audience, cursor and retry duration. The claim
+lists `relay_tool_calls`; actions stay hand-off capabilities in this lane.
 
 One JSON Schema (draft 2020-12) holds every body; an endpoint names its
 bodies by the keys under `$defs`. Wire objects are open (receivers ignore
@@ -1361,6 +1381,11 @@ that poll claims the held request.
 
 ## A.7 Progress events
 
+**[rt]** Runner-owned reads emit `tool_start` and `tool_done` for unrestricted
+tools only. Restricted outputs and their progress never enter the child's
+prompt or a member's answer. The result's audience is checked independently
+of the tool index's audience.
+
 A heartbeat carries at most one `Progress`:
 
 | Field | Meaning |
@@ -1388,6 +1413,17 @@ Rules:
 - A relay service ignores a `kind` it does not know.
 
 ## A.8 The answer request and the answer
+
+**[rt]** With callable direct reads, the round schema adds action `call` and
+`calls: [{tool, arguments: string, cursor: string | null}]`. Tool parameters
+stay in `<tools>`; arguments are a JSON object encoded as a string. The
+loop-only prompt includes escaped `<tool_guidance>` and `<tool_results>`.
+The requester gates both the index and every result. Bounds: eight rounds,
+four concurrent reads per round, sixteen distinct calls, 16000 code points
+per result and 64 KiB of total output. Pending is polled with identical bytes,
+and a returned cursor can fetch a page. Round eight (or exhausted/terminal
+budget) uses the slice 1 hand-off schema and `checkedAnswer`. The instruction
+“You cannot call any of those tools” applies to the slice 1 path.
 
 What `Input` carries:
 
@@ -1609,6 +1645,12 @@ the install.
 
 ## A.9 Idempotency and replay protection
 
+**[rt]** The install mints `call_id` as base64url SHA-256 over
+`delegatus-relay-call\n`, request id, a newline, and recursively sorted JSON
+of `{tool, arguments}` or `{cursor}`. Lease id is excluded. Retry, poll and
+re-claim send the same logical identity; the service owns the durable ledger
+across leases (C6). The install caches results only during the request.
+
 - **The relay service mints every id** that names shared state: request,
   lease, pairing. The install never names a request it was not handed.
 - **Claim once.** The claim is a compare-and-set on the request's record. A
@@ -1807,6 +1849,12 @@ New files:
 
 ## B.2 Configuration and state
 
+**[rt]** Loop records additionally carry `rounds` and `toolCalls` metadata:
+round, tool, page flag, status/code, audience, truncation/replay/withheld/local
+flags. They carry no tool output, arguments, call id, cursor or lease id.
+Retention remains 30 days. Re-claims of a request count once against the
+member limit. No new state file or child credential is introduced.
+
 | Path | Mode | Holds |
 |---|---|---|
 | `<state>/external-relay/relays.json` | 0600 in a 0700 directory | `{ v: 1, installId, label, relays[], pending[] }`. A relay: origin, `api_base`, descriptor name and description, credential, owner, paired time, `paused`, and targets with `{ id, name, enabled, engine, model, effort, project, concurrency, hardCapMinutes }`. A pending pairing: `pairing_id`, poll secret, code, link, expiry. |
@@ -1875,7 +1923,7 @@ Each round sends `ClaimRequest` with `wait_s` = min(25,
 configured target. When a run ends and frees a slot, the loop aborts its open
 poll and opens a new one with fresh slots, so the relay service never goes on
 believing a target is busy. **[rc]** It also sends `features:
-["requester_context"]` (`CLAIM_FEATURES` in `src/lib/externalRelay/poller.ts`).
+["requester_context", "relay_tool_calls"]` (`CLAIM_FEATURES` in `src/lib/externalRelay/poller.ts`).
 **[delta]** The chat conversations of §B.14 add `chat_conversations` to that
 list once they are implemented; no install sends it today.
 
@@ -1988,10 +2036,16 @@ else.
    stays per run and is removed on every path; only the transcript
    persists.
 6. Start `runEphemeralAgent`. Send heartbeat 1 at once, then one every
-   `heartbeat_interval_s` while the child lives, each carrying the newest
-   unsent progress label or null.
+   `heartbeat_interval_s`, each carrying the newest unsent progress or null.
+   **[rt]** One lease keeper spans all child rounds and call/poll phases. The
+   first call waits for an acknowledged heartbeat. Every round has a distinct
+   child key and run directory; admission and the recorder begin once.
+   Direct reads run through the bounded loop of slice 2a §2–§5; without
+   callable reads there is one unchanged slice 1 launch.
 7. A heartbeat answered 409 `lease_lost` cancels the run: kill the group,
-   drop the run, complete nothing.
+   drop the run, complete nothing. **[rt]** A 404 or 409 `lease_lost` on a tool
+   call has the same effect and aborts concurrent calls. A stalled lease also
+   aborts polling. Other transport errors follow slice 2a §3.3.
 8. On exit: `done` with a valid answer completes `answered`; **[rc]** a
    valid `handoff` completes `declined` / `handoff` (§A.8); a failing
    answer check completes `failed` / `invalid_answer`; `failed` completes
@@ -2567,6 +2621,17 @@ No new driver.
 
 ## B.11 Test plan
 
+**[rt]** Slice 2a tests run by file path in isolated HOME, TMPDIR and
+LLV_STATE_DIR with a closed-port Viewer control URL. The production launch
+and HTTP seams replay all X1 claim roles, 26 result samples and 2a error
+envelopes. Bounds, polling/page fetch, lease loss and C6 replay, audience
+withholding, metadata-only records and slice 1 prompt hashes are pinned.
+Real CLI probes accept the round schema without model quota. A live loop
+per signed-in engine checks call→result→answer. The runner/poller test emits
+`evidence/external-relay/install_tool_loop.json` (X2) and refreshes
+`install_completions.json`; fixture generation never changes X1 bytes.
+See slice 2a §11 for exact cases and environment flags.
+
 Every suite runs by file path with `LLV_STATE_DIR` pointed at a fresh temp
 directory. Nobody sweeps `src/lib/agent/` or `src/app/api/runtime/`. Every
 stub server binds port 0 and reads its port back. The runtime host and the
@@ -2596,7 +2661,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 20 | **[delta]** `src/lib/externalRelay/poller.test.ts` against `testRelay.ts`, which implements F1b with L7 and the F7 hold, and the stub CLI of test 4 | A target of concurrency 1 with a chat key. Request 1 is claimed and heartbeated, so the open poll lists `free: 0`. Request 2 for the same chat is queued and held (F7). Request 1 completes before the install opens its next poll. Request 2 does not fall back: it is claimed by the poll reopened after completion, within `claim_window_s`, and runs as the conversation's second turn without `chat busy`. Two controls. With L7 removed from `testRelay.ts`, request 2 falls back by F1b at once, so the test goes red. With an install that keeps its `free: 0` poll open after request 1 completes and opens no new one, request 2 is not claimed on that poll and falls back by F2 after `claim_window_s`. |
 | 21 | **[rc]** `src/lib/externalRelay/protocol.test.ts`, `src/lib/externalRelay/prompt.test.ts` | A request without the new fields parses as before and gets the Phase 1 prompt byte for byte. The new fields parse with unknown inner fields dropped; the focused bounds refuse a 65-code-point name, a duplicate name, an unknown mode, 16 001 code points of memory, a non-boolean role flag; service-built claims cover all four roles, the 12 000-emoji media budget and 16 000-emoji memory. The install also refuses its lenient bounds of 129 tools and a 241-code-point summary. The sections are escaped and named as data; the hand-off rule appears only with tools. `handoff` is an answer only with tools, and drops text and `reply_to`. |
 | 22 | **[rc]** `src/lib/externalRelay/runner.test.ts` with the stub CLI of test 4 | With tools, the schema offers `handoff` and the completion is exactly `declined` / `handoff` with the fixed `HANDOFF_DETAIL` and null `retry_after_s`; without tools the schema keeps two actions. Records: input as received, engine, model, outcome, delivery `accepted` / `refused`, a declined request, a lost lease, no record for ids that cannot name a file, and neither the lease id nor the credential in any record. |
-| 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context"]`. Both routes keep every guard and refuse an agent caller. |
+| 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context", "relay_tool_calls"]`. Both routes keep every guard and refuse an agent caller. |
 | 24 | **[rc]** `ExternalRelaySection.dom.test.tsx`, and the `relay-answers` case of `scripts/capture-board-geometry.ts` | The disclosure, the list, one exchange read-only with no field to type into, back, empty and expired, in English and Ukrainian, chat text as plain text. The capture renders the list and one exchange in the real settings dialog at 1440 and 390 in both languages, with no sideways overflow. |
 | 25 | **[rc]** `src/lib/agent/ephemeral.test.ts`, `src/lib/externalRelay/progress.test.ts`, `src/lib/externalRelay/runner.test.ts`, `src/app/api/external-relay/route.test.ts`, `ExternalRelaySection.dom.test.tsx`, and test 7 with `LLV_ANSWER_PROFILE_PROBE=1` | Web search: the argument lists add only `web_search=live` and `--tools WebSearch --allowedTools WebSearch`, every other hardening stays; the tripwire admits the search events only with web search on, and still trips on `WebFetch`, `Bash`, MCP, command and file items; every relay run is launched with it and its record says so. Member limit: a member's third request at a limit of 2 is declined `member_limit` with its line and a `retry_after_s` under an hour; another chat, another member, an admin, the owner, a limit of 0 or null, and a request without a requester all pass; the route takes 0 to 1000 or null and refuses the rest; the field shows the default and saves a number or no limit. |
 
@@ -3171,3 +3236,11 @@ observations cannot settle is left to tests 15 and 19.
 
 Nothing here is built for a need the quotes do not carry; what they do not
 yet need is in the deferred list.
+
+## [rt] Deferred after slice 2a
+
+Direct actions (F2, L5, E2), native MCP exposure, resumed child sessions,
+local tool parameter validation, a persistent install call ledger, automatic
+paging, tool-result reply targets and a call-detail UI remain deferred.
+The explicit 2b seams and conditions for revisiting these choices are in
+[slice 2a §10 and §13](relay-slice2-tool-loop.md#10-seams-for-2b-not-built-here).
