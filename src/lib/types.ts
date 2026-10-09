@@ -444,6 +444,9 @@ export interface ProjectCatalogEntry {
   smt: number;
   /** Lightweight count from the full candidate scan. */
   conversations: number;
+  /** Conversations the recent file set does not carry are still current (a
+      relay service's chats): the sidebar draws the entry at full contrast. */
+  recent?: boolean;
 }
 
 export interface FilesResponse {

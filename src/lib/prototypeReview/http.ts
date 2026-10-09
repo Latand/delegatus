@@ -66,6 +66,7 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
     const { caller, stage, taskId } = publicationTarget(request,input.taskId,world);
     const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId });
     return NextResponse.json({ reviewId: round.id, taskId, title: round.title, variants: round.variants.length,
+      ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
   } catch (error) { return prototypeFailure(error); }
 }

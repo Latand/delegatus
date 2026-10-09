@@ -1,0 +1,2354 @@
+[
+  {
+    "lang": "en",
+    "scheme": "light",
+    "width": 1440,
+    "needsYouRow": "Questions for you· 4m agoRestore search results after the index rebuildAnswer"
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-search",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-search",
+    "width": 1440,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 16:38Saved and sent to the orchestrator",
+    "title": "Questions · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-upload",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Prototype review · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 1268.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1327.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-links",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-links",
+    "width": 1440,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered9 Oct, 16:38Saved and sent to the orchestrator",
+    "title": "Questions · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-disk",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-export",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 16:37Keep the recommended defaults.Saved and sent to the orchestrator",
+    "title": "Questions · Simplify the export settings sheet",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "width": 1440,
+    "needsYouRow": "Questions for you· 4m agoRestore search results after the index rebuildAnswer"
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-search",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-search",
+    "width": 1440,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 16:39Saved and sent to the orchestrator",
+    "title": "Questions · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-upload",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Prototype review · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 1268.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1327.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-links",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-links",
+    "width": 1440,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered9 Oct, 16:39Saved and sent to the orchestrator",
+    "title": "Questions · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-disk",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 130.703125,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-export",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Skipped, recommended answers taken",
+    "decisionText": "Skipped, recommended answers taken9 Oct, 16:38Keep the recommended defaults.Saved and sent to the orchestrator",
+    "title": "Questions · Simplify the export settings sheet",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "width": 1440,
+    "needsYouRow": "Питання до вас· 4 хв томуRestore search results after the index rebuildВідповісти"
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-search",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-search",
+    "width": 1440,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:39Збережено й надіслано оркестратору",
+    "title": "Питання · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-upload",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Огляд прототипів · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 1202.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 1306.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-links",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-links",
+    "width": 1440,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли9 жовт., 16:39Збережено й надіслано оркестратору",
+    "title": "Питання · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-disk",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-export",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:38Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "title": "Питання · Simplify the export settings sheet",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "width": 1440,
+    "needsYouRow": "Питання до вас· 4 хв томуRestore search results after the index rebuildВідповісти"
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-search",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-search",
+    "width": 1440,
+    "state": "skipped",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:39Збережено й надіслано оркестратору",
+    "title": "Питання · Restore search results after the index rebuild",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-upload",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Огляд прототипів · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 1202.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 1306.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-links",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 5,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-links",
+    "width": 1440,
+    "state": "answered",
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли9 жовт., 16:39Збережено й надіслано оркестратору",
+    "title": "Питання · Repair old links in the release notes",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-disk",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 1,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 196.9375,
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-export",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Пропущено, взято рекомендовані",
+    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:38Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "title": "Питання · Simplify the export settings sheet",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": true
+  }
+]

@@ -43,6 +43,7 @@ export type FeedFilter = {
   /** Older peers reject the board preference added in task wire v3. */
   includeBoard?: boolean;
   includePrototypeReview?: boolean;
+  peerTaskWireVersion?: number;
   filePath?: string;
 };
 
@@ -63,7 +64,7 @@ class Page {
 }
 
 function encoded(task: BoardTask, filter: FeedFilter) {
-  const { row, bytes } = encodeTask(outboundTask(task), filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview });
+  const { row, bytes } = encodeTask(outboundTask(task), filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview, peerTaskWireVersion: filter.peerTaskWireVersion });
   return { row, bytes, stub: "withheld" in row };
 }
 
