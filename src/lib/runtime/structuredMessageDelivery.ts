@@ -609,8 +609,12 @@ async function holdDuringRuntimeSynchronization(
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
       /* Off the loop; refused before anything is reserved (rule c). */
       const reseatFor = conversation.id;
-      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" },
-        () => registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId }));
+      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" }, () => {
+        // Authorization may change while the writer waits. An admitted key
+        // keeps its recovery binding; a fresh send must still be authorized.
+        if (!replay) request.admissionGuard?.();
+        return registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId });
+      });
       if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
       conversation = reseat.value;
     }
@@ -1348,8 +1352,12 @@ export async function enqueueStructuredMessage(
     try {
       /* Off the loop; refused before anything is reserved (rule c). */
       const reseatFor = conversation.id;
-      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" },
-        () => registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId }));
+      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" }, () => {
+        // Recheck inside the acquired write before creating migration intent.
+        // Recovery of an admitted key retains its original authorization.
+        if (!terminalReplay) request.admissionGuard?.();
+        return registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId });
+      });
       if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
       conversation = reseat.value;
     } catch (error) {
