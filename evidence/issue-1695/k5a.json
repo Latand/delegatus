@@ -1,5 +1,5 @@
 {
-  "prototypeCompared": false,
+  "prototypeCompared": true,
   "boardWidth": 1192,
   "boardWidths": {
     "1440": 1192,
@@ -8,8 +8,7 @@
   "frames": {
     "summary-default-light": {
       "production": {
-        "chain": 1,
-        "graphs": 0,
+        "compact": true,
         "nodes": 0,
         "pressed": "false",
         "chips": 4
@@ -21,34 +20,30 @@
         "nodes": [
           {
             "stage": "implement",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "passed",
-            "attempt": "2",
-            "detail": ""
+            "detail": "attempt 2"
           },
           {
             "stage": "review",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "passed",
-            "attempt": "",
-            "detail": "1 ✓"
+            "detail": "R1 ✓"
           },
           {
             "stage": "verify",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "running",
-            "attempt": "2",
-            "detail": ""
+            "detail": "attempt 2 · 2 retries"
           },
           {
             "stage": "merge",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "waiting",
-            "attempt": "",
             "detail": "not started"
           }
         ],
@@ -56,7 +51,7 @@
           {
             "edge": "implement:pass:review",
             "classes": "pedge pass",
-            "dashed": true
+            "dashed": false
           },
           {
             "edge": "review:pass:verify",
@@ -66,29 +61,82 @@
           {
             "edge": "verify:pass:merge",
             "classes": "pedge pass",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken",
             "dashed": true
           }
         ],
         "labels": [
-          "1"
-        ],
-        "strips": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      },
+      "prototype": {
+        "dir": "TB",
+        "nodes": [
           {
-            "strip": "verify:fail:implement",
-            "shape": "return",
-            "classes": "pstrip shape-return utone-active fired pulse",
-            "fired": "1",
-            "max": "2",
-            "text": "back to Implement",
-            "dots": "bad next"
+            "stage": "implement",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "attempt 2"
+          },
+          {
+            "stage": "review",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "R1 ✓"
+          },
+          {
+            "stage": "verify",
+            "width": 234,
+            "height": 76,
+            "state": "running",
+            "detail": "attempt 2 · 2 retries"
+          },
+          {
+            "stage": "merge",
+            "width": 234,
+            "height": 76,
+            "state": "waiting",
+            "detail": "not started"
           }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "review:pass:verify",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:pass:merge",
+            "classes": "pedge pass   ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken ",
+            "dashed": true
+          }
+        ],
+        "labels": [
+          "pass",
+          "fail · retry 1 of 2"
         ]
       }
     },
     "summary-default-dark": {
       "production": {
-        "chain": 1,
-        "graphs": 0,
+        "compact": true,
         "nodes": 0,
         "pressed": "false",
         "chips": 4
@@ -100,34 +148,30 @@
         "nodes": [
           {
             "stage": "implement",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "passed",
-            "attempt": "2",
-            "detail": ""
+            "detail": "attempt 2"
           },
           {
             "stage": "review",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "passed",
-            "attempt": "",
-            "detail": "1 ✓"
+            "detail": "R1 ✓"
           },
           {
             "stage": "verify",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "running",
-            "attempt": "2",
-            "detail": ""
+            "detail": "attempt 2 · 2 retries"
           },
           {
             "stage": "merge",
-            "width": 268,
+            "width": 234,
             "height": 76,
             "state": "waiting",
-            "attempt": "",
             "detail": "not started"
           }
         ],
@@ -135,7 +179,7 @@
           {
             "edge": "implement:pass:review",
             "classes": "pedge pass",
-            "dashed": true
+            "dashed": false
           },
           {
             "edge": "review:pass:verify",
@@ -145,22 +189,76 @@
           {
             "edge": "verify:pass:merge",
             "classes": "pedge pass",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken",
             "dashed": true
           }
         ],
         "labels": [
-          "1"
-        ],
-        "strips": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      },
+      "prototype": {
+        "dir": "TB",
+        "nodes": [
           {
-            "strip": "verify:fail:implement",
-            "shape": "return",
-            "classes": "pstrip shape-return utone-active fired pulse",
-            "fired": "1",
-            "max": "2",
-            "text": "back to Implement",
-            "dots": "bad next"
+            "stage": "implement",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "attempt 2"
+          },
+          {
+            "stage": "review",
+            "width": 234,
+            "height": 76,
+            "state": "passed",
+            "detail": "R1 ✓"
+          },
+          {
+            "stage": "verify",
+            "width": 234,
+            "height": 76,
+            "state": "running",
+            "detail": "attempt 2 · 2 retries"
+          },
+          {
+            "stage": "merge",
+            "width": 234,
+            "height": 76,
+            "state": "waiting",
+            "detail": "not started"
           }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "review:pass:verify",
+            "classes": "pedge pass  taken ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:pass:merge",
+            "classes": "pedge pass   ",
+            "dashed": false
+          },
+          {
+            "edge": "verify:fail:implement",
+            "classes": "pedge fail back taken ",
+            "dashed": true
+          }
+        ],
+        "labels": [
+          "pass",
+          "fail · retry 1 of 2"
         ]
       }
     },
@@ -173,46 +271,70 @@
             "width": 176,
             "height": 76,
             "state": "needs you",
-            "attempt": "",
-            "detail": ""
+            "detail": "attempt 1"
           },
           {
             "stage": "review",
             "width": 176,
             "height": 76,
             "state": "waiting",
-            "attempt": "",
-            "detail": "reviews prior run"
+            "detail": "reviews the run before it"
           }
         ],
         "edges": [
           {
             "edge": "implement:pass:review",
             "classes": "pedge pass",
-            "dashed": true
+            "dashed": false
           }
         ],
-        "labels": [],
-        "strips": []
+        "labels": []
+      },
+      "prototype": {
+        "dir": "LR",
+        "nodes": [
+          {
+            "stage": "implement",
+            "width": 176,
+            "height": 76,
+            "state": "needs you",
+            "detail": "attempt 1"
+          },
+          {
+            "stage": "review",
+            "width": 176,
+            "height": 76,
+            "state": "waiting",
+            "detail": "reviews the run before it"
+          }
+        ],
+        "edges": [
+          {
+            "edge": "implement:pass:review",
+            "classes": "pedge pass   ",
+            "dashed": false
+          }
+        ],
+        "labels": []
       }
     },
     "five-rounds": {
       "production": {
         "dir": "LR",
-        "right": 1023,
-        "bottom": 573,
+        "right": 1025,
+        "bottom": 547,
         "chips": [
           {
-            "text": "5",
-            "right": 999,
-            "top": 548,
-            "bottom": 564
+            "text": "+4",
+            "right": 977,
+            "top": 514,
+            "bottom": 530
           },
           {
-            "text": "✓",
-            "right": 1012,
-            "top": 548,
-            "bottom": 563
+            "text": "R5 ✓",
+            "right": 1014,
+            "top": 514,
+            "bottom": 530
           }
         ]
       }
@@ -221,7 +343,7 @@
       "production": [
         {
           "kind": "attempt",
-          "label": "Build",
+          "label": "Builder · attempt 1",
           "verdict": "failed"
         }
       ]
@@ -230,44 +352,175 @@
       "production": [
         {
           "kind": "round",
-          "label": "Review · round 1",
+          "label": "Reviewer · round 1",
           "verdict": "approved",
           "open": true
         },
         {
           "kind": "attempt",
-          "label": "Implement · 1",
+          "label": "Builder · attempt 1",
           "verdict": "passed",
           "open": true
         },
         {
           "kind": "attempt",
-          "label": "Implement · 2",
+          "label": "Builder · attempt 2",
           "verdict": "passed",
           "open": true
         },
         {
           "kind": "attempt",
-          "label": "Review",
+          "label": "Reviewer · attempt 1",
           "verdict": "passed",
           "open": true
         },
         {
           "kind": "attempt",
-          "label": "Verify · 1",
+          "label": "Verifier · attempt 1",
           "verdict": "failed",
           "open": true
         },
         {
           "kind": "helper",
-          "label": "Implement · helper conversation 1",
+          "label": "Builder · helper conversation 1",
           "verdict": "passed",
           "open": true
         }
       ]
     }
   },
-  "geometry": null,
+  "geometry": {
+    "retryLight": {
+      "dir": {
+        "production": "TB",
+        "prototype": "TB"
+      },
+      "nodeHeights": {
+        "production": [
+          76,
+          76,
+          76,
+          76
+        ],
+        "prototype": [
+          76,
+          76,
+          76,
+          76
+        ]
+      },
+      "nodeWidths": {
+        "production": [
+          234,
+          234,
+          234,
+          234
+        ],
+        "prototype": [
+          234,
+          234,
+          234,
+          234
+        ]
+      },
+      "edges": {
+        "production": 4,
+        "prototype": 4
+      },
+      "labels": {
+        "production": [
+          "pass",
+          "fail · retry 1 of 2"
+        ],
+        "prototype": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      }
+    },
+    "retryDark": {
+      "dir": {
+        "production": "TB",
+        "prototype": "TB"
+      },
+      "nodeHeights": {
+        "production": [
+          76,
+          76,
+          76,
+          76
+        ],
+        "prototype": [
+          76,
+          76,
+          76,
+          76
+        ]
+      },
+      "nodeWidths": {
+        "production": [
+          234,
+          234,
+          234,
+          234
+        ],
+        "prototype": [
+          234,
+          234,
+          234,
+          234
+        ]
+      },
+      "edges": {
+        "production": 4,
+        "prototype": 4
+      },
+      "labels": {
+        "production": [
+          "pass",
+          "fail · retry 1 of 2"
+        ],
+        "prototype": [
+          "pass",
+          "fail · retry 1 of 2"
+        ]
+      }
+    },
+    "twoStage": {
+      "dir": {
+        "production": "LR",
+        "prototype": "LR"
+      },
+      "nodeHeights": {
+        "production": [
+          76,
+          76
+        ],
+        "prototype": [
+          76,
+          76
+        ]
+      },
+      "nodeWidths": {
+        "production": [
+          176,
+          176
+        ],
+        "prototype": [
+          176,
+          176
+        ]
+      },
+      "edges": {
+        "production": 1,
+        "prototype": 1
+      },
+      "labels": {
+        "production": [],
+        "prototype": []
+      }
+    }
+  },
   "flows": {
     "helperOpen": "conversation_search-helper",
     "toggleAndNode": {
@@ -283,17 +536,8 @@
     "liveEdge": {
       "before": 0,
       "afterHelper": 0,
-      "label": {
-        "strip": {
-          "fired": "2",
-          "max": "2",
-          "spent": true
-        },
-        "marks": 1,
-        "helperAttempt": " · 2",
-        "implementAttempt": " · 3"
-      },
-      "clearedAfterMs": 2402
+      "label": "fail · retry 2 of 2",
+      "clearedAfterMs": 2393
     }
   },
   "failures": []

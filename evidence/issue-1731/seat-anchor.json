@@ -9,8 +9,63 @@
       "seat": "compact",
       "seatHeights": null,
       "scroll": {
-        "scrollTop": 619,
-        "maxScroll": 687,
+        "scrollTop": 214,
+        "maxScroll": 282,
+        "headOutOfView": true,
+        "composerOnTop": true,
+        "composerClipped": true
+      },
+      "wrap": {
+        "heights": [
+          28,
+          44
+        ],
+        "shortLength": 179,
+        "longLength": 188
+      },
+      "fixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39
+        ],
+        "scrollTops": [
+          214
+        ],
+        "swings": 0
+      },
+      "unfixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39,
+          200.39
+        ],
+        "scrollTops": [
+          214,
+          204
+        ],
+        "swings": 12,
+        "overflowAnchor": "auto"
+      }
+    },
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "seat": "grip-expanded",
+      "seatHeights": {
+        "before": 270,
+        "after": 520
+      },
+      "scroll": {
+        "scrollTop": 464,
+        "maxScroll": 532,
         "headOutOfView": true,
         "composerOnTop": true,
         "composerClipped": true
@@ -20,8 +75,8 @@
           28,
           46
         ],
-        "shortLength": 98,
-        "longLength": 107
+        "shortLength": 179,
+        "longLength": 188
       },
       "fixed": {
         "fieldHeights": [
@@ -29,10 +84,10 @@
           46
         ],
         "frameTops": [
-          116
+          190.39
         ],
         "scrollTops": [
-          619
+          464
         ],
         "swings": 0
       },
@@ -42,12 +97,12 @@
           46
         ],
         "frameTops": [
-          116,
-          128
+          190.39,
+          202.39
         ],
         "scrollTops": [
-          619,
-          607
+          464,
+          452
         ],
         "swings": 12,
         "overflowAnchor": "auto"
@@ -61,8 +116,63 @@
       "seat": "compact",
       "seatHeights": null,
       "scroll": {
-        "scrollTop": 544,
-        "maxScroll": 612,
+        "scrollTop": 182,
+        "maxScroll": 250,
+        "headOutOfView": true,
+        "composerOnTop": true,
+        "composerClipped": true
+      },
+      "wrap": {
+        "heights": [
+          28,
+          44
+        ],
+        "shortLength": 134,
+        "longLength": 143
+      },
+      "fixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39
+        ],
+        "scrollTops": [
+          182
+        ],
+        "swings": 0
+      },
+      "unfixed": {
+        "fieldHeights": [
+          28,
+          44
+        ],
+        "frameTops": [
+          190.39,
+          200.39
+        ],
+        "scrollTops": [
+          182,
+          172
+        ],
+        "swings": 12,
+        "overflowAnchor": "auto"
+      }
+    },
+    {
+      "viewport": {
+        "width": 1100,
+        "height": 800
+      },
+      "seat": "grip-expanded",
+      "seatHeights": {
+        "before": 240,
+        "after": 490
+      },
+      "scroll": {
+        "scrollTop": 432,
+        "maxScroll": 500,
         "headOutOfView": true,
         "composerOnTop": true,
         "composerClipped": true
@@ -72,8 +182,8 @@
           28,
           46
         ],
-        "shortLength": 125,
-        "longLength": 134
+        "shortLength": 134,
+        "longLength": 143
       },
       "fixed": {
         "fieldHeights": [
@@ -81,10 +191,10 @@
           46
         ],
         "frameTops": [
-          151
+          190.39
         ],
         "scrollTops": [
-          544
+          432
         ],
         "swings": 0
       },
@@ -94,20 +204,17 @@
           46
         ],
         "frameTops": [
-          151,
-          163
+          190.39,
+          202.39
         ],
         "scrollTops": [
-          544,
-          532
+          432,
+          420
         ],
         "swings": 12,
         "overflowAnchor": "auto"
       }
     }
   ],
-  "failures": [
-    "1440x900: boundingBox: Error: strict mode violation: locator('[data-seat-grip]') resolved to 2 elements:",
-    "1100x800: boundingBox: Error: strict mode violation: locator('[data-seat-grip]') resolved to 2 elements:"
-  ]
+  "failures": []
 }

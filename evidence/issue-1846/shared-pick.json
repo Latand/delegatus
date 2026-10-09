@@ -8,30 +8,30 @@
       },
       "before": "Account A",
       "pillPick": {
-        "ms": 14.6,
+        "ms": 12.2,
         "chip": "Account A → Account C with the next message",
         "pillHead": "",
         "pickerPending": ""
       },
       "pillMark": {
         "text": "→ Account C",
-        "width": 68.7,
+        "width": 63.5,
         "inView": true,
         "cut": false
       },
       "boardChip": {
         "text": "Account A→Account Cwith the next message",
-        "width": 258.3,
+        "width": 250.8,
         "inView": false,
         "cut": false
       },
       "readerChip": {
         "text": "Account A→Account Cwith the next message",
-        "width": 258.3,
+        "width": 250.8,
         "inView": false,
         "cut": false
       },
-      "readerWidth": 524,
+      "readerWidth": 426,
       "paneBadges": 0,
       "pickerAfterPillPick": {
         "pending": "Account C · moves with the next message",
@@ -41,7 +41,7 @@
         ]
       },
       "boardTakeBack": {
-        "ms": 23.5,
+        "ms": 27.1,
         "chip": "Account A",
         "pillHead": "",
         "pickerPending": ""
@@ -49,7 +49,7 @@
       "pillMarkAfterTakeBack": null,
       "pillAfterBoardTakeBack": "runs on Account A",
       "boardPick": {
-        "ms": 26.7,
+        "ms": 18.8,
         "chip": "Account A → Account C with the next message",
         "pillHead": "",
         "pickerPending": ""
@@ -77,30 +77,30 @@
       },
       "before": "Account A",
       "pillPick": {
-        "ms": 14.6,
+        "ms": 16.8,
         "chip": "Account A → Account C з наступним повідомленням",
         "pillHead": "",
         "pickerPending": ""
       },
       "pillMark": {
         "text": "→ Account C",
-        "width": 68.7,
+        "width": 63.5,
         "inView": true,
         "cut": false
       },
       "boardChip": {
         "text": "Account A→Account Cз наступним повідомленням",
-        "width": 293.6,
+        "width": 286.3,
         "inView": false,
         "cut": false
       },
       "readerChip": {
         "text": "Account A→Account Cз наступним повідомленням",
-        "width": 293.6,
+        "width": 286.3,
         "inView": false,
         "cut": false
       },
-      "readerWidth": 524,
+      "readerWidth": 426,
       "paneBadges": 0,
       "pickerAfterPillPick": {
         "pending": "Account C · перейде з наступним повідомленням",
@@ -110,7 +110,7 @@
         ]
       },
       "boardTakeBack": {
-        "ms": 23.3,
+        "ms": 31.5,
         "chip": "Account A",
         "pillHead": "",
         "pickerPending": ""
@@ -118,7 +118,7 @@
       "pillMarkAfterTakeBack": null,
       "pillAfterBoardTakeBack": "працює на Account A",
       "boardPick": {
-        "ms": 13.7,
+        "ms": 18.4,
         "chip": "Account A → Account C з наступним повідомленням",
         "pillHead": "",
         "pickerPending": ""
@@ -146,30 +146,30 @@
       },
       "before": "Account A",
       "pillPick": {
-        "ms": 11.5,
+        "ms": 16,
         "chip": "Account A → Account C with the next message",
         "pillHead": "",
         "pickerPending": ""
       },
       "pillMark": {
         "text": "→ Account C",
-        "width": 68.7,
+        "width": 63.5,
         "inView": true,
         "cut": false
       },
       "boardChip": {
         "text": "Account A→Account Cwith the next message",
-        "width": 258.3,
-        "inView": true,
+        "width": 250.8,
+        "inView": false,
         "cut": false
       },
       "readerChip": {
         "text": "Account A→Account Cwith the next message",
-        "width": 258.3,
-        "inView": true,
+        "width": 250.8,
+        "inView": false,
         "cut": false
       },
-      "readerWidth": 468,
+      "readerWidth": 426,
       "paneBadges": 0,
       "pickerAfterPillPick": {
         "pending": "Account C · moves with the next message",
@@ -179,7 +179,7 @@
         ]
       },
       "boardTakeBack": {
-        "ms": 30.3,
+        "ms": 24.4,
         "chip": "Account A",
         "pillHead": "",
         "pickerPending": ""
@@ -187,7 +187,7 @@
       "pillMarkAfterTakeBack": null,
       "pillAfterBoardTakeBack": "runs on Account A",
       "boardPick": {
-        "ms": 22.7,
+        "ms": 15.8,
         "chip": "Account A → Account C with the next message",
         "pillHead": "",
         "pickerPending": ""
@@ -215,30 +215,30 @@
       },
       "before": "Account A",
       "pillPick": {
-        "ms": 13.2,
+        "ms": 18.4,
         "chip": "Account A → Account C з наступним повідомленням",
         "pillHead": "",
         "pickerPending": ""
       },
       "pillMark": {
         "text": "→ Account C",
-        "width": 68.7,
+        "width": 63.5,
         "inView": true,
         "cut": false
       },
       "boardChip": {
         "text": "Account A→Account Cз наступним повідомленням",
-        "width": 293.6,
-        "inView": true,
+        "width": 286.3,
+        "inView": false,
         "cut": false
       },
       "readerChip": {
         "text": "Account A→Account Cз наступним повідомленням",
-        "width": 293.6,
-        "inView": true,
+        "width": 286.3,
+        "inView": false,
         "cut": false
       },
-      "readerWidth": 468,
+      "readerWidth": 426,
       "paneBadges": 0,
       "pickerAfterPillPick": {
         "pending": "Account C · перейде з наступним повідомленням",
@@ -248,7 +248,7 @@
         ]
       },
       "boardTakeBack": {
-        "ms": 20.1,
+        "ms": 33.7,
         "chip": "Account A",
         "pillHead": "",
         "pickerPending": ""
@@ -256,7 +256,7 @@
       "pillMarkAfterTakeBack": null,
       "pillAfterBoardTakeBack": "працює на Account A",
       "boardPick": {
-        "ms": 12,
+        "ms": 16.8,
         "chip": "Account A → Account C з наступним повідомленням",
         "pillHead": "",
         "pickerPending": ""

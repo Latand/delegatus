@@ -1,10 +1,10 @@
 {
-  "prototypeCompared": false,
+  "prototypeCompared": true,
   "boardWidth": 1192,
   "frames": {
     "card-menu-light": {
       "production": {
-        "width": 300,
+        "width": 298,
         "swatches": [
           "No colour",
           "Coral",
@@ -17,11 +17,17 @@
           "Slate"
         ],
         "swatchBox": {
-          "width": 22,
-          "height": 22
+          "width": 24,
+          "height": 32
         },
         "checked": "none",
         "items": [
+          {
+            "label": "Collapse card",
+            "kbd": null,
+            "why": null,
+            "disabled": false
+          },
           {
             "label": "Rename",
             "kbd": "Enter",
@@ -35,42 +41,25 @@
             "disabled": false
           },
           {
-            "label": "Attach PR or issue…",
-            "kbd": null,
-            "why": null,
-            "disabled": false
-          },
-          {
             "label": "Hide from board",
             "kbd": "H",
-            "why": "Hide: 1 agent keeps working",
-            "disabled": false
-          },
-          {
-            "label": "Appearance",
-            "kbd": null,
-            "why": null,
-            "disabled": false
-          },
-          {
-            "label": "Icon…",
-            "kbd": "I",
-            "why": null,
-            "disabled": false
-          },
-          {
-            "label": "More",
-            "kbd": null,
-            "why": null,
+            "why": "1 agent keeps working. History stays.",
             "disabled": false
           }
         ]
+      },
+      "prototype": {
+        "width": 298,
+        "swatchBox": {
+          "width": 24,
+          "height": 32
+        }
       }
     },
     "hidden-tray-light": {
       "production": {
         "width": 360,
-        "count": "6",
+        "count": "5",
         "sections": [
           "Hidden groups",
           "Empty tasks off the board",
@@ -91,18 +80,21 @@
           }
         ],
         "empty": [
-          "t-queue",
           "t-old"
         ],
         "closed": [
           "Spike: a virtualized Done column"
         ],
-        "rowHeight": 65
+        "rowHeight": 49
+      },
+      "prototype": {
+        "width": 360,
+        "rowHeight": 49
       }
     },
     "card-menu-dark": {
       "production": {
-        "width": 300,
+        "width": 298,
         "swatches": [
           "No colour",
           "Coral",
@@ -115,11 +107,17 @@
           "Slate"
         ],
         "swatchBox": {
-          "width": 22,
-          "height": 22
+          "width": 24,
+          "height": 32
         },
         "checked": "none",
         "items": [
+          {
+            "label": "Collapse card",
+            "kbd": null,
+            "why": null,
+            "disabled": false
+          },
           {
             "label": "Rename",
             "kbd": "Enter",
@@ -133,42 +131,25 @@
             "disabled": false
           },
           {
-            "label": "Attach PR or issue…",
-            "kbd": null,
-            "why": null,
-            "disabled": false
-          },
-          {
             "label": "Hide from board",
             "kbd": "H",
-            "why": "Hide: 1 agent keeps working",
-            "disabled": false
-          },
-          {
-            "label": "Appearance",
-            "kbd": null,
-            "why": null,
-            "disabled": false
-          },
-          {
-            "label": "Icon…",
-            "kbd": "I",
-            "why": null,
-            "disabled": false
-          },
-          {
-            "label": "More",
-            "kbd": null,
-            "why": null,
+            "why": "1 agent keeps working. History stays.",
             "disabled": false
           }
         ]
+      },
+      "prototype": {
+        "width": 298,
+        "swatchBox": {
+          "width": 24,
+          "height": 32
+        }
       }
     },
     "hidden-tray-dark": {
       "production": {
         "width": 360,
-        "count": "6",
+        "count": "5",
         "sections": [
           "Hidden groups",
           "Empty tasks off the board",
@@ -189,13 +170,16 @@
           }
         ],
         "empty": [
-          "t-queue",
           "t-old"
         ],
         "closed": [
           "Spike: a virtualized Done column"
         ],
-        "rowHeight": 65
+        "rowHeight": 49
+      },
+      "prototype": {
+        "width": 360,
+        "rowHeight": 49
       }
     },
     "editing-title": {
@@ -206,12 +190,15 @@
         "hint": "Enter saves · Esc cancels",
         "cardBefore": {
           "width": 454,
-          "height": 279
+          "height": 288
         },
         "cardDuring": {
           "width": 454,
-          "height": 299
+          "height": 308
         }
+      },
+      "prototype": {
+        "height": 22
       }
     },
     "editing-description": {
@@ -220,29 +207,58 @@
         "value": "Fold the eleven toggles into three sensible presets and one advanced disclosure.",
         "height": 38,
         "hint": "⌘/Ctrl+Enter saves · Esc cancels"
+      },
+      "prototype": {
+        "height": 38
       }
     },
     "column-menu-done": {
       "production": [
         {
-          "label": "Hide finished tasks (2)",
+          "label": "Hide finished tasks (3)",
           "why": "Keeps 1 task whose agent is still working.",
+          "disabled": false
+        },
+        {
+          "label": "Show hidden tasks (5)",
+          "why": null,
           "disabled": false
         }
       ]
     }
   },
-  "geometry": null,
+  "geometry": {
+    "swatchWidth": {
+      "production": 24,
+      "prototype": 24,
+      "delta": 0
+    },
+    "swatchHeight": {
+      "production": 32,
+      "prototype": 32,
+      "delta": 0
+    },
+    "trayWidth": {
+      "production": 360,
+      "prototype": 360,
+      "delta": 0
+    },
+    "titleEditorHeight": {
+      "production": 22,
+      "prototype": 22,
+      "delta": 0
+    }
+  },
   "flows": {
     "hide": {
-      "countBefore": "6",
+      "countBefore": "5",
       "onClick": {
         "column": null,
-        "count": "7",
+        "count": "6",
         "receipts": [
           "Hidden «Restore search results after the index rebuild» · 1 agent keeps working"
         ],
-        "focused": "task:t-upload"
+        "focused": "task:t-export"
       },
       "written": {
         "patches": [
@@ -258,6 +274,51 @@
         "column": "assigned",
         "stored": false
       }
+    },
+    "bulkHide": {
+      "left": [
+        "task:t-attach"
+      ],
+      "receipts": [
+        "Hidden 3 finished tasks · kept 1 with a working agent"
+      ],
+      "sequential": true,
+      "writes": [
+        {
+          "id": "t-interrupt",
+          "tookMs": 400
+        },
+        {
+          "id": "t-voice",
+          "tookMs": 400
+        },
+        {
+          "id": "t-queue",
+          "tookMs": 400
+        }
+      ],
+      "undoneStored": [
+        false,
+        false,
+        false
+      ]
+    },
+    "protectedSeat": {
+      "seatCard": {
+        "column": "assigned",
+        "lock": true,
+        "hideButton": false,
+        "resurfaced": "Back on the board: it holds the orchestrator's conversation",
+        "hideAgain": false
+      },
+      "receipts": [
+        "«Coordinate the atlas release» holds the orchestrator's conversation, so it stays on the board"
+      ],
+      "menuHide": {
+        "disabled": true,
+        "why": "Holds the orchestrator's conversation, so it stays on the board"
+      },
+      "patches": 0
     },
     "renameRefused": {
       "optimistic": "Export presets: three, plus advanced",
@@ -295,7 +356,7 @@
       "before": null,
       "back": {
         "column": "assigned",
-        "needs": false,
+        "needs": true,
         "line": "Back on the board: a conversation asked for a decision"
       },
       "receipts": [
@@ -320,10 +381,10 @@
     "tray": {
       "shown": {
         "column": "assigned",
-        "count": "5"
+        "count": "4"
       },
       "restored": {
-        "count": "4",
+        "count": "3",
         "mutations": [
           {
             "kind": "restore",
@@ -332,7 +393,7 @@
           }
         ],
         "receipts": [
-          "«Verify delivery recovery across transcript…» is back on the board",
+          "«Verify delivery recovery across transcript bou…» is back on the board",
           "«Spike: a virtualized Done column» is back on the board"
         ]
       }
@@ -355,7 +416,7 @@
         "focused": true
       },
       "last": {
-        "ms": 3950,
+        "ms": 3935,
         "present": true,
         "focused": true
       }
@@ -373,10 +434,30 @@
         "stored": false
       }
     },
+    "bulkUndoRefused": {
+      "order": [
+        "t-interrupt",
+        "t-voice",
+        "t-queue"
+      ],
+      "after": {
+        "receipts": [
+          "Couldn't show «Universal interrupt and stop for every engine»: refused by the evidence fixture",
+          "2 tasks are back on the board"
+        ],
+        "done": [
+          "task:t-attach",
+          "task:t-voice",
+          "task:t-queue"
+        ],
+        "refusedStillHidden": true
+      },
+      "retry": "Retry"
+    },
     "seatRead": {
       "reads": 2,
       "panel": true,
-      "lock": false
+      "lock": true
     },
     "keys": {
       "rename": {
@@ -396,22 +477,8 @@
         "swatches": 9
       },
       "hidden": null,
-      "undone": null
+      "undone": "inbox"
     }
   },
-  "failures": [
-    "tray light: hidden count 6",
-    "tray light: empty [\"t-queue\",\"t-old\"]",
-    "tray dark: hidden count 6",
-    "tray dark: empty [\"t-queue\",\"t-old\"]",
-    "done column menu: [{\"label\":\"Hide finished tasks (2)\",\"why\":\"Keeps 1 task whose agent is still working.\",\"disabled\":false}]",
-    "bulk hide flow: waitForFunction: Timeout 10000ms exceeded.",
-    "protected seat flow: scrollIntoViewIfNeeded: Timeout 30000ms exceeded.",
-    "resurface: {\"before\":null,\"back\":{\"column\":\"assigned\",\"needs\":false,\"line\":\"Back on the board: a conversation asked for a decision\"}}",
-    "tray show: {\"column\":\"assigned\",\"count\":\"5\"}",
-    "tray restore: {\"count\":\"4\",\"mutations\":[{\"kind\":\"restore\",\"path\":\"/repo/old-spike.jsonl\",\"placement\":\"manual\"}],\"receipts\":[\"«Verify delivery recovery across transcript…» is back on the board\",\"«Spike: a virtualized Done column» is back on the board\"]}",
-    "bulk undo refusal flow: waitForFunction: Timeout 10000ms exceeded.",
-    "seat read: {\"reads\":2,\"panel\":true,\"lock\":false}",
-    "keys: {\"rename\":{\"card\":\"task:t-onboarding\",\"editor\":\"title\",\"menu\":false},\"describe\":{\"card\":\"task:t-onboarding\",\"editor\":\"description\",\"menu\":false},\"colour\":{\"card\":null,\"editor\":null,\"menu\":true,\"swatches\":9},\"hidden\":null,\"undone\":null}"
-  ]
+  "failures": []
 }
