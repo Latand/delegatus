@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,98 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-owner-api-"));
 process.env.LLV_STATE_DIR = root;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const sentinel = "clst_fixture_sentinel_do_not_forward";
+async function rateFixture(id: string, api: Parameters<typeof startTestRelay>[0]) {
+  let origin = "";
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.startsWith("/.well-known")) return { body: { features: ["owner_api"], owner_api: { api_base: `${origin}/api/public/v1`, openapi_url: `${origin}/api/public/v1/openapi.json`, key_url: `${origin}/key`, operations: ["read"] } } };
+    if (req.url?.endsWith("openapi.json")) return { body: { paths: { "/api/public/v1/items": { get: { operationId: "read" } } } } };
+    return api(req, body);
+  }); origin = server.origin;
+  const relay = { id, origin, api_base: `${origin}/relay/v1`, owner: { namespace: "telegram", id: "41" } } as PairedRelay;
+  updateRelayStore((store) => ({ ...store, relays: [relay] })); setRelaySwitch("owner_api", true);
+  const request = requestSchema.parse({ ...sampleRequest, input: { ...sampleRequest.input, requester: { key: "u", is_owner: true, is_admin: false, is_anonymous_admin: false, can_restrict_members: false, can_delete_messages: false } } });
+  return { relay, request, close: async () => { forgetOwnerKey(relay.id); setRelaySwitch("owner_api", false); await server.close(); } };
+}
+
+test("long 429 delays refuse this run and peers until the full deadline", async () => {
+  let time = Date.now(), limited = true;
+  const arrivals: number[] = [], waits: number[] = [];
+  const f = await rateFixture("long_delay", (req) => {
+    if (req.url?.endsWith("/me")) return { body: { user_id: 41 } };
+    arrivals.push(time);
+    return limited ? { status: 429, body: { error: [{ code: "rate_limited", retry_after: 120 }] } } : { body: { status: "ok" } };
+  });
+  const runtime = { now: () => time, sleep: async (ms: number) => { waits.push(ms); time += ms; } };
+  const signal = new AbortController().signal;
+  try {
+    await bindOwnerKey(f.relay, "clst_long_delay_fixture");
+    const tool = (await ownerToolsFor(f.relay, f.request))[0]!;
+    const start = time;
+    expect(await callOwnerApi(f.relay, tool, {}, { calls: 0 }, signal, runtime)).toMatchObject({ status: "denied", code: "rate_limited", sent: true });
+    expect(arrivals).toEqual([start]); expect(waits).toEqual([]);
+    limited = false; time = start + 59999;
+    const peerBudget = { calls: 0 };
+    expect(await callOwnerApi(f.relay, tool, {}, peerBudget, signal, runtime)).toMatchObject({ status: "denied", code: "rate_limited" });
+    expect(arrivals).toEqual([start]); expect(peerBudget.calls).toBe(0);
+    time = start + 60000;
+    expect(await callOwnerApi(f.relay, tool, {}, { calls: 0 }, signal, runtime)).toMatchObject({ status: "ok" });
+    expect(waits).toEqual([60000]); expect(arrivals).toEqual([start, start + 120000]);
+  } finally { await f.close(); }
+});
+
+test("binding 429 holds proxy runs and another binding for the full delay", async () => {
+  let time = Date.now(), limited = false, meCalls = 0, itemCalls = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => time);
+  const f = await rateFixture("binding_delay", (req) => {
+    if (req.url?.endsWith("/me")) {
+      meCalls++;
+      return limited ? { status: 429, body: { error: [{ code: "rate_limited", retry_after: 120 }] } } : { body: { user_id: 41 } };
+    }
+    itemCalls++; return { body: { status: "ok" } };
+  });
+  const key = "clst_binding_delay_fixture", signal = new AbortController().signal;
+  try {
+    await bindOwnerKey(f.relay, key);
+    const tool = (await ownerToolsFor(f.relay, f.request))[0]!;
+    limited = true;
+    await expect(bindOwnerKey(f.relay, key)).rejects.toMatchObject({ code: "rate_limited" });
+    const start = time; limited = false; time += 59999;
+    expect(await callOwnerApi(f.relay, tool, {}, { calls: 0 }, signal, { now: () => time, sleep: async (ms) => { time += ms; } })).toMatchObject({ status: "denied", code: "rate_limited" });
+    expect(meCalls).toBe(2); expect(itemCalls).toBe(0);
+    time = start + 120000;
+    await bindOwnerKey(f.relay, key);
+    expect(await callOwnerApi(f.relay, tool, {}, { calls: 0 }, signal)).toMatchObject({ status: "ok" });
+    expect(meCalls).toBe(3); expect(itemCalls).toBe(1);
+  } finally { clock.mockRestore(); await f.close(); }
+});
+
+test("concurrent binding refusals only extend the shared key deadline", async () => {
+  let time = Date.now(), meCalls = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => time);
+  let firstSeen!: () => void, secondSeen!: () => void, releaseFirst!: () => void, releaseSecond!: () => void;
+  const first = new Promise<void>((resolve) => { firstSeen = resolve; });
+  const second = new Promise<void>((resolve) => { secondSeen = resolve; });
+  const firstResponse = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondResponse = new Promise<void>((resolve) => { releaseSecond = resolve; });
+  const f = await rateFixture("concurrent_delay", async () => {
+    const index = meCalls++;
+    if (index === 0) { firstSeen(); await firstResponse; }
+    if (index === 1) { secondSeen(); await secondResponse; }
+    return index < 2 ? { status: 429, body: { error: [{ code: "rate_limited", retry_after: index === 0 ? 180 : 120 }] } } : { body: { user_id: 41 } };
+  });
+  const key = "clst_concurrent_delay_fixture";
+  try {
+    const a = bindOwnerKey(f.relay, key).catch((error) => error); await first;
+    const b = bindOwnerKey(f.relay, key).catch((error) => error); await second;
+    releaseFirst(); expect(await a).toMatchObject({ code: "rate_limited" });
+    releaseSecond(); expect(await b).toMatchObject({ code: "rate_limited" });
+    const start = time; time += 110000;
+    await expect(bindOwnerKey(f.relay, key)).rejects.toMatchObject({ code: "rate_limited" });
+    expect(meCalls).toBe(2);
+    time = start + 180000; await bindOwnerKey(f.relay, key); expect(meCalls).toBe(3);
+  } finally { releaseFirst(); releaseSecond(); clock.mockRestore(); await f.close(); }
+});
+
 test("bind, discover, proxy and redact only for the paired owner", async () => {
   let origin = ""; let owner = 41; let status = 200; let calls = 0; let documents = 0;
   const server = await startTestRelay((req) => {

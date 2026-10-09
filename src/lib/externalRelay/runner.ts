@@ -528,7 +528,7 @@ export async function runClaimedRequest(
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
     if (conversation) {
-      const compacted = conversationEvidence.compacted || typeof conversationEvidence.promptTokens === "number" && typeof conversation.lastPromptTokens === "number" && conversationEvidence.promptTokens < conversation.lastPromptTokens;
+      const compacted = conversationEvidence.compacted;
       releaseConversation(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
         ...(conversationEvidence.sessionId ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
           lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,

@@ -264,8 +264,8 @@ The answer path of `runClaimedRequest` keeps its order up to the profile
    reported its session: store the session id, the account, `turns + 1`,
    `turnsSinceCompaction + 1`, `lastTurnAt`, `lastPromptTokens`, the ids the
    turn prompt carried plus `respond_to`, the static digest it carried, and
-   `idle`. If any round reported a compaction, or the prompt size fell below
-   the previous turn's, clear `seen` and `staticDigest` and set
+   `idle`. If any round reported an engine compaction event, clear `seen`
+   and `staticDigest` and set
    `turnsSinceCompaction` to 0, so the next turn carries the frame and the
    whole window again (relay.md §A.8).
 6. **Failure.** A resume that ends before the engine reports its session (no
@@ -582,7 +582,7 @@ Owner tools join the 2b loop as a second source of callable tools:
 |---|---|
 | 20 owner-API requests per run | A counter in the loop counts every HTTP request the proxy sends for this claimed request, retries included. At 20, every further owner call is local `too_many_calls` and never sent. Relay calls keep their own budget of 16 (2a). |
 | 60 per minute per key | A sliding window per relay id on the controller object (`globalThis`, like the poller's), shared by every run and by binding. Before each request: if 60 requests fall in the last 60 s or a 429 block is active, wait for the first free moment through the loop's `sleep` seam when it comes within 60 s; otherwise the call is local `rate_limited`. |
-| 429 | `retry_after` from `error[0].retry_after` (else the `Retry-After` header), rounded up, clamped to 1–60 s, sets the window's `blockedUntil` for every run of that key; the call is retried after it, at most three times, then projected `denied` / `rate_limited`. |
+| 429 | `retry_after` from `error[0].retry_after` (else the `Retry-After` header), rounded up with a minimum of 1 s, extends the window's `blockedUntil` for every run of that key. A wait over 60 s returns local `denied` / `rate_limited` and keeps the full block for peers. Shorter waits retry at most three times. Concurrent responses only extend the block. Binding through `/me` shares it. |
 
 ### 6.6 Errors
 

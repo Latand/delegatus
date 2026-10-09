@@ -68,6 +68,12 @@ function windowFor(key: string) {
   const id = createHash("sha256").update(keyFile() + key).digest("hex");
   let value = windows.get(id); if (!value) { value = { times: [], blockedUntil: 0 }; windows.set(id, value); } return value;
 }
+function holdKey(key: string, error: ExternalRelayError, now: number) {
+  const window = windowFor(key);
+  const wait = Math.ceil(Math.max(1, error.retryAfterSeconds ?? 1)) * 1000;
+  window.blockedUntil = Math.max(window.blockedUntil, now + wait);
+  return window.blockedUntil - now;
+}
 async function admit(key: string, signal: AbortSignal, runtime: ToolLoopRuntime) {
   const now = runtime.now ?? Date.now; const sleep = runtime.sleep ?? toolSleep; const window = windowFor(key);
   while (true) {
@@ -89,7 +95,7 @@ export async function bindOwnerKey(relay: PairedRelay, key: string): Promise<Own
   try { value = ownerApiMeSchema.parse((await relayCall(descriptor.api_base, "/me", "GET", undefined, key)).body); }
   catch (error) {
     if (error instanceof ExternalRelayError && error.status === 401) { invalidate(relay, "rejected"); throw new ExternalRelayError("key_rejected", 409); }
-    if (error instanceof ExternalRelayError && error.status === 429) { windowFor(key).blockedUntil = Date.now() + Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1)) * 1000; throw new ExternalRelayError("rate_limited", 429); }
+    if (error instanceof ExternalRelayError && error.status === 429) { holdKey(key, error, Date.now()); throw new ExternalRelayError("rate_limited", 429); }
     throw new ExternalRelayError(error instanceof ExternalRelayError ? "unreachable" : "malformed", 502);
   }
   if (String(value.user_id) !== relay.owner.id) { forgetOwnerKey(relay.id); throw new ExternalRelayError("owner_mismatch", 409); }
@@ -200,7 +206,12 @@ export async function callOwnerApi(relay: PairedRelay, tool: OwnerTool, args: Re
   for (let attempt = 0; attempt < 4; attempt++) {
     const entry = entryFor(relay, now()); if (!entry) return local("unauthorized");
     if (budget.calls >= 20) return local("too_many_calls");
-    await admit(entry.key, signal, runtime); signal.throwIfAborted();
+    try { await admit(entry.key, signal, runtime); }
+    catch (error) {
+      if (error instanceof ExternalRelayError && error.status === 429) return { ...local("rate_limited"), sent };
+      throw error;
+    }
+    signal.throwIfAborted();
     // Re-check expiry after a rate-limit wait.
     const afterWait = entryFor(relay, now());
     if (!afterWait || afterWait.key !== entry.key) return local("unauthorized");
@@ -218,8 +229,8 @@ export async function callOwnerApi(relay: PairedRelay, tool: OwnerTool, args: Re
         if (error.status === 401) { invalidate(relay, "rejected"); return { ...local("unauthorized"), sent, output: "The owner key was refused. Ask the owner to paste a new key in Delegatus." }; }
         if ([403, 404, 422].includes(error.status)) return { status: error.status === 403 ? "denied" : "error", output: [...redactedJson(object(error.payload).error ?? [], entry.key)].slice(0, 16000).join(""), truncated: false, code: error.status === 403 ? "not_permitted" : error.status === 404 ? "not_found" : "invalid_arguments", sent };
         if (error.status === 429) {
-          const wait = Math.ceil(Math.min(60, Math.max(1, error.retryAfterSeconds ?? 1))) * 1000;
-          windowFor(entry.key).blockedUntil = now() + wait;
+          const wait = holdKey(entry.key, error, now());
+          if (wait > 60000) return { ...local("rate_limited"), sent };
           if (attempt < 3) { await sleep(wait, signal); continue; }
           return { ...local("rate_limited"), sent };
         }
