@@ -2,8 +2,9 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, prepareCache, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
+import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, prepareCache, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -103,6 +104,28 @@ test("duplicate names match occurrences and keep suite ancestry", () => {
   const result = compareTests(base, { ...base, failures: [site, site, { ...site, suite: "other" }] });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(2);
 });
+test("scope and service guards report an identical surviving tree once across the baseline", () => {
+  const file = "fixture.test.ts";
+  const failures: TestSite[] = [{ file, suite: "", kind: "error",
+    name: "<hook error> owned test scope children survived teardown: 22 (22:2), 21 (21:1)" }];
+  appendOwnershipFailure(failures, file, "owned runner: surviving owned processes: 21 (21:1), 22 (22:2)");
+  const base: TestRun = { failures: [{ file, suite: "", kind: "error",
+    name: "<ownership error> owned runner: surviving owned processes: 31 (31:3)" }], passed: [], completed: [file], elapsedMs: 0 };
+  const result = compareTests(base, { ...base, failures });
+  expect(result.introduced).toEqual([]);
+  expect(result.preexisting).toHaveLength(1);
+  expect(result.preexisting[0]!.name).toContain("21 (21:1), 22 (22:2)");
+});
+test("distinct scope identities and unrelated hook failures remain blocking", () => {
+  const file = "fixture.test.ts";
+  const failures: TestSite[] = [{ file, suite: "", kind: "error",
+    name: "<hook error> owned test scope children survived teardown: 21 (21:9)" },
+  { file, suite: "", kind: "error", name: "<hook error> fixture failed to close" }];
+  appendOwnershipFailure(failures, file, "owned runner: surviving owned processes: 21 (21:1)");
+  expect(failures).toHaveLength(3);
+  const empty: TestRun = { failures: [], passed: [], completed: [file], elapsedMs: 0 };
+  expect(compareTests(empty, { ...empty, failures }).introduced).toHaveLength(3);
+});
 test("swapped duplicate outcomes report the stable head occurrence NEW and the recovered occurrence FIXED", () => {
   const f = fixture(source(true));
   const duplicateSource = (firstFails: boolean, secondFails: boolean) => `import { test, expect } from "bun:test";
@@ -128,6 +151,41 @@ test("report errors are retained; incomplete reports and unidentifiable errors a
   expect(() => parseReport(xml.replace('tests="1"', 'tests="2"'), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml, " 1 error\n", "f.test.ts", "/checkout")).toThrow();
 });
+
+test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "example.test.ts"), source(true) + '\nimport { afterAll } from "bun:test"; afterAll(() => { throw new Error("synthetic owned child survived teardown"); });');
+  const result = f.run();
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.kind).toBe("error");
+  expect(result.introduced[0]!.name).toContain("synthetic owned child survived teardown");
+  expect(result.flaky).toHaveLength(0);
+  expect(f.logs.join("\n")).not.toContain("flaky confirmation");
+});
+
+test.skipIf(process.platform !== "linux")("a green JUnit report cannot hide the owned runner's survivor diagnostic", () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test";
+test("detached worker", async () => {
+  const child = Bun.spawn([process.execPath, "-e", 'require("node:child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }).unref(); process.exit(0);'], { stdout: "ignore", stderr: "ignore" });
+  await child.exited;
+});`);
+  const result = f.run();
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.kind).toBe("error");
+  expect(result.introduced[0]!.name).toContain("owned runner: surviving owned processes:");
+  expect(result.introduced[0]!.name).toMatch(/\d+ \(\d+:\d+\)/);
+});
+test.skipIf(process.platform !== "linux")("a completed baseline's owned survivor is FIXED when head reaps it", () => {
+  const f = fixture(source(true) + `\nimport { spawn } from "node:child_process";
+spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).unref();`);
+  writeFileSync(path.join(f.dir, "example.test.ts"), source(true));
+  const result = f.run();
+  expect(result.introduced).toHaveLength(0);
+  expect(result.fixed).toHaveLength(1);
+  expect(result.fixed[0]!.kind).toBe("error");
+  expect(f.logs.join("\n")).toMatch(/FIXED .+surviving owned processes: \d+ \(\d+:\d+\)/);
+});
 test("cache prunes owned bounded entries, preserves unrelated files, and refuses linked roots", () => {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-test-")); roots.push(dir);
   const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });
@@ -142,10 +200,11 @@ test("cache prunes owned bounded entries, preserves unrelated files, and refuses
   prepareCache(cache); expect(existsSync(pending)).toBeFalse(); expect(existsSync(oversized)).toBeFalse();
   const linked = path.join(dir, "linked"); symlinkSync(cache, linked, "dir"); expect(() => prepareCache(linked)).toThrow("owned private directory");
 });
-test.skipIf(process.platform === "win32")("test helpers in the recorded process group cannot keep the slot alive", () => {
+test.skipIf(process.platform === "win32")("a surviving test helper fails the run and cannot keep the slot alive", () => {
   const marker = path.join(gateTemporaryRoot(), `gate-helper-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test } from "bun:test"; import { spawn } from "node:child_process"; import { appendFileSync } from "node:fs"; const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); appendFileSync(${JSON.stringify(marker)}, String(child.pid) + "\\n"); child.unref(); test("helper", () => {});`);
-  expect(f.run().introduced).toHaveLength(0);
+  expect(f.run().preexisting.length).toBeGreaterThan(0);
+  if (process.platform === "linux") expect(f.logs.join("\n")).toMatch(/PRE-EXISTING .+surviving owned processes: \d+ \(\d+:\d+\)/);
   for (const pid of readFileSync(marker, "utf8").trim().split("\n").map(Number)) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
     expect(probe.status !== 0 || probe.stdout.trim().startsWith("Z")).toBeTrue();
@@ -155,7 +214,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   const f = fixture(source(false));
   for (const leaf of [".githooks", ".github/workflows", "shims"]) mkdirSync(path.join(f.dir, leaf), { recursive: true });
   mkdirSync(path.join(f.dir, "scripts"));
-  for (const name of ["local-gate.ts", "local-gate-tests.ts", "gate-slot.sh", "verify-native-codex-runtime.ts"]) symlinkSync(path.join(root, "scripts", name), path.join(f.dir, "scripts", name));
+  for (const name of ["local-gate.ts", "local-gate-tests.ts", "gate-slot.sh", "owned-runner.ts", "verify-native-codex-runtime.ts"]) symlinkSync(path.join(root, "scripts", name), path.join(f.dir, "scripts", name));
   writeFileSync(path.join(f.dir, ".githooks/pre-push"), readFileSync(path.join(root, ".githooks/pre-push")));
   for (const name of ["platform-tests.yml", "bun-runtime.yml"]) writeFileSync(path.join(f.dir, ".github/workflows", name), readFileSync(path.join(root, ".github/workflows", name)));
   const calls = path.join(f.dir, "phases.log");
@@ -168,7 +227,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "HEAD:main"], { env: f.env, stdio: "pipe" });
   f.git("remote", "set-url", "origin", remote); f.git("update-ref", "refs/remotes/origin/main", hookBase);
   writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
-  const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
+  const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, LLV_GATE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
   const hook = () => spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
@@ -190,6 +249,20 @@ test("an incomplete cached baseline is rebuilt before it can certify a compariso
   writeFileSync(entry, JSON.stringify(contents)); f.logs.length = 0;
   expect(f.run().introduced).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("baseline run");
+});
+
+test("fresh kernel ownership descriptors preserve a warm baseline", () => {
+  const f = fixture(source(true));
+  expect(f.run().introduced).toHaveLength(0);
+  Object.assign(f.env, {
+    LLV_OWNED_TEST_RUNNER_PID: "synthetic-next-runner",
+    LLV_OWNED_TEST_RUN_CGROUP: "/synthetic-next-service",
+    LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
+    LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
+  });
+  f.logs.length = 0;
+  expect(f.run().introduced).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("baseline cache hit");
 });
 
 test.each(["changed failure identity", "missing integrity"])("a cached baseline with %s cannot hide a newly failing test", corruption => {

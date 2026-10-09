@@ -191,6 +191,14 @@ export interface ReaderView {
   /** The reader stands in a Stages pane, whose head names the stage and its state. */
   inSheet?: boolean;
   owner: ReaderOwner | null;
+  /** The conversation holds the project's orchestrator seat: it reads as the
+      orchestrator, the way the seat names it. */
+  seat?: boolean;
+  /** The reader is the agent window's: the conversation's one composer is
+      here, even while the seat shows the same conversation. */
+  composerPrimary?: boolean;
+  /** What the composer says in place of its default: the seat's own words. */
+  composerPlaceholder?: string;
 }
 
 interface ReaderProps extends ReaderView {
@@ -215,16 +223,16 @@ export interface ReaderStop {
 /** The role a reader's frame wears: from the stage it is an attempt of and
     the conversation's own durable lineage. The reader's ribbon and the
     open-agents rail both read it here. */
-export function readerFrameRole(view: Pick<ReaderView, "file" | "owner">): FrameRole {
-  return conversationFrameRole({ stage: view.owner?.stage?.stage ?? null, file: view.file });
+export function readerFrameRole(view: Pick<ReaderView, "file" | "owner" | "seat">): FrameRole {
+  return conversationFrameRole({ seat: view.seat, stage: view.owner?.stage?.stage ?? null, file: view.file });
 }
 
 /** A reader in words: the stage's name the way the stage list has it, else
     the conversation's own title; and the card it is open on. Never an id. */
-export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner">): { name: string; card: string | null } {
+export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner" | "seat">): { name: string; card: string | null } {
   const { file, owner } = view;
   const place = owner?.stage ? stageAttemptPlace(owner.stage.pipeline, owner.stage.stage.id, file) : null;
-  const name = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
+  const name = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : view.seat ? t("orchPanel.title") : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
   const card = owner?.cardTitle && owner.cardTitle !== name ? owner.cardTitle : null;
   return { name, card };
 }
@@ -232,7 +240,7 @@ export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, composerPrimary = false, composerPlaceholder, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -247,7 +255,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
      tooltip (#1865). */
   const place = owner?.stage ? stageAttemptPlace(owner.stage.pipeline, owner.stage.stage.id, file) : null;
   const role = owner?.stage && place ? stageCardLabel(t, owner.stage.stage, place) : null;
-  const title = role && owner ? `${role} · ${owner.cardTitle}` : cleanTitle(file.title ?? "", 90) || t("kanban.untitledConversation");
+  const title = role && owner ? `${role} · ${owner.cardTitle}` : readerNames(t, { file, owner, seat }).name;
   /* The attempt number is set apart the way the tile sets it: a muted
      tabular suffix of the stage's name, never a third bold word. */
   const labelParts = owner?.stage && place ? stageCardLabelParts(t, owner.stage.stage, place) : null;
@@ -277,7 +285,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   const needs = row.dot === "warning";
   /* The role frame: which agent this is, from the stage it is an
      attempt of and its own durable lineage. */
-  const frameRole = readerFrameRole({ file, owner });
+  const frameRole = readerFrameRole({ file, owner, seat });
   const identity = (
     <>
       {engine ? (
@@ -410,6 +418,8 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
       tasks={[]}
       isRoot={false}
       onSpawnRetry={retryLaunch}
+      composerPrimary={composerPrimary}
+      composerPlaceholder={composerPlaceholder}
       chrome={{
         header,
         className: `reader conv${needs ? " needs" : ""}${isLaunchedConversation(file) ? " launched" : ""}`,

@@ -1,8 +1,11 @@
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 
 // A machine without /proc (macOS): every read under it fails the way a
 // missing path does, and `ps` can be taken away as well.
@@ -10,24 +13,49 @@ const real = { ...fs }, realChild = { ...childProcess };
 const missing = (target: unknown) => typeof target === "string" && (target === "/proc" || target.startsWith("/proc/"));
 const absent = (target: string) => Object.assign(new Error(`ENOENT: no such file or directory, open '${target}'`), { code: "ENOENT" });
 let psBroken = false;
+// Lifetime authority reads the real machine, outside the missing-/proc fault
+// injected into the gate. Capture synchronously while the reported child lives.
+let lifetimeProbe = false;
 mock.module("node:fs", () => ({
   ...real,
-  readFileSync: (target: string, ...rest: unknown[]) => { if (missing(target)) throw absent(target); return (real.readFileSync as (...args: unknown[]) => unknown)(target, ...rest); },
-  readdirSync: (target: string, ...rest: unknown[]) => { if (missing(target)) throw absent(target); return (real.readdirSync as (...args: unknown[]) => unknown)(target, ...rest); },
+  readFileSync: (target: string, ...rest: unknown[]) => { if (!lifetimeProbe && missing(target)) throw absent(target); return (real.readFileSync as (...args: unknown[]) => unknown)(target, ...rest); },
+  readdirSync: (target: string, ...rest: unknown[]) => { if (!lifetimeProbe && missing(target)) throw absent(target); return (real.readdirSync as (...args: unknown[]) => unknown)(target, ...rest); },
 }));
 mock.module("node:child_process", () => ({
   ...realChild,
-  spawnSync: (command: string, ...rest: unknown[]) => psBroken && command === "ps"
+  spawnSync: (command: string, ...rest: unknown[]) => !lifetimeProbe && psBroken && command === "ps"
     ? { status: null, stdout: "", stderr: "", error: absent(command) }
     : (realChild.spawnSync as (...args: unknown[]) => unknown)(command, ...rest),
 }));
 const { ContainmentFailed, NoVerdict, runSteps } = await import("./local-gate");
 
-const roots: string[] = [], started: number[] = [];
-afterEach(() => {
+const roots: string[] = [], started: ProcessIdentity[] = [];
+const spawn = Bun.spawn;
+const children: ReturnType<typeof Bun.spawn>[] = [];
+beforeEach(() => {
+  Bun.spawn = ((...args: Parameters<typeof Bun.spawn>) => {
+    const child = Reflect.apply(spawn, Bun, args) as ReturnType<typeof Bun.spawn>;
+    children.push(child);
+    return child;
+  }) as typeof Bun.spawn;
+});
+afterEach(async () => {
+  Bun.spawn = spawn;
   psBroken = false;
-  // Only the processes these tests started, each by the PID it recorded.
-  for (const pid of started.splice(0)) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  lifetimeProbe = true;
+  try { for (const identity of started.splice(0)) await stopFixtureIdentity(identity); }
+  finally { lifetimeProbe = false; }
+  // A deadline stop with failed process-table evidence may unref its root.
+  // Reap the original handle before the preload checks for surviving children.
+  for (const child of children.splice(0)) {
+    if (child.exitCode === null) child.kill("SIGTERM");
+    const force = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 500);
+    try {
+      await Promise.race([child.exited, Bun.sleep(2_000).then(() => {
+        throw new Error("owned deadline fixture did not reap its root");
+      })]);
+    } finally { clearTimeout(force); }
+  }
   for (const dir of roots.splice(0)) real.rmSync(dir, { recursive: true, force: true });
 });
 /** Signal 0 and ps, the two things this machine still has. */
@@ -44,10 +72,25 @@ async function stoppedStep(dir: string, budgetMs = 1_000) {
   const at = performance.now();
   // The root and a helper it started, which must go with it.
   const script = `echo $$ > '${dir}/root.pid'; sleep 60 & echo $! > '${dir}/helper.pid'; wait`;
-  const error = await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: dir, deadline: { at: Date.now() + budgetMs, startedAt: Date.now() }, logDir: dir, say: () => {},
+  const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: dir, deadline: { at: Date.now() + budgetMs, startedAt: Date.now() }, logDir: dir, say: () => {},
     prepare: () => ({ command: ["bash", "-c", script], env: process.env }) }).then(() => null, (caught: unknown) => caught);
-  const pids = ["root", "helper"].map(name => Number(real.readFileSync(path.join(dir, `${name}.pid`), "utf8")));
-  started.push(...pids);
+  const until = Date.now() + budgetMs;
+  const pids: number[] = [];
+  try {
+    for (const name of ["root", "helper"]) {
+      const file = path.join(dir, `${name}.pid`);
+      while (!real.existsSync(file) && Date.now() < until) await Bun.sleep(10);
+      const pid = Number(real.readFileSync(file, "utf8"));
+      lifetimeProbe = true;
+      try {
+        const identity = captureProcessIdentity(pid);
+        started.push(identity);
+        expect(processIdentityStatus(identity), "fixture reported with live PID/start/boot identity").toBe("alive");
+      } finally { lifetimeProbe = false; }
+      pids.push(pid);
+    }
+  } finally { await pending; }
+  const error = await pending;
   return { error, elapsed: performance.now() - at, pids };
 }
 

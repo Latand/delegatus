@@ -1,3 +1,4 @@
+import "@/lib/testing/fixtureLifetime";
 import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtures";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs";

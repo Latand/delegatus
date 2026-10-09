@@ -1,3 +1,5 @@
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { signalFixtureIdentity, stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -49,8 +51,20 @@ function scratchState(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-response-worker-"));
 }
 
-afterEach(() => {
+async function stopTestWorker(): Promise<void> {
+  const pid = filesResponseWorkerPoolDiagnostics().pid;
+  const identity = pid === null ? null : captureProcessIdentity(pid);
   shutdownFilesResponseWorker("test");
+  if (identity) {
+    await stopFixtureIdentity(identity);
+    const deadline = Date.now() + 2_000;
+    while (processIdentityStatus(identity) === "alive" && Date.now() < deadline) await Bun.sleep(10);
+    expect(processIdentityStatus(identity), "test worker was reaped before teardown returned").toBe("dead");
+  }
+}
+
+afterEach(async () => {
+  await stopTestWorker();
   delete process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB;
   delete process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS;
 });
@@ -70,7 +84,7 @@ test("files response projection runs in an isolated worker process", async () =>
       tasks: [],
     });
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -91,7 +105,7 @@ test("a burst of rapid sequential projections is served by one worker process", 
     expect(after.pid).not.toBeNull();
     for (const result of results) expectEtagMatchesBody(result);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -111,7 +125,7 @@ test("concurrent projections are served by one worker process", async () => {
        two builds can never hand back the same one. */
     expect(new Set(results.map((result) => bodyWithoutVolatileStorageFreeBytes(result.body))).size).toBe(1);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -127,7 +141,7 @@ test("a worker that ends a build above the size threshold is retired", async () 
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(2);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -142,7 +156,7 @@ test("a worker nobody asks for a projection is retired when it goes idle", async
     expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("idle");
     expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -153,15 +167,15 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     const running = filesResponseWorkerPoolDiagnostics();
     expect(running.pid).not.toBeNull();
+    const identity = captureProcessIdentity(running.pid!);
     const pending = buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    /* The pid this kills is the one the pool just reported as its own. */
-    process.kill(running.pid!, "SIGKILL");
+    signalFixtureIdentity(identity, "SIGKILL");
     await expect(pending).rejects.toThrow(/files response worker/);
     const recovered = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(recovered.etag).toMatch(/^"[a-f0-9]{40}"$/);
     expect(filesResponseWorkerPoolDiagnostics().spawns).toBeGreaterThanOrEqual(running.spawns + 1);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -185,7 +199,7 @@ test("a retired worker still answers the next revision with a delta from its per
   try {
     const first = await buildFilesResponseInWorker(scoped(1) as never, runtimeFor(stateDir));
     expect(first.delta).toBeUndefined();
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
 
     const second = await buildFilesResponseInWorker(scoped(2) as never, runtimeFor(stateDir));
     expect(second.etag).not.toBe(first.etag);
@@ -211,7 +225,7 @@ test("a retired worker still answers the next revision with a delta from its per
     }
     expect(fs.readdirSync(path.join(stateDir, "files-response-results")).filter((name) => !name.startsWith("delta-base-"))).toEqual([]);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -237,7 +251,7 @@ test("a projection from the snapshot file reports the scan generation that file 
     const inline = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(inline.snapshotRead).toBeUndefined();
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });

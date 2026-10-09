@@ -1,3 +1,4 @@
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -4948,7 +4949,8 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(again.dismissedBy).toEqual({ kind: "agent", conversationId: "conversation_seat", role: "orchestrator" });
 
   /* The dismissal service's own write carries the attribution it derived. */
-  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
+  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports, undefined, "The merger already holds this work");
+  expect(loadPipelines()[0]!.dismissedNote).toBe("The merger already holds this work");
   expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
 
   /* A card drawn before the lane's last movement clears nothing: that
@@ -4973,6 +4975,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();
   expect(shown.pipeline!.dismissedBy).toBeUndefined();
+  expect(shown.pipeline!.dismissedNote).toBeUndefined();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
   const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
@@ -19120,11 +19123,11 @@ async function idleStageHostFixture(h: ReturnType<typeof harness>) {
     { conversationId: begun.receipt.conversationId, host: "alive", turn: "idle", attentionIds: [] },
   ] });
   return {
-    registry, key, claimOwner, transcriptPath, attempt, host, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
+    registry, key, claimOwner, transcriptPath, attempt, host, child, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
     bind: (cursorDebounceMs: number) => bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs }),
-    end: () => {
+    end: async () => {
       setAgentRegistryForTests(null);
-      try { process.kill(child.pid!, "SIGKILL"); } catch { /* already gone */ }
+      await stopFixtureProcess(child);
     },
   };
 }
@@ -19197,7 +19200,7 @@ test("a stage that keeps working after its turn ended keeps its host through the
     stop();
   } finally {
     globalThis.setTimeout = realSetTimeout;
-    f.end();
+    await f.end();
   }
 });
 
@@ -19229,7 +19232,7 @@ test("an automatic stop withdrawn after it captured the tree leaves the registry
     expect(f.registry.setStructuredHostClaimed(f.key, { ...before.structuredHost!, eventCursor: 173 }, "idle", f.claimOwner, 1))
       .toMatchObject({ structuredHost: { eventCursor: 173 } });
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19257,7 +19260,7 @@ test("a really interrupted idle turn is stopped by the product's own stop and re
     expect(attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
     expect(attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "engine-stop" });
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19270,7 +19273,7 @@ function runtimeReleaseOf(f: Awaited<ReturnType<typeof idleStageHostFixture>>, o
     retired,
     terminateOwnedHost: async (key: Parameters<typeof f.registry.terminateStructuredHost>[0], expected: Parameters<typeof f.registry.terminateStructuredHost>[1]) => {
       // The fixture's own child, by the pid it recorded; its process probes then answer "gone".
-      process.kill(f.hostPid, "SIGKILL");
+      f.child.kill("SIGKILL");
       f.termination.signal(f.hostPid, "SIGKILL");
       onReleased();
       f.host.emit({ status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
@@ -19311,7 +19314,7 @@ test("an automatic stop whose first step is the runtime's own release still reti
     expect(lane.runs[0]!.attempts).toHaveLength(2);
     expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19353,7 +19356,7 @@ test("a descendant that outlives the runtime's release is still signalled, and t
     expect(lane.state).toBe("running");
     expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19374,7 +19377,7 @@ test("a stop still withdraws when the host resumes before the runtime released a
     expect(f.row()).toEqual(before);
     expect(f.journal().map((line) => line.event)).toEqual(["captured", "withdrawn"]);
   } finally {
-    f.end();
+    await f.end();
   }
 });
 
@@ -19563,7 +19566,7 @@ test("a host Delegatus stopped is recorded as stopped by Delegatus although its 
     expect(h.spawnInputs.at(-1)!.prompt).toContain("stage attempt 1 was stopped by Delegatus after its turn went silent.");
     expect(`${lane.runs[0]!.attempts[0]!.error} ${h.spawnInputs.at(-1)!.prompt}`).not.toContain("lost");
   } finally {
-    f.end();
+    await f.end();
   }
 });
 

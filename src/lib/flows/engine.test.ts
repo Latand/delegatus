@@ -1,3 +1,4 @@
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync as rawSpawnSync, type SpawnSyncReturns } from "node:child_process";
 import crypto from "node:crypto";
@@ -1171,7 +1172,7 @@ test("synthetic takeover preserves an identity-less headless launch lease for th
     });
   } finally {
     if (reviewer.pid) {
-      try { process.kill(reviewer.pid, "SIGKILL"); } catch { /* already gone */ }
+      await stopFixtureProcess(reviewer);
     }
   }
 });
@@ -1260,7 +1261,7 @@ test("identity-less headless post-spawn checkpoint keeps its cross-Viewer lease 
     });
   } finally {
     if (reviewer.pid) {
-      try { process.kill(reviewer.pid, "SIGKILL"); } catch { /* already gone */ }
+      await stopFixtureProcess(reviewer);
     }
   }
 });
@@ -1331,7 +1332,7 @@ test("restart recovery accepts a conclusive Codex artifact without process ident
     });
   } finally {
     if (reviewer.pid) {
-      try { process.kill(reviewer.pid, "SIGKILL"); } catch { /* already gone */ }
+      await stopFixtureProcess(reviewer);
     }
   }
 });

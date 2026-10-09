@@ -1,3 +1,5 @@
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureProcess, stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -47,14 +49,16 @@ test("resident worker exits when its Viewer parent is killed", async () => {
     env: { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state"), XDG_CONFIG_HOME: sandbox },
   });
   let workerPid: number | null = null;
+  let workerIdentity: ProcessIdentity | undefined;
   try {
     workerPid = await reportedWorkerPid(parent);
+    workerIdentity = captureProcessIdentity(workerPid);
     expect(exited(workerPid)).toBe(false);
     parent.kill("SIGKILL");
     await waitForExit(workerPid);
   } finally {
-    if (parent.pid && !exited(parent.pid)) parent.kill("SIGKILL");
-    if (workerPid && !exited(workerPid)) process.kill(workerPid, "SIGKILL");
+    if (workerIdentity) await stopFixtureIdentity(workerIdentity);
+    await stopFixtureProcess(parent);
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });
@@ -70,8 +74,10 @@ test("resident worker exits when a successor replaces its live Viewer", async ()
       LLV_STATE_DIR: path.join(sandbox, "state"), XDG_CONFIG_HOME: sandbox },
   });
   let workerPid: number | null = null;
+  let workerIdentity: ProcessIdentity | undefined;
   try {
     workerPid = await reportedWorkerPid(parent);
+    workerIdentity = captureProcessIdentity(workerPid);
     expect(exited(workerPid)).toBe(false);
     const replacement = path.join(sandbox, "replacement.json");
     fs.writeFileSync(replacement, JSON.stringify({ endpoint: "http://127.0.0.1:17991" }));
@@ -79,8 +85,8 @@ test("resident worker exits when a successor replaces its live Viewer", async ()
     await waitForExit(workerPid);
     expect(exited(parent.pid!)).toBe(false);
   } finally {
-    if (parent.pid && !exited(parent.pid)) parent.kill("SIGKILL");
-    if (workerPid && !exited(workerPid)) process.kill(workerPid, "SIGKILL");
+    if (workerIdentity) await stopFixtureIdentity(workerIdentity);
+    await stopFixtureProcess(parent);
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });

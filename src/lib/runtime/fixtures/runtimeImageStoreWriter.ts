@@ -1,3 +1,4 @@
+import { checkFixtureParent } from "@/lib/testing/fixtureLifetime";
 import fs from "node:fs";
 
 import { RuntimeImageStore } from "../runtimeImageStore";
@@ -11,7 +12,12 @@ const header = Buffer.from(
 );
 const data = Buffer.concat([header, Buffer.alloc(4 * 1024 * 1024, tag.charCodeAt(0))]);
 fs.writeFileSync(readyFile, "ready");
-while (!fs.existsSync(startFile)) Bun.sleepSync(2);
+const startDeadline = Date.now() + 30_000;
+while (!fs.existsSync(startFile)) {
+  checkFixtureParent();
+  if (Date.now() >= startDeadline) throw new Error("runtime image writer did not reach its start barrier within 30 seconds");
+  Bun.sleepSync(20);
+}
 
 try {
   new RuntimeImageStore(root, {

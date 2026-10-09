@@ -942,7 +942,11 @@
    until it is ready; a first open keeps the whole window so. */
 .kb .aw-reader > .reader-slot[data-incoming], .kb .agent-window-layer[data-agent-window-pending] { visibility: hidden; }
 .kb .aw-reader .reader-host, .kb .reader-park .reader-host { max-width: none; height: 100%; }
-.kb .agent-window .reader.conv, .kb .reader-park .reader.conv { max-height: none; height: 100%; border: 0; border-radius: 0; }
+.kb .agent-window .reader.conv, .kb .reader-park .reader.conv, .kb .reader-screen .reader.conv { max-height: none; height: 100%; border: 0; border-radius: 0; }
+/* On the phone a relay chat's conversation (RelayChats.tsx) opens full screen,
+   the agent window's reader with no list beside it. */
+.kb .reader-screen { position: fixed; inset: 0; z-index: 64; display: flex; background: var(--surface-card); }
+.kb .reader-screen > .reader-host { max-width: none; height: 100%; }
 /* A reader not on screen waits laid out at the window reader's size, off
    screen and not drawn, so it comes back with the layout it left with. */
 .kb .reader-park {

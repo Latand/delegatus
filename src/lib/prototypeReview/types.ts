@@ -91,6 +91,7 @@ export interface PrototypeReviewRead {
 }
 export interface PrototypeReviewReplica { summary: PrototypeReviewSummary; rounds: PrototypeRoundView[]; historyTruncated?: true }
 export interface PrototypeReviewSummary {
+  waitingDismissal?: { at: string; by: import("@/lib/attention/dismissalTypes").DismissedBy };
   latestReviewId: string;
   waitingReviewId: string | null;
   title: string;
