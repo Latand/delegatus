@@ -3423,6 +3423,10 @@ function completeSpentReview(pipeline: Pipeline, stage: PipelineStage, attempt: 
     Durable activation ancestry carries that return for fresh edges and grants. */
 function outerTerminalReviewReturn(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): { stageId: string; recheck: boolean } | null {
   let current: PipelineStageAttempt | undefined = attempt;
+  // A returning granted review settles its nested repairs. Look for outer
+  // obligations only after crossing that grant's root on the ancestry.
+  let fulfilledGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
+  if (fulfilledGrant?.stageId !== stage.id) fulfilledGrant = null;
   const settled = new Set([stage.id]);
   const visited = new Set<string>();
   while (current?.activatedBy) {
@@ -3431,7 +3435,9 @@ function outerTerminalReviewReturn(pipeline: Pipeline, stage: PipelineStage, att
     if (visited.has(key)) break;
     visited.add(key);
     const source = pipeline.stages.find(candidate => candidate.id === activation.stageId);
-    if (activation.edge === "fail" && source?.onFail && source.next === null && !settled.has(source.id)) {
+    if (activation.edge === "fail" && activation.stageId === fulfilledGrant?.stageId
+      && activation.attempt === fulfilledGrant.terminalAttempt) fulfilledGrant = null;
+    if (!fulfilledGrant && activation.edge === "fail" && source?.onFail && source.next === null && !settled.has(source.id)) {
       const grant = pipeline.reviewGrants?.find(candidate => candidate.stageId === source.id && candidate.terminalAttempt === activation.attempt);
       return { stageId: source.id, recheck: Boolean(activation.budgetSpent || grant && terminalGrantIsLastRound(pipeline, grant)) };
     }
