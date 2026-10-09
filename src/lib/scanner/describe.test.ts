@@ -1077,3 +1077,17 @@ test("a real linked sibling removed by git survives a fresh resolver process", (
   expect(result.status).toBe(0);
   expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identity.project, displayName: identity.displayName });
 });
+
+test("a path-recognized live checkout is recorded on its first observation", () => {
+  const state = useStateDirectory("pure-recognizer-first-observation");
+  const repo = path.join(SANDBOX, "pure-observation-repository");
+  const identity = createRepository(repo);
+  const checkout = path.join(repo, ".claude", "worktrees", "lane-14");
+  const cwd = path.join(checkout, "src");
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-14")}\n`);
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-14" });
+  fs.rmSync(checkout, { recursive: true });
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});

@@ -820,10 +820,13 @@ function projectInfoFromHandoffDigest(cwd: string): ProjectInfo | null {
     human label from that repository's canonical remote. */
 export function projectInfoFromCwd(cwd: string, requestedState?: string): ProjectInfo | null {
   if (!cwd.trim()) return null;
+  /* Observation records facts before any early return. Grouping still uses
+     the canonical pure recognizers first, followed by the live pointer. */
+  const liveWorktree = worktreeFromGitFile(cwd);
   const resolutionState = requestedState ?? projectResolutionStateKey();
   const cached = projectInfoCwdCache.get(cwd);
   if (cached && cached[0] > Date.now() && cached[1] === resolutionState
-    && (cached[2]?.worktree || !observeWorktreeResolution(cwd))) return cached[2];
+    && (cached[2]?.worktree || !liveWorktree)) return cached[2];
   const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, scratchpad]);
@@ -838,7 +841,7 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   let worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
-    (codexWorktree ? worktreeFromGitFile(cwd) ?? codexWorktree : worktreeFromGitFile(cwd));
+    (codexWorktree ? liveWorktree ?? codexWorktree : liveWorktree);
   if (!worktree && !hasGitMarker(cwd)) {
     /* An arbitrary-path worktree that has since been deleted: no live
        recognizer matched and its `.git` is gone, but a resolution we recorded
