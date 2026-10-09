@@ -1380,3 +1380,26 @@ function sessionReader(read: () => Promise<RuntimeSnapshot>): NonNullable<Runtim
       ?? state.sessions.find(row => row.artifactPath === identity.artifactPath) ?? null;
   };
 }
+
+test("a delivered image replay racing reseat admission wins over source capability refusal", async () => {
+  const { registry, conversation } = registryWithConversation("seat-source", "claude");
+  const intent = registry.commitMigrationIntent({ engine: "claude", targetId: "seat-active", origin: "manual",
+    requestId: "opt-out-delivered-image", expectedRevision: registry.engineRouting("claude").revision, scope: "all" });
+  registry.setMigrationIntentState(intent.id, "stopped", intent.revision);
+  const beforeIntents = registry.snapshot().migrationIntents;
+  const hold = registry.holdDeliveryOffLoop.bind(registry);
+  registry.holdDeliveryOffLoop = async (...args) => {
+    const raced = registry.holdDelivery(...args);
+    registry.recordDeliveryOutcome(raced.id, "delivered", null, "delivered");
+    return hold(...args);
+  };
+  const client = deliveredClient(conversation.id, () => { throw new Error("delivered replay reached source"); });
+  client.readSession = sessionReader(async () => snapshot(conversation.id, "claude"));
+  const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "delivered-image-race", text: "Already delivered image.",
+    imageRefs: [{ sha256: "f".repeat(64), mime: "image/png", bytes: 67 }] },
+  { enabled: () => true, client: () => client, registry: () => registry, kick: () => {}, progress: null });
+  expect(result).toMatchObject({ ok: true, outcome: "delivered" });
+  expect(registry.snapshot().migrationIntents).toEqual(beforeIntents);
+  expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{ state: "delivered" }]);
+});

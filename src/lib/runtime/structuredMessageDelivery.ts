@@ -1415,6 +1415,14 @@ export async function enqueueStructuredMessage(
         conversation = reseat.value;
       } else {
         reseatReservation = await admitDurably();
+        if (reseatReservation.state === "delivered") {
+          return deliveredReservationReplay(reseatReservation, idempotencyKey, conversation.id, false);
+        }
+        if (reseatReservation.state === "failed") {
+          return { ok: false, structured: true, outcome: "failed",
+            error: reseatReservation.error || "delivery target is unavailable", status: 409,
+            operationId: reseatReservation.command.operationId };
+        }
         conversation = registry.conversation(conversation.id)!;
       }
     } catch (error) {
