@@ -16,7 +16,7 @@ import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/v
 import type { DelegationView, SpeechLine, ToolCallView } from "@/lib/voiceCompanion/reducer";
 
 import { CompanionCharacter, type CharacterHandle } from "./CompanionCharacter";
-import { CompanionTranscript, transcriptLabels, transcriptRect, TRANSCRIPT_CSS } from "./CompanionTranscript";
+import { awaitsReport, CompanionTranscript, transcriptLabels, transcriptRect, TRANSCRIPT_CSS } from "./CompanionTranscript";
 import type { SessionTranscriptRecord } from "@/lib/voiceCompanion/transcriptRecord";
 import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
 
@@ -1073,16 +1073,18 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* Readable from the first conversation on: before it there is no record to open. */
   if ((connected || starting) && !sessionSeen) setSessionSeen(true);
   const readable = typeof adapter.transcript === "function" && sessionSeen;
-  /* Read as it opens and while the conversation lasts; once more after it ended, then it stands as it was. */
+  /* Read as it opens and while the conversation lasts. After it ended the record is read on only while a sent
+     request waits for its report, which the server still takes in; then it stands as it was. */
+  const waitingForReport = record !== null && awaitsReport(record);
   useEffect(() => {
     if (!reading || !adapter.transcript) return;
     let alive = true;
     const read = () => { adapter.transcript!().then((next) => { if (alive && next) setRecord(next); }).catch(() => undefined); };
     read();
-    if (!connected && !starting) return () => { alive = false; };
+    if (!connected && !starting && !waitingForReport) return () => { alive = false; };
     const timer = setInterval(read, 1_500);
     return () => { alive = false; clearInterval(timer); };
-  }, [reading, adapter, connected, starting]);
+  }, [reading, adapter, connected, starting, waitingForReport]);
   const phaseLabel = starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
   const failing = floaters.some((floater) => floater.kind === "notice" && floater.tone === "failure");
   const attention = stage === "awaiting-confirmation" || stage === "answered" || failing;

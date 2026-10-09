@@ -305,9 +305,10 @@ async function liveHarness() {
   storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
   const sent: string[] = [];
+  const reportList: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const admission = new CompanionAdmission(storage, {
     recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }),
-    send: async binding => { sent.push(binding.delivery.clientMessageId); return { status: "queued", operationId: `operation-${sent.length}` }; }, reports: () => [] });
+    send: async binding => { sent.push(binding.delivery.clientMessageId); return { status: "queued", operationId: `operation-${sent.length}` }; }, reports: () => reportList });
   const reads = new CompanionBoardReads({ tasks: () => ["project-a", "project-b"].map(project => ({ id: `task-${project}`, project, text: `Task of ${project}`, status: "open" })),
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => FAKE_KEY, timers: false, closeTimeoutMs: 20 });
@@ -373,7 +374,13 @@ async function liveHarness() {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
   };
   return {
-    storage, provider, sent, failing, propose, answer, service, trackStops: () => track.stops, tones,
+    storage, provider, sent, failing, propose, answer,
+    /** The orchestrator's report on the newest request sent, correlated the way the bridge correlates it. */
+    report(body: string, project = "project-a") {
+      const id = `report-${reportList.length + 1}`;
+      reportList.push({ id, key: id, seq: reportList.length + 1, at: "2026-10-09T00:00:00Z", class: "completed", body, project, correlatesDirective: sent[sent.length - 1],
+        origin: { kind: "manager", conversationId: `conversation_${project}`, role: "orchestrator" } });
+    }, service, trackStops: () => track.stops, tones,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -681,3 +688,31 @@ test("a tap on the character opens the whole conversation from the session recor
     expect(live.tones).toEqual([660, 990, 990, 660, 660, 990]);
   } finally { await unmountNow(); await live.release(); }
 });
+
+test("review: a transcript stays current when the orchestrator answers after the voice session ended", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    const grip = () => document.querySelector<HTMLElement>("[data-voice-companion] [data-grip]")!;
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    await live.propose(live.provider.sessions[0].id, "Review the plan");
+    expect(live.sent).toHaveLength(1);
+    await click(document.querySelector("[data-companion-end]"));
+    await pause(200);
+    await click(grip());
+    await pause();
+    const view = () => document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+    expect(view().querySelector("[data-transcript-answer]")).toBeNull();
+    const startsBefore = live.starts();
+    const providerSessions = live.provider.sessions.length;
+    live.report("The plan holds; two small notes.");
+    /* The adapter's observer reads the Viewer every two seconds once the voice is gone. */
+    await pause(4_500);
+    expect(view().querySelector("[data-transcript-answer]")?.textContent).toContain("The plan holds");
+    expect(view().querySelector("[data-transcript-answer] .vc-tr-copy")).toBeTruthy();
+    /* Still offline, and nothing was started or sent to the provider for it. */
+    expect(document.querySelector("[data-companion-talk]")).toBeTruthy();
+    expect([live.starts(), live.provider.sessions.length]).toEqual([startsBefore, providerSessions]);
+  } finally { await unmountNow(); await live.release(); }
+}, 20_000);

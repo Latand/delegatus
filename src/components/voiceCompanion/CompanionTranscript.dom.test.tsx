@@ -14,7 +14,7 @@ import { installOnboardingDom, settle } from "@/test-helpers/onboardingDom";
 installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
-const { CompanionTranscript, transcriptRows, TRANSCRIPT_CSS } = await import("./CompanionTranscript");
+const { awaitsReport, CompanionTranscript, transcriptRows, TRANSCRIPT_CSS } = await import("./CompanionTranscript");
 const { sampleTranscript } = await import("./transcriptSample.fixture");
 
 let mounted: { root: Root; host: HTMLDivElement } | null = null;
@@ -213,4 +213,12 @@ test("a record that reached its size limit says some content was not retained, i
   await act(async () => root.render(<CompanionTranscript record={{ ...sampleTranscript("en"), truncated: true }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
   await act(async () => settle());
   expect(host.querySelector("[data-transcript-body]")!.textContent).toContain(transcriptLabels("en").truncated);
+});
+
+test("a record waits for a report only while a queued or delivered request has no report beyond progress", () => {
+  const request = (status: string) => ({ id: "request-1", kind: "request" as const, atMs: 1_000, order: 1, data: { callId: "call-1", status, instruction: "Review the plan" } });
+  const report = (status: string, order: number) => ({ id: `report-${order}`, kind: "report" as const, atMs: 2_000, order, data: { status, text: "Checked", delivery: { callId: "call-1" } } });
+  const wait = (...entries: Parameters<typeof awaitsReport>[0]["entries"]) => awaitsReport({ entries, truncated: false });
+  expect([wait(request("queued")), wait(request("delivered")), wait(request("queued"), report("progress", 2))]).toEqual([true, true, true]);
+  expect([wait(request("queued"), report("result", 2)), wait(request("failed")), wait(request("refused")), wait(request("cancelled")), wait()]).toEqual([false, false, false, false, false]);
 });

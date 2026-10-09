@@ -84,6 +84,11 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
   return rows;
 }
 
+/** A sent request nothing has answered for yet. The server records its report whenever it arrives, the voice
+    session open or not, so a record that holds one is read again until the answer lands. */
+export const awaitsReport = (record: SessionTranscriptRecord): boolean =>
+  transcriptRows(record.entries).some((row) => row.kind === "request" && (row.stage === "queued" || row.stage === "delivered") && !row.answers.some((answer) => answer.status !== "progress"));
+
 export const clock = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
 /** A line that opens: one row with a chevron, the detail under it only while open. Closed by default. */
