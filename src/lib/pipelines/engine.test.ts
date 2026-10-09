@@ -24481,6 +24481,55 @@ test.each(["fail", "pass", "needs_decision"] as const)("spending a nested termin
   expect(pipeline.runs.find(run => run.stageId === "fix")!.attempts[1]!.verdict!.findings).toHaveLength(1);
 });
 
+test.each(["pass", "fail"] as const)("spending an inner budget returns to the default-three outer gate (outer verdict: %s)", async (outerVerdict) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix" }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, access: "read-only", role: { roleId: "reviewer" }, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const { pipeline } = await driveWithController(h, (stageId, n) => stageId === "fix"
+    || stageId === "critique" && (n === 1 || outerVerdict === "fail"));
+  const reviews = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(pipeline.stages.find(stage => stage.id === "critique")!.onFail!.maxRounds).toBe(3);
+  expect(reviews).toHaveLength(outerVerdict === "pass" ? 2 : 4);
+  expect(reviews[1]!.activatedBy).toEqual({ stageId: "fix", attempt: 2, edge: "pass" });
+  expect(reviews.at(-1)!.activatedBy?.budgetRecheck).toBe(outerVerdict === "fail" ? true : undefined);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.reviewBudgetSpent?.stageId).toBe(outerVerdict === "pass" ? "fix" : "critique");
+  expect(pipeline.stateDetail).toContain("budget spent:");
+  const { mergeEligible, sweepAutoMerge } = await import("@/lib/forge/autoMerge");
+  expect(mergeEligible(pipeline)).toBe(true);
+  for (const enabled of [false, true]) {
+    const live = structuredClone(pipeline);
+    let queued = false;
+    const writes: string[][] = [];
+    await sweepAutoMerge({
+      now: () => Date.parse(pipeline.closedAt!),
+      loadPipelines: () => [structuredClone(live)],
+      mutate: async (_id, change) => {
+        const changed = change(live);
+        if (live.merge?.state === "queued") queued = true;
+        return changed;
+      },
+      setting: () => ({ enabled, changedAt: pipeline.createdAt, changedBy: null }),
+      pullRequestOf: () => ({ repository: "acme/widgets", number: 1 }),
+      cachedState: () => null,
+      run: async args => args[0] === "pr" ? JSON.stringify({
+        state: "OPEN", headRefOid: live.lastPassedCommit, baseRefName: "main",
+        mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED",
+        statusCheckRollup: [{ __typename: "CheckRun", name: "required", status: "IN_PROGRESS", conclusion: null }],
+      }) : JSON.stringify(["required"]),
+      write: async args => { writes.push(args); return ""; },
+    });
+    expect(queued).toBe(enabled);
+    expect(live.merge?.state).toBe(enabled ? "waiting-checks" : undefined);
+    expect(writes).toEqual([]);
+  }
+});
+
 test.each([1, 2] as const)("stored outer grants settle their owed reviews after an inner budget is spent (%i rounds)", async (rounds) => {
   const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
   movingHeadPorts = h.ports;

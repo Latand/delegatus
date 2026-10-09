@@ -3433,7 +3433,7 @@ function outerTerminalReviewReturn(pipeline: Pipeline, stage: PipelineStage, att
     const source = pipeline.stages.find(candidate => candidate.id === activation.stageId);
     if (activation.edge === "fail" && source?.onFail && source.next === null && !settled.has(source.id)) {
       const grant = pipeline.reviewGrants?.find(candidate => candidate.stageId === source.id && candidate.terminalAttempt === activation.attempt);
-      if (activation.budgetSpent || grant) return { stageId: source.id, recheck: Boolean(activation.budgetSpent || grant && terminalGrantIsLastRound(pipeline, grant)) };
+      return { stageId: source.id, recheck: Boolean(activation.budgetSpent || grant && terminalGrantIsLastRound(pipeline, grant)) };
     }
     current = pipeline.runs.find(run => run.stageId === activation.stageId)?.attempts.find(candidate => candidate.n === activation.attempt && !candidate.historical);
     if (current?.state === "passed" || current?.verdict?.status === "fail" && terminalReviewBudgetSpent(current, true)) settled.add(activation.stageId);
