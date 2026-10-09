@@ -2943,6 +2943,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.railAria": "Оркестратор, {state}. Розгорнути",
   "orchPanel.seatCollapse": "Згорнути чат оркестратора (O)",
   "orchPanel.seatExpand": "Розгорнути чат оркестратора (O)",
+  "orchPanel.seatOpenWindow": "Відкрити у вікні агента",
   "orchPanel.seatFoldWord": "Згорнути",
   "orchPanel.seatUnfoldWord": "Розгорнути",
   "orchPanel.seatUnreadReply": "Нова відповідь",

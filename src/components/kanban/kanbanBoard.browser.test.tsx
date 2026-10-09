@@ -10272,6 +10272,181 @@ describe("the agent window: a click on the board opens the agent in one window, 
   }, 900_000);
 });
 
+describe("the orchestrator's expand button opens it in the agent window, like any agent", () => {
+  /* The `stages` scenario at 1440×900 and 1000×900 (the seat unfolded) and
+     1000×700 (the seat folded to its strip), in English and Ukrainian, light
+     and dark. One
+     run per face opens the build stage's agent and leaves its window, so an
+     agent is already open, then presses the seat's expand button: the window
+     shows the orchestrator, its list holds both agents with the orchestrator
+     named and framed as the seat names it, and the conversation's one
+     composer is in the window's reader while the seat holds none. Closing the
+     window from the reader's corner leaves the seat where and as it was, with
+     its composer, and hands the keyboard back to the button without a focus
+     ring. Gated as well: the button stands in the seat head's first row,
+     beside its icon buttons and as tall as they are. Frames go to ORCHESTRATOR_WINDOW_PNG_DIR,
+     the readings to evidence/orchestrator-agent-window/built.json. */
+  const BUILD = `${card("t-rounds")} .pb-pills [data-stage="build"]`;
+  const KEY = { build: "conversation_rounds-build", seat: "conversation_orchestrator" } as const;
+  const showing = (page: Page, key: string) => page.waitForFunction((wanted) => document.querySelector(`[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="${wanted}"]`) !== null, key, { timeout: 15_000 });
+  const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 350)))));
+  const read = (page: Page) => page.evaluate(() => {
+    const rect = (element: Element | null | undefined) => {
+      const box = element?.getBoundingClientRect();
+      return box ? { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) } : null;
+    };
+    const seat = document.querySelector<HTMLElement>("[data-kanban-seat]");
+    const head = seat?.querySelector<HTMLElement>("[data-seat-head]") ?? null;
+    const button = head?.querySelector<HTMLElement>("[data-seat-window]") ?? null;
+    const reader = document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]");
+    const active = document.activeElement as HTMLElement | null;
+    const drawn = (scope: Element | null | undefined) => [...(scope?.querySelectorAll<HTMLElement>("form textarea") ?? [])].filter((field) => field.getBoundingClientRect().width > 0).length;
+    return {
+      seat: rect(seat),
+      head: head?.dataset.seatHead ?? null,
+      headHeight: Math.round(head?.getBoundingClientRect().height ?? 0),
+      button: button ? {
+        box: rect(button),
+        label: button.getAttribute("aria-label"),
+        glyph: button.querySelector("svg")?.getAttribute("class") ?? null,
+        next: button.nextElementSibling?.hasAttribute("data-seat-collapse") ?? false,
+        /* In the head's first row, with the title. */
+        firstRow: (() => { const title = head?.querySelector(".seat-title"); return title ? Math.abs(button.getBoundingClientRect().top + button.getBoundingClientRect().height / 2 - (title.getBoundingClientRect().top + title.getBoundingClientRect().height / 2)) < 4 : false; })(),
+        focused: active === button,
+        ring: button.matches(":focus-visible"),
+      } : null,
+      /* The head's other icon buttons, the row the expand button joins. */
+      iconButtons: [...(head?.querySelectorAll<HTMLElement>(".icon-btn") ?? [])].filter((other) => other !== button).map((other) => rect(other)),
+      seatComposers: drawn(seat?.querySelector("[data-orchestrator-conversation]")),
+      window: rect(document.querySelector("[data-agent-window-frame]")),
+      /* The agent each composer's selected-context line names. */
+      badges: [...document.querySelectorAll<HTMLElement>("[data-selected-context]")].map((badge) => badge.textContent ?? ""),
+      shown: reader?.dataset.kanbanReader ?? null,
+      readerRole: reader?.dataset.role ?? null,
+      readerTitle: reader?.querySelector(".ch-title")?.textContent ?? null,
+      readerComposers: drawn(reader),
+      readerPlaceholder: reader?.querySelector("form textarea")?.getAttribute("placeholder") ?? null,
+      skeleton: reader?.closest(".reader-slot")?.querySelector('[role="status"][aria-busy="true"]') != null,
+      rows: [...document.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent]")].map((row) => ({ key: row.dataset.openAgent!, role: row.dataset.role ?? null, name: row.querySelector(".or-name")?.textContent ?? "", current: row.querySelector("[data-open-agent-jump]")?.getAttribute("aria-current") === "true" })),
+      pill: document.querySelector("[data-open-agents-pill] .pill-words")?.textContent ?? null,
+      cards: Object.fromEntries(["t-rounds", "t-export"].map((id) => [id, rect(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))])),
+    };
+  });
+
+  browserTest("the seat's expand button opens the orchestrator in the agent window and closing returns to the seat, at 1440 and 1000, en and uk, light and dark", async () => {
+    const pngDir = process.env.ORCHESTRATOR_WINDOW_PNG_DIR ?? "/var/tmp/llv-orchestrator-window-evidence";
+    const out = path.resolve(".artifacts/orchestrator-agent-window");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 900 }, { width: 1000, height: 700 }] as const) {
+            const label = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+            if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+            const fail = (message: string) => failures.push(`${label}: ${message}`);
+            const shot = (name: string, clip?: { x: number; y: number; width: number; height: number }) => page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`), ...(clip ? { clip } : {}) });
+            const title = translate(lang, "orchPanel.title");
+            try {
+              await page.waitForSelector("[data-kanban-seat] [data-seat-window]", { timeout: 30_000 });
+              await page.waitForSelector(`${BUILD} >> visible=true`, { timeout: 30_000 });
+              const steps: Record<string, unknown> = {};
+
+              /* Another agent is open: the build stage's, opened from its chip and left behind the pill. */
+              await page.locator(BUILD).click();
+              await showing(page, KEY.build);
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              /* Back to the seat: the chip's click scrolled the page down to the card. The fixture's
+                 attention toast sits over the seat's right edge (#1643), so it is dismissed first, as
+                 the operator would. */
+              await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
+              await page.locator("[data-attention-toast-dismiss]").click({ timeout: 5_000 }).catch(() => { /* No toast on this face. */ });
+              await page.mouse.move(viewport.width / 2, viewport.height - 4);
+              await settle(page);
+
+              const before = await read(page);
+              steps["01-seat"] = before;
+              await shot("01-board");
+              if (before.seat) await shot("01-seat-head", { x: Math.max(0, before.seat.x - 8), y: Math.max(0, before.seat.y - 8), width: Math.min(viewport.width - Math.max(0, before.seat.x - 8), before.seat.width + 16), height: Math.min(96, viewport.height) });
+              const expectedHead = viewport.height < 800 ? "strip" : "full";
+              if (before.head !== expectedHead) fail(`the seat's head is «${before.head}», «${expectedHead}» expected in a ${viewport.height} px window`);
+              if (!before.button) fail("no expand button in the seat's head");
+              else {
+                if (before.button.label !== translate(lang, "orchPanel.seatOpenWindow")) fail(`the button reads «${before.button.label}»`);
+                if (!before.button.glyph?.includes("lucide-maximize")) fail(`the button wears «${before.button.glyph}»`);
+                if (!before.button.next) fail("the button does not stand right before the fold");
+                if (!before.button.firstRow) fail("the button left the head's first row");
+                for (const other of before.iconButtons) {
+                  if (other && before.button.box && (other.height !== before.button.box.height || other.y !== before.button.box.y)) fail(`the button (${JSON.stringify(before.button.box)}) is out of the head's icon row (${JSON.stringify(other)})`);
+                }
+              }
+              if (before.pill === null) fail("the build agent is not open behind the pill");
+              if (!before.badges.length) fail("no composer names the agent the operator selected before the window opens");
+              if (expectedHead === "full" && before.seatComposers !== 1) fail(`the seat shows ${before.seatComposers} composers before the window opens`);
+
+              await page.locator("[data-kanban-seat] [data-seat-window]").click();
+              await showing(page, KEY.seat);
+              await page.mouse.move(viewport.width / 2, viewport.height / 2);
+              await settle(page);
+              const open = await read(page);
+              steps["02-window"] = open;
+              await shot("02-window");
+              if (open.shown !== KEY.seat) fail(`the window shows ${open.shown}`);
+              if (open.skeleton) fail("the window shows the orchestrator as a skeleton");
+              if (open.readerRole !== "orchestrator") fail(`the reader wears the ${open.readerRole} role`);
+              if (open.readerTitle !== title) fail(`the reader is titled «${open.readerTitle}»`);
+              if (open.rows.map((row) => row.key).join(",") !== [KEY.build, KEY.seat].join(",")) fail(`the window lists ${open.rows.map((row) => row.key).join(",")}`);
+              const row = open.rows.find((entry) => entry.key === KEY.seat);
+              if (!row?.current || row.role !== "orchestrator" || row.name !== title) fail(`the orchestrator's row reads ${JSON.stringify(row)}`);
+              if (open.readerComposers !== 1) fail(`the window's reader shows ${open.readerComposers} composers`);
+              if (open.seatComposers !== 0) fail(`the seat under the window still shows ${open.seatComposers} composers`);
+              /* The orchestrator's composer never points at the orchestrator, and the selection stays where it was. */
+              if (open.badges.some((text) => text.includes(title))) fail(`a composer in the window names the orchestrator: ${JSON.stringify(open.badges)}`);
+              if (JSON.stringify(open.badges) !== JSON.stringify(before.badges)) fail(`the selected context changed with the window open: ${JSON.stringify(before.badges)} → ${JSON.stringify(open.badges)}`);
+              const placeholder = translate(lang, "composer.placeholderOrchestrator", { project: "atlas" });
+              if (open.readerPlaceholder !== placeholder) fail(`the window's composer says «${open.readerPlaceholder}», the seat's «${placeholder}»`);
+              for (const [id, box] of Object.entries(open.cards)) if (JSON.stringify(box) !== JSON.stringify(before.cards[id])) fail(`card ${id} moved under the window: ${JSON.stringify(before.cards[id])} → ${JSON.stringify(box)}`);
+
+              await page.locator(`[data-agent-window] [data-reader-close="${KEY.seat}"]`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              await page.mouse.move(viewport.width / 2, viewport.height - 4);
+              await settle(page);
+              const closed = await read(page);
+              steps["03-closed"] = closed;
+              await shot("03-closed");
+              if (JSON.stringify(closed.seat) !== JSON.stringify(before.seat)) fail(`the seat moved: ${JSON.stringify(before.seat)} → ${JSON.stringify(closed.seat)}`);
+              if (closed.head !== before.head) fail(`the seat's head came back «${closed.head}»`);
+              if (closed.seatComposers !== before.seatComposers) fail(`the seat shows ${closed.seatComposers} composers after the window, ${before.seatComposers} before`);
+              if (JSON.stringify(closed.badges) !== JSON.stringify(before.badges)) fail(`the selected context changed with the window: ${JSON.stringify(before.badges)} → ${JSON.stringify(closed.badges)}`);
+              if (!closed.button?.focused) fail("closing the window did not hand the keyboard back to the expand button");
+              if (closed.button?.ring) fail("a mouse close drew a focus ring on the expand button");
+              if (!/2/.test(closed.pill ?? "")) fail(`the pill reads «${closed.pill}», both agents stay open`);
+              for (const [id, box] of Object.entries(closed.cards)) if (JSON.stringify(box) !== JSON.stringify(before.cards[id])) fail(`card ${id} moved: ${JSON.stringify(before.cards[id])} → ${JSON.stringify(box)}`);
+              if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+              readings[label] = steps;
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/orchestrator-agent-window", { recursive: true });
+    fs.writeFileSync("evidence/orchestrator-agent-window/built.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dragged wider, one inset per container", () => {
   /*
    * Over the fixture's `agent-report` scenario, where the orchestrator has

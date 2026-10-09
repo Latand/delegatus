@@ -409,6 +409,15 @@
           "titled": true
         },
         {
+          "name": "Open in the agent window",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Collapse the orchestrator chat (O)",
           "button": true,
           "visibleText": 23,
@@ -425,7 +434,7 @@
     "768-uk-top": {
       "root": {
         "width": 494,
-        "height": 116
+        "height": 152
       },
       "atoms": [
         {
@@ -574,6 +583,15 @@
         },
         {
           "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Відкрити у вікні агента",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -773,6 +791,15 @@
           "titled": true
         },
         {
+          "name": "Open in the agent window",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Collapse the orchestrator chat (O)",
           "button": true,
           "visibleText": 23,
@@ -956,6 +983,15 @@
         },
         {
           "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Відкрити у вікні агента",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -1155,6 +1191,15 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
           "visibleText": 50,
@@ -1338,6 +1383,15 @@
         },
         {
           "name": "Закріпити збоку",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Відкрити у вікні агента",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -1537,6 +1591,15 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
           "visibleText": 50,
@@ -1728,6 +1791,15 @@
           "titled": true
         },
         {
+          "name": "Open in the agent window",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Collapse the orchestrator chat (O)",
           "button": true,
           "visibleText": 23,
@@ -1893,6 +1965,15 @@
         },
         {
           "name": "Dock at the top",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Open in the agent window",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
@@ -2092,6 +2173,15 @@
           "titled": true
         },
         {
+          "name": "Відкрити у вікні агента",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
           "name": "Згорнути чат оркестратора (O)",
           "button": true,
           "visibleText": 50,
@@ -2257,6 +2347,15 @@
         },
         {
           "name": "Закріпити зверху",
+          "button": true,
+          "visibleText": 0,
+          "naturalText": 0,
+          "clipped": false,
+          "truncated": false,
+          "titled": true
+        },
+        {
+          "name": "Відкрити у вікні агента",
           "button": true,
           "visibleText": 0,
           "naturalText": 0,
