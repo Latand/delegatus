@@ -706,7 +706,7 @@ export class RuntimeJournal {
 
   private nativeCommandAtAdmission(command: RuntimeOperationCommand, operationId: string): NativeQueueCommand | null {
     if (command.kind === "native-queue") return { ...command, operationId };
-    if (command.kind !== "send" || command.policy !== "queue") return null;
+    if (command.kind !== "send" || command.policy !== "queue" || command.onlyIfIdle) return null;
     const session = this.entity<RuntimeSession>("session", command.conversationId);
     if (!session?.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
     return { kind: "native-queue", action: "add", conversationId: command.conversationId, operationId,
@@ -959,6 +959,17 @@ export class RuntimeJournal {
           || (previous.status !== "delivering" && this.retirementInProgress(command.conversationId))) {
           status = "failed";
           details = { ...details, reason: "idle-retirement-deferred" };
+        }
+      }
+      if (status === "delivering" && command.kind === "send" && command.onlyIfIdle) {
+        const session = this.entity<RuntimeSession>("session", command.conversationId);
+        if (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
+          || this.retirementBlocked(command.conversationId, operationId)
+          || this.retirementInProgress(command.conversationId)) {
+          status = "failed";
+          // Only an unclaimed effect proves that host execution never began.
+          const unclaimed = previous.status === "pending" || previous.status === "queued";
+          details = { ...details, reason: unclaimed ? "idle-continuation-pre-execution-refused" : "idle-continuation-cancelled" };
         }
       }
       const queueing = status === "queued"
@@ -2057,6 +2068,7 @@ export class RuntimeJournal {
     if (command.operationId !== undefined && (!command.operationId.trim() || command.operationId.includes(":") || /\s/.test(command.operationId))) throw new Error("operationId is invalid");
     if (Buffer.byteLength(JSON.stringify(command)) > 256 * 1024) throw new Error("runtime operation exceeds 256 KiB");
     if (command.kind === "send" || command.kind === "steer") {
+      if (command.onlyIfIdle !== undefined) parseRuntimeCommand(command.kind, command);
       if (!command.text.trim() && !command.images?.length) throw new Error("message content is required");
       if (!command.contentDigest) throw new Error("message content digest is required");
     }
@@ -2151,6 +2163,11 @@ export class RuntimeJournal {
     if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
       status = "rejected";
       reason = "idle-retirement-in-progress";
+    } else if (command.kind === "send" && command.onlyIfIdle
+      && (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
+        || this.retirementBlocked(command.conversationId))) {
+      status = "rejected";
+      reason = "idle-continuation-cancelled";
     } else if (command.kind === "native-queue") {
       turnId = command.turnId ?? null;
       if (!this.structuredHosts || !session || session.host !== "hosted") {
@@ -2364,13 +2381,14 @@ export class RuntimeJournal {
 
   /** Keyed, durable work evidence; the eight displayed receipts cannot prove
       an empty queue. Unknown outcomes also retain their work obligation. */
-  private retirementBlocked(conversationId: string): boolean {
-    const operation = this.db.query<{ present: number }, [string]>(`
+  private retirementBlocked(conversationId: string, excludeOperationId: string | null = null): boolean {
+    const operation = this.db.query<{ present: number }, [string, string | null, string | null]>(`
       SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND (? IS NULL OR operation_id <> ?)
         AND json_extract(request_json, '$.kind') <> 'kill'
         AND json_extract(receipt_json, '$.status') IN ('pending', 'queued', 'delivering', 'applying', 'uncertain')
       LIMIT 1
-    `).get(conversationId);
+    `).get(conversationId, excludeOperationId, excludeOperationId);
     if (operation) return true;
     return !!this.db.query<{ present: number }, [string]>(`
       SELECT 1 AS present FROM native_queue_entries WHERE conversation_id = ?
