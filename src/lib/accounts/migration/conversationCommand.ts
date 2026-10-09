@@ -77,6 +77,11 @@ async function settleAfterCommit(work: () => unknown): Promise<void> {
 }
 
 const deliveryPort = createMigrationDeliveryPort();
+
+/** A switch write the registry lock refused: nothing changed, and asking again is safe. */
+function registryBusy(what: string): ConversationMigrationCommandResult {
+  return { status: 503, body: { error: `the delivery record's write lock is busy; ${what}`, retryable: true } };
+}
 const IN_FLIGHT_PHASES = new Set(["requested", "waiting-turn", "preparing", "successor-starting", "verifying"]);
 
 export async function applyConversationMigration(
@@ -287,7 +292,11 @@ export async function applyConversationMigration(
     /* #1846: messages a failed account switch held go out on the account the conversation runs on. */
     const registry = registryForCommand();
     if (!registry.conversation(conversationId)) return { status: 404, body: { error: "viewer conversation is unknown" } };
-    const { released, conversation } = registry.releaseSwitchHold(conversationId);
+    const written = await registry.deliveryWrite({ label: "delivery.release-switch-hold",
+      operationId: command.requestOperationId ?? registry.switchHold(conversationId)?.operationId ?? null },
+      () => registry.releaseSwitchHold(conversationId));
+    if (!written.acquired) return registryBusy("the switch hold and its messages remain held");
+    const { released, conversation } = written.value;
     await settleAfterCommit(() => (dependencies.kick ?? kickStructuredDeliveryQueue)());
     return { status: 200, body: { keepCurrent: released ? "released" : "nothing-held", conversation } };
   }
@@ -302,7 +311,11 @@ export async function applyConversationMigration(
     const registry = registryForCommand();
     let cancelled;
     try {
-      cancelled = registry.cancelConversationSwitch(conversationId, command.expectedRevision as number);
+      /* Off the loop (docs/design/delivery-progress-and-drain.md, C2). */
+      const written = await registry.deliveryWrite({ label: "migration.cancel" },
+        () => registry.cancelConversationSwitch(conversationId, command.expectedRevision as number));
+      if (!written.acquired) return registryBusy("nothing was cancelled");
+      cancelled = written.value;
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.includes("revision")) return { status: 409, body: { error: "migration revision is stale", code: "MIGRATION_STALE" } };
@@ -319,7 +332,10 @@ export async function applyConversationMigration(
   if (command.action === "rollback") {
     try {
       const registry = registryForCommand();
-      const conversation = registry.rollbackConversationMigration(conversationId, command.expectedRevision);
+      const written = await registry.deliveryWrite({ label: "migration.rollback" },
+        () => registry.rollbackConversationMigration(conversationId, command.expectedRevision));
+      if (!written.acquired) return registryBusy("nothing was rolled back");
+      const conversation = written.value;
       await drainHeldDeliveries(conversation.id, dependencies.deliveryPort ?? deliveryPort, registry);
       return { status: 200, body: conversation as unknown as Record<string, unknown> };
     } catch (error) {
@@ -342,7 +358,9 @@ export async function applyConversationMigration(
         && migration.errorCode === "codex-fork-outcome-unknown") {
         await authorizeForkRetry(migration.operationId, failed.id);
       }
-      registry.retryConversationMigration(conversationId, command.expectedRevision);
+      const written = await registry.deliveryWrite({ label: "migration.retry", operationId: migration.operationId },
+        () => registry.retryConversationMigration(conversationId, command.expectedRevision as number));
+      if (!written.acquired) return registryBusy("the switch was not retried");
       const conversation = await advanceConversationMigration(conversationId, registry, providerForCommand());
       if (conversation.migration?.phase === "committed") await drainHeldDeliveries(conversation.id, deliveryPort, registry);
       return { status: 200, body: conversation as unknown as Record<string, unknown> };

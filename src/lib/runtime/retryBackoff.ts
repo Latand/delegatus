@@ -6,8 +6,12 @@ export class RetryBackoff {
   ready(now = Date.now()): boolean { return now >= this.nextAt; }
 
   fail(now = Date.now()): void {
-    this.nextAt = now + Math.min(30_000, 1_000 * 2 ** Math.min(this.failures++, 5));
+    this.nextAt = now + this.nextDelayMs();
+    this.failures += 1;
   }
 
   reset(): void { this.failures = 0; this.nextAt = 0; }
+
+  /** The wait the next {@link fail} sets. */
+  nextDelayMs(): number { return Math.min(30_000, 1_000 * 2 ** Math.min(this.failures, 5)); }
 }

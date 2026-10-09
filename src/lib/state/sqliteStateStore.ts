@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { recordBlockingWait } from "@/lib/blockingWaits";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -1903,8 +1904,11 @@ export class SqliteStateCollection<T> {
   private acquireLeaseSync(): string {
     const db = connectDatabase(this.filename);
     const ownerToken = crypto.randomUUID();
+    const startedAt = performance.now();
+    let attempts = 0;
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+        attempts = attempt;
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
         if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
@@ -1913,7 +1917,12 @@ export class SqliteStateCollection<T> {
       throw new FileTransactionBusyError(this.options.busyMessage);
     } finally {
       db.close();
+      if (attempts > 0) this.noteLeaseWait(performance.now() - startedAt, true);
     }
+  }
+
+  private noteLeaseWait(durationMs: number, synchronous: boolean): void {
+    recordBlockingWait({ site: "state-lease", durationMs, synchronous, subject: this.options.collection });
   }
 
   /** #1766: the wait for the lease is bounded in time, not only in attempts, so
@@ -1924,8 +1933,11 @@ export class SqliteStateCollection<T> {
     const db = connectDatabase(this.filename);
     const ownerToken = crypto.randomUUID();
     const deadline = waitMs === undefined ? null : Date.now() + Math.max(0, waitMs);
+    const startedAt = performance.now();
+    let attempts = 0;
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+        attempts = attempt;
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
         if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         if (deadline !== null && Date.now() >= deadline) break;
@@ -1935,6 +1947,7 @@ export class SqliteStateCollection<T> {
       throw new FileTransactionBusyError(this.options.busyMessage);
     } finally {
       db.close();
+      if (attempts > 0) this.noteLeaseWait(performance.now() - startedAt, false);
     }
   }
 

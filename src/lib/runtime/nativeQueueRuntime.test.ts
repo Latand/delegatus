@@ -1,13 +1,14 @@
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import type { EngineHost } from "./engineHost";
-import type { RuntimeHostClient } from "./client";
+import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
 import { parseRuntimeCommand } from "./commands";
 import { handleNativeQueue } from "./nativeQueueHttp";
@@ -698,4 +699,524 @@ test.each(["add", "start", "send-now"] as const)("persistent drain holds authent
       await queued().drain(); expect(f.calls).toHaveLength(2);
     }
   } finally { setCallerConversationResolverForTests(null); releaseDrain(drainFile(), "native-drain"); f.journal.close(); }
+});
+
+/* docs/design/delivery-progress-and-drain.md, P18 and P25 (A6, A8, C3). */
+test("a native entry's record shows the switch it follows, the successor it waits for and an unreadable health, then dispatching before its write and awaiting-turn once acknowledged; the entry is added once", async () => {
+  const f = fixture();
+  const add = command("op-native-notes");
+  f.journal.executeOperation(add);
+  const notes: string[] = [];
+  const note = (reason: string) => { notes.push(reason); };
+  const successor = { ...binding, accountId: "account-b" };
+  const executorWith = (port: Partial<ConstructorParameters<typeof NativeQueueExecutor>[0]>) =>
+    new NativeQueueExecutor({ client: f.client, resolveHost: () => f.host, binding: () => binding, ...port });
+  expect(await executorWith({ succession: () => ({ status: "pending" }) }).execute(add, undefined, note)).toBe(false);
+  expect(await executorWith({ succession: () => ({ status: "committed", binding: successor }), resolveHost: () => null, binding: () => successor })
+    .execute(add, undefined, note)).toBe(false);
+  const unreadableHost = { ...f.host, health: async () => { throw new Error("health unreadable"); } } as unknown as EngineHost;
+  expect(await executorWith({ succession: () => ({ status: "committed", binding: successor }), resolveHost: () => unreadableHost, binding: () => successor })
+    .execute(add, undefined, note)).toBe(false);
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  await f.executor.execute(add, undefined, note);
+  expect(notes).toEqual(["switching-accounts", "awaiting-host", "evidence-unreadable", "dispatching", "awaiting-turn"]);
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  f.journal.close();
+});
+
+test("a native entry whose journal status cannot be read records why it waits", async () => {
+  const f = fixture();
+  const add = command("op-native-unreadable");
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async () => { throw new Error("journal status unavailable"); },
+    progress,
+    nativeQueueExecute: async () => { throw new Error("nothing may run without a readable status"); },
+  }, () => f.host);
+  await queue.drain().catch(() => {});
+  expect(progress.get(add.operationId)).toMatchObject({ waitReason: "evidence-unreadable", detail: "delivery journal status is unavailable", terminal: null });
+  f.journal.close();
+});
+
+test("a native entry whose journal status read has not answered shows that step and its stall within the bound, and is added once when it answers", async () => {
+  const f = fixture();
+  const add = command("op-native-status-hangs");
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  let answer!: () => void;
+  let reads = 0;
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async (operationId) => {
+      reads += 1;
+      if (reads === 1) await new Promise<void>((resolve) => { answer = resolve; });
+      return f.journal.operationResult(operationId)?.receipt ?? null;
+    },
+    progress,
+    nativeQueueExecute: (effect, refusal, note) => f.executor.execute(effect as never, refusal, note),
+  }, () => f.host, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  const draining = queue.drain();
+  for (let attempt = 0; attempt < 200 && !answer; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  clock += 5_000;
+  await queue.tick();
+  const waiting = progress.get(add.operationId)!;
+  expect(waiting).toMatchObject({ waitReason: "checking", detail: "reading the delivery journal status", terminal: null });
+  expect(typeof waiting.stalledSince).toBe("string");
+  expect(clock - Date.parse(waiting.phaseSince)).toBeLessThanOrEqual(10_000);
+  answer();
+  await draining;
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  f.journal.close();
+});
+
+test("the executor's own status read, after the queue's answered, shows that step and its stall within the bound, and the entry is added once when it answers", async () => {
+  const f = fixture();
+  const add = command("op-native-executor-status-hangs");
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  let answer!: () => void;
+  const hanging = { ...f.client, operationStatus: async (operationId: string) => {
+    await new Promise<void>((resolve) => { answer = resolve; });
+    return f.journal.operationResult(operationId);
+  } } as RuntimeHostClient;
+  const executor = new NativeQueueExecutor({ client: hanging, resolveHost: () => f.host, binding: () => binding });
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async (operationId) => f.journal.operationResult(operationId)?.receipt ?? null,
+    progress,
+    nativeQueueExecute: (effect, refusal, note, step) => executor.execute(effect as never, refusal, note, step),
+  }, () => f.host, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  const draining = queue.drain();
+  for (let attempt = 0; attempt < 200 && !answer; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof answer).toBe("function");
+  clock += 5_000;
+  await queue.tick();
+  const waiting = progress.get(add.operationId)!;
+  expect(waiting).toMatchObject({ waitReason: "checking", detail: "reading the delivery journal status", terminal: null });
+  expect(typeof waiting.stalledSince).toBe("string");
+  expect(clock - Date.parse(waiting.phaseSince)).toBeLessThanOrEqual(10_000);
+  answer();
+  await draining;
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  expect(progress.get(add.operationId)).toMatchObject({ waitReason: "awaiting-turn" });
+  f.journal.close();
+});
+
+function handOffFixture(name: string) {
+  const f = fixture();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-handoff-${name}-`));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  return { f, root, registry, cleanup: () => { f.journal.close(); fs.rmSync(root, { recursive: true, force: true }); } };
+}
+function handOff(key: string, text = "queued for Codex") {
+  return new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+    body: JSON.stringify({ kind: "native-queue", conversationId, idempotencyKey: key, action: "add", text, binding }) });
+}
+
+test("a Queue-for-Codex hand-off whose reply is lost is owned and recorded from before its command, a replay answers the same operation, and Codex's queue receives one add", async () => {
+  const { f, registry, cleanup } = handOffFixture("lost-reply");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  let lose = true;
+  const seen: { row: boolean; record: boolean; operationId: string | undefined }[] = [];
+  const client = {
+    ...f.client,
+    command: async (c: NativeQueueCommand) => {
+      const owners = Object.values(registry.snapshot().deliveryOperationOwners);
+      seen.push({ row: owners.some((owner) => owner.command.operationId === c.operationId), record: Boolean(c.operationId && progress.get(c.operationId)), operationId: c.operationId });
+      const result = f.journal.executeOperation(c);
+      if (lose) { lose = false; throw new RuntimeHostUnavailableError("runtime host is unavailable"); }
+      return result;
+    },
+  } as RuntimeHostClient;
+  const dependencies = { client: () => client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  try {
+    const lost = await handleNativeQueue(handOff("handoff-lost"), dependencies as never);
+    expect(lost.status).toBe(503);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ row: true, record: true });
+    const operationId = seen[0]!.operationId!;
+    expect(registry.snapshot().deliveryOperationOwners[operationId]).toMatchObject({ directAdmission: "native-queue-add", clientMessageId: "handoff-lost", terminalState: null });
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "handoff-lost", waitReason: "evidence-unreadable", attempt: 1, terminal: null });
+    expect(progress.get(operationId)!.deadlineAt).not.toBeNull();
+
+    const replay = await handleNativeQueue(handOff("handoff-lost"), dependencies as never);
+    expect(replay.status).toBe(202);
+    expect((await replay.json()).operationId).toBe(operationId);
+    expect(seen.map((call) => call.operationId)).toEqual([operationId, operationId]);
+    await f.executor.execute(f.journal.effectBatch(100).find((effect) => effect.kind === "runtime.native-queue")!.payload as never);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+
+    /* Past its deadline with the journal unreadable, the sweep ends the
+       hand-off's own row, and its record keeps the ending. */
+    const { settleDueSends } = await import("./sendSettlement");
+    const unreadable = { ...client, operationStatus: async () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); } } as RuntimeHostClient;
+    await settleDueSends({ registry, client: unreadable, progress, readMs: 200, now: () => Date.now() + 2 * 60 * 60_000 });
+    expect(registry.snapshot().deliveryOperationOwners[operationId]?.terminalState).not.toBeNull();
+    expect(progress.get(operationId)?.terminal).not.toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
+test("a key first admitted before this build adopts the journal's operation, and a replay whose row has ended sends nothing and answers from the journal", async () => {
+  const { f, registry, cleanup } = handOffFixture("adopt");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  let commands = 0;
+  const client = { ...f.client, command: async (c: NativeQueueCommand) => { commands += 1; return f.journal.executeOperation(c); } } as RuntimeHostClient;
+  const dependencies = { client: () => client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  try {
+    /* Older code admitted it straight into the journal, which minted the id. */
+    const older = f.journal.executeOperation(parseRuntimeCommand("native-queue", { kind: "native-queue", conversationId,
+      idempotencyKey: "handoff-older", action: "add", text: "queued for Codex", binding }) as NativeQueueCommand);
+    const adopted = await handleNativeQueue(handOff("handoff-older"), dependencies as never);
+    expect(adopted.status).toBe(202);
+    expect((await adopted.json()).operationId).toBe(older.operationId);
+    expect(registry.snapshot().deliveryOperationOwners[older.operationId]).toMatchObject({ directAdmission: "native-queue-add", clientMessageId: "handoff-older", terminalState: null });
+    expect(progress.get(older.operationId)).toMatchObject({ originalKey: "handoff-older", terminal: null });
+    const own = Object.entries(registry.snapshot().deliveryOperationOwners)
+      .filter(([id, owner]) => owner.clientMessageId === "handoff-older" && id !== older.operationId);
+    expect(own.map(([, owner]) => owner)).toMatchObject([{ terminalState: "failed", terminalDisposition: "lost" }]);
+
+    /* A row the settlement ended is never sent again. */
+    const fresh = await handleNativeQueue(handOff("handoff-ended", "ended before its reply"), dependencies as never);
+    const freshOperation = (await fresh.json()).operationId as string;
+    registry.settleDirectAdmission(freshOperation, "failed", "settled at its deadline", "unverified");
+    const before = commands;
+    const replay = await handleNativeQueue(handOff("handoff-ended", "ended before its reply"), dependencies as never);
+    expect(commands).toBe(before);
+    expect(replay.status).toBe(202);
+    expect((await replay.json()).operationId).toBe(freshOperation);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hand-off whose acknowledgement is lost after Codex already holds the entry keeps the executor's phase and clocks, and the entry is added once", async () => {
+  const { f, registry, cleanup } = handOffFixture("late-failed-ack");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  let kicks = 0;
+  const client = {
+    ...f.client,
+    command: async (c: NativeQueueCommand) => {
+      f.journal.executeOperation(c);
+      /* The queue lists it and the executor hands it to Codex before the reply comes back. */
+      const effect = f.journal.effectBatch(100).find((candidate) => candidate.kind === "runtime.native-queue")!;
+      await f.executor.execute(effect.payload as never, undefined, (reason, detail) => {
+        progress.note(c.operationId!, conversationId, { waitReason: reason, detail: detail ?? null, progressed: true });
+      });
+      setSystemTime(new Date(Date.now() + 5_000));
+      throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    },
+  } as RuntimeHostClient;
+  const dependencies = { client: () => client, enabled: () => true, kick: () => { kicks += 1; }, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  try {
+    const lost = await handleNativeQueue(handOff("late-failed-ack"), dependencies as never);
+    expect(lost.status).toBe(503);
+    const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "late-failed-ack")!.command.operationId;
+    const record = progress.get(operationId)!;
+    expect(record).toMatchObject({ waitReason: "awaiting-turn", attempt: 0, terminal: null });
+    expect(Date.parse(record.lastProgressAt)).toBeLessThan(Date.now() - 4_000);
+    expect(kicks).toBe(1);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  } finally {
+    setSystemTime();
+    cleanup();
+  }
+});
+
+test("a replay of a hand-off the executor already acknowledged leaves the executor's phase, clocks and wake as they were, and the entry is added once", async () => {
+  const { f, registry, cleanup } = handOffFixture("replay-acknowledged");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const dependencies = { client: () => f.client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  try {
+    const first = await handleNativeQueue(handOff("replay-acknowledged"), dependencies as never);
+    expect(first.status).toBe(202);
+    const operationId = (await first.json()).operationId as string;
+    const effect = f.journal.effectBatch(100).find((candidate) => candidate.kind === "runtime.native-queue")!;
+    await f.executor.execute(effect.payload as never, undefined, (reason, detail) => {
+      progress.note(operationId, conversationId, { waitReason: reason, detail: detail ?? null, progressed: true });
+    });
+    const acknowledged = structuredClone(progress.get(operationId)!);
+    expect(acknowledged).toMatchObject({ waitReason: "awaiting-turn", terminal: null });
+    setSystemTime(new Date(Date.now() + 5_000));
+    const replay = await handleNativeQueue(handOff("replay-acknowledged"), dependencies as never);
+    expect(replay.status).toBe(202);
+    expect((await replay.json()).operationId).toBe(operationId);
+    const after = progress.get(operationId)!;
+    expect(after).toMatchObject({ waitReason: "awaiting-turn", terminal: null });
+    expect(after.phaseSince).toBe(acknowledged.phaseSince);
+    expect(after.lastProgressAt).toBe(acknowledged.lastProgressAt);
+    expect(after.nextWakeAt).toBe(acknowledged.nextWakeAt);
+    expect(after.stalledSince).toBe(acknowledged.stalledSince);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  } finally {
+    setSystemTime();
+    cleanup();
+  }
+});
+
+test("a hand-off whose supplied operation id names another key's owner is refused and leaves that owner, its record and its entry as they were", async () => {
+  const { f, registry, cleanup } = handOffFixture("collision");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  let commands = 0;
+  const client = { ...f.client, command: async (c: NativeQueueCommand) => { commands += 1; return f.journal.executeOperation(c); } } as RuntimeHostClient;
+  const dependencies = { client: () => client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  const named = (key: string, text: string, operationId: string, target = conversationId) =>
+    new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ kind: "native-queue", conversationId: target, idempotencyKey: key, action: "add", text, operationId, binding }) });
+  try {
+    const first = await handleNativeQueue(handOff("owner-a", "message A"), dependencies as never);
+    expect(first.status).toBe(202);
+    const a = (await first.json()).operationId as string;
+    const rowBefore = structuredClone(registry.snapshot().deliveryOperationOwners[a]);
+    const recordBefore = structuredClone(progress.get(a));
+    const before = commands;
+
+    for (const request of [
+      named("owner-b", "message B", a),
+      named("owner-b2", "message A", a),
+      named("owner-a", "message A", a, "conversation_other"),
+    ]) {
+      const refused = await handleNativeQueue(request, dependencies as never);
+      expect(refused.status).toBe(409);
+    }
+    expect(commands).toBe(before);
+    expect(registry.snapshot().deliveryOperationOwners[a]).toEqual(rowBefore);
+    expect(progress.get(a)).toEqual(recordBefore);
+    expect(f.journal.operationResult(a)?.receipt.status).toBe("queued");
+    await f.executor.execute(f.journal.effectBatch(100).find((effect) => effect.kind === "runtime.native-queue")!.payload as never);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+
+    /* An owner that has ended is not answered for another key either. */
+    registry.settleDirectAdmission(a, "failed", "settled at its deadline", "unverified");
+    const ended = await handleNativeQueue(named("owner-c", "message C", a), dependencies as never);
+    expect(ended.status).toBe(409);
+    expect(registry.snapshot().deliveryOperationOwners[a]).toMatchObject({ clientMessageId: "owner-a", terminalDisposition: "unverified" });
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hand-off during a switch holds neither the switch nor the message", async () => {
+  const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-switch-"));
+  try {
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    registry.reconcileConversations([{ engine: "codex", path: "/handoff-switch.jsonl", accountId: "a",
+      launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }), turn: { state: "idle", source: "empty", terminalAt: null },
+      observedAt: "2026-07-10T12:00:00.000Z" }]);
+    const conversation = registry.conversationForPath("/handoff-switch.jsonl")!;
+    registry.commitMigrationIntent({ engine: "codex", targetId: "b", origin: "manual", requestId: "handoff-switch", expectedRevision: registry.engineRouting("codex").revision });
+    const row = registry.recordDirectAdmission({ handOff: { conversationId: conversation.id, clientMessageId: "handoff-during-switch",
+      command: { operationId: "", kind: "send", policy: "queue" }, text: "queued during the switch", contentDigest: null,
+      evidenceText: "queued during the switch", evidenceImageCount: 0 } })!;
+    expect(row).toMatchObject({ directAdmission: "native-queue-add", terminalState: null });
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+    let created = 0;
+    const committed = await advanceConversationMigration(conversation.id, registry, {
+      virtualSource: true,
+      async create(input) {
+        created += 1;
+        return { operationId: input.operationId, nativeId: "handoff-successor", path: "/handoff-successor.jsonl", continuityPaths: [],
+          historyHash: "hash", host: { kind: "codex-app-server", identity: "host", epoch: 1, verifiedAt: "2026-07-10T12:01:00.000Z" } };
+      },
+      async verify() {},
+    });
+    expect(created).toBe(1);
+    expect(committed.migration).toMatchObject({ phase: "committed" });
+    expect(registry.snapshot().deliveryOperationOwners[row.command.operationId]).toMatchObject({ terminalState: null });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a native entry's settlement waits for the lock off the loop, a hand-off settles its own row, and a refused settle is left for the sweep", async () => {
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  const { settleNativeQueueEntry } = await import("./nativeQueueSettlement");
+  const made = sqliteRegistryFixture("llv-native-settle", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const conversation = registry.ensureConversation("codex", "/native-settle.jsonl", "a");
+    const held = registry.holdDelivery(conversation.id, "converted send", "native-settle-send", "text", [], null, { operationId: "native-settle-send", kind: "send", policy: "queue" });
+    registry.beginDeliveryAttempt(held.id, held.generationId!);
+    const handOffRow = registry.recordDirectAdmission({ handOff: { conversationId: conversation.id, clientMessageId: "native-settle-handoff",
+      command: { operationId: "native-settle-handoff", kind: "send", policy: "queue" }, text: "hand-off", contentDigest: null,
+      evidenceText: "hand-off", evidenceImageCount: 0 } })!;
+    resetBlockingWaitsForTests(() => {});
+    await holder.hold(100);
+    const { value: settled, gapMs } = await longestLoopGap(() => settleNativeQueueEntry(registry, { conversationId: conversation.id, entryId: "native-settle-send", state: "delivered" }));
+    expect(settled).toBe(true);
+    expect(gapMs).toBeLessThan(50);
+    expect(blockingWaitDiagnostics().longest.find((sample) => sample.label === "delivery.native-settle")).toMatchObject({ operationId: "native-settle-send", synchronous: false });
+    expect(registry.snapshot().deliveryOperationOwners["native-settle-send"]).toMatchObject({ terminalState: "delivered" });
+    expect(await settleNativeQueueEntry(registry, { conversationId: conversation.id, entryId: handOffRow.command.operationId, state: "delivered" })).toBe(true);
+    expect(registry.snapshot().deliveryOperationOwners[handOffRow.command.operationId]).toMatchObject({ terminalState: "delivered", terminalDisposition: "delivered" });
+    const second = registry.recordDirectAdmission({ handOff: { conversationId: conversation.id, clientMessageId: "native-settle-refused",
+      command: { operationId: "native-settle-refused", kind: "send", policy: "queue" }, text: "refused", contentDigest: null,
+      evidenceText: "refused", evidenceImageCount: 0 } })!;
+    await holder.hold(500);
+    expect(await settleNativeQueueEntry(registry, { conversationId: conversation.id, entryId: second.command.operationId, state: "delivered" })).toBe(false);
+    expect(registry.snapshot().deliveryOperationOwners[second.command.operationId]).toMatchObject({ terminalState: null });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});
+
+/* docs/design/delivery-progress-and-drain.md, P18 and P25 (A6, #1131): the
+   durable record ended an add that was never handed to Codex while the journal
+   was out of reach. The add's first actuation passes that fence like any
+   send's: no add follows, through a later executor too, and the ending stands. */
+test("a Queue-for-Codex add the durable record already ended is refused before any add, after a restart too, and its ended record stands", async () => {
+  const { f, registry, cleanup } = handOffFixture("settled-fence");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const { settleDueSends, sendIsSettled } = await import("./sendSettlement");
+  const progress = new DeliveryProgressStore(null);
+  let lose = true;
+  const client = {
+    ...f.client,
+    command: async (c: NativeQueueCommand) => {
+      const result = f.journal.executeOperation(c);
+      if (lose) { lose = false; throw new RuntimeHostUnavailableError("runtime host is unavailable"); }
+      return result;
+    },
+  } as RuntimeHostClient;
+  try {
+    const lost = await handleNativeQueue(handOff("handoff-settled"), { client: () => client, enabled: () => true, kick: () => {},
+      admitImages: () => ({ images: [], error: null }), storeImages: () => [], registry: () => registry, progress } as never);
+    expect(lost.status).toBe(503);
+    const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "handoff-settled")!.command.operationId;
+    const unreadable = { ...client, operationStatus: async () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); } } as RuntimeHostClient;
+    await settleDueSends({ registry, client: unreadable, progress, readMs: 200, now: () => Date.now() + 61 * 60_000 });
+    expect(sendIsSettled(registry.snapshot(), operationId)).toBe(true);
+    const ended = progress.get(operationId)!.terminal;
+    expect(ended).not.toBeNull();
+    const queue = () => new StructuredDeliveryQueue({
+      effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+      status: async (id) => f.journal.operationResult(id)?.receipt ?? null,
+      transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+      settled: (id) => sendIsSettled(registry.snapshot(), id),
+      progress,
+      nativeQueueExecute: (c, reason, note, step, settled) => f.executor.execute(c as never, reason, note, step, settled),
+    }, () => f.host);
+    await queue().drain();
+    await queue().drain();
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+    expect(f.journal.nativeQueueRead(conversationId).find((entry) => entry.entryId === operationId)?.state).toBe("refused");
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+    expect(progress.get(operationId)!.terminal).toEqual(ended);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a converted queue send's add waits on an unreadable settlement fence, then is refused once the record ended it; Codex's queue receives nothing", async () => {
+  const f = fixture();
+  const send = parseRuntimeCommand("send", { conversationId, operationId: "converted-fenced", idempotencyKey: "converted-fenced-key", text: "native owned", policy: "queue" });
+  f.journal.executeOperation(send);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  progress.note("converted-fenced", conversationId, { waitReason: "queued", originalKey: "converted-fenced-key" });
+  let fence: "unreadable" | boolean = "unreadable";
+  const queue = () => new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    status: async (id) => f.journal.operationResult(id)?.receipt ?? null,
+    transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+    settled: async () => { if (fence === "unreadable") throw new Error("registry is unreadable"); return fence; },
+    progress,
+    nativeQueueExecute: (c, reason, note, step, settled) => f.executor.execute(c as never, reason, note, step, settled),
+  }, () => f.host);
+  await queue().drain();
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  expect(progress.get("converted-fenced")).toMatchObject({ waitReason: "evidence-unreadable", detail: "durable delivery record is unavailable", terminal: null });
+  expect(f.journal.operationResult("converted-fenced")?.receipt.status).toBe("queued");
+  fence = true;
+  progress.settle("converted-fenced", "uncertain", "settled while the journal was unreachable");
+  await queue().drain();
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
+  expect(progress.get("converted-fenced")!.terminal).toMatchObject({ state: "uncertain" });
+  f.journal.close();
+});
+
+/* A6: the reads after a failed preparation are the entry's wait as much as
+   the normal path's, so one that hangs shows as that step and stalls. */
+test.each([
+  ["reading the delivery journal status", "status"],
+  ["reading the native queue journal", "journal"],
+] as const)("after a failed preparation, %s that has not answered shows that step and its stall within the bound, and nothing is added", async (detail, hang) => {
+  const f = fixture();
+  const add = command(`op-native-error-${hang}`);
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  let answer: (() => void) | undefined;
+  let statusReads = 0;
+  let journalReads = 0;
+  const hanging = {
+    ...f.client,
+    operationStatus: async (operationId: string) => {
+      statusReads += 1;
+      if (hang === "status" && statusReads === 2) await new Promise<void>((resolve) => { answer = resolve; });
+      return f.journal.operationResult(operationId);
+    },
+    nativeQueueRead: async (id: string) => {
+      journalReads += 1;
+      if (hang === "journal" && journalReads === 2) await new Promise<void>((resolve) => { answer = resolve; });
+      return f.journal.nativeQueueRead(id);
+    },
+  } as RuntimeHostClient;
+  const failing = { ...f.host, nativeQueue: { ...f.host.nativeQueue!, prepare: async () => { throw new Error("attachment unreadable"); } } } as unknown as EngineHost;
+  const executor = new NativeQueueExecutor({ client: hanging, resolveHost: () => failing, binding: () => binding });
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async (operationId) => f.journal.operationResult(operationId)?.receipt ?? null,
+    progress,
+    nativeQueueExecute: (effect, refusal, note, step) => executor.execute(effect as never, refusal, note, step),
+  }, () => failing, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  const draining = queue.drain();
+  for (let attempt = 0; attempt < 200 && !answer; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof answer).toBe("function");
+  clock += 5_000;
+  await queue.tick();
+  const waiting = progress.get(add.operationId)!;
+  expect(waiting).toMatchObject({ waitReason: "checking", detail, terminal: null });
+  expect(typeof waiting.stalledSince).toBe("string");
+  expect(clock - Date.parse(waiting.phaseSince)).toBeLessThanOrEqual(10_000);
+  answer!();
+  await draining;
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
+  f.journal.close();
 });
