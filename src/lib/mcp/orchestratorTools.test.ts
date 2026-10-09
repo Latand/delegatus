@@ -597,6 +597,23 @@ test("renamed-project receipt recovery still refuses a different authenticated r
   expect(posts).toHaveLength(1);
 });
 
+test("receiptless original-key lookup retains uncertainty after the project name changes", async () => {
+  seatActive("project-a", SEATED_ID, null);
+  const projects = [{ project: "project-a", displayName: "Example project" }];
+  const { posts, control } = controlStub();
+  const { service, receipts } = projectService(control, projects);
+  const args = { clientRequestId: "receiptless-name-recovery", project: "Example project", text: "status?" };
+  projects[0]!.displayName = "Renamed project";
+  expect(await service.callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true })).toMatchObject({
+    ok: false, code: "outcome_unknown", details: { outcome: "unknown", nextAction: "original-key-lookup" },
+  });
+  expect(receipts.lookup(`send_message_to_orchestrator:${args.clientRequestId}`)).toBeNull();
+  expect(posts).toEqual([]);
+  projects[0]!.displayName = "Example project";
+  expect((await service.callTool("send_message_to_orchestrator", args)).ok).toBe(true);
+  expect(posts).toHaveLength(1);
+});
+
 for (const tool of ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"] as const) {
   for (const changedName of ["renamed", "ambiguous"] as const) {
     for (const uncertain of [false, true]) test(`recorded ${uncertain ? "uncertain" : "settled"} ${tool} replays after its display name becomes ${changedName}`, async () => {

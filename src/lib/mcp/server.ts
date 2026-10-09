@@ -2871,15 +2871,19 @@ export function createMcpToolService(
             return unreadableReceipt(cause, false);
           }
           if (record) return recoverRecord(record);
-          try {
-            const fresh = await tool.bind(digestArgs);
-            if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
-            binding = { ...binding, ...fresh };
-          } catch (error) {
-            return failure(typedTool, requestId,
-              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-              error instanceof Error ? error.message : String(error), false, false,
-              error instanceof McpToolRefusal ? error.details : undefined);
+          // An absent lookup is no admission verdict: the original may still
+          // arrive. Resolve current names only when this call can admit work.
+          if (!recoveryOnly) {
+            try {
+              const fresh = await tool.bind(digestArgs);
+              if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+              binding = { ...binding, ...fresh };
+            } catch (error) {
+              return failure(typedTool, requestId,
+                error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof McpToolRefusal ? error.details : undefined);
+            }
           }
         }
         if (recoveryOnly) {
