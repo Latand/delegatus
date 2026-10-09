@@ -77,9 +77,12 @@ export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicat
   }>;
   decision?: Omit<PrototypeDecision, "delivery"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean } };
 }
+/** A read's round. Superseded rounds name the later decided round that retired
+    them; the mark is derived on read and never crosses to another installation. */
+export interface PrototypeRoundRead extends PrototypeRoundView { supersededBy?: string }
 export interface PrototypeReviewRead {
   taskId: string;
-  rounds: PrototypeRoundView[];
+  rounds: PrototypeRoundRead[];
   waitingReviewId: string | null;
   /** Replicated metadata has no local media and cannot be decided here. */
   unavailable?: "another-installation";

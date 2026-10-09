@@ -54,6 +54,7 @@ def ready(serving, target):
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=180):
     old, hosts = adapter.preflight()
+    started = utc()
     diagnostics = []
     serving = {}
     protected = []
@@ -102,11 +103,23 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
                 adapter.emit({"sample": index + 1, "serving": serving, "protected": protected})
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
+    # Read once the samples are over: the booting Viewer records its cuts
+    # before it re-hosts anything, long before the last sample. A list read
+    # with gaps names them in `interruptedUnreadable`; a list that could not be
+    # read at all is null. Either leaves the inventory unknown, which the seat
+    # has to look at, so the switch cannot pass on it.
+    try:
+        interrupted, unreadable = adapter.interrupted(started, hosts)
+    except Exception as error:
+        interrupted, unreadable = None, ["interrupted:" + type(error).__name__]
+        diagnostics.append(unreadable[0])
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
-    verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if "unknown" in outcomes else "pass"
+    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
+    verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
-              "protected": protected, "diagnostics": diagnostics}
+              "protected": protected, "interrupted": interrupted,
+              "interruptedUnreadable": unreadable, "diagnostics": diagnostics}
     adapter.last_result = result
     adapter.emit(result)
     return result
@@ -114,6 +127,181 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
 
 def utc():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def parse_time(value):
+    return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+OBLIGATION_STATES = {"owed", "submitted", "delivered", "discharged", "failed"}
+
+
+def text(value):
+    return isinstance(value, str) and bool(value)
+
+
+def count(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def obligation_flaw(record):
+    """The first field that keeps a record from naming the conversation it cut,
+    or None. The fields are the ones the Viewer itself requires before it acts
+    on a record, with the stage and checkpoint shapes the inventory reports."""
+    if record.get("version") != 1:
+        return "version"
+    for field in ["conversationId", "hostKey", "path"]:
+        if not text(record.get(field)):
+            return field
+    if record.get("engine") not in ["claude", "codex"]:
+        return "engine"
+    if record.get("reason") not in ["viewer-release", "viewer-restart"]:
+        return "reason"
+    if record.get("state") not in OBLIGATION_STATES:
+        return "state"
+    if not (record.get("resolution") is None or isinstance(record["resolution"], str)):
+        return "resolution"
+    stage = record.get("stage")
+    if stage is not None and not (isinstance(stage, dict) and text(stage.get("pipelineId"))
+                                  and (stage.get("stageId") is None or text(stage["stageId"]))
+                                  and (stage.get("attempt") is None or count(stage["attempt"]))):
+        return "stage"
+    checkpoint = record.get("checkpoint")
+    tasks = checkpoint.get("backgroundTasks", []) if isinstance(checkpoint, dict) else None
+    if not (isinstance(tasks, list) and all(text(task) for task in tasks)):
+        return "checkpoint"
+    return None
+
+
+PENDING_JOURNAL = "interruption-obligations.pending.jsonl"
+# Inventory reads before the records are reported as still moving. An import
+# holds its claim for milliseconds, so a quiet read comes within a few.
+INVENTORY_ROUNDS = 5
+
+
+def read_journal(path, records, unreadable):
+    """Adds the records of one pending journal, each id once. A journal gone
+    by the read moved elsewhere; the round that read it says so by its places."""
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        unreadable.append(path.name + ":" + type(error).__name__)
+        return
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            record = None
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            unreadable.append(path.name + ":" + str(number))
+            continue
+        records.setdefault(record["id"], record)
+
+
+def file_identity(path):
+    try:
+        status = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return status.st_ino, status.st_size, status.st_mtime_ns
+
+
+def obligation_places(directory, pending):
+    """Every place a record can be, by what would change if one moved: the
+    pending journal and each import claim by file identity, the record
+    directory by its names. A rename, an append, a publication and a deleted
+    claim each change one of them."""
+    try:
+        beside = sorted(os.listdir(directory.parent))
+    except FileNotFoundError:
+        beside = []
+    claims = tuple((name, file_identity(directory.parent / name))
+                   for name in beside if name.startswith(PENDING_JOURNAL + ".claim-"))
+    names = tuple(sorted(os.listdir(directory))) if os.path.lexists(directory) else ()
+    return file_identity(pending), claims, names
+
+
+def read_obligations(directory, pending, claims):
+    journaled = {}
+    unreadable = []
+    read_journal(pending, journaled, unreadable)
+    for name in claims:
+        read_journal(directory.parent / name, journaled, unreadable)
+    records = {}
+    names = sorted(os.listdir(directory)) if os.path.lexists(directory) else []
+    for name in names:
+        if not (name.startswith("interruption-continuation-") and name.endswith(".json")):
+            continue
+        try:
+            record = json.loads((directory / name).read_text())
+        except (OSError, ValueError) as error:
+            unreadable.append(name + ":" + type(error).__name__)
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            unreadable.append(name + ":shape")
+            continue
+        records[record["id"]] = record
+    for identifier, record in journaled.items():
+        records.setdefault(identifier, record)
+    return records, unreadable
+
+
+def interrupted_conversations(state, since, hosts=()):
+    """The conversations whose turn this switch cut, as the Viewers recorded
+    them: an incumbent at release, the booting successor at restart, and the
+    records it could not read or that are too incomplete to name a
+    conversation. Each conversation names its pipeline stage when it ran one;
+    a stage the preflight protected names it from that capture when the record
+    does not. A state with no record directory recorded no cut.
+
+    A record can wait in the pending journal, and an import takes that journal
+    by renaming it to a claim beside it, writes its records into the
+    directory, returns the ones the directory refused to the journal and only
+    then deletes the claim. A later import takes over a claim one died holding
+    by renaming it to a claim of its own. A record can therefore move while it
+    is read, so a read counts only when every place it can be is unchanged
+    across it. A read that never finds them still is reported as unreadable,
+    which leaves the inventory unknown."""
+    directory = pathlib.Path(state) / "interruption-obligations"
+    pending = directory.with_name(PENDING_JOURNAL)
+    for round_number in range(INVENTORY_ROUNDS):
+        if round_number:
+            time.sleep(0.05 * round_number)
+        before = obligation_places(directory, pending)
+        records, unreadable = read_obligations(directory, pending, [name for name, _ in before[1]])
+        if obligation_places(directory, pending) == before:
+            break
+    else:
+        unreadable.append("interruption-obligations:moving")
+    unreadable = list(dict.fromkeys(unreadable))
+    boundary = parse_time(since)
+    protected = {host.get("conversationId"): host for host in hosts if host.get("conversationId")}
+    listed = []
+    for record in records.values():
+        try:
+            if parse_time(record["recordedAt"]) < boundary:
+                continue
+        except (KeyError, TypeError, ValueError, AttributeError):
+            unreadable.append(record["id"] + ":recordedAt")
+            continue
+        flaw = obligation_flaw(record)
+        if flaw:
+            unreadable.append(record["id"] + ":" + flaw)
+            continue
+        conversation = record["conversationId"]
+        stage = record.get("stage")
+        host = protected.get(conversation)
+        if not stage and host:
+            stage = {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
+        listed.append({"conversationId": conversation, "recordedAt": record["recordedAt"],
+                       "reason": record["reason"], "state": record["state"],
+                       "resolution": record.get("resolution"), "stage": stage or None,
+                       "backgroundTasks": record["checkpoint"].get("backgroundTasks", [])})
+    return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"])), unreadable
 
 
 def write_json(destination, body):
@@ -385,6 +573,9 @@ class Checkout:
 
     def process(self, entry):
         return read_process(entry, self.process_read)
+
+    def interrupted(self, since, hosts):
+        return interrupted_conversations(self.state, since, hosts)
 
     def head(self, directory):
         sha = self.command(["git", "rev-parse", "HEAD"], cwd=directory)

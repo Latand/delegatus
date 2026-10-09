@@ -845,11 +845,13 @@ function ChatIdentity({ file }: { file: FileEntry }) {
  *
  * Read off the live transcript path, as every other account surface reads it.
  * The legacy home is named too — «default» is the answer to that question, and
- * the runtime sheet answers it with the same word.
+ * the runtime sheet answers it with the same word. A conversation still
+ * starting has no transcript yet; its launch record names the account it was
+ * launched on, as the board's account chip reads it.
  */
 function ChatAccountTag({ file }: { file: FileEntry }) {
   const { t } = useLocale();
-  const account = accountIdFromPath(file.path);
+  const account = file.spawn?.accountId ?? accountIdFromPath(file.path);
   /* #1846: a pick waiting for the next message is named here too, in the frame the sheet names it, so
      the conversation says where the next message goes with the sheet closed. */
   const runtime = useRuntimeSessionForConversation(file.conversationId, file.path);

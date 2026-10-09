@@ -16164,6 +16164,521 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 });
 
 
+describe("seat tick switch: four stops in the seat header and the phone's seat row, dragged, stepped and clicked", () => {
+  /*
+   * The tick's switch (docs/design/seat-tick-slider.md, variant 4) in the two
+   * places it is mounted: the kanban seat's header at 1440×900 and the phone's
+   * seat sheet at 390×844 with a touch pointer, over `?scenario=seat-head&tick=driver`.
+   * The driver holds the tick's record and answers the settings route the way
+   * the module does (the reason it requires off the default, the expiry it
+   * clears), so every frame after a move is a read-back.
+   *
+   * In en and uk, light and dark: every state at rest (off, the three presets,
+   * 15 min and 12 h set in the settings, a temporary 10 min, 10 min with a
+   * stale tick), then a held drag and its release sampled frame by frame, a
+   * quick stroke to off, two arrow steps back to the default, and a press that does
+   * not move, which opens the settings. At 768 px, where the seat's row gives
+   * up the word, the thumb is a round knob. Under reduced motion the thumb has
+   * no travel to sample.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 LLV_SEAT_TICK_SWITCH_FRAMES=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "seat tick switch"
+   *
+   * Frames go to LLV_SEAT_TICK_SWITCH_FRAMES (default `.artifacts/seat-tick-switch/frames`);
+   * the readings go to `evidence/seat-tick-switch/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-tick-switch");
+  const EVIDENCE = path.resolve("evidence/seat-tick-switch");
+  const FRAMES = path.resolve(process.env.LLV_SEAT_TICK_SWITCH_FRAMES ?? ".artifacts/seat-tick-switch/frames");
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const gateway = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const REFUSAL = "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
+
+  interface Row { enabled: boolean; wakeIntervalMinutes: number | null; reason: string | null; until: string | null; checkedAgo: number }
+  const STORED = "Release week: wake more often until every lane has merged.";
+  const STATES: Record<string, () => Row> = {
+    off: () => ({ enabled: false, wakeIntervalMinutes: null, reason: STORED, until: null, checkedAgo: 2 }),
+    "4h": () => ({ enabled: true, wakeIntervalMinutes: 240, reason: STORED, until: null, checkedAgo: 2 }),
+    "1h": () => ({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null, checkedAgo: 2 }),
+    "10m": () => ({ enabled: true, wakeIntervalMinutes: 10, reason: STORED, until: null, checkedAgo: 2 }),
+    "15m": () => ({ enabled: true, wakeIntervalMinutes: 15, reason: STORED, until: null, checkedAgo: 2 }),
+    "12h": () => ({ enabled: true, wakeIntervalMinutes: 720, reason: STORED, until: null, checkedAgo: 2 }),
+    until: () => ({ enabled: true, wakeIntervalMinutes: 10, reason: STORED, until: new Date(Date.now() + 150 * 60_000).toISOString(), checkedAgo: 2 }),
+    stale: () => ({ enabled: true, wakeIntervalMinutes: 10, reason: STORED, until: null, checkedAgo: 41 }),
+  };
+  /** What each state must draw: the stop, the thumb's kind, the dot, and the thumb's word in en and uk. */
+  const EXPECTED: Record<string, { stop: string; thumb: string; dot: string; en: string; uk: string }> = {
+    off: { stop: "0", thumb: "preset", dot: "muted", en: "off", uk: "вимк." },
+    "4h": { stop: "1", thumb: "preset", dot: "ok", en: "4 h", uk: "4 год" },
+    "1h": { stop: "2", thumb: "preset", dot: "ok", en: "1 h", uk: "1 год" },
+    "10m": { stop: "3", thumb: "preset", dot: "ok", en: "10 min", uk: "10 хв" },
+    "15m": { stop: "custom", thumb: "custom", dot: "ok", en: "15 min", uk: "15 хв" },
+    "12h": { stop: "custom", thumb: "custom", dot: "ok", en: "12 h", uk: "12 год" },
+    until: { stop: "3", thumb: "preset", dot: "ok", en: "10 min", uk: "10 хв" },
+    stale: { stop: "3", thumb: "preset", dot: "warn", en: "10 min", uk: "10 хв" },
+  };
+
+  const READ = `() => {
+    const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+    if (!control) return null;
+    const box = el => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left * 10) / 10, y: Math.round(r.top * 10) / 10, w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 }; };
+    const thumb = control.querySelector("[data-seat-tick-thumb]");
+    const track = control.querySelector("[data-seat-tick-track]");
+    const face = control.querySelector("[data-seat-tick-face]");
+    const controls = control.closest("[data-orchestrator-controls]");
+    const row = control.closest("[data-seat-tick-row]");
+    const label = row ? row.querySelector('[data-mobile2-open="tick"] span:last-child') : null;
+    const tops = controls ? [...controls.children].map(el => Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2)) : [];
+    const edge = thumb.getBoundingClientRect();
+    /* A notch that is drawn at all, within 1 px of the thumb's edge or under it. */
+    const notchesTouching = [...control.querySelectorAll(".seat-tick-notch")].flatMap((notch, index) => {
+      const r = notch.getBoundingClientRect();
+      const opacity = Number(getComputedStyle(notch).opacity);
+      return opacity > 0.02 && r.right > edge.left - 1 && r.left < edge.right + 1 ? [index + ":" + opacity.toFixed(2)] : [];
+    });
+    return {
+      state: control.getAttribute("data-seat-tick-chip"),
+      stop: control.getAttribute("data-seat-tick-stop"),
+      mode: control.getAttribute("data-seat-tick-switch"),
+      now: control.getAttribute("aria-valuenow"),
+      valueText: control.getAttribute("aria-valuetext"),
+      expanded: control.getAttribute("aria-expanded"),
+      title: control.getAttribute("title"),
+      word: face ? face.textContent : null,
+      wordShown: face ? face.getClientRects().length > 0 : false,
+      thumbKind: thumb.getAttribute("data-seat-tick-thumb"),
+      dot: control.querySelector("[data-seat-tick-dot]").getAttribute("data-seat-tick-dot"),
+      dotInsideTrack: track.contains(control.querySelector("[data-seat-tick-dot]")),
+      until: control.querySelector("[data-seat-tick-until]") !== null,
+      control: box(control), track: box(track), thumb: box(thumb),
+      notchesTouching,
+      thumbInsideTrack: thumb.getBoundingClientRect().left >= track.getBoundingClientRect().left - 0.5 && thumb.getBoundingClientRect().right <= track.getBoundingClientRect().right + 0.5,
+      wordFits: face ? face.getBoundingClientRect().width <= thumb.getBoundingClientRect().width - 2 : true,
+      controlsOnOneRow: tops.length ? Math.max(...tops) - Math.min(...tops) <= 2 : null,
+      labelTruncated: label ? label.scrollWidth > label.clientWidth : null,
+      labelText: label ? label.textContent : null,
+      pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  }`;
+  /** Every animation frame's drawn thumb, in stops, from `start()` to `stop()`. */
+  const TRACE = `() => {
+    const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+    const trace = [];
+    let on = true;
+    const t0 = performance.now();
+    const tick = () => {
+      if (!on) return;
+      trace.push([Math.round(performance.now() - t0), Number(control.style.getPropertyValue("--tick-pos"))]);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    window.__tickMark = () => trace.length;
+    window.__tickTrace = () => { on = false; return trace; };
+  }`;
+  type Reading = { state: string; stop: string; mode: string; now: string; valueText: string; expanded: string; title: string; word: string | null; wordShown: boolean; thumbKind: string; dot: string; dotInsideTrack: boolean; until: boolean; notchesTouching: string[]; offTint?: { tint: number[]; pill: number[] }; ring?: { before: number[]; after: number[] }; control: { x: number; y: number; w: number; h: number }; track: { x: number; y: number; w: number; h: number }; thumb: { x: number; y: number; w: number; h: number }; thumbInsideTrack: boolean; wordFits: boolean; controlsOnOneRow: boolean | null; labelTruncated: boolean | null; labelText: string | null; pageOverflow: boolean };
+
+  /** A column of captioned crops on the page's own background, as one PNG. */
+  async function sheet(file: string, rows: Array<{ caption: string; png: Buffer }>, scheme: Scheme, captionWidth: number): Promise<void> {
+    const metas = await Promise.all(rows.map((row) => sharp(row.png).metadata()));
+    const gap = 16;
+    const width = captionWidth + Math.max(...metas.map((meta) => meta.width ?? 0)) + gap * 3;
+    const height = metas.reduce((sum, meta) => sum + (meta.height ?? 0) + gap, gap);
+    const ink = scheme === "dark" ? "#e8e6f0" : "#23202b";
+    const escape = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    let y = gap;
+    const layers: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
+    const captions: string[] = [];
+    rows.forEach((row, index) => {
+      const h = metas[index]!.height ?? 0;
+      captions.push(`<text x="${gap}" y="${y + h / 2 + 8}" font-family="DejaVu Sans, Noto Sans, sans-serif" font-size="24" font-weight="600" fill="${ink}">${escape(row.caption)}</text>`);
+      layers.push({ input: row.png, left: captionWidth + gap * 2, top: y });
+      y += h + gap;
+    });
+    layers.unshift({ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${captions.join("")}</svg>`), left: 0, top: 0 });
+    await sharp({ create: { width, height, channels: 4, background: scheme === "dark" ? "#14141c" : "#f3f0eb" } }).composite(layers).png({ compressionLevel: 9, palette: true }).toFile(file);
+  }
+
+  browserTest("every state, a drag with its release, a quick stroke, arrows and a click, at 1440 and 390 px in en and uk, light and dark", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.mkdirSync(FRAMES, { recursive: true });
+    let row: Row = STATES["1h"]!();
+    let writes: Array<Record<string, unknown>> = [];
+    const answerOf = (project: string) => {
+      const isDefault = row.enabled && row.wakeIntervalMinutes === null;
+      const updatedAt = isDefault && !row.reason ? null : ago(40);
+      return {
+        maintenance: {
+          enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+          updatedAt: null, setBy: null, live: null, lastRun: null, nextEligibleAt: null, nextRunAt: null, waitingOn: "off", pauseReason: null, runsError: null,
+        },
+        project, changed: false, at: new Date().toISOString(), actor: gateway,
+        settings: { project, enabled: row.enabled, wakeIntervalMinutes: row.wakeIntervalMinutes, reason: row.reason, monitorPrompt: null, until: row.until, updatedAt, setBy: updatedAt ? gateway : null },
+        effective: {
+          enabled: row.enabled, wakeIntervalMinutes: row.wakeIntervalMinutes ?? 60, reason: row.reason, monitorPrompt: null, until: row.until,
+          isDefault, configured: updatedAt !== null, lapsed: false, updatedAt,
+        },
+        defaults: { project, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null },
+        defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
+        policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+        state: { lastCheckAt: ago(row.checkedAgo), lastWakeAt: ago(38), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
+        stateError: null, lastRun: null, lastDelivery: { at: ago(38), outcome: "landed" }, journalError: null,
+      };
+    };
+    const server = await serveEvidenceFixture(OUT, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        const project = new URL(request.url).searchParams.get("project") ?? "atlas";
+        if (request.method !== "PUT") return Response.json(answerOf(project));
+        const change = await request.json() as Record<string, unknown>;
+        writes.push(change);
+        const next = { ...row };
+        if ("enabled" in change) next.enabled = change.enabled as boolean;
+        if ("wakeIntervalMinutes" in change) next.wakeIntervalMinutes = change.wakeIntervalMinutes as number | null;
+        if ("reason" in change) next.reason = change.reason as string | null;
+        if ("untilMinutes" in change) next.until = change.untilMinutes === null ? null : new Date(Date.now() + Number(change.untilMinutes) * 60_000).toISOString();
+        const isDefault = next.enabled && next.wakeIntervalMinutes === null;
+        if (!isDefault && !next.reason) return Response.json({ error: REFUSAL }, { status: 400 });
+        if (isDefault) next.until = null;
+        row = next;
+        return Response.json({ ...answerOf(String(change.project ?? project)), changed: true });
+      },
+      "/api/roles": {
+        revision: "fixture", health: "ok",
+        launchChoices: [{ engine: "claude", models: [{ id: "opus", label: "Opus", shortLabel: "Opus", use: "build", efforts: ["low", "medium", "high", "xhigh", "max"] }] }],
+        roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const must = (ok: boolean, text: string) => { if (!ok) failures.push(text); };
+    const CONTROL = '[role="slider"][data-seat-tick-switch]';
+    const read = (page: Page) => page.evaluate(`(${READ})()`) as Promise<Reading | null>;
+
+    /** The control drawn in its place, with the record read. */
+    async function open(width: number, lang: "en" | "uk", scheme: Scheme, state: string, motion: "no-preference" | "reduce" = "no-preference") {
+      row = STATES[state]!();
+      writes = [];
+      const phone = width < 640;
+      const fixture = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: phone ? 844 : 900 }, scheme, lang, motion, phone, 2);
+      const { page } = fixture;
+      await page.evaluate((value) => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
+      await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+      if (phone) {
+        await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+        await page.locator("[data-mobile2-open=seat]").first().click();
+        await page.waitForSelector(`[data-mobile2-sheet='seat'] [data-seat-tick-row] ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+      } else {
+        await page.waitForSelector(`[data-kanban-seat] ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+      }
+      await page.waitForTimeout(500);
+      return { ...fixture, phone, crop: phone ? "[data-mobile2-sheet='seat'] [data-seat-tick-row]" : "[data-kanban-seat] [data-orchestrator-controls]" };
+    }
+    const shot = (page: Page, selector: string) => page.locator(selector).first().screenshot();
+    /** One pixel's colour, averaged over the device pixels under a CSS pixel. */
+    const pixel = async (page: Page, x: number, y: number) => {
+      const { data, info } = await sharp(await page.screenshot({ clip: { x, y, width: 1, height: 1 } })).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const sum = [0, 0, 0];
+      for (let i = 0; i < data.length; i += 3) for (let c = 0; c < 3; c += 1) sum[c]! += data[i + c]!;
+      const n = info.width * info.height;
+      return sum.map((value) => Math.round(value / n)) as [number, number, number];
+    };
+    const centre = async (page: Page) => {
+      const box = (await page.locator(CONTROL).first().boundingBox())!;
+      return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+    };
+    /** One pointer for both surfaces: the mouse on the desktop, a finger on the phone. */
+    async function pointer(page: Page, phone: boolean) {
+      const cdp = phone ? await page.context().newCDPSession(page) : null;
+      const touch = (type: "touchStart" | "touchMove" | "touchEnd", points: Array<{ x: number; y: number }>) => cdp!.send("Input.dispatchTouchEvent", { type, touchPoints: points });
+      return {
+        down: (x: number, y: number) => (cdp ? touch("touchStart", [{ x, y }]) : page.mouse.move(x, y).then(() => page.mouse.down())),
+        move: (x: number, y: number) => (cdp ? touch("touchMove", [{ x, y }]) : page.mouse.move(x, y)),
+        up: () => (cdp ? touch("touchEnd", []) : page.mouse.up()),
+      };
+    }
+
+    try {
+      for (const width of [1440, 390] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const scheme of ["light", "dark"] as const) {
+            const key = `${width}-${lang}-${scheme}`;
+            const rest: Array<{ caption: string; png: Buffer }> = [];
+            const states: Record<string, Reading | null> = {};
+            try {
+              /* Every state at rest. */
+              for (const state of Object.keys(STATES)) {
+                const { context, page, pageErrors, phone, crop } = await open(width, lang, scheme, state);
+                try {
+                  const reading = await read(page);
+                  states[state] = reading;
+                  const want = EXPECTED[state]!;
+                  const tag = `${key} ${state}`;
+                  if (!reading) { failures.push(`${tag}: no switch was drawn`); continue; }
+                  must(reading.stop === want.stop && reading.thumbKind === want.thumb, `${tag}: stop ${reading.stop} / ${reading.thumbKind}, wanted ${want.stop} / ${want.thumb}`);
+                  must(reading.word === want[lang], `${tag}: the thumb says «${reading.word}», wanted «${want[lang]}»`);
+                  must(reading.dot === want.dot && !reading.dotInsideTrack, `${tag}: dot ${reading.dot}${reading.dotInsideTrack ? " inside the pill" : ""}, wanted ${want.dot} outside it`);
+                  must(reading.until === (state === "until"), `${tag}: hourglass ${reading.until ? "drawn" : "missing"}`);
+                  must(reading.thumbInsideTrack && reading.wordFits, `${tag}: the thumb leaves the pill or its word does not fit`);
+                  must(reading.notchesTouching.length === 0, `${tag}: notches ${reading.notchesTouching.join(", ")} touch the thumb`);
+                  if (state === "off") {
+                    /* The tint in the inset left of the thumb against the bare pill
+                       at its right end: off adds no hue, so it is no warmer. */
+                    const mid = reading.track.y + reading.track.h / 2 - 0.5;
+                    const tint = await pixel(page, reading.track.x + 1.5, mid);
+                    const pill = await pixel(page, reading.track.x + reading.track.w - 5, mid);
+                    must(tint[0] - tint[2] <= pill[0] - pill[2] + 1, `${tag}: the tint left of the off thumb is rgb(${tint.join(",")}), warmer than the pill's rgb(${pill.join(",")})`);
+                    reading.offTint = { tint, pill };
+                  }
+                  {
+                    /* The ring 1 px out from the thumb on either side: the tint
+                       reaches past the thumb's far edge, so the two match and
+                       no bare crescent shows beside it, the last stop included. */
+                    const mid = reading.thumb.y + reading.thumb.h / 2 - 0.5;
+                    const before = await pixel(page, reading.thumb.x - 1.5, mid);
+                    const after = await pixel(page, reading.thumb.x + reading.thumb.w + 0.5, mid);
+                    const seam = Math.max(...before.map((value, channel) => Math.abs(value - after[channel]!)));
+                    must(seam <= 4, `${tag}: the ring beside the thumb is rgb(${before.join(",")}) on its left and rgb(${after.join(",")}) on its right`);
+                    reading.ring = { before, after };
+                  }
+                  must(reading.control.h === (phone ? 36 : 24), `${tag}: the control is ${reading.control.h} px tall`);
+                  must(!reading.pageOverflow, `${tag}: the page scrolls sideways`);
+                  if (phone) must(reading.labelTruncated === false, `${tag}: the row's label «${reading.labelText}» is truncated`);
+                  else must(reading.controlsOnOneRow === true, `${tag}: the header's controls are not on one row`);
+                  must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+                  rest.push({ caption: state, png: await shot(page, crop) });
+                } finally {
+                  await context.close();
+                }
+              }
+              await sheet(path.join(FRAMES, `states-${key}.png`), rest, scheme, 110);
+
+              /* A held drag from the default toward 10 min, its release, a
+                 quick stroke to off, two arrows back, and a press that does not move. */
+              const { context, page, pageErrors, phone, crop } = await open(width, lang, scheme, "1h");
+              try {
+                const motion: Array<{ caption: string; png: Buffer }> = [];
+                const hand = await pointer(page, phone);
+                const at = await centre(page);
+                const stepPx = 20;
+                motion.push({ caption: "rest: 1 h", png: await shot(page, crop) });
+                await page.evaluate(`(${TRACE})()`);
+                await hand.down(at.x, at.y);
+                /* 0.6 of a stop in three quick moves, then held still: the thumb
+                   trails the pointer and swings softly past where it stopped. */
+                const reach = Math.round(stepPx * 0.6);
+                for (let step = 1; step <= 3; step += 1) await hand.move(at.x + Math.round((reach * step) / 3), at.y);
+                motion.push({ caption: "drag, on the way", png: await shot(page, crop) });
+                motion.push({ caption: "drag, just held", png: await shot(page, crop) });
+                await page.waitForTimeout(450);
+                const held = await read(page);
+                motion.push({ caption: "held at rest", png: await shot(page, crop) });
+                const released = await page.evaluate("window.__tickMark()") as number;
+                await hand.up();
+                for (const caption of ["release +1", "release +2", "release +3", "release +4"]) motion.push({ caption, png: await shot(page, crop) });
+                await page.waitForTimeout(700);
+                motion.push({ caption: "settled: 10 min", png: await shot(page, crop) });
+                const trace = await page.evaluate("window.__tickTrace()") as Array<[number, number]>;
+                const afterDrag = await read(page);
+                const dragWrites = [...writes];
+                const heldAt = Number(held?.now ?? "0");
+                /* The trace's two halves: up to the held position, then on to the stop. */
+                const peakHeld = Math.max(...trace.slice(0, released).map(([, pos]) => pos));
+                const peak = Math.max(...trace.map(([, pos]) => pos));
+                must(peakHeld > heldAt && peakHeld - heldAt < 0.25, `${key}: while held the thumb peaked at ${peakHeld} for a pointer at ${heldAt}, wanted a soft swing past it`);
+                must(peak - 3 < peakHeld - heldAt, `${key}: the release swings ${peak - 3} past its stop, more than the ${peakHeld - heldAt} it swung while held`);
+                must(held?.mode === "dragging" && heldAt > 2.4 && heldAt < 2.8, `${key}: the held drag reads ${held?.mode} at ${held?.now}`);
+                must(afterDrag?.stop === "3" && afterDrag.mode === "rest", `${key}: the release landed on ${afterDrag?.stop}`);
+                must(trace.filter(([, pos]) => pos > 2.02 && pos < 2.98).length >= 6, `${key}: the thumb jumped (${trace.length} samples)`);
+                must(peak > 3 && peak <= 3.08, `${key}: the release peaked at ${peak}, wanted a small overshoot past 3`);
+                must(trace[trace.length - 1]![1] === 3, `${key}: the thumb rested at ${trace[trace.length - 1]![1]}`);
+
+                /* A quick stroke to the left, released moving. It travels the whole
+                   way: a scripted pointer on a busy machine is not reliably faster
+                   than the flick speed, and the carry itself is held in the dom test. */
+                const from = await centre(page);
+                await hand.down(from.x, from.y);
+                for (let step = 1; step <= 4; step += 1) await hand.move(from.x - step * 16, from.y);
+                await hand.up();
+                await page.waitForTimeout(900);
+                const afterFlick = await read(page);
+                motion.push({ caption: "quick stroke left: off", png: await shot(page, crop) });
+                must(afterFlick?.stop === "0", `${key}: the stroke to the left landed on ${afterFlick?.stop}`);
+
+                /* Two arrows: one write, back to the default. */
+                await page.locator(CONTROL).first().focus();
+                await page.keyboard.press("ArrowRight");
+                await page.keyboard.press("ArrowRight");
+                await page.waitForTimeout(200);
+                const pendingStep = await read(page);
+                motion.push({ caption: "two arrows, pending", png: await shot(page, crop) });
+                await page.waitForTimeout(1_100);
+                const afterKeys = await read(page);
+                must(pendingStep?.mode === "pending" && pendingStep.now === "2", `${key}: the arrows read ${pendingStep?.mode} at ${pendingStep?.now}`);
+                must(afterKeys?.stop === "2" && afterKeys.mode === "rest", `${key}: the arrows landed on ${afterKeys?.stop}`);
+                const sent = [...writes];
+                const sentence = (en: string, uk: string) => (lang === "uk" ? uk : en);
+                const wanted = [
+                  { enabled: true, wakeIntervalMinutes: 10, untilMinutes: null, reason: sentence("The operator set the activity slider to «every 10 minutes».", "Оператор поставив повзунок активності на «кожні 10 хвилин».") },
+                  { enabled: false, untilMinutes: null, reason: sentence("Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.", "Вимкнено повзунком активності в шапці оркестратора. Лишається вимкненим, доки оператор не пересуне повзунок.") },
+                  { enabled: true, wakeIntervalMinutes: null, untilMinutes: null, reason: null },
+                ];
+                must(JSON.stringify(sent.map((change) => Object.fromEntries(Object.entries(change).filter(([name]) => name !== "project")))) === JSON.stringify(wanted), `${key}: the route was sent ${JSON.stringify(sent)}`);
+                must(dragWrites.length === 1, `${key}: the drag sent ${dragWrites.length} writes`);
+
+                /* A press that does not move opens the settings and writes nothing. */
+                const spot = await centre(page);
+                await hand.down(spot.x, spot.y);
+                await hand.move(spot.x + 2, spot.y);
+                await hand.up();
+                await page.waitForSelector(phone ? '[data-testid="mobile-seat-tick-sheet"]' : "[data-seat-tick-popover]", { timeout: 10_000 });
+                await page.waitForTimeout(500);
+                must(writes.length === sent.length, `${key}: the click wrote ${JSON.stringify(writes.slice(sent.length))}`);
+                must(await page.locator("[data-seat-tick-enabled]").count() === 1, `${key}: the settings did not open with their form`);
+                const whole = await page.screenshot(phone ? {} : { clip: { x: 760, y: 0, width: 680, height: 620 } });
+                await sharp(whole).resize({ width: phone ? 390 : 680 }).png({ compressionLevel: 9, palette: true }).toFile(path.join(FRAMES, `settings-${key}.png`));
+                await sheet(path.join(FRAMES, `motion-${key}.png`), motion, scheme, 290);
+                must(pageErrors.length === 0, `${key}: page errors ${pageErrors.join(" | ")}`);
+                readings[key] = {
+                  states,
+                  drag: { heldAt, peakWhileHeld: peakHeld, heldSwingPx: Math.round((peakHeld - heldAt) * stepPx * 100) / 100, releasePeak: peak, releaseOvershootPx: Math.round((peak - 3) * stepPx * 100) / 100, samples: trace.length, releasedAtSample: released, trace: trace.map(([at, pos]) => `${at}:${pos}`).join(" ") },
+                  writes: sent,
+                };
+              } finally {
+                await context.close();
+              }
+            } catch (error) {
+              failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            }
+          }
+        }
+      }
+
+      /* Where the row gives up the word, the thumb is a round knob: every
+         state, with no notch against it, then the drag on the short pill. */
+      for (const lang of ["en", "uk"] as const) {
+        const knobs: Array<{ caption: string; png: Buffer }> = [];
+        for (const state of Object.keys(STATES)) {
+          const { context, page, pageErrors, crop } = await open(768, lang, "light", state);
+          try {
+            const reading = await read(page);
+            const tag = `768-${lang} ${state}`;
+            must(reading !== null && !reading.wordShown && reading.thumb.w === 18, `${tag}: the thumb is ${reading?.thumb.w} px with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+            must(reading?.notchesTouching.length === 0, `${tag}: notches ${reading?.notchesTouching.join(", ")} touch the knob`);
+            must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            knobs.push({ caption: state, png: await shot(page, crop) });
+          } finally {
+            await context.close();
+          }
+        }
+        await sheet(path.join(FRAMES, `knob-768-${lang}-light.png`), knobs, "light", 110);
+        const { context, page, pageErrors } = await open(768, lang, "light", "10m");
+        try {
+          const reading = await read(page);
+          must(reading !== null && !reading.wordShown && reading.thumb.w === 18 && reading.thumb.h === 18, `768-${lang}: the thumb is ${reading?.thumb.w} × ${reading?.thumb.h} with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+          /* The knob on half the travel: 18 + 30 + 2 × 2 px of inset + the border, then the dot. */
+          must(reading?.track.w === 54 && reading.control.w === 66, `768-${lang}: the pill is ${reading?.track.w} px and the control ${reading?.control.w} px`);
+          /* The drag follows the pill that is drawn: 10 px a stop there. */
+          const at = await centre(page);
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.down();
+          await page.mouse.move(at.x - 11, at.y, { steps: 4 });
+          await page.waitForTimeout(250);
+          const dragged = await read(page);
+          await page.keyboard.press("Escape");
+          await page.mouse.up();
+          must(dragged?.now === "1.9", `768-${lang}: 11 px of drag on the short pill reads ${dragged?.now}, wanted 1.9`);
+          must(writes.length === 0, `768-${lang}: Escape still wrote ${JSON.stringify(writes)}`);
+          must(reading?.controlsOnOneRow === true && !reading.pageOverflow, `768-${lang}: the controls wrapped or the page scrolls`);
+          must(pageErrors.length === 0, `768-${lang}: page errors ${pageErrors.join(" | ")}`);
+          readings[`768-${lang}-knob`] = reading;
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The seat docked to the side at 1440: the row gives up the word there
+         too, and with an expiry the hourglass rides in the knob, so every
+         control of the row stays inside the seat — «Зупинити хост» was cut
+         by 9 px in uk when the hourglass stood beside the pill. */
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const side: Array<{ caption: string; png: Buffer }> = [];
+          for (const state of ["until", "stale", "15m"]) {
+            const { context, page, pageErrors } = await open(1440, lang, scheme, state);
+            const tag = `side-1440-${lang}-${scheme} ${state}`;
+            try {
+              await page.locator("[data-kanban-seat] [data-seat-placement]").click();
+              await page.waitForSelector(`[data-kanban-seat].side ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              const reading = await read(page);
+              const fit = await page.evaluate(() => {
+                const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+                const controls = document.querySelector("[data-kanban-seat] [data-orchestrator-controls]")!;
+                const head = document.querySelector("[data-kanban-seat] .seat-head") as HTMLElement;
+                const control = controls.querySelector('[role="slider"][data-seat-tick-switch]')!;
+                const glass = control.querySelector(".seat-tick-knob-until");
+                return {
+                  seatRight: Math.round(seat.right * 10) / 10,
+                  past: [...controls.children].flatMap((child) => {
+                    const right = child.getBoundingClientRect().right;
+                    return right > seat.right + 0.5 ? [`${(child.textContent ?? "").trim() || child.tagName} ${Math.round((right - seat.right) * 10) / 10} px`] : [];
+                  }),
+                  headOverflow: head.scrollWidth > head.clientWidth,
+                  outsideHourglass: control.querySelector("[data-seat-tick-until]")?.getClientRects().length ?? 0,
+                  knobHourglass: glass ? glass.getClientRects().length : 0,
+                };
+              });
+              must(reading !== null && !reading.wordShown && reading.thumb.w === 18, `${tag}: the thumb is ${reading?.thumb.w} px with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+              must(fit.past.length === 0, `${tag}: past the seat's right edge at ${fit.seatRight}: ${fit.past.join(", ")}`);
+              must(!fit.headOverflow, `${tag}: the seat's header scrolls sideways`);
+              must(reading?.controlsOnOneRow === true && !reading.pageOverflow, `${tag}: the controls wrapped or the page scrolls`);
+              must(fit.outsideHourglass === 0 && fit.knobHourglass === (state === "until" ? 1 : 0), `${tag}: hourglass beside the pill ${fit.outsideHourglass}, in the knob ${fit.knobHourglass}`);
+              must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+              readings[tag.replace(" ", "-")] = { ...fit, control: reading?.control, track: reading?.track, thumb: reading?.thumb };
+              side.push({ caption: state, png: await shot(page, "[data-kanban-seat] .seat-head") });
+            } catch (error) {
+              failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            } finally {
+              await context.close();
+            }
+          }
+          if (side.length) await sheet(path.join(FRAMES, `side-1440-${lang}-${scheme}.png`), side, scheme, 110);
+        }
+      }
+
+      /* Reduced motion: the thumb is where the pointer is, and on the stop the
+         frame after the release. Nothing travels, so nothing overshoots. */
+      {
+        const { context, page, pageErrors } = await open(1440, "en", "light", "1h", "reduce");
+        try {
+          const at = await centre(page);
+          await page.evaluate(`(${TRACE})()`);
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.down();
+          await page.mouse.move(at.x + 12, at.y, { steps: 3 });
+          await page.waitForTimeout(200);
+          await page.mouse.up();
+          await page.waitForTimeout(400);
+          const trace = await page.evaluate("window.__tickTrace()") as Array<[number, number]>;
+          const seen = [...new Set(trace.map(([, pos]) => pos))];
+          must(Math.max(...seen) === 3 && seen.every((pos) => [2, 2.2, 2.4, 2.6, 3].includes(pos)), `reduced motion: the thumb was drawn at ${seen.join(", ")}`);
+          must(pageErrors.length === 0, `reduced motion: page errors ${pageErrors.join(" | ")}`);
+          readings["1440-en-light-reduced-motion"] = { drawnAt: seen };
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ what: "The seat tick switch in the kanban seat header (1440×900) and the phone's seat sheet (390×844, touch): every state at rest, a held drag and its release sampled per animation frame (`trace` is milliseconds:drawn thumb position in stops), a quick stroke to off, two arrow steps and a click. Positions are in stops: 0 off, 1 every 4 h, 2 the default, 3 every 10 min.", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+
 describe("task motion and waiting reasons", () => {
   browserTest("states and reasons stay readable at 1440, 1280, 1024 and 390 px in en and uk", async () => {
     const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
@@ -19973,6 +20488,496 @@ describe("the board holds still under a scroll", () => {
   }, 120_000);
 });
 
+describe("creating a new agent: the composer alone, and the conversation after Send", () => {
+  /*
+   * docs/design/new-agent-redesign.md, variant 1 as built. The real Viewer over `?scenario=new-agent`, walked
+   * from the board's own button through the same moments at 1440x900, 1000x700 and a 390 phone, light and
+   * dark, en and uk: the empty form, the runtime pill open, the model and the account chosen, dictation in
+   * progress, the frame after Send, the frame after the launch answered, and the loaded conversation. On the
+   * desktop the same launch is walked from a task card's own «+ Agent». At every size, scheme and language a
+   * launch that carries a picture is walked too, to the frame after the launch answered. Six more states are
+   * drawn once, at 1440 in the light theme in English: a refused launch, a handoff draft, a handoff whose
+   * source's folder is on no record, a signed-out account, a Copilot account chosen in the pill and a launch
+   * of a picture with no words. The launch is the fixture's own: no agent starts.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> NEW_AGENT_TODAY=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
+   *
+   * The frames and the comparison sheets go to `NEW_AGENT_OUT`, outside the repository. `NEW_AGENT_TODAY`
+   * names the frames of the form this one replaced (`look0-<view>-<scheme>-<lang>-<state>.png`, shot by the
+   * design lane at the last commit that had it); given, each sheet puts them beside the built ones.
+   * `NEW_AGENT_ONLY` narrows a run while the form is being drawn: `views=desktop-1440;langs=en;schemes=light;passes=header`.
+   */
+  const OUT = process.env.NEW_AGENT_OUT ? path.resolve(process.env.NEW_AGENT_OUT) : null;
+  const TODAY = process.env.NEW_AGENT_TODAY ? path.resolve(process.env.NEW_AGENT_TODAY) : null;
+  const only = new Map((process.env.NEW_AGENT_ONLY ?? "").split(";").filter(Boolean).map((entry) => {
+    const [key, value] = entry.split("=");
+    return [key!, new Set((value ?? "").split(","))] as const;
+  }));
+  const wanted = (key: string, value: string) => !only.has(key) || only.get(key)!.has(value);
+  /* The strip the design lane's page printed above the application; cut off a frame of today's form. */
+  const TODAY_STRIP = 40;
+  const views = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-1000", width: 1000, height: 700, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const STATES = ["empty", "picker", "chosen", "dictation", "sent", "receipt", "loaded", "task-card-empty", "task-card-sent", "task-card-receipt", "task-card-loaded", "image-sent", "image-receipt"] as const;
+  /* Drawn once. */
+  const EXTRAS = ["refused", "handoff", "handoff-lost", "signed-out", "copilot", "image-only-sent", "image-only-receipt"] as const;
+  const EXTRA_PASSES = ["refused", "handoff", "handoff-lost", "signed-out", "copilot", "image-only"] as const;
+  const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#1f2430"/><text x="14" y="${height / 2 + size / 3}" font-family="sans-serif" font-weight="700" font-size="${size}" fill="#fff">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
+  );
+  /* One sheet: a block per caption, a row per state, today's frame then the built one, scaled to one height. */
+  const sheet = async (file: string, title: string, cell: number, blocks: { name: string; rows: { state: string; today: string | null; built: string }[] }[]) => {
+    const layers: { input: Buffer; left: number; top: number }[] = [];
+    let top = 64;
+    let widest = 0;
+    for (const block of blocks) {
+      const blockTop = top;
+      top += 40;
+      for (const row of block.rows) {
+        if (!fs.existsSync(row.built)) continue;
+        const built = await sharp(row.built).metadata();
+        const column = Math.round(cell * (built.width! / built.height!));
+        let left = 190;
+        layers.push({ input: await sharp(caption(row.state, 182, cell, 17)).png().toBuffer(), left: 0, top });
+        /* A moment today's form did not have (it had no pill to open) leaves its column empty. */
+        if (row.today && fs.existsSync(row.today)) {
+          const today = await sharp(row.today).metadata();
+          layers.push({ input: await sharp(row.today).extract({ left: 0, top: TODAY_STRIP, width: today.width!, height: today.height! - TODAY_STRIP }).resize({ height: cell }).png().toBuffer(), left, top });
+        }
+        left += column + 8;
+        layers.push({ input: await sharp(row.built).resize({ height: cell }).png().toBuffer(), left, top });
+        left += column + 8;
+        widest = Math.max(widest, left);
+        top += cell + 8;
+      }
+      layers.push({ input: await sharp(caption(block.name, 1600, 34, 18)).png().toBuffer(), left: 0, top: blockTop });
+      top += 16;
+    }
+    layers.push({ input: await sharp(caption(title, Math.max(widest, 1600), 56, 26)).png().toBuffer(), left: 0, top: 0 });
+    await sharp({ create: { width: Math.max(widest, 1600), height: top, channels: 3, background: "#8a8f99" } }).composite(layers).png().toFile(file);
+  };
+  const TYPED = { en: "Compare the two export screens and list what differs", uk: "Порівняй два екрани експорту й перелічи відмінності" } as const;
+  const SPOKEN = { en: "Read the README and tell me what this project is made of", uk: "Прочитай README і скажи, з чого складається цей проєкт" } as const;
+
+  browserTest("the form is the composer alone and the pane is the conversation after Send, at three sizes, in both themes and languages", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "new-agent-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: Record<string, unknown>[] = [];
+    const server = await serveEvidenceFixture(work);
+    /* The picture a launch carries: a small PNG, put in through the composer's own file input. */
+    const picture = path.join(work, "screen.png");
+    await sharp({ create: { width: 64, height: 48, channels: 3, background: "#3b82f6" } }).png().toFile(picture);
+    /* Dictation is recorded from the browser's own synthetic microphone. */
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+    try {
+      for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        if (!wanted("views", view.name) || !wanted("schemes", scheme) || !wanted("langs", lang)) continue;
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+        for (const pass of ["header", "task-card", "image", ...EXTRA_PASSES] as const) {
+          if (!wanted("passes", pass)) continue;
+          const extra = (EXTRA_PASSES as readonly string[]).includes(pass);
+          if (extra && (view.name !== "desktop-1440" || scheme !== "light" || lang !== "en")) continue;
+          /* A card's own «+ Agent» is on the desktop board; the phone opens a draft from its menu alone. */
+          if (pass === "task-card" && view.touch) continue;
+          const { width, height } = view;
+          const seeded = extra && pass !== "image-only";
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent${seeded ? `&naseed=${pass}` : ""}`, { width, height }, scheme, lang, "reduce", view.touch);
+          await context.grantPermissions(["microphone"]);
+          const label = (state: string) => `built-${view.name}-${scheme}-${lang}-${state}`;
+          const settle = async () => {
+            /* A tooltip follows the pointer and the focus a press left, and would lie over the frame. */
+            if (!view.touch) await page.mouse.move(0, 0);
+            await page.waitForTimeout(250);
+          };
+          /* The launches the page asked for; the fixture answers them itself and keeps what each one carried. */
+          const launches = () => page.evaluate(() => (window as unknown as { launchRun: { requests: Record<string, unknown>[] } }).launchRun.requests);
+          const shoot = (state: string) => page.screenshot({ path: path.join(out, `${label(state)}.png`) });
+          try {
+            await page.locator("[data-kanban-board] .card[data-id], [data-phone-card]").first().waitFor({ state: "attached", timeout: 30_000 });
+            /* An attention toast is another surface's and would lie over the draft; a tooltip is the pointer's. */
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            if (pass === "task-card") {
+              await page.locator("[data-add-agent]:visible").first().click();
+            } else if (pass === "handoff" || pass === "handoff-lost") {
+              /* The fixture restored this draft the way the product restores a tab's drafts. */
+            } else if (view.touch) {
+              await page.locator('[data-mobile2-open="menu"]').click();
+              await page.locator('[data-mobile2-menu-row="new-agent"]').click();
+            } else if (await page.locator("[data-new-agent]").isVisible()) {
+              await page.locator("[data-new-agent]").click();
+            } else {
+              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
+            }
+            const draft = page.locator("[data-draft-pane]:visible").first();
+            const prompt = draft.locator(`textarea[aria-label="${tr("draft.promptTextAria")}"]`);
+            await prompt.waitFor({ timeout: 15_000 });
+            const box = async (target: ReturnType<typeof page.locator>) => {
+              const rect = await target.first().boundingBox();
+              if (!rect) throw new Error(`${label(pass)}: nothing to measure`);
+              return { left: Math.round(rect.x), top: Math.round(rect.y), right: Math.round(rect.x + rect.width), bottom: Math.round(rect.y + rect.height) };
+            };
+            const within = (rect: { left: number; top: number; right: number; bottom: number }) => rect.left >= 0 && rect.top >= 0 && rect.right <= width && rect.bottom <= height;
+            /* What the form holds: the composer's own parts, and every kind of field it must not hold. */
+            const controls = () => page.evaluate((names) => {
+              const pane = [...document.querySelectorAll<HTMLElement>("[data-draft-pane]")].find((element) => element.getClientRects().length)!;
+              const seen = (selector: string) => [...pane.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length).length;
+              const clipped = [...pane.querySelectorAll<HTMLElement>("[data-runtime-pill], textarea, button")].filter((element) => element.getClientRects().length)
+                .filter((element) => { const rect = element.getBoundingClientRect(); return rect.left < 0 || rect.right > innerWidth + 0.5; }).length;
+              return {
+                voice: seen("button:has(svg.lucide-mic)"), prompt: seen("textarea"), images: pane.querySelectorAll('input[type="file"]').length,
+                /* The picker is the image one: a launch carries images and no other file, and says so. */
+                imageOnly: pane.querySelectorAll('input[type="file"][accept="image/*"]').length, paperclip: seen("svg.lucide-paperclip"),
+                launch: seen(`button[aria-label="${names.launch}"]`), pill: seen("[data-runtime-pill]"),
+                selects: seen("select"), radios: seen('[role="radio"]'), textInputs: seen('input:not([type="file"]):not([type="hidden"])'), details: seen("details"),
+                headings: seen("h1, h2, h3, h4, header"), buttons: seen("button"), clipped, focused: document.activeElement === pane.querySelector("textarea"),
+                height: Math.round(pane.getBoundingClientRect().height),
+              };
+            }, { launch: tr("composer.launchAgent") });
+            const composerOnly = async (state: string) => {
+              const read = await controls();
+              expect({ prompt: read.prompt, voice: read.voice, images: read.images, imageOnly: read.imageOnly, paperclip: read.paperclip, launch: read.launch, pill: read.pill }, `${label(state)} the composer's parts`)
+                .toEqual({ prompt: 1, voice: 1, images: 1, imageOnly: 1, paperclip: 0, launch: 1, pill: 1 });
+              expect({ selects: read.selects, radios: read.radios, textInputs: read.textInputs, details: read.details, headings: read.headings }, `${label(state)} fields the form dropped`)
+                .toEqual({ selects: 0, radios: 0, textInputs: 0, details: 0, headings: 0 });
+              /* The runtime pill, the image picker, the microphone and Send: nothing else is pressed here. */
+              expect(read.buttons, `${label(state)} buttons`).toBeLessThanOrEqual(5);
+              expect(read.clipped, `${label(state)} nothing cut by the window`).toBe(0);
+              expect(within(await box(draft.locator("[data-draft-form]"))), `${label(state)} the composer in the window`).toBe(true);
+              return read;
+            };
+            /* The form grows before Send (the recording panel, the picture's tile, a refused file's line), and
+               a draft opened low in its column keeps the whole of it in the window as it does. */
+            const formInSight = async (state: string) => {
+              /* The form is brought into sight in the frame its height changed in; measure once that frame is drawn. */
+              await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+              const form = await box(draft.locator("[data-draft-form]"));
+              expect(within(form), `${label(state)} the whole form in the window: ${JSON.stringify(form)} of ${width}x${height}`).toBe(true);
+              return form;
+            };
+            /* The runtime control of a new agent says what the launch starts on: no name inside the draft, its
+               popover or its sheet speaks of a conversation's next message. */
+            const nextMessageNames = () => page.evaluate((marks) => {
+              const names: string[] = [];
+              for (const root of document.querySelectorAll<HTMLElement>("[data-draft-pane], [data-runtime-popover], [data-runtime-sheet]")) {
+                for (const element of [root, ...root.querySelectorAll<HTMLElement>("*")]) {
+                  const name = element.getAttribute("aria-label");
+                  if (name) names.push(name);
+                }
+                names.push(root.innerText);
+              }
+              return names.filter((name) => marks.some((mark) => name.toLowerCase().includes(mark)));
+            }, ["next message", "наступне повідомлення"]);
+            /* After Send the pane is the conversation: the first message is a row of the feed from the first
+               frame, the loading shape stands where the answer will be, and no status sentence stands in. */
+            const opening = async (state: string, text: string) => {
+              const shape = draft.locator("[data-draft-opening]");
+              await shape.waitFor({ timeout: 5_000 });
+              await shoot(state);
+              const found = {
+                firstMessage: await shape.locator("[data-message-row]").filter({ hasText: text }).count(),
+                loadingShape: await shape.locator('[data-skeleton="feed"]').count(),
+                statusSentence: await draft.getByText(tr("draft.launchedStructured")).count(),
+                pane: await box(draft),
+                message: await box(shape.locator("[data-message-row]")),
+                composer: await box(draft.locator("[data-draft-form]")),
+              };
+              expect({ firstMessage: found.firstMessage, loadingShape: found.loadingShape, statusSentence: found.statusSentence }, `${label(state)} the conversation's opening shape`).toEqual({ firstMessage: 1, loadingShape: 1, statusSentence: 0 });
+              /* The first message is in sight. The composer stands where the launched window's composer will,
+                 which on a short window is under its lower edge, as the product's launched card is. */
+              expect(within(found.message), `${label(state)} the first message in the window`).toBe(true);
+              return found;
+            };
+            /* The account the conversation's window names: the phone's top bar, or the chip nearest the row
+               on the board. */
+            const accountShown = async (text: string) => {
+              if (view.touch) return (await page.locator("[data-mobile2-chat-account-runs]").filter({ visible: true }).first().innerText()).replace(/^@\s*/, "").trim();
+              return page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first().evaluate((row) => {
+                for (let at: Element | null = row; at; at = at.parentElement) {
+                  const chip = at.querySelector(".ch-account");
+                  if (chip) return (chip.querySelector(".cur") ?? chip).textContent?.trim() ?? "";
+                }
+                return "";
+              });
+            };
+            /* The launch answered: the product's own conversation window took the pane over. The first
+               message is the same row in the same place and of the same height, the picture's count under
+               it included; nothing the operator was reading moved. */
+            const receipt = async (state: string, text: string, before: { message: { left: number; top: number; right: number; bottom: number } }) => {
+              await page.locator("[data-draft-pane]").first().waitFor({ state: "detached", timeout: 10_000 });
+              const row = page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first();
+              await row.waitFor({ timeout: 5_000 });
+              const message = await box(row);
+              const account = await accountShown(text);
+              await shoot(state);
+              /* Each edge within a pixel: the window lays the row out a fraction of a pixel off the pane's, which
+                 rounds either way; the jump this guards against was 18 px. */
+              const moved = Math.max(...(["left", "top", "right", "bottom"] as const).map((edge) => Math.abs(message[edge] - before.message[edge])));
+              expect(moved, `${label(state)} the first message where it was: ${JSON.stringify({ before: before.message, after: message })}`).toBeLessThanOrEqual(1);
+              return { message, account };
+            };
+            /* The loaded conversation is the product's own window: the first message once, and the agent's answer. */
+            const loaded = async (state: string, text: string) => {
+              const answer = page.getByText("Summary: the README describes the layout above", { exact: false }).filter({ visible: true }).first();
+              await answer.waitFor({ timeout: 30_000 });
+              await page.waitForTimeout(400);
+              await settle();
+              await shoot(state);
+              const rows = await page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).count();
+              expect(rows, `${label(state)} the first message, once`).toBe(1);
+              expect(await page.locator("[data-draft-pane]").count(), `${label(state)} the draft is gone`).toBe(0);
+              return { firstMessage: rows, account: await accountShown(text) };
+            };
+            /* A launch that carries a picture: its count is under the first message from the press, as the
+               conversation draws it, so the row keeps its height when the launch answers. */
+            const withPicture = async (words: string) => {
+              /* A file the launch cannot carry is refused by name, in a line the form grows by. */
+              await draft.locator('input[type="file"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
+              await draft.locator('[data-testid="composer-status"]').filter({ hasText: "notes.txt" }).first().waitFor({ timeout: 10_000 });
+              const refusedForm = await formInSight(`${pass}-refused-file`);
+              await draft.locator('input[type="file"]').setInputFiles(picture);
+              await page.locator('[data-testid="attachment-tile"][data-status="ready"]').first().waitFor({ timeout: 10_000 });
+              const attachedForm = await formInSight(`${pass}-attached`);
+              if (words) await prompt.fill(words);
+              await prompt.press("Enter");
+              const count = tr("composer.imagesCount", { count: 1 });
+              const sent = await opening(`${pass}-sent`, words || count);
+              const caption = await draft.locator("[data-draft-opening] [data-message-row]").getByText(count, { exact: true }).count();
+              const answered = await receipt(`${pass}-receipt`, words || count, sent);
+              const posted = await launches();
+              const launchedWith = { count: posted.length, images: (posted[0]?.images as unknown[] | undefined)?.length ?? 0, prompt: posted[0]?.prompt };
+              readings.push({ view: view.name, scheme, lang, state: pass, refusedForm, attachedForm, caption, launchedWith, sent, receipt: answered, pageErrors });
+              expect(caption, `${label(`${pass}-sent`)} the picture's count under the first message`).toBe(1);
+              expect(launchedWith, `${label(`${pass}-sent`)} what was launched`).toEqual({ count: 1, images: 1, prompt: words });
+            };
+            if (pass === "image") {
+              await withPicture(TYPED[lang]);
+            } else if (pass === "image-only") {
+              await withPicture("");
+            } else if (pass === "refused") {
+              /* The engine is chosen with the model: a model of another engine moves the draft to it. */
+              await draft.locator("[data-runtime-pill]").click();
+              await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+              await page.locator('[data-runtime-popover] [data-runtime-value="codex/gpt-6-astra"]').click();
+              expect((await draft.locator("[data-runtime-pill]").innerText()).replace(/\s+/g, " ").trim(), `${label(pass)} the pill names the engine`).toContain("Codex · 6-Astra");
+              await prompt.fill(TYPED[lang]);
+              await prompt.press("Enter");
+              const refusal = draft.locator('[data-testid="composer-status"]').filter({ hasText: "export-csv" });
+              await refusal.first().waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              const found = { refusal: await refusal.count(), promptKept: await prompt.inputValue() === TYPED[lang] ? 1 : 0 };
+              const posted = await launches();
+              expect({ engine: posted[0]?.engine, model: posted[0]?.model }, `${label(pass)} the engine the model chose`).toEqual({ engine: "codex", model: "gpt-6-astra" });
+              readings.push({ view: view.name, scheme, lang, state: pass, found, launchedWith: { engine: posted[0]?.engine, model: posted[0]?.model }, controls: await composerOnly(pass), pageErrors });
+              expect(found, label(pass)).toEqual({ refusal: 1, promptKept: 1 });
+            } else if (pass === "handoff") {
+              /* A restored draft is not brought into sight, as no restored card is; the press that opens a
+                 handoff in the product reveals its card. */
+              await draft.scrollIntoViewIfNeeded();
+              await settle();
+              await shoot(pass);
+              /* The source rides in the field, and in the launch: the new agent is its continuation. */
+              const found = { sourceInPrompt: (await prompt.inputValue()).includes("/repo/pending-worker.jsonl") ? 1 : 0 };
+              const controlsRead = await composerOnly(pass);
+              await prompt.press("Enter");
+              await draft.locator("[data-draft-opening]").waitFor({ timeout: 5_000 });
+              const posted = await launches();
+              const carried = { src: posted[0]?.src, cwd: posted[0]?.cwd, parentConversationId: posted[0]?.parentConversationId ?? null, role: posted[0]?.role ?? null };
+              readings.push({ view: view.name, scheme, lang, state: pass, found, carried, controls: controlsRead, pageErrors });
+              expect(found, label(pass)).toEqual({ sourceInPrompt: 1 });
+              expect(carried.src, `${label(pass)} the launch names its source`).toBe("/repo/pending-worker.jsonl");
+              /* The source's own checkout, which the fixture answers for it; the project's root is `/repo`. */
+              expect(carried.cwd, `${label(pass)} the launch runs in its source's folder`).toBe("/repo/worktrees/export-csv");
+            } else if (pass === "handoff-lost") {
+              /* No record names the source's folder: the launch is refused in words, and the board's guess is not taken. */
+              await draft.scrollIntoViewIfNeeded();
+              const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+              await blocked.getByText(tr("draft.sourceFolderUnknown")).waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              await prompt.press("Enter");
+              await page.waitForTimeout(400);
+              const found = { refusal: await blocked.getByText(tr("draft.sourceFolderUnknown")).count(), launches: (await launches()).length, opening: await draft.locator("[data-draft-opening]").count() };
+              const read = await controls();
+              readings.push({ view: view.name, scheme, lang, state: pass, found, controls: read, pageErrors });
+              expect(found, label(pass)).toEqual({ refusal: 1, launches: 0, opening: 0 });
+              expect({ selects: read.selects, textInputs: read.textInputs, clipped: read.clipped }, `${label(pass)} no path is asked for`).toEqual({ selects: 0, textInputs: 0, clipped: 0 });
+              expect(within(await box(blocked)), `${label(pass)} the refusal in the window`).toBe(true);
+            } else if (pass === "copilot") {
+              /* Copilot's account is chosen in the same pill, among the draft's own. */
+              const pill = draft.locator("[data-runtime-pill]");
+              const popover = page.locator("[data-runtime-popover]");
+              await pill.click();
+              await popover.locator('[data-runtime-value="model"]').click();
+              await popover.locator('[data-runtime-value="copilot/auto"]').click();
+              await pill.click();
+              const head = (await popover.locator("[data-runtime-popover-account]").innerText()).trim();
+              await popover.locator('[data-runtime-value="account"]').click();
+              await popover.locator('[data-runtime-value="account-account-k"]').waitFor({ timeout: 5_000 });
+              await settle();
+              await shoot(pass);
+              const offered = await popover.locator('[data-runtime-row="account"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-runtime-value")));
+              expect(within(await box(popover)), `${label(pass)} the popover in the window`).toBe(true);
+              await popover.locator('[data-runtime-value="account-account-k"]').click();
+              const face = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              const controlsRead = await composerOnly(pass);
+              await prompt.fill(TYPED[lang]);
+              await prompt.press("Enter");
+              await draft.locator("[data-draft-opening]").waitFor({ timeout: 5_000 });
+              const posted = await launches();
+              const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, accountId: posted[0]?.accountId, fast: posted[0]?.fast ?? null };
+              readings.push({ view: view.name, scheme, lang, state: pass, head, offered, face, launchedWith, controls: controlsRead, pageErrors });
+              expect(head, `${label(pass)} the account the agent starts on`).toBe(tr("draft.accountStartsOn", { account: "Account H" }));
+              expect(offered, `${label(pass)} the accounts offered`).toEqual(["account-default", "account-account-k"]);
+              expect(face, `${label(pass)} the pill names the engine and the account`).toContain("Copilot · Auto");
+              expect(face, `${label(pass)} the pill names the account`).toContain("Account K");
+              expect(launchedWith, `${label(pass)} what was launched`).toEqual({ count: 1, engine: "copilot", model: "auto", accountId: "account-k", fast: null });
+            } else if (pass === "signed-out") {
+              const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+              await blocked.waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              const found = {
+                signedOut: await blocked.getByText(tr("launch.accountSignedOut", { label: "Account A", engine: "Claude" })).count(),
+                signIn: await blocked.getByRole("button", { name: tr("launch.signInFirst", { engine: "Claude" }) }).count(),
+              };
+              readings.push({ view: view.name, scheme, lang, state: pass, found, pageErrors });
+              expect(found, label(pass)).toEqual({ signedOut: 1, signIn: 1 });
+            } else if (pass === "task-card") {
+              await settle();
+              await shoot("task-card-empty");
+              const empty = await composerOnly("task-card-empty");
+              expect(empty.focused, `${label("task-card-empty")} cursor in the field`).toBe(true);
+              const card = await draft.evaluate((pane) => pane.closest(".card")?.getAttribute("data-id") ?? "");
+              /* On a task's card the draft is one more row of that card: the card keeps its own title. */
+              expect(card.startsWith("task:"), `${label("task-card-empty")} the draft on the task's card`).toBe(true);
+              await prompt.fill(TYPED[lang]);
+              /* Enter sends: no second step. */
+              await prompt.press("Enter");
+              const sent = await opening("task-card-sent", TYPED[lang]);
+              const answered = await receipt("task-card-receipt", TYPED[lang], sent);
+              const done = await loaded("task-card-loaded", TYPED[lang]);
+              /* The conversation is on the card whose button was pressed. */
+              const holder = await page.locator("[data-message-row]").filter({ hasText: TYPED[lang] }).filter({ visible: true }).first().evaluate((row) => row.closest(".card")?.getAttribute("data-id") ?? "");
+              expect(holder, `${label("task-card-loaded")} the conversation on its card`).toBe(card);
+              const posted = await launches();
+              expect({ count: posted.length, taskId: posted[0]?.taskId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null }, `${label("task-card-sent")} what was launched`).toEqual({ count: 1, taskId: card.slice("task:".length), cwd: "/repo", role: null });
+              expect(answered.account, `${label("task-card-receipt")} the account the window names`).toBe(done.account);
+              readings.push({ view: view.name, scheme, lang, state: pass, card, empty, sent, receipt: answered, loaded: done, pageErrors });
+            } else {
+              await settle();
+              await shoot("empty");
+              const empty = await composerOnly("empty");
+              /* «+ Agent» puts the cursor in the field at once. */
+              expect(empty.focused, `${label("empty")} cursor in the field`).toBe(true);
+              /* The model and the account are chosen in the runtime pill, as in a conversation's composer: a
+                 popover on the desktop, the sheet on the phone, which says it is a new agent's. */
+              const pill = draft.locator("[data-runtime-pill]");
+              const defaultFace = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              expect(defaultFace, `${label("empty")} the pill names the engine, the model and the tier`).toContain(`Claude · Opus 5.5 · ${tr("draft.tierDefault")}`);
+              let sheetTitle: string | null = null;
+              if (view.touch) {
+                await pill.click();
+                const runtimeSheet = page.locator("[data-runtime-sheet]");
+                await runtimeSheet.waitFor({ timeout: 5_000 });
+                await settle();
+                await shoot("picker");
+                sheetTitle = (await runtimeSheet.locator("h2").innerText()).trim();
+                expect(sheetTitle, `${label("picker")} the sheet says it is a new agent`).toBe(tr("draft.sheetTitle"));
+                expect(await nextMessageNames(), `${label("picker")} the sheet speaks of no next message`).toEqual([]);
+                await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: "Claude · Fable" }).click();
+                await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: /^high$/ }).click();
+                await runtimeSheet.locator('[data-runtime-sheet-account="account-c"]').click();
+                await runtimeSheet.locator("[data-runtime-sheet-close]").click();
+              } else {
+                const popover = page.locator("[data-runtime-popover]");
+                await pill.click();
+                await popover.locator('[data-runtime-value="model"]').click();
+                await popover.locator('[data-runtime-row="model"]').first().waitFor({ timeout: 5_000 });
+                await settle();
+                await shoot("picker");
+                expect(within(await box(popover)), `${label("picker")} the popover in the window`).toBe(true);
+                await popover.locator('[data-runtime-value="fable"]').click();
+                await pill.click();
+                await popover.locator('[data-runtime-value="tier-high"]').click();
+                await pill.click();
+                await popover.locator('[data-runtime-value="account"]').click();
+                await popover.locator('[data-runtime-value="account-account-c"]').waitFor({ timeout: 5_000 });
+                expect(await nextMessageNames(), `${label("picker")} the popover speaks of no next message`).toEqual([]);
+                await popover.locator('[data-runtime-value="account-account-c"]').click();
+              }
+              await settle();
+              await shoot("chosen");
+              const face = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              expect(face, `${label("chosen")} the pill names the model`).toContain("Fable");
+              expect(face, `${label("chosen")} the pill names the tier`).toContain(view.touch ? "high" : tr("reasoningTier.high"));
+              /* The desktop face names the picked account; the phone's chip names none, as a conversation's
+                 does not, and its sheet marks the account the launch goes to. */
+              if (view.touch) {
+                await pill.click();
+                expect(await page.locator('[data-runtime-sheet] [data-runtime-sheet-account="account-c"]').getAttribute("data-runtime-account-next"), `${label("chosen")} the sheet marks the account`).toBe("true");
+                await page.locator("[data-runtime-sheet] [data-runtime-sheet-close]").click();
+              } else expect(face, `${label("chosen")} the pill names the account`).toContain("Account C");
+              const pillName = await pill.getAttribute("aria-label");
+              expect(pillName, `${label("chosen")} the pill's name says what the agent starts with`).toContain(tr("draft.runtimePill"));
+              expect(await nextMessageNames(), `${label("chosen")} the draft speaks of no next message`).toEqual([]);
+              await composerOnly("chosen");
+              /* Dictation: the composer's own microphone, then «stop and launch» sends what was said. */
+              await draft.locator("button:has(svg.lucide-mic)").first().click();
+              const stop = draft.getByRole("button", { name: tr("draft.stopAndLaunch") }).first();
+              await stop.waitFor({ timeout: 10_000 });
+              await page.waitForTimeout(900);
+              await settle();
+              await shoot("dictation");
+              const dictatingForm = await formInSight("dictation");
+              await stop.click();
+              const sent = await opening("sent", SPOKEN[lang]);
+              const answered = await receipt("receipt", SPOKEN[lang], sent);
+              const done = await loaded("loaded", SPOKEN[lang]);
+              /* One press launched it, with what the pill said and the directory the board derived. */
+              const posted = await launches();
+              const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, effort: posted[0]?.effort, accountId: posted[0]?.accountId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null };
+              expect(launchedWith, `${label("sent")} what was launched`).toEqual({ count: 1, engine: "claude", model: "fable", effort: "high", accountId: "account-c", cwd: "/repo", role: null });
+              /* The window names the account the pill chose, from the launch's answer on. */
+              expect({ receipt: answered.account, loaded: done.account }, `${label("receipt")} the account the window names`).toEqual({ receipt: "Account C", loaded: "Account C" });
+              readings.push({ view: view.name, scheme, lang, state: pass, empty, defaultFace, sheetTitle, face, pillName, dictatingForm, launchedWith, sent, receipt: answered, loaded: done, pageErrors });
+            }
+            expect(pageErrors, `${label(pass)} page errors`).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${label(`${pass}-FAILED`)}.png`) }).catch(() => {});
+            throw error;
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const built = (view: string, scheme: string, lang: string, state: string) => path.join(out, `built-${view}-${scheme}-${lang}-${state}.png`);
+    const today = (view: string, scheme: string, lang: string, state: string) => (TODAY ? path.join(TODAY, `look0-${view}-${scheme}-${lang}-${state}.png`) : null);
+    /* One sheet per size, each row one moment: the form this one replaced, then the built one. */
+    for (const view of views) {
+      if (!wanted("views", view.name)) continue;
+      await sheet(path.join(out, `sheet-built-${view.width}.png`), `Creating a new agent at ${view.width} px — each row: ${TODAY ? "before, then built" : "built"}`, view.touch ? 640 : 520, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
+        name: `${scheme} · ${lang}`,
+        rows: [...STATES, ...(view.name === "desktop-1440" && scheme === "light" ? EXTRAS : [])].map((state) => ({ state, today: today(view.name, scheme!, lang!, state), built: built(view.name, scheme!, lang!, state) })),
+      })));
+    }
+    if (!only.size) {
+      fs.mkdirSync("evidence/new-agent-redesign", { recursive: true });
+      fs.writeFileSync("evidence/new-agent-redesign/built.json", `${JSON.stringify({ viewports: views.map((view) => `${view.width}x${view.height}`), readings }, null, 2)}\n`);
+    }
+  }, 3_600_000);
+});
+
 describe("the left sidebar: one tidy panel with a compact system block", () => {
   /*
    * Rendered evidence for the built sidebar (docs/design/sidebar-redesign.md, variant 1):
@@ -22271,6 +23276,185 @@ describe("orchestrator wires after a seat action", () => {
   }, 300_000);
 });
 
+describe("prototype review: a decided round retires the earlier undecided rounds of its task", () => {
+  /*
+   * Export carries a design round nobody answered and, after it, a revise
+   * round the operator decided (`?proto=1&retired=1`): the shape of the task
+   * that kept its prototype in the operator's menu after the answer. The
+   * fixture answers through the Viewer's own selectors, so these frames draw
+   * what the server projects. At 1440 and 390, in English and Ukrainian, light
+   * and dark: the
+   * needs-you menu lists the three waiting tasks and not export, the
+   * orchestrator's notice counts three and never names export, export's card
+   * button says decided, and its review marks the first round superseded by
+   * the second and nothing as waiting. Opened, the first round says round 2
+   * replaced it and offers no choice until asked; when its sentence fills the
+   * row, the link wraps under the sentence (never under the mark) and the
+   * button that decides it anyway takes a row of its own.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "retires the earlier"
+   *
+   * Frames go to PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`);
+   * readings to `evidence/prototype-review/retired-rounds.json`.
+   */
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+  const WAITING = ["t-links", "t-search", "t-upload"];
+
+  browserTest("prototype review: the retired round leaves the menu, the notice and the card, and reads as superseded", async () => {
+    const out = path.resolve(".artifacts/prototype-review");
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/prototype-review", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const size of SIZES) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `${size.name}-${lang}-${theme}`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1&retired=1`, size.viewport, theme, lang, "reduce", size.phone);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `retired-${label}-${name}.png`) });
+        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
+        try {
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* The menu: everything that waits on the operator, the prototypes among it. */
+          const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+          await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
+          await page.waitForSelector(`${LIST} [data-attention-prototype]`, { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const menu = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-attention-prototype]`)]
+            .map((row) => row.dataset.attentionPrototype ?? null).sort(), LIST);
+          record("menu", menu);
+          await shot("menu");
+          if (JSON.stringify(menu) !== JSON.stringify(WAITING)) failures.push(`${label}: the menu lists the prototypes of ${JSON.stringify(menu)}, expected ${JSON.stringify(WAITING)}`);
+          await page.keyboard.press("Escape");
+          await page.reload();
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* The plaque: the orchestrator's notice above its message field, or the phone seat card's chip. */
+          if (size.phone) {
+            const chip = page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]");
+            await chip.waitFor({ timeout: 15_000 });
+            const plaque = { count: await chip.getAttribute("data-prototype-notice-chip"), label: await chip.getAttribute("aria-label") };
+            record("plaque", plaque);
+            await page.locator("[data-mobile2-seat-card]").screenshot({ path: path.join(pngDir, `retired-${label}-plaque.png`) });
+            if (plaque.count !== "3" || plaque.label?.includes("Export")) failures.push(`${label}: the seat card's notice reads ${JSON.stringify(plaque)}, expected three waiting tasks and no export`);
+          } else {
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+            const list = page.locator("[data-orchestrator-conversation] [data-prototype-notices]");
+            await list.waitFor({ timeout: 15_000 });
+            const more = page.locator("[data-orchestrator-conversation] [data-prototype-notice-more]");
+            if (await more.count()) await more.click();
+            await page.waitForTimeout(250);
+            await list.scrollIntoViewIfNeeded();
+            const plaque = await page.evaluate(() => ({
+              count: document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notices]")?.dataset.prototypeNotices ?? null,
+              tasks: [...document.querySelectorAll<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notice]")].map((row) => row.dataset.prototypeNotice ?? null).sort(),
+            }));
+            record("plaque", plaque);
+            await shot("plaque");
+            if (plaque.count !== "3" || JSON.stringify(plaque.tasks) !== JSON.stringify(WAITING)) failures.push(`${label}: the orchestrator's notice reads ${JSON.stringify(plaque)}, expected ${JSON.stringify(WAITING)}`);
+          }
+
+          /* The card: export's review button says decided. */
+          if (size.phone) {
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(300);
+          }
+          const button = page.locator(size.phone ? '[data-phone-card-prototype-button="t-export"]' : '[data-prototype-button="t-export"]');
+          await button.scrollIntoViewIfNeeded();
+          const card = { state: await button.getAttribute("data-prototype-state"), text: (await button.textContent())?.trim() ?? null };
+          record("card", card);
+          await page.locator(size.phone ? '[data-phone-card-frame="task:t-export"]' : '[data-kanban-board] .card[data-id="task:t-export"]').screenshot({ path: path.join(pngDir, `retired-${label}-card.png`) });
+          if (card.state !== "decided") failures.push(`${label}: export's review button reads ${JSON.stringify(card)}, expected decided`);
+
+          /* The review: the decided round opens, the first round reads as superseded by it and nothing waits. */
+          await button.click();
+          await page.waitForSelector("[data-prototype-review] [data-prototype-rounds]", { timeout: 10_000 });
+          await page.waitForTimeout(400);
+          const rounds = await page.evaluate(() => ({
+            shown: document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
+            tabs: [...document.querySelectorAll<HTMLElement>("[data-prototype-review] [data-prototype-round]")].map((tab) => ({
+              round: tab.dataset.prototypeRound ?? null,
+              superseded: tab.querySelector<HTMLElement>("[data-prototype-superseded]")?.dataset.prototypeSuperseded ?? null,
+              marks: [...tab.querySelectorAll("[aria-label]")].map((mark) => mark.getAttribute("aria-label")),
+            })),
+          }));
+          record("rounds", rounds);
+          await shot("rounds");
+          const first = rounds.tabs.find((tab) => tab.round === "r-export-0");
+          if (rounds.shown !== "r-export") failures.push(`${label}: export's review opened on ${rounds.shown}, expected its decided round`);
+          if (first?.superseded !== "r-export" || JSON.stringify(first.marks) !== JSON.stringify([tr("proto.round.superseded", { n: 2 })])) failures.push(`${label}: the first round's tab reads ${JSON.stringify(first)}, expected superseded by round 2`);
+          if (rounds.tabs.some((tab) => tab.marks.includes(tr("proto.round.waiting")))) failures.push(`${label}: a round of export still says it waits: ${JSON.stringify(rounds.tabs)}`);
+
+          /* The superseded round opened from history: its footer names the round that replaced it, asks for nothing,
+             and its tab mark weighs what the decided check weighs, with its words on hover. */
+          await page.locator('[data-prototype-round="r-export-0"]').click();
+          /* On the phone the footer sits in the sheet's own slot, outside the review's body. */
+          await page.waitForSelector('[data-prototype-round-shown="r-export-0"]', { state: "attached", timeout: 10_000 });
+          await page.waitForSelector("[data-prototype-superseded-line]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const opened = await page.evaluate(() => {
+            const box = (selector: string) => { const rect = document.querySelector(selector)?.getBoundingClientRect(); return rect ? [Math.round(rect.width), Math.round(rect.height)] : null; };
+            return {
+              line: document.querySelector("[data-prototype-superseded-line]")?.textContent ?? null,
+              footer: (document.querySelector("[data-prototype-superseded-line]")?.closest("footer") ?? document.querySelector("[data-prototype-superseded-line]")?.parentElement)?.textContent ?? null,
+              save: Boolean(document.querySelector("[data-prototype-save]")),
+              choose: [...document.querySelectorAll<HTMLButtonElement>("[data-prototype-choose]")].filter((button) => !button.disabled).length,
+              marks: { superseded: box('[data-prototype-round="r-export-0"] [data-prototype-superseded]'), decided: box('[data-prototype-round="r-export"] svg') },
+              title: document.querySelector<HTMLElement>('[data-prototype-round="r-export-0"]')?.title ?? null,
+              /* Left, top and bottom of the mark, the sentence, its link and the decide-anyway button. */
+              layout: Object.fromEntries(([
+                ["mark", "[data-prototype-superseded-said] svg"],
+                ["sentence", "[data-prototype-superseded-said] > span:last-child > span"],
+                ["link", "[data-prototype-superseded-line] [data-prototype-open-round]"],
+                ["anyway", "[data-prototype-superseded-line] [data-prototype-decide-anyway]"],
+              ] as const).map(([name, selector]) => {
+                const rect = document.querySelector(selector)?.getBoundingClientRect();
+                return [name, rect ? { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom) } : null];
+              })),
+            };
+          });
+          record("superseded", opened);
+          await shot("superseded");
+          const said = tr("proto.supersededLine", { n: 2, date: "" }).split(",")[0]!;
+          if (!opened.line?.includes(said) || !opened.line.includes(tr("proto.openRound", { n: 2 }))) failures.push(`${label}: the superseded round's footer reads ${JSON.stringify(opened.line)}, expected «${said}…» with a link to round 2`);
+          if (opened.save || opened.choose || opened.footer?.includes(tr("proto.chooseFirst")) || opened.footer?.includes(tr("proto.chooseFirstPhone"))) failures.push(`${label}: the superseded round still asks for a choice: ${JSON.stringify(opened)}`);
+          if (JSON.stringify(opened.marks.superseded) !== JSON.stringify(opened.marks.decided)) failures.push(`${label}: the tab marks differ in size: ${JSON.stringify(opened.marks)}`);
+          if (!opened.title?.endsWith(tr("proto.round.superseded", { n: 2 }))) failures.push(`${label}: the superseded tab's hover text reads ${JSON.stringify(opened.title)}`);
+          const { mark, sentence, link, anyway } = opened.layout;
+          if (!mark || !sentence || !link || !anyway) failures.push(`${label}: the superseded footer misses a part: ${JSON.stringify(opened.layout)}`);
+          else {
+            const wrapped = link.top >= sentence.bottom - 2;
+            if (wrapped && Math.abs(link.left - sentence.left) > 1) failures.push(`${label}: the wrapped link starts at x=${link.left}, the sentence at x=${sentence.left}`);
+            if (mark.left >= sentence.left) failures.push(`${label}: the mark does not lead the sentence: ${JSON.stringify(opened.layout)}`);
+            if (wrapped && anyway.top < link.bottom - 2) failures.push(`${label}: the decide-anyway button shares the wrapped link's row: ${JSON.stringify(opened.layout)}`);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/prototype-review/retired-rounds.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("orchestrator wire routing across the board's layouts", () => {
   /* docs/design/orchestrator-wire-routing.md: every seat/card layout the board
      produces, one seat action each, and the route the layer draws for it —
@@ -22506,4 +23690,46 @@ describe("orchestrator wire routing across the board's layouts", () => {
     }
     if (failures.length) throw new Error(failures.join("\n"));
   }, 1_800_000);
+});
+
+
+describe("idle seat interval eligibility", () => {
+  browserTest("the board explains excluded workers and inbox-only agendas in both languages", async () => {
+    const out = path.resolve(".artifacts/seat-idle-wakes/browser");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const notice = seatTickSettingsCardText({ project: "atlas", detail: "wakes every five minutes",
+          reason: "check open work", until: null, updatedAt: "2026-10-09T00:00:00Z", setBy: null,
+          schedule: { enabled: true, wakeIntervalMinutes: 5 }, locale: lang, timeZone: "UTC" });
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          if (width === 390) {
+            await node.click();
+            await page.locator('[data-phone-task-description]').click();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+            await node.waitFor();
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+            await node.waitFor();
+          }
+          const text = await node.inputValue();
+          expect(text).toContain(lang === "en" ? "Unparented workers and inbox cards alone" : "Працівники без батьківського зв’язку");
+          expect(pageErrors).toEqual([]);
+          await node.screenshot({ path: path.join(out, `${lang}-${width}.png`) });
+          readings.push({ lang, width, text, errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });

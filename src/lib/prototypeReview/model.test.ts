@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { prototypeReviewNotices, prototypeReviewSummary, withPrototypeReviewSummaries } from "./read";
+import { prototypeRoundsSuperseded } from "./model";
 import type { PrototypeReviewRound } from "./types";
 
 function round(id: string, title: string, createdAt: string, decided: boolean): PrototypeReviewRound {
@@ -23,13 +24,36 @@ test("the notice names the task, and the waiting round's own title rides second"
   expect(notice).toMatchObject({ title: "Repair old links in the release notes", roundTitle: "Release notes links", reviewId: "r-1" });
 });
 
-test("an undecided older round under a decided newer one keeps its own title, never the newer round's", () => {
+const ids = (rounds: PrototypeReviewRound[]) => rounds.map(r => [r.id, prototypeRoundsSuperseded(rounds).get(r.id) ?? null]);
+
+test("two rounds with the newer decided: nothing waits, and the older undecided round is superseded by the newer", () => {
   const rounds = [round("r-old", "Release notes links", "2026-10-02T00:00:00Z", false), round("r-new", "Release notes links, smaller arrows", "2026-10-03T00:00:00Z", true)];
+  expect(prototypeReviewSummary(rounds)?.waitingReviewId).toBeNull();
+  expect(prototypeReviewNotices([task(rounds)])).toEqual([]);
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task(rounds)]))).toEqual([]);
+  expect(ids(rounds)).toEqual([["r-old", "r-new"], ["r-new", null]]);
+});
+
+test("the older round decided and a newer one undecided: the newer waits, nothing is superseded", () => {
+  const rounds = [round("r-old", "Release notes links", "2026-10-02T00:00:00Z", true), round("r-new", "Release notes links, smaller arrows", "2026-10-03T00:00:00Z", false)];
+  expect(prototypeReviewSummary(rounds)?.waitingReviewId).toBe("r-new");
   const [notice] = prototypeReviewNotices([task(rounds)]);
-  expect(notice).toMatchObject({ title: "Repair old links in the release notes", roundTitle: "Release notes links", reviewId: "r-old" });
-  /* The page's poll carries only the summary, which knows the latest title alone: the notice names the task and leaves the round unnamed. */
-  const [polled] = prototypeReviewNotices(withPrototypeReviewSummaries([task(rounds)]));
-  expect(prototypeReviewSummary(rounds)?.title).toBe("Release notes links, smaller arrows");
-  expect(polled).toMatchObject({ title: "Repair old links in the release notes", reviewId: "r-old" });
-  expect(polled!.roundTitle).toBeUndefined();
+  expect(notice).toMatchObject({ reviewId: "r-new", roundTitle: "Release notes links, smaller arrows" });
+  expect(ids(rounds)).toEqual([["r-old", null], ["r-new", null]]);
+});
+
+test("three rounds with the middle decided: only the newest waits, the oldest is superseded by the middle one", () => {
+  const rounds = [round("r-1", "One", "2026-10-02T00:00:00Z", false), round("r-2", "Two", "2026-10-03T00:00:00Z", true), round("r-3", "Three", "2026-10-04T00:00:00Z", false)];
+  expect(prototypeReviewSummary(rounds)?.waitingReviewId).toBe("r-3");
+  expect(prototypeReviewNotices([task(rounds)]).map(notice => notice.reviewId)).toEqual(["r-3"]);
+  expect(ids(rounds)).toEqual([["r-1", "r-2"], ["r-2", null], ["r-3", null]]);
+});
+
+test("a summary an older installation replicated, still naming a round a later decision retired, waits for nothing here", () => {
+  const rounds = [round("r-old", "Release notes links", "2026-10-02T00:00:00Z", false), round("r-new", "Release notes links, smaller arrows", "2026-10-03T00:00:00Z", true)];
+  const stale = { ...prototypeReviewSummary(rounds)!, waitingReviewId: "r-old" };
+  const remote = { ...task([]), prototypeReviews: undefined, prototypeReviewReplica: { summary: stale, rounds: [] } } as BoardTask;
+  expect(prototypeReviewNotices([remote])).toEqual([]);
+  expect(withPrototypeReviewSummaries([remote])[0]!.prototypeReview?.waitingReviewId).toBeNull();
+  expect(prototypeReviewNotices([{ ...task([]), prototypeReviews: undefined, prototypeReview: stale } as BoardTask])).toEqual([]);
 });

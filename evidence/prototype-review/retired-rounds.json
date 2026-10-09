@@ -1,0 +1,590 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "desktop-1440-en-light-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "desktop-1440-en-light-plaque": {
+      "count": "3",
+      "tasks": [
+        "t-links",
+        "t-search",
+        "t-upload"
+      ]
+    },
+    "desktop-1440-en-light-card": {
+      "state": "decided",
+      "text": "Prototype"
+    },
+    "desktop-1440-en-light-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "superseded by round 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "decided"
+          ]
+        }
+      ]
+    },
+    "desktop-1440-en-light-superseded": {
+      "line": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "footer": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Export presets, first take · 28 Aug, 11:59 · superseded by round 2",
+      "layout": {
+        "mark": {
+          "left": 117,
+          "top": 810,
+          "bottom": 824
+        },
+        "sentence": {
+          "left": 139,
+          "top": 809,
+          "bottom": 825
+        },
+        "link": {
+          "left": 403,
+          "top": 809,
+          "bottom": 825
+        },
+        "anyway": {
+          "left": 1149,
+          "top": 801,
+          "bottom": 833
+        }
+      }
+    },
+    "desktop-1440-en-dark-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "desktop-1440-en-dark-plaque": {
+      "count": "3",
+      "tasks": [
+        "t-links",
+        "t-search",
+        "t-upload"
+      ]
+    },
+    "desktop-1440-en-dark-card": {
+      "state": "decided",
+      "text": "Prototype"
+    },
+    "desktop-1440-en-dark-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "superseded by round 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "decided"
+          ]
+        }
+      ]
+    },
+    "desktop-1440-en-dark-superseded": {
+      "line": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "footer": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Export presets, first take · 28 Aug, 11:59 · superseded by round 2",
+      "layout": {
+        "mark": {
+          "left": 117,
+          "top": 810,
+          "bottom": 824
+        },
+        "sentence": {
+          "left": 139,
+          "top": 809,
+          "bottom": 825
+        },
+        "link": {
+          "left": 403,
+          "top": 809,
+          "bottom": 825
+        },
+        "anyway": {
+          "left": 1149,
+          "top": 801,
+          "bottom": 833
+        }
+      }
+    },
+    "desktop-1440-uk-light-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "desktop-1440-uk-light-plaque": {
+      "count": "3",
+      "tasks": [
+        "t-links",
+        "t-search",
+        "t-upload"
+      ]
+    },
+    "desktop-1440-uk-light-card": {
+      "state": "decided",
+      "text": "Прототип"
+    },
+    "desktop-1440-uk-light-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "замінено раундом 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "вирішено"
+          ]
+        }
+      ]
+    },
+    "desktop-1440-uk-light-superseded": {
+      "line": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "footer": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Пресети експорту, перша спроба · 28 серп., 11:59 · замінено раундом 2",
+      "layout": {
+        "mark": {
+          "left": 117,
+          "top": 810,
+          "bottom": 824
+        },
+        "sentence": {
+          "left": 139,
+          "top": 809,
+          "bottom": 825
+        },
+        "link": {
+          "left": 415,
+          "top": 809,
+          "bottom": 825
+        },
+        "anyway": {
+          "left": 1119,
+          "top": 801,
+          "bottom": 833
+        }
+      }
+    },
+    "desktop-1440-uk-dark-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "desktop-1440-uk-dark-plaque": {
+      "count": "3",
+      "tasks": [
+        "t-links",
+        "t-search",
+        "t-upload"
+      ]
+    },
+    "desktop-1440-uk-dark-card": {
+      "state": "decided",
+      "text": "Прототип"
+    },
+    "desktop-1440-uk-dark-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "замінено раундом 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "вирішено"
+          ]
+        }
+      ]
+    },
+    "desktop-1440-uk-dark-superseded": {
+      "line": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "footer": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Пресети експорту, перша спроба · 28 серп., 11:59 · замінено раундом 2",
+      "layout": {
+        "mark": {
+          "left": 117,
+          "top": 810,
+          "bottom": 824
+        },
+        "sentence": {
+          "left": 139,
+          "top": 809,
+          "bottom": 825
+        },
+        "link": {
+          "left": 415,
+          "top": 809,
+          "bottom": 825
+        },
+        "anyway": {
+          "left": 1119,
+          "top": 801,
+          "bottom": 833
+        }
+      }
+    },
+    "phone-390-en-light-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "phone-390-en-light-plaque": {
+      "count": "3",
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype"
+    },
+    "phone-390-en-light-card": {
+      "state": "decided",
+      "text": "Prototype"
+    },
+    "phone-390-en-light-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "superseded by round 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "decided"
+          ]
+        }
+      ]
+    },
+    "phone-390-en-light-superseded": {
+      "line": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "footer": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Export presets, first take · 28 Aug, 11:59 · superseded by round 2",
+      "layout": {
+        "mark": {
+          "left": 16,
+          "top": 775,
+          "bottom": 789
+        },
+        "sentence": {
+          "left": 38,
+          "top": 774,
+          "bottom": 790
+        },
+        "link": {
+          "left": 302,
+          "top": 774,
+          "bottom": 790
+        },
+        "anyway": {
+          "left": 200,
+          "top": 794,
+          "bottom": 838
+        }
+      }
+    },
+    "phone-390-en-dark-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "phone-390-en-dark-plaque": {
+      "count": "3",
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype"
+    },
+    "phone-390-en-dark-card": {
+      "state": "decided",
+      "text": "Prototype"
+    },
+    "phone-390-en-dark-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "superseded by round 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "decided"
+          ]
+        }
+      ]
+    },
+    "phone-390-en-dark-superseded": {
+      "line": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "footer": "Superseded by round 2, decided on 31 Aug 2026.Open round 2Decide this round anyway",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Export presets, first take · 28 Aug, 11:59 · superseded by round 2",
+      "layout": {
+        "mark": {
+          "left": 16,
+          "top": 775,
+          "bottom": 789
+        },
+        "sentence": {
+          "left": 38,
+          "top": 774,
+          "bottom": 790
+        },
+        "link": {
+          "left": 302,
+          "top": 774,
+          "bottom": 790
+        },
+        "anyway": {
+          "left": 200,
+          "top": 794,
+          "bottom": 838
+        }
+      }
+    },
+    "phone-390-uk-light-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "phone-390-uk-light-plaque": {
+      "count": "3",
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу"
+    },
+    "phone-390-uk-light-card": {
+      "state": "decided",
+      "text": "Прототип"
+    },
+    "phone-390-uk-light-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "замінено раундом 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "вирішено"
+          ]
+        }
+      ]
+    },
+    "phone-390-uk-light-superseded": {
+      "line": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "footer": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Пресети експорту, перша спроба · 28 серп., 12:00 · замінено раундом 2",
+      "layout": {
+        "mark": {
+          "left": 16,
+          "top": 754,
+          "bottom": 768
+        },
+        "sentence": {
+          "left": 38,
+          "top": 753,
+          "bottom": 770
+        },
+        "link": {
+          "left": 38,
+          "top": 774,
+          "bottom": 790
+        },
+        "anyway": {
+          "left": 170,
+          "top": 794,
+          "bottom": 838
+        }
+      }
+    },
+    "phone-390-uk-dark-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "phone-390-uk-dark-plaque": {
+      "count": "3",
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу"
+    },
+    "phone-390-uk-dark-card": {
+      "state": "decided",
+      "text": "Прототип"
+    },
+    "phone-390-uk-dark-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "замінено раундом 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "вирішено"
+          ]
+        }
+      ]
+    },
+    "phone-390-uk-dark-superseded": {
+      "line": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "footer": "Замінено раундом 2, рішення від 31 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Пресети експорту, перша спроба · 28 серп., 12:00 · замінено раундом 2",
+      "layout": {
+        "mark": {
+          "left": 16,
+          "top": 754,
+          "bottom": 768
+        },
+        "sentence": {
+          "left": 38,
+          "top": 753,
+          "bottom": 770
+        },
+        "link": {
+          "left": 38,
+          "top": 774,
+          "bottom": 790
+        },
+        "anyway": {
+          "left": 170,
+          "top": 794,
+          "bottom": 838
+        }
+      }
+    }
+  },
+  "failures": []
+}
