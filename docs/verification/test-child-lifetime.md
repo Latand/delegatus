@@ -483,13 +483,13 @@ repeated for this inventory correction.
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
 | `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
-| `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
+| `src/runtime-host/hostRollback.test.ts` | 253, 279 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
 | `src/runtime-host/journalStartup.test.ts` | 78 | owned; preload records the original Bun handle before return, the interrupted backfill child deliberately signals itself and its exit is awaited inside the private runner service |
 | `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
 | `src/runtime-host/mcpRuntimeRelease.test.ts` | 78, 120, 175, 280, 318 | owned |
 | `src/runtime-host/runtimeHostFence.test.ts` | 60, 115, 124 | owned |
-| `src/runtime-host/runtimeHostStartup.test.ts` | 175 | owned |
+| `src/runtime-host/runtimeHostStartup.test.ts` | 176 | owned |
 | `src/runtime-host/runtimeHostSuccession.process.test.ts` | 36 | owned; original host handles are retained before readiness, finally cleanup awaits TERM with three-second KILL escalation, and the private runner service contains interrupted succession |
 | `test-preload.ts` | 19 | contained helper |
 
