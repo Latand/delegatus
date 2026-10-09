@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 43;
+export const ORCHESTRATOR_PROMPT_VERSION = 44;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -461,7 +461,7 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 ## Pipeline stage contract
 Stages are a graph; array order controls presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null. add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order.
 Review pairs a read-only reviewer with onFail:{to:"<fix stage id>",maxRounds} and a fix whose next returns to it. maxRounds counts failing reviews. advance (default) runs the last fix: a terminal gate (next:null) re-checks once and completes either way; a fail completes as "budget spent". A nonterminal gate follows its pass edge with unreviewed findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.
-Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief. Pick rounds at creation; they never grow. A spent budget merges; its findings go to a follow-up task.
+Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. Pick rounds at creation; they never grow. A spent budget merges; its findings go to a follow-up task.
 The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.
 src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve.
 

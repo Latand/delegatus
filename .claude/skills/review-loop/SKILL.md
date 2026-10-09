@@ -64,7 +64,7 @@ From an agent:
    }
    ```
 
-   Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief. Unlimited review requires an explicit operator request and `roundLimit: 0`.
+   Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. For pipeline gates: Pick rounds at creation; they never grow. A spent budget merges; its findings go to a follow-up task. For standalone flows, more than 3 only when the operator asks; state the reason in the brief. Standalone flows may use unlimited review only on an explicit operator request with `roundLimit: 0`.
 
    A role is `{engine: "claude"|"codex", model: string|null, effort: string|null}`
    (codex effort: low|medium|high|xhigh). `GET /api/flows` lists flows and the
@@ -103,7 +103,7 @@ From an agent:
 - `needs_decision: "reviewer verdict was unparseable"` — read the round
   artifact. A usage-limit banner means the reviewer engine ran out of quota:
   switch `roles.reviewer` in `flows.json`, then `retry-round`.
-- Round limit reached — `close`, or `{"action":"extend","rounds":N}` to a
+- Standalone flow round limit reached — `close`, or `{"action":"extend","rounds":N}` to a
   revised budget of at most 3. More than 3 only when the operator asks; state
   the reason in the brief.
 

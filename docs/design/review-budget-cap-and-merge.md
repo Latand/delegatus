@@ -70,10 +70,11 @@ seat wake contract and leaves rotation, board maintenance and update drain alone
 The merge bar accepts passed reviews and spent budgets on green checks. The
 review paragraph says: “Pick rounds at creation; they never grow. A spent budget
 merges; its findings go to a follow-up task.” The default remains 3 and the risk
-selection guidance remains intact.
+selection guidance remains intact. The creator chooses the finite budget without
+an additional approval for values above three.
 
-The corrected text bumps mandate v42 to v43, adds its fingerprint without
-rewriting history and retains the delivered-envelope bound. Reconcile the next
+The corrected text bumps mandate v42 through v43 to v44, adds each fingerprint
+without rewriting history and retains the delivered-envelope bound. Reconcile the next
 version after merging any parallel mandate change.
 
 Cards and `list_pipelines` show completed with

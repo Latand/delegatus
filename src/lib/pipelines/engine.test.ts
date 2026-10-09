@@ -22097,7 +22097,7 @@ test.each([false, true])("a blocked terminal reviewer retries its unspent activa
 });
 
 
-test.each(["tick", "direct"] as const)("an older failed terminal park migrates on tick or continues before tick (%s)", async (recovery) => {
+test.each(["tick", "direct"] as const)("an older failed terminal park migrates on tick and refuses a new grant before tick (%s)", async (recovery) => {
   const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
   movingHeadPorts = h.ports;
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
@@ -22105,19 +22105,21 @@ test.each(["tick", "direct"] as const)("an older failed terminal park migrates o
   delete legacy.reviewPending;
   legacy.stateDetail = "budget spent: 1 findings left (critique): retained finding";
   savePipelines([legacy]);
-  if (recovery === "tick") {
-    await tickPipelines([], h.ports);
-    expect(loadPipelines()[0]!.reviewBudgetSpent).toMatchObject({ stageId: "critique", findings: 1 });
-    expect(loadPipelines()[0]!.state).toBe("completed");
-    return;
+  if (recovery === "direct") {
+    const parked = loadPipelines()[0]!;
+    const refused = await continueReview(parked, "legacy-new-grant", 2);
+    expect(refused.status).toBe(409);
+    expect(refused.error).toContain("chosen at creation");
+    expect(loadPipelines()[0]).toEqual(parked);
   }
-  const parked = loadPipelines()[0]!;
-  expect((await restoreHistoricReviewGrant(parked, `legacy-${recovery}-grant`, 2)).error).toBeUndefined();
-  expect(loadPipelines()[0]!.id).toBe(legacy.id);
-  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
-  const continued = (await driveWithController(h)).pipeline;
-  expect(continued.state).toBe("completed");
-  expect(continued.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
+  await tickPipelines([], h.ports);
+  const completed = loadPipelines()[0]!;
+  expect(completed.id).toBe(legacy.id);
+  expect(completed.reviewBudgetSpent).toMatchObject({ stageId: "critique", findings: 1 });
+  expect(completed.state).toBe("completed");
+  const attempts = completed.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts.at(-1)!.verdict?.findings).toEqual(legacy.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.verdict?.findings);
 });
 
 
