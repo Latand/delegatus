@@ -586,8 +586,8 @@ test("renamed-project receipt recovery still refuses a different authenticated r
   let caller = "conversation_caller";
   const { posts, control } = controlStub();
   const { service } = projectService(control, projects, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: caller }),
-    attentionAuthority: () => ({ kind: "worker", conversationId: caller }),
+    callerAttribution: () => ({ kind: "gateway", conversationId: caller, role: null }),
+    attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: null }),
   });
   const args = { clientRequestId: "renamed-ownership", project: "Example project", text: "status?" };
   expect((await service.callTool("send_message_to_orchestrator", args)).ok).toBe(true);
