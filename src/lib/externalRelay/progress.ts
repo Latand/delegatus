@@ -7,7 +7,7 @@ export type EphemeralAgentEvent =
 export function mapAgentLine(
   engine: "claude" | "codex",
   line: string,
-  profile: { webSearch: boolean } = { webSearch: false },
+  profile: { webSearch: boolean; session?: boolean } = { webSearch: false },
 ): EphemeralAgentEvent[] {
   let event: Record<string, unknown>;
   try {
@@ -20,7 +20,7 @@ export function mapAgentLine(
       const item = event.item as Record<string, unknown> | undefined;
       if (
         !item ||
-        !["agent_message", "reasoning", "error", ...(profile.webSearch ? ["web_search"] : [])].includes(String(item.type))
+        !["agent_message", "reasoning", "error", ...(profile.webSearch ? ["web_search"] : []), ...(profile.session ? ["context_compaction"] : [])].includes(String(item.type))
       )
         return [{ type: "violation", detail: "unexpected Codex item" }];
       // The native web search is the one tool the profile may offer (§B.6.5).

@@ -10,9 +10,11 @@ import { installOnboardingDom, jsonResponse, settle, typeInto } from "@/test-hel
  * The external relay's operator surface (docs/design/relay.md §B.9), every
  * state it draws: the connect form, the code and link while the owner acts in
  * the relay service, the identity to confirm, a pairing that ended there, a
- * paired relay with its targets, poller state, last outcome and last
- * progress, and the setup guide's step that pairs only once an account of the
- * chosen engine is signed in.
+ * paired relay with its targets folded to one row each and unfolded in place,
+ * poller state, last outcome and last progress, the relay's ⋯ with pause and
+ * disconnect, and the setup guide's step that pairs only once an account of
+ * the chosen engine is signed in. The card holds settings only: nothing a
+ * relay's chat said is shown or fetched here.
  */
 
 const harness = installOnboardingDom();
@@ -22,6 +24,7 @@ const { ExternalRelaySection } = await import("./ExternalRelaySection");
 const { RelayStep } = await import("@/components/onboarding/RelayStep");
 const { resetEngineAccountsStoresForTests } = await import("@/hooks/useEngineAccounts");
 const { setLocale } = await import("@/lib/i18n");
+const { ExternalRelaySettingsDialog } = await import("./ExternalRelaySettingsDialog");
 
 const OWNER = { namespace: "example", id: "owner-1", display_name: "Person A", handle: "@person_a" };
 const target = (over: Record<string, unknown> = {}) => ({
@@ -61,6 +64,17 @@ const click = async (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   await act(async () => (element as HTMLElement).click());
   await act(async () => settle());
+};
+/** Unfolds a target's row, where its engine, model, effort, concurrency and member limit are. */
+const unfold = async (row: Element) => {
+  if (row.querySelector("[data-external-relay-target-fold]")?.getAttribute("aria-expanded") !== "true") await click(row.querySelector("[data-external-relay-target-fold]"));
+  return row;
+};
+const switchOf = (row: Element) => row.querySelector<HTMLButtonElement>("[data-external-relay-answered-by]")!;
+/** The relay's ⋯ menu, opened, and its row named `label`. */
+const menuRow = async (card: Element, label: string) => {
+  await click(card.querySelector("[data-external-relay-menu] [data-bar-more]"));
+  return Array.from(card.querySelectorAll<HTMLButtonElement>("[data-bar-more-menu] button")).find((button) => button.textContent === label);
 };
 function accounts(body: { claude?: unknown[]; codex?: unknown[] }): void {
   resetEngineAccountsStoresForTests();
@@ -143,7 +157,11 @@ test("a pairing the service declined shows its reason as text and starts again",
   expect(ended.textContent).toContain("The relay service declined this pairing.");
   expect(ended.textContent).toContain("<b>not admitted</b>");
   expect(ended.querySelector("b")).toBeNull();
-  await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Start again"));
+  /* Starting again is a new pairing: it carries the board's repeat icon, never a back chevron. */
+  const again = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Start again");
+  expect(again?.querySelector("svg.lucide-rotate-ccw")).toBeTruthy();
+  expect(again?.querySelector("svg.lucide-chevron-left")).toBeNull();
+  await click(again);
   expect(host.querySelector("[data-external-relay-connect-area]")).toBeTruthy();
 });
 
@@ -175,32 +193,96 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
   expect(card.querySelector("[data-external-relay-state]")?.getAttribute("data-external-relay-state")).toBe("unreachable");
   expect(card.querySelector("[data-external-relay-state]")?.className).toContain("text-warning");
   expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toContain("Declined: the target was at its concurrency");
-  expect(card.querySelector("[data-external-relay-last-progress]")?.textContent).toContain("Support bot: Reading the thread");
+  /* The last progress names the target and the time; its label is only the line's tooltip. */
+  const progress = card.querySelector("[data-external-relay-last-progress]")!;
+  expect(progress.textContent).toContain("Support bot · ");
+  expect(progress.getAttribute("title")).toBe("Reading the thread");
 
+  /* Each target is one folded row: its model, running count and limit, and the switch. */
   const first = card.querySelector("[data-external-relay-target=bot-1]")!;
-  expect(first.textContent).toContain("1 of 2 running");
-  const selects = Array.from(first.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).value);
-  expect(selects).toEqual(["claude", "opus", "low", "2"]);
-  expect((first.querySelector("[data-external-relay-answered-by]") as HTMLInputElement).checked).toBe(true);
+  expect(first.querySelector("[data-external-relay-running]")?.textContent).toBe("Opus 5.5 · 1 of 2 running · 10/h");
+  /* The effort ladder belongs to the model, so it sits right after the model's name. */
+  expect(first.querySelector("[data-external-relay-running] [data-effort-pills]")?.previousElementSibling?.textContent).toBe("Opus 5.5");
+  expect(first.querySelector("[data-external-relay-target-fold]")?.getAttribute("aria-expanded")).toBe("false");
+  expect(first.querySelectorAll("select")).toHaveLength(0);
+  expect(switchOf(first).getAttribute("role")).toBe("switch");
+  expect(switchOf(first).getAttribute("aria-checked")).toBe("true");
+  expect(switchOf(first).getAttribute("aria-label")).toBe("Answered by this install · Support bot");
+
+  /* Unfolded in place: the new-agent form's engine pills, model and effort, then concurrency and the member limit. */
+  await unfold(first);
+  expect(first.querySelector('[data-external-relay-engine] [role=radio][aria-checked="true"]')?.textContent).toBe("Claude");
+  expect(Array.from(first.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).value)).toEqual(["opus", "low", "2"]);
+  expect(Array.from(first.querySelectorAll("select")).map((select) => select.getAttribute("aria-label"))).toEqual(["Model · Support bot", "Effort · Support bot", "At once · Support bot"]);
+  expect((first.querySelector("[data-external-relay-member-limit]") as HTMLInputElement).value).toBe("10");
+  /* One row is open at a time. */
+  const second = card.querySelector("[data-external-relay-target=bot-2]")!;
+  await unfold(second);
+  expect(first.querySelectorAll("select")).toHaveLength(0);
 
   /* Codex has no signed-in account: its target cannot be switched to this install. */
-  const second = card.querySelector("[data-external-relay-target=bot-2]")!;
-  expect((second.querySelector("[data-external-relay-answered-by]") as HTMLInputElement).disabled).toBe(true);
+  expect(switchOf(second).disabled).toBe(true);
+  expect(second.querySelector("[data-external-relay-running]")?.className).toContain("text-warning");
   expect(second.querySelector("[data-external-relay-no-account]")?.textContent).toBe("No Codex account is signed in here. Sign one in first.");
 
   /* A target with no engine yet says what it needs and cannot answer. */
   const third = card.querySelector("[data-external-relay-target=bot-3]")!;
-  expect((third.querySelector("[data-external-relay-answered-by]") as HTMLInputElement).disabled).toBe(true);
-  expect(third.textContent).toContain("Choose an engine and a model before this install can answer.");
+  expect(switchOf(third).disabled).toBe(true);
+  expect(third.querySelector("[data-external-relay-running]")?.textContent).toBe("Choose an engine and a model");
 
   /* Changing the engine sends that engine's default model and clears the effort. */
-  const engine = first.querySelector("select") as HTMLSelectElement;
-  await act(async () => {
-    engine.value = "codex";
-    engine.dispatchEvent(new (window as unknown as { Event: typeof Event }).Event("change", { bubbles: true }));
-  });
-  await act(async () => settle());
+  await unfold(first);
+  await click(Array.from(first.querySelectorAll("[data-external-relay-engine] [role=radio]")).find((radio) => radio.textContent === "Codex"));
   expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol", effort: null } });
+});
+
+/** Picks `value` in a select as the operator would, firing its change. */
+const choose = async (select: HTMLSelectElement | null | undefined, value: string) => {
+  expect(select).toBeTruthy();
+  await act(async () => { select!.value = value; select!.dispatchEvent(new window.Event("change", { bubbles: true })); });
+  await act(async () => settle());
+};
+
+test("the model keeps the effort only where the new model has it, and the effort and concurrency save what was picked", async () => {
+  accounts({ codex: [signedIn("work")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "codex", model: "gpt-6-astra", effort: "ultra", concurrency: 1, answered_by: "install" })] })], pending: [], status: [] };
+  route((url, init) => url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const row = await unfold(host.querySelector("[data-external-relay-target=bot-1]")!);
+  const select = (label: string) => row.querySelector<HTMLSelectElement>(`select[aria-label="${label} · Support bot"]`);
+  const patches = () => harness.calls.filter((call) => call.method === "PATCH").map((call) => [call.url, call.body]);
+
+  /* GPT-6 Sol has «ultra» too, so the effort goes along; GPT-6 Luna has no «ultra», so it falls back to the default. */
+  await choose(select("Model"), "gpt-6-sol");
+  await choose(select("Model"), "gpt-6-luna");
+  /* An effort is saved as picked, and «Default» as none. */
+  await choose(select("Effort"), "high");
+  await choose(select("Effort"), "");
+  await choose(select("At once"), "3");
+  expect(patches()).toEqual([
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6-sol", effort: "ultra" } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6-luna", effort: null } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", effort: "high" } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", effort: null } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", concurrency: 3 } }],
+  ]);
+});
+
+test("the switch routes a target to this install or back to the service, and the card fetches nothing a chat said", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus" }), target({ id: "bot-2", name: "Sales bot", engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+  route((url, init) => url.startsWith("/api/external-relay/relays/relay-1/targets/") && init?.method === "PATCH" ? jsonResponse({ target: {} }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const card = host.querySelector("[data-external-relay=relay-1]")!;
+  await click(switchOf(card.querySelector("[data-external-relay-target=bot-1]")!));
+  await click(switchOf(card.querySelector("[data-external-relay-target=bot-2]")!));
+  expect(harness.calls.filter((call) => call.method === "PATCH").map((call) => [call.url, call.body])).toEqual([
+    ["/api/external-relay/relays/relay-1/targets/bot-1", { answered_by: "install" }],
+    ["/api/external-relay/relays/relay-1/targets/bot-2", { answered_by: "service" }],
+  ]);
+  for (const row of card.querySelectorAll("[data-external-relay-target]")) await unfold(row);
+  expect(harness.calls.some((call) => call.url.includes("/answers") || call.url.includes("/conversations"))).toBe(false);
+  expect(card.querySelector("[data-external-relay-answers], [data-external-relay-answers-toggle], [data-external-relay-exchange]")).toBeNull();
 });
 
 test("a relay whose credential was refused reads as an error, and a paused one offers Resume and its failed targets refresh", async () => {
@@ -223,8 +305,13 @@ test("a relay whose credential was refused reads as an error, and a paused one o
   expect(paused.querySelector("[data-external-relay-state]")?.getAttribute("data-external-relay-state")).toBe("paused");
   // A targets refresh that failed keeps the list and says why.
   expect(paused.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe("Could not refresh the targets. The relay service could not be reached.");
-  await click(Array.from(paused.querySelectorAll("button")).find((button) => button.textContent === "Resume"));
+  await click(await menuRow(paused, "Resume"));
   expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ paused: false });
+  /* Pause and Disconnect sit behind the relay's ⋯. */
+  expect(await menuRow(host.querySelector("[data-external-relay=relay-1]")!, "Pause")).toBeTruthy();
+  const disconnect = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-external-relay=relay-1] [data-bar-more-menu] button")).find((button) => button.textContent === "Disconnect");
+  await click(disconnect);
+  expect(harness.calls.find((call) => call.method === "DELETE")?.url).toBe("/api/external-relay/relays/relay-1");
 });
 
 test("a staging Viewer says relays are off there", async () => {
@@ -278,14 +365,15 @@ test("the setup guide's step reports a relay paired earlier and offers no Skip w
   expect(host.querySelector("[data-onboarding-relay-skip]")).toBeNull();
 });
 
-test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 24-hour clock", async () => {
+test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 24-hour clock to the minute", async () => {
   accounts({ claude: [signedIn("main")] });
   const outcomeAt = "2026-09-28T17:08:43.000Z";
   const progressAt = "2026-09-28T17:07:10.000Z";
   const pairedAt = "2026-09-27T17:27:16.000Z";
+  const expiresAt = new Date(Date.now() + 600_000).toISOString();
   answers.relay = {
     relays: [relay({ pairedAt, targets: [target({ engine: "claude", model: "opus", effort: "low" })] })],
-    pending: [pending({ id: "pair-2", expires_at: new Date(Date.now() + 600_000).toISOString() })],
+    pending: [pending({ id: "pair-2", expires_at: expiresAt })],
     status: [{ id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: outcomeAt, lastProgress: { targetId: "bot-1", label: "Пишу відповідь", at: progressAt } }, running: {} }],
   };
   answers.pairing = { status: "pending" };
@@ -294,14 +382,22 @@ test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 
   try {
     const host = await mount(<ExternalRelaySection />);
     const card = host.querySelector("[data-external-relay=relay-1]")!;
-    expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(`Відповіли · ${new Date(outcomeAt).toLocaleTimeString("uk-UA")}`);
-    expect(card.querySelector("[data-external-relay-last-progress]")?.textContent).toContain(new Date(progressAt).toLocaleTimeString("uk-UA"));
-    expect(card.textContent).toContain(new Date(pairedAt).toLocaleString("uk-UA"));
+    const minute = (at: string) => new Date(at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+    expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(`Відповіли · ${minute(outcomeAt)}`);
+    expect(card.querySelector("[data-external-relay-last-progress]")?.textContent).toBe(`Support bot · ${minute(progressAt)}`);
+    /* The pairing date is short: day, month's abbreviation and the minute, without seconds or this year. */
+    expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toBe(`Під’єднано як Person A (@person_a) · ${new Date(pairedAt).toLocaleString("uk-UA", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`);
+    expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toMatch(/вер\./);
     const pairing = host.querySelector("[data-external-relay-pairing]")!;
-    expect(pairing.textContent).not.toMatch(/AM|PM/);
-    expect(card.textContent).not.toMatch(/AM|PM/);
-    expect(card.textContent).toMatch(/\d{2}\.\d{2}\.2026/);
+    expect(pairing.textContent).toContain(`Код дійсний до ${minute(expiresAt)}.`);
+    for (const text of [pairing.textContent, card.textContent]) {
+      expect(text).not.toMatch(/AM|PM/);
+      expect(text).not.toMatch(/\d:\d{2}:\d{2}/);
+      expect(text).not.toMatch(/\d{2}\.\d{2}\.2026/);
+    }
+    await unfold(card.querySelector("[data-external-relay-target=bot-1]")!);
     const effort = card.querySelector<HTMLSelectElement>('select[aria-label^="Зусилля"]')!;
+    expect(card.querySelector("[data-external-relay-running]")?.textContent).toContain("10/год");
     expect(effort.value).toBe("low");
     expect(effort.selectedOptions[0]?.textContent).toBe("низькі");
     expect(Array.from(effort.options).map((option) => option.value)).toContain("xhigh");
@@ -309,6 +405,35 @@ test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 
   } finally {
     setLocale("en");
   }
+});
+
+test("a pairing from another year names its year; English times are on the same 24-hour clock", async () => {
+  accounts({ claude: [signedIn("main")] });
+  const pairedAt = "2025-03-04T09:14:00.000Z";
+  answers.relay = { relays: [relay({ pairedAt })], pending: [], status: [{ id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: "2026-09-28T17:08:43.000Z", lastProgress: null }, running: {} }] };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const card = host.querySelector("[data-external-relay=relay-1]")!;
+  expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toBe(`Paired as Person A (@person_a) · ${new Date(pairedAt).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}`);
+  expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toMatch(/Mar \d+, 2025/);
+  expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toMatch(/^Answered · \d{2}:\d{2}$/);
+  expect(card.textContent).not.toMatch(/AM|PM/);
+});
+
+test("the settings dialog explains what a relay is until one is paired, then opens on the relay", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  route();
+  let host = await mount(<ExternalRelaySettingsDialog onClose={() => {}} />);
+  expect(host.querySelector("[data-external-relay-intro]")?.textContent).toContain("A relay service can send this install questions");
+  await act(async () => mounted!.root.unmount());
+  host.remove();
+  mounted = null;
+
+  answers.relay = { relays: [relay()], pending: [], status: [] };
+  host = await mount(<ExternalRelaySettingsDialog onClose={() => {}} />);
+  expect(host.querySelector("[data-external-relay=relay-1]")).toBeTruthy();
+  expect(host.querySelector("[data-external-relay-intro]")).toBeNull();
 });
 
 test("a refusal made by this install, or its own failure, never reads as the relay service's refusal", async () => {
@@ -526,125 +651,12 @@ test("in Ukrainian the button, its lead and the disclosure are written in Ukrain
   }
 });
 
-const ANSWERS_URL = "/api/external-relay/relays/relay-1/targets/bot-1/answers";
-const exchanges = {
-  answers: [
-    { requestId: "rq_2", startedAt: "2026-10-06T09:05:00.000Z", finishedAt: "2026-10-06T09:05:04.000Z", durationMs: 4200, state: "finished", outcome: "declined:handoff", delivery: "accepted", request: "@helper mute him for an hour", answer: null },
-    { requestId: "rq_1", startedAt: "2026-10-06T09:00:00.000Z", finishedAt: "2026-10-06T09:00:06.000Z", durationMs: 6100, state: "finished", outcome: "answered", delivery: "accepted", request: "When is the <b>meetup</b>?", answer: "Thursday at 18:30." },
-  ],
-  retentionDays: 30,
-};
-const handoffRecord = {
-  requestId: "rq_2", startedAt: "2026-10-06T09:05:00.000Z", finishedAt: "2026-10-06T09:05:04.000Z", durationMs: 4200, state: "finished",
-  outcome: "declined:handoff", delivery: "accepted", engine: "claude", model: "opus", answer: { action: "handoff", text: "", reply_to: null },
-  input: {
-    conversation: [{ id: "m9", author: { key: "u_a", name: "Admin A", self: false }, text: "@helper mute him for an hour", reply_to: null }],
-    respond_to: "m9", request_text: null,
-    requester: { key: "u_a", is_admin: true, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false },
-    tools: [{ name: "restrict_member", summary: "Mute a participant", mode: "handoff" }],
-  },
-};
-function answersRoute(list: unknown = exchanges) {
-  route((url) => {
-    if (url === ANSWERS_URL) return jsonResponse(list);
-    if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: handoffRecord });
-    if (url === `${ANSWERS_URL}/rq_gone`) return jsonResponse({ error: "not_found" }, 404);
-    return undefined;
-  });
-}
-
-test("recent answers open from the target row, list the kept exchanges and show one read-only", async () => {
-  accounts({ claude: [signedIn("main")] });
-  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
-  answersRoute();
-  const host = await mount(<ExternalRelaySection />);
-  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
-  const toggle = row.querySelector("[data-external-relay-answers-toggle]")!;
-  expect(toggle.textContent).toBe("Recent answers");
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(harness.calls.some((call) => call.url === ANSWERS_URL)).toBe(false);
-  await click(toggle);
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  const list = row.querySelector("[data-external-relay-answer-list]")!;
-  const items = Array.from(list.querySelectorAll("[data-external-relay-answer]"));
-  expect(items.map((item) => item.getAttribute("data-external-relay-answer"))).toEqual(["rq_2", "rq_1"]);
-  expect(items[0]!.textContent).toContain("Handed off to the service");
-  expect(items[1]!.textContent).toContain("Answered");
-  expect(items[1]!.textContent).toContain("When is the <b>meetup</b>?");
-  expect(items[1]!.querySelector("b")).toBeNull();
-  expect(row.textContent).toContain("Each exchange is kept for 30 days and can only be read.");
-
-  await click(items[0]);
-  const exchange = row.querySelector("[data-external-relay-exchange=rq_2]")!;
-  expect(exchange.querySelector("[data-external-relay-exchange-outcome]")?.textContent).toBe("Handed off to the service");
-  expect(exchange.querySelector("[data-external-relay-exchange-request]")?.textContent).toBe("@helper mute him for an hour");
-  expect(exchange.querySelector("[data-external-relay-exchange-answer]")?.textContent).toBe("Handed back to the service, whose own assistant answers it.");
-  expect(exchange.textContent).toContain("Admin A · Admin");
-  expect(exchange.textContent).toContain("Claude · Opus 5.5");
-  expect(exchange.textContent).toContain("Received the result");
-  expect(exchange.querySelector("[data-external-relay-exchange-input]")?.textContent).toContain("\"restrict_member\"");
-  // Read-only: no composer, no field to type into.
-  expect(exchange.querySelector("textarea, input")).toBeNull();
-  await click(Array.from(exchange.querySelectorAll("button")).find((button) => button.textContent === "Back to recent answers"));
-  expect(row.querySelector("[data-external-relay-answer-list]")).toBeTruthy();
-});
-
-for (const locale of ["en", "uk"] as const)
-  for (const [role, flags, labels] of [
-    ["member", { is_admin: false, is_owner: false, is_anonymous_admin: false }, { en: "Member", uk: "Учасник" }],
-    ["admin", { is_admin: true, is_owner: false, is_anonymous_admin: false }, { en: "Admin", uk: "Адміністратор" }],
-    ["owner", { is_admin: false, is_owner: true, is_anonymous_admin: false }, { en: "Member · the owner", uk: "Учасник · власник" }],
-    ["anonymous admin", { is_admin: true, is_owner: false, is_anonymous_admin: true }, { en: "Admin · anonymous", uk: "Адміністратор · анонімно" }],
-  ] as const)
-    test(`the exchange shows service role flags for ${role} (${locale})`, async () => {
-      setLocale(locale);
-      try {
-        accounts({ claude: [signedIn("main")] });
-        answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
-        route((url) => {
-          if (url === ANSWERS_URL) return jsonResponse(exchanges);
-          if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: {
-            ...handoffRecord, input: { ...handoffRecord.input, requester: { ...handoffRecord.input.requester, ...flags } },
-          } });
-          return undefined;
-        });
-        const host = await mount(<ExternalRelaySection />);
-        await click(host.querySelector("[data-external-relay-answers-toggle]"));
-        await click(host.querySelector("[data-external-relay-answer=rq_2]"));
-        expect(host.querySelector("[data-external-relay-exchange=rq_2]")?.textContent).toContain(`Admin A · ${labels[locale]}`);
-      } finally {
-        setLocale("en");
-      }
-    });
-
-test("recent answers in Ukrainian, empty and expired", async () => {
-  setLocale("uk");
-  try {
-    accounts({ claude: [signedIn("main")] });
-    answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
-    answersRoute({ answers: [], retentionDays: 30 });
-    const host = await mount(<ExternalRelaySection />);
-    const row = host.querySelector("[data-external-relay-target=bot-1]")!;
-    const toggle = row.querySelector("[data-external-relay-answers-toggle]")!;
-    expect(toggle.textContent).toBe("Останні відповіді");
-    await click(toggle);
-    expect(row.querySelector("[data-external-relay-answers-empty]")?.textContent).toBe("За останні 30 днів відповідей немає.");
-    await click(toggle);
-    answersRoute({ ...exchanges, answers: [{ ...exchanges.answers[0], requestId: "rq_gone" }] });
-    await click(toggle);
-    await click(row.querySelector("[data-external-relay-answer=rq_gone]"));
-    expect(row.querySelector("[data-external-relay-exchange]")?.textContent).toContain("Цей обмін більше не зберігається.");
-  } finally {
-    setLocale("en");
-  }
-});
-
 test("the member limit shows the default, saves a number on leaving the field, and saves an empty field as no limit", async () => {
   accounts({ claude: [signedIn("main")] });
   answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
   route((url, init) => url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
   const host = await mount(<ExternalRelaySection />);
-  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  const row = await unfold(host.querySelector("[data-external-relay-target=bot-1]")!);
   const field = row.querySelector("[data-external-relay-member-limit]") as HTMLInputElement;
   expect(field.value).toBe("10");
   expect(row.textContent).toContain("Answers per member per hour");

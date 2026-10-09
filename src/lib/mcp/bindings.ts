@@ -1,3 +1,4 @@
+import { readBridgeReportLog } from "@/lib/bridge/store";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
 import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
@@ -104,7 +105,7 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import {
@@ -256,7 +257,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
@@ -783,6 +784,7 @@ export interface ViewerMcpDomainDependencies {
       (docs/design/needs-attention.md §5). Optional: production wires the
       registry, the task store and the pipeline engine. */
   dismissalPorts?: DismissalPorts;
+  attentionReportProject?(seq: number): string | null;
   /** Whether a phone the operator is looking at is open, for a request with no
       desktop to move (docs/design/needs-attention.md §6). Optional: production
       reads presence. */
@@ -1301,7 +1303,7 @@ function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string
   if (!model) return;
   if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
-  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
+  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
   let engine: "claude" | "codex" | "copilot" | null = null;
   if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
@@ -1453,7 +1455,7 @@ export function requestAttentionOperationKey(clientRequestId: string): string {
 function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "registrySnapshot">): void {
   const roleId = text(args.role);
   const role = roleId
-    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, engine: args.engine, model: args.model, effort: args.effort })
+    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort })
     : null;
   /* An unresolvable role is the route's to refuse, with its own words. */
   if (role && !role.ok) return;
@@ -1475,7 +1477,38 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
   if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from a large model (Claude Opus or Fable, or a large Codex model), or the role's own row" }] });
 }
 
+/** Check the deployer's caller before a fresh request claims a key,
+    and again at dispatch so a seat change cannot authorize a fresh launch. */
+function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dependencies?: ViewerMcpDomainDependencies): void {
+  if (text(args.role) !== "deployer") return;
+  let allowed = false;
+  try {
+    const caller = dependencies ? attributionOf(dependencies) : null;
+    if (dependencies && caller?.conversationId && !caller.via) {
+      allowed = caller.kind === "gateway" || (caller.kind === "manager"
+        && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
+    }
+  } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
+  if (!allowed) {
+    throw new McpToolRefusal("only the target project's designated orchestrator seat or the operator's own session may launch a deployer", {
+      code: "deployer_spawn_caller_unauthorized", status: 403,
+    });
+  }
+}
+
+function requireMcpDeployerConfirmation(args: McpToolArgs): void {
+  if (text(args.role) !== "deployer") return;
+  const role = resolveSpawnRole({
+    role: "deployer", roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams,
+    confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort,
+  });
+  if (!role.ok) throw new McpToolRefusal(role.error, { status: 400 });
+}
+
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
+  requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
   if (dependencies) {
     try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
@@ -5744,7 +5777,7 @@ function latestPendingLaunchReceiptForConversation(
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
 }
 
-function projectForArchiveTarget(
+function projectForConversationTarget(
   conversation: RegistrySnapshot["conversations"][string] | null,
   receipt: RegistrySnapshot["receipts"][string] | null,
   fallbackProject: string | null = null,
@@ -5810,7 +5843,7 @@ function resolveArchiveTargetFromRegistry(
     ...generationPaths,
     ...(placeholderPath ? [placeholderPath] : []),
   ])];
-  const project = projectForArchiveTarget(conversation, receipt);
+  const project = projectForConversationTarget(conversation, receipt);
   if (!project) return null;
   return { conversationId: conversationId ?? null, transcriptPath, transcriptPaths, project };
 }
@@ -6511,6 +6544,7 @@ async function dismissThroughService(
   undo: boolean,
   operationKey: string,
   dependencies: ViewerMcpDomainDependencies,
+  reason?: string,
 ) {
   const authority = dependencies.attentionAuthority();
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
@@ -6518,10 +6552,39 @@ async function dismissThroughService(
   if (!admission.allowed) {
     throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
   }
-  const focus = focusTargetFromArgs(target.kind === "conversation"
-    ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) }
-    : target, dependencies);
-  const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
+  if (target.kind === "conversation" && target.conversationId) {
+    const known = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot()).conversation(target.conversationId as `conversation_${string}`);
+    if (known) {
+      const path = known.generations.at(-1)?.path;
+      if (!path) throw new McpToolRefusal("conversation has no transcript", { code: "CONVERSATION_NOT_FOUND" });
+      target = { ...target, path };
+    }
+  }
+  let focus: FocusTarget | null = null;
+  let rawProject: string;
+  if (target.kind === "report") {
+    const project = dependencies.attentionReportProject ? dependencies.attentionReportProject(target.seq) : readBridgeReportLog().reports.find(r => r.seq === target.seq)?.project;
+    if (!project) throw new McpToolRefusal("report not found", { code: "REPORT_NOT_FOUND" });
+    rawProject = project;
+  } else if (target.kind === "prototype") {
+    const task = dependencies.loadTasks().find(t => t.id === target.taskId);
+    if (!task) throw new McpToolRefusal("prototype task not found", { code: "TASK_NOT_FOUND" });
+    rawProject = task.project;
+  } else if (target.kind === "conversation" && target.path?.startsWith("spawn:")) {
+    const snapshot = dependencies.registrySnapshot();
+    const receipt = snapshot.receipts?.[target.path.slice(6)];
+    if (!receipt) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND" });
+    const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(receipt.conversationId);
+    const project = projectForConversationTarget(conversation, receipt);
+    if (!project) throw new McpToolRefusal("launch project unavailable", { code: "CONVERSATION_NOT_FOUND" });
+    rawProject = project;
+    focus = { kind: "conversation", path: target.path };
+  } else {
+    focus = focusTargetFromArgs(target.kind === "conversation"
+      ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) } : target, dependencies);
+    rawProject = await focusTargetProject(focus, "", dependencies);
+  }
+  const project = canonicalOrchestratorProject(rawProject);
   const verdict = permitAttentionDismissal(authority, seats, project);
   if (!verdict.allowed) {
     throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
@@ -6537,9 +6600,9 @@ async function dismissThroughService(
     return await dismissAttentionService(
       /* A conversation named by id resolves to its current transcript, which
          is how the service keys it when the registry does not. */
-      target.kind === "conversation" && focus.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
+      target.kind === "conversation" && focus?.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
       by,
-      { undo, operationKey, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
+      { undo, operationKey, project, reason, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
     );
   } catch (error) {
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
@@ -6547,7 +6610,23 @@ async function dismissThroughService(
   }
 }
 
-async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+  if (args.target === undefined) {
+    if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });
+    const authority = dependencies.attentionAuthority();
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    const caller = maintenanceCaller(dependencies);
+    const maintainer = caller ? { ...caller, project: caller.project ? canonicalOrchestratorProject(caller.project) : null } : null;
+    const normalizedSeats = seats.map(seat => ({ ...seat, project: seat.project ? canonicalOrchestratorProject(seat.project) : null }));
+    const admission = permitNeedsYouRead(authority, normalizedSeats, maintainer, null);
+    if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "NEEDS_YOU_READ_NOT_PERMITTED" });
+    const ownProject = authority.kind !== "unidentified" ? normalizedSeats.find(s => s.conversationId === authority.conversationId)?.project ?? maintainer?.project : null;
+    const project = canonicalOrchestratorProject(text(args.project) || ownProject || "");
+    if (!project) throw new McpToolRefusal("name a project for the read", { code: "PROJECT_REQUIRED" });
+    const verdict = permitNeedsYouRead(authority, normalizedSeats, maintainer, project);
+    if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "NEEDS_YOU_READ_NOT_PERMITTED" });
+    return redactPayload(await viewerControlForCall(control, context).post("/api/attention/needs-you", { project, kinds: args.kinds, full: args.full, cursor: args.cursor }, callerCapabilityHeaders()));
+  }
   let target: DismissalTarget;
   try {
     target = parseDismissalTarget(args.target, { allowSubjects: false });
@@ -6555,7 +6634,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
     throw error;
   }
-  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
+  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined);
   return {
     dismissed: outcome.dismissed,
     alreadyClear: outcome.alreadyClear,
@@ -6563,6 +6642,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     at: outcome.at,
     by: outcome.by,
     undo: outcome.undo,
+    ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
   };
 }
 
@@ -6841,6 +6921,9 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
+  // An unidentified caller cannot own a receipt. Keep the deployer's refusal
+  // before lookup; identified owners are checked again only for fresh work.
+  if (caller.kind === "unidentified") requireMcpDeployerCaller(args, project, dependencies);
   refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
@@ -7096,6 +7179,10 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      authorizeClaim: (args, binding) => {
+        requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
+        requireMcpDeployerConfirmation(args);
+      },
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
@@ -7182,7 +7269,7 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
-    dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
+    dismiss_attention: (args, context) => dismissAttentionTool(args, domainDependencies, controlDependencies, context),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),

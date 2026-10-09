@@ -1,3 +1,4 @@
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -217,11 +218,11 @@ test("a host process no record covers is listed as orphaned so it can be reclaim
 });
 
 test("a scan-only inner CLI is rooted at its stamped wrapper", async () => {
-  const wrapper = spawn("/bin/sh", ["-c", "sleep 30 & wait"], {
+  const wrapper = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30 & wait"], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env, [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp() },
-  });
+  }));
   const wrapperPid = wrapper.pid;
   if (wrapperPid === undefined) throw new Error("fixture wrapper did not start");
   try {
@@ -261,7 +262,7 @@ test("a scan-only inner CLI is rooted at its stamped wrapper", async () => {
       }),
     });
   } finally {
-    try { process.kill(-wrapperPid, "SIGKILL"); } catch { /* already gone */ }
+    await stopFixtureTree(wrapper);
   }
 });
 
@@ -369,14 +370,8 @@ test("the kill allowlist holds exactly the listed hosts and a consumed target ca
 const workerFixtures: ChildProcess[] = [];
 const workerHome = mkdtempSync(path.join(os.tmpdir(), "llv-structured-host-worker-"));
 
-afterEach(() => {
-  for (const child of workerFixtures.splice(0)) {
-    try {
-      if (child.pid) process.kill(-child.pid, "SIGKILL");
-    } catch {
-      /* already gone */
-    }
-  }
+afterEach(async () => {
+  for (const child of workerFixtures.splice(0)) await stopFixtureTree(child);
 });
 
 afterAll(() => {
@@ -385,6 +380,7 @@ afterAll(() => {
 
 test("the collector worker turns a host record into a listed row with kill authority", async () => {
   const child = spawn("/bin/sh", ["-c", "sleep 30 & wait"], { detached: true, stdio: "ignore" });
+  ownFixtureTree(child);
   workerFixtures.push(child);
   const pid = child.pid;
   if (pid === undefined) throw new Error("fixture tree did not start");

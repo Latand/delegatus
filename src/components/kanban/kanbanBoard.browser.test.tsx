@@ -7,6 +7,8 @@ import sharp from "sharp";
 import type { Browser, LaunchOptions, Page } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { en } from "@/lib/i18n/en";
 import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -21724,11 +21726,11 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       for (const reading of recorded.readings) if (reading.variant === 0) before.set(reading.frame, reading);
     } catch { /* a checkout without the design lane's readings compares nothing */ }
     /* The browser runs as a server of its own so its process id is on record and the run can prove it gone. */
-    const pids: number[] = [];
+    const identities: ProcessIdentity[] = [];
     const launch = async () => {
       const browserServer = await chromium.launchServer(LAUNCH);
-      pids.push(browserServer.process().pid!);
-      fs.writeFileSync(path.join(OUT, "browser.pid"), `${pids.join("\n")}\n`);
+      identities.push(captureProcessIdentity(browserServer.process().pid!));
+      fs.writeFileSync(path.join(OUT, "browser.pid"), `${identities.map(identity => identity.pid).join("\n")}\n`);
       return { browserServer, browser: await chromium.connect(browserServer.wsEndpoint()) };
     };
     let running = await launch();
@@ -21909,12 +21911,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       await running.browser.close().catch(() => {});
       await running.browserServer.close().catch(() => {});
       server.stop();
-      const closed = pids.map((pid) => {
-        let alive = true;
-        try { process.kill(pid, 0); } catch { alive = false; }
-        if (alive) process.kill(pid, "SIGKILL");
-        return `${pid} closed`;
-      });
+      await Promise.all(identities.map(identity => stopFixtureIdentity(identity)));
+      const closed = identities.map(identity => `${identity.pid} closed`);
       fs.writeFileSync(path.join(OUT, "browser.pid"), `${closed.join("\n")}\n`);
     }
 

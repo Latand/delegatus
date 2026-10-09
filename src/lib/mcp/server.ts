@@ -2332,6 +2332,9 @@ export interface McpRecoverableTool {
   /** Resolve the server-derived caller and target for fresh admission. Runs
       before receipt access unless bindForRecovery authenticates that access first. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Fresh-request admission after an absent receipt lookup, before any claim.
+      Existing receipts retain their recorded caller and digest checks. */
+  authorizeClaim?(args: McpToolArgs, binding: McpRequestBindingInput): void | Promise<void>;
   /** Authenticate recovery without resolving a mutable target name. Existing
       receipts supply their own target; absent receipts still run bind before admission. */
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
@@ -2886,7 +2889,7 @@ export function createMcpToolService(
             }
           }
         }
-        if (recoveryOnly) {
+        if (recoveryOnly || tool.authorizeClaim) {
           let record: McpReceiptRecord | null;
           try {
             record = await store.lookup(key);
@@ -2895,6 +2898,15 @@ export function createMcpToolService(
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
           if (record) return recoverRecord(record);
+          try {
+            await tool.authorizeClaim?.(digestArgs, binding);
+          } catch (error) {
+            outcome = "failure";
+            return failure(typedTool, requestId,
+              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof McpToolRefusal ? error.details : undefined);
+          }
           /* Nothing has claimed this key HERE — an observation, never a
              verdict: the original may be a moment from claiming it, in this
              process or another, and a lookup that wrote anything under the
@@ -2904,13 +2916,15 @@ export function createMcpToolService(
              establishes whose work a downstream record under this key would
              be, so an answer built from it could hand one caller another's
              ids. The answer stays unknown while execution remains possible. */
-          outcome = "failure";
-          return recoveryAnswer(typedTool, requestId, {
-            outcome: "unknown",
-            evidence: "none",
-            reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
-            ids: {},
-          }, false);
+          if (recoveryOnly) {
+            outcome = "failure";
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "none",
+              reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
+              ids: {},
+            }, false);
+          }
         }
         let claim: ReceiptClaim;
         try {
@@ -3230,6 +3244,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
+    'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     "When a turn of the new agent ends, Delegatus sends you, the caller, one message from it: its title and id, how long it ran, its Verdict line first, and its final message (up to 4 KB). Briefs need no 'report back' line. Pass `notifyLauncher: false` to turn this off; the answer's `launcherNotice` says whether it is on.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -3337,9 +3352,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   publish_prototype_review: "Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   read_prototype_review: "Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
-    "Clear a needs-you flag the operator is shown, without answering anything (docs/design/needs-attention.md): a conversation's question, plan, prompt or undelivered message, a lane parked on a decision or a spent review budget, or everything on a task's card stops raising needs-you until something newer asks. Nothing else moves \u2014 no question is answered, no lane changes state, no message is dropped \u2014 and the card says who cleared it.",
-    "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
-    "Targets: { kind: \"conversation\", conversationId | path }, { kind: \"pipeline\", pipelineId }, or { kind: \"task\", taskId } for its conversations and the lanes filed under it. undo: true brings back what was cleared. The answer lists what was dismissed and what was alreadyClear (a lane that asks nothing, one already cleared, an undo of nothing), neither of which is an error. Attributed to the calling session on the server; idempotent by clientRequestId. pipeline_action dismiss/undismiss is the same write.",
+    "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
+    "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
+    'Targets: {kind:"conversation",conversationId|path,reasonId}, {kind:"pipeline",pipelineId,laneMovedAt}, {kind:"report",seq}, {kind:"prototype",taskId,reviewId}, {kind:"task",taskId}. Optional reason is one line up to 200 characters, retained beside server attribution in the read\'s cleared list. undo:true restores the mark. New reasons and rounds ask again. Dismissal resolves a report question in its log and leaves prototype choices open. pipeline_action dismiss/undismiss is the same lane write.',
   ].join(" "),
   bridge_report: [
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
@@ -3634,6 +3649,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Codex only: catalog tier id such as priority or ultrafast; refused if the model/account does not offer it. default or standard opts out of a role tier."),
     fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier when both are present."),
     role: z.enum(ROLE_IDS).optional(),
+    confirm: z.string().optional()
+      .describe('For deployer, must be "deploy": honoured only for the target project\'s designated orchestrator seat and the operator\'s own session. Other roles ignore this field.'),
     roleParams: z.record(z.string(), z.unknown()).optional()
       .describe("Role-specific parameters. Bounded integers accept numeric strings, clamp to their declared role bounds, and report the applied value in clamped."),
     reviews: z.string().optional(),
@@ -4127,11 +4144,20 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       z.object({
         kind: z.literal("conversation"),
         conversationId: z.string().min(1).optional().describe('Durable "conversation_…" id. The form to prefer.'),
+        reasonId: z.string().min(1).optional(),
         path: z.string().min(1).optional().describe("Transcript .jsonl path. Supply at least one of the two."),
       }).passthrough(),
-      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1) }).passthrough(),
+      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1), laneMovedAt: z.number().nullable().optional() }).passthrough(),
       z.object({ kind: z.literal("task"), taskId: z.string().min(1).describe("Board task id: its assignments and the lanes filed under it.") }).passthrough(),
-    ]).describe("What to clear."),
+      z.object({ kind: z.literal("update"), decisionId: z.string().optional() }).passthrough(),
+      z.object({ kind: z.literal("report"), seq: z.number().int().positive() }).passthrough(),
+      z.object({ kind: z.literal("prototype"), taskId: z.string().min(1), reviewId: z.string().min(1) }).passthrough(),
+    ]).optional().describe("What to clear; omit to read the project panel."),
+    project: z.string().min(1).optional().describe("Read form; defaults to your seat or maintenance project."),
+    kinds: z.array(z.enum(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"])).optional(),
+    full: z.boolean().optional(),
+    cursor: z.string().optional(),
+    reason: z.string().max(200).optional().describe("One line retained beside who cleared the row."),
     undo: z.boolean().optional().describe("true brings back what an earlier dismissal cleared."),
   }).passthrough(),
   bridge_report: z.object({

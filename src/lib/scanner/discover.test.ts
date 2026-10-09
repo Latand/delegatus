@@ -2350,3 +2350,15 @@ test("openclawSessionRoots is empty when the state directory does not exist", ()
     else process.env.OPENCLAW_STATE_DIR = previousOpenclawStateDir;
   }
 });
+
+test("discovery hides persistent relay transcripts while keeping ordinary neighbouring projects", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "relay-discovery-"));
+  try {
+    const hidden = path.join(root, "-tmp-llv-relay-conv-00000000-0000-0000-0000-000000000000", "session.jsonl");
+    const ordinary = path.join(root, "ordinary", "session.jsonl");
+    for (const file of [hidden, ordinary]) await writeFixture(file, JSON.stringify({ type: "system", subtype: "init", cwd: "/example/project", session_id: "fixture" }) + "\n", 100);
+    const entries = await discoverFiles({ "claude-projects": root } as Record<RootKey, string>);
+    expect(entries.some((entry) => entry.path === hidden)).toBe(false);
+    expect(entries.some((entry) => entry.path === ordinary)).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

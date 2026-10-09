@@ -1,0 +1,64 @@
+{
+  "x3": {
+    "revision": "c5067f000493ca14e51216cdcac68fd6442fa2f6",
+    "claims": {
+      "claimed_compact_owner.json": "9b38c08da1a938cef1f28c8ca41703bc3f5207a3c2c61308c90055436a8c5276",
+      "claimed_compact_admin.json": "63230ac373e55c9fe039bd5a5d313f9e5062a164dfc622bef23f762c25304a04"
+    }
+  },
+  "claim_body": {
+    "wait_s": 25,
+    "kinds": [
+      "answer",
+      "compact"
+    ],
+    "features": [
+      "requester_context",
+      "relay_tool_calls",
+      "relay_tool_actions",
+      "chat_conversations"
+    ],
+    "slots": [
+      {
+        "target_id": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+        "free": 1
+      }
+    ]
+  },
+  "runs": [
+    {
+      "claim": "claimed_compact_owner.json",
+      "heartbeats": [
+        {
+          "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+          "seq": 1,
+          "progress": null
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "compacted",
+        "reason": "compacted",
+        "detail": null,
+        "duration_ms": 0
+      }
+    },
+    {
+      "claim": "claimed_compact_admin.json",
+      "heartbeats": [
+        {
+          "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+          "seq": 1,
+          "progress": null
+        }
+      ],
+      "completion": {
+        "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+        "outcome": "compacted",
+        "reason": "nothing_to_compact",
+        "detail": null,
+        "duration_ms": 0
+      }
+    }
+  ]
+}

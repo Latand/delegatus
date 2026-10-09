@@ -1,3 +1,4 @@
+import { isRelayConversationDir } from "@/lib/externalRelay/conversationPrivacy";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -117,7 +118,7 @@ function realpathSafe(p: string): string | null {
  */
 export function pathAllowed(candidate: string): boolean {
   const real = realpathSafe(candidate);
-  if (!real) return false;
+  if (!real || candidate.split(path.sep).some(isRelayConversationDir) || real.split(path.sep).some(isRelayConversationDir)) return false;
   return scanRootEntries().some(([, root]) => {
     const rootReal = realpathSafe(root);
     return rootReal !== null && real.startsWith(rootReal + path.sep);

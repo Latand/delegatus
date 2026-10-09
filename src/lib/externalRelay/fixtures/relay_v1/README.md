@@ -30,3 +30,13 @@ The 2b X2 action run includes two concurrent reads before the action so that
 normal and reversed HTTP arrivals exercise the same admission snapshots.
 Polling an admitted image generation returns its stored delivered outcome with
 `replayed: true`; the double counts one execution for that call identity.
+
+## Slice 3 (X3)
+
+Copied byte for byte from service revision `c5067f000493ca14e51216cdcac68fd6442fa2f6`.
+
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `claimed_compact_owner.json` | 692 | `9b38c08da1a938cef1f28c8ca41703bc3f5207a3c2c61308c90055436a8c5276` |
+| `claimed_compact_admin.json` | 690 | `63230ac373e55c9fe039bd5a5d313f9e5062a164dfc622bef23f762c25304a04` |
+| `compact_completions.json` | 7988 | `4b90e23eed944d18f127ac2121b25a6fc6c48fa30db70a23b36c0f2db746816c` |
