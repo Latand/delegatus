@@ -283,7 +283,7 @@ test("a failed launch's projected target belongs to its explicit project when th
   const owner = serviceAs(MANAGER, state, new MemoryMcpReceiptStore(), overrides);
   expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-seat", target })).toMatchObject({ ok: true });
   expect(writes).toBe(1);
-  expect(readAttentionDismissals().records).toMatchObject([{ path: target.kind === "conversation" ? target.path : undefined, by: { kind: "manager", conversationId: SEAT } }]);
+  expect(readAttentionDismissals().records).toMatchObject([{ path: `spawn:${begun.receipt.launchId}`, by: { kind: "manager", conversationId: SEAT } }]);
   expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-undo", target, undo: true })).toMatchObject({ ok: true });
   expect(readAttentionDismissals().records).toEqual([]);
 });
