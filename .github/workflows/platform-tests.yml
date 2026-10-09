@@ -44,6 +44,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Journal startup and large-history handoff under the image interpreter.
+  journal-startup:
+    name: Journal startup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve the image interpreter
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin=$(sed -nE 's/.*npm install -g bun@([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' Dockerfile | sort -u)
+          [[ "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'version=%s\n' "$pin" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify journal startup and handoff against isolated history
+        shell: bash
+        env:
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          HOME: ${{ runner.temp }}/journal-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/journal-config
+          LLV_STATE_DIR: ${{ runner.temp }}/journal-state
+          TMPDIR: ${{ runner.temp }}/journal-tmp
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          files=(
+            src/runtime-host/journalStartup.test.ts
+            src/runtime-host/runtimeHostStartup.test.ts
+            src/runtime-host/runtimeHostSuccession.process.test.ts
+            src/app/api/runtime/snapshot/route.test.ts
+            src/runtime-host/journal.test.ts
+            src/runtime-host/hostRehearsal.test.ts
+            src/runtime-host/hostRehearsalRun.test.ts
+            src/runtime-host/deploymentProxy.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file"
+            flock /var/tmp/llv-heavy-gate.lock bun test "$file" 2>&1 | tee "$RUNNER_TEMP/journal-test.log"
+            grep -q "across 1 file" "$RUNNER_TEMP/journal-test.log"
+          done
+          flock /var/tmp/llv-heavy-gate.lock bun scripts/verify-runtime-host.ts
+
+
   scope:
     timeout-minutes: 3
     name: Scope (Windows)
