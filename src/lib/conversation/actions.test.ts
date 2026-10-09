@@ -382,3 +382,34 @@ test("a seat deputy is never resumed or compacted, and can still be interrupted"
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+
+test("provider recovery authority reaches the conversation structured control", async () => {
+  const owner = conversation("conversation_owner", ["/sessions/current.jsonl"]);
+  const onlyIfIdle = { revision: 1, writerClaim: "fixture:1" };
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const controls: unknown[] = [];
+  const result = await applyConversationAction({ conversationId: owner.id, transcriptPath: "/sessions/current.jsonl",
+    action: "kill", onlyIfIdle, providerRecovery }, {
+    registry: () => ({ conversation: () => owner, conversationForPath: () => owner } as never),
+    structuredEnabled: () => true,
+    dispatchStructuredControl: async request => {
+      controls.push(request);
+      return { status: 202, body: { ok: true, structured: true, target: owner.id, operationId: "provider-retire", receipt: { operationId: "provider-retire", status: "queued" } } };
+    },
+    killConversation: async () => { throw new Error("legacy kill forbidden"); },
+    interruptConversation: async () => { throw new Error("unexpected interrupt"); },
+    resumeConversation: async () => { throw new Error("unexpected resume"); },
+    compactConversation: async () => { throw new Error("unexpected compact"); },
+    answerDialogKey: async () => { throw new Error("unexpected dialog key"); },
+  });
+  expect(result.status).toBe(202);
+  expect(controls).toEqual([expect.objectContaining({ onlyIfIdle, providerRecovery })]);
+});
+
+
+test("provider recovery authority cannot fall through to a legacy kill", async () => {
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  expect(await applyConversationAction({ conversationId: "conversation_fixture", transcriptPath: "/sessions/current.jsonl",
+    action: "kill", providerRecovery })).toMatchObject({ status: 400 });
+});
