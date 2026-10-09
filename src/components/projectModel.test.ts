@@ -859,8 +859,9 @@ describe("buildProjectSummaries with workflows", () => {
     const summaries = buildProjectSummaries(TREE, 2_000, [wf({})]);
     const row = summaries.find((summary) => summary.project === "wf-only-project");
     expect(row).toBeDefined();
-    /* Provisioning counts as running work; the project sorts like a live one. */
-    expect(row!.liveCount).toBe(1);
+    /* A provisioning workflow is not an agent: the row exists, and its working
+       count waits for the conversation the workflow starts. */
+    expect(row!.liveCount).toBe(0);
     expect(row!.smt).toBeGreaterThan(0);
   });
 

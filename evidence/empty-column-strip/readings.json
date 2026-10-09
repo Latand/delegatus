@@ -2,7 +2,8 @@
   "readings": {
     "1280x900-none-en": {
       "mode": "scroll",
-      "rail": null,
+      "pill": null,
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 280,
@@ -37,8 +38,6 @@
           "cards": 6
         }
       },
-      "agentMin": 520,
-      "agent": null,
       "scroll": {
         "scrollWidth": 1156,
         "clientWidth": 1032
@@ -47,73 +46,8 @@
     },
     "1280x900-agent-en": {
       "mode": "scroll",
-      "rail": "full",
-      "columns": {
-        "inbox": {
-          "width": 280,
-          "strip": false,
-          "title": "Inbox",
-          "count": "3",
-          "headOverflows": false,
-          "cards": 4
-        },
-        "assigned": {
-          "width": 520,
-          "strip": false,
-          "title": "In progress",
-          "count": "8",
-          "headOverflows": false,
-          "cards": 8
-        },
-        "blocked": {
-          "width": 48,
-          "strip": true,
-          "title": "Waiting",
-          "count": "0",
-          "headOverflows": false,
-          "cards": 0
-        },
-        "done": {
-          "width": 280,
-          "strip": false,
-          "title": "Done",
-          "count": "6",
-          "headOverflows": false,
-          "cards": 6
-        }
-      },
-      "agentMin": 520,
-      "agent": {
-        "column": "assigned",
-        "columnWidth": 520,
-        "readerWidth": 468
-      },
-      "scroll": {
-        "scrollWidth": 1196,
-        "clientWidth": 832
-      },
-      "pageErrors": [],
-      "inboxWide": {
-        "mode": "scroll",
-        "agentMin": 520,
-        "agent": {
-          "column": "assigned",
-          "columnWidth": 520,
-          "readerWidth": 468
-        },
-        "assigned": {
-          "width": 520,
-          "strip": false,
-          "title": "In progress",
-          "count": "8",
-          "headOverflows": false,
-          "cards": 8
-        }
-      }
-    },
-    "1440x900-none-en": {
-      "mode": "scroll",
-      "rail": null,
+      "pill": "1 agent",
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 280,
@@ -148,8 +82,50 @@
           "cards": 6
         }
       },
-      "agentMin": 576,
-      "agent": null,
+      "scroll": {
+        "scrollWidth": 1156,
+        "clientWidth": 1032
+      },
+      "pageErrors": []
+    },
+    "1440x900-none-en": {
+      "mode": "scroll",
+      "pill": null,
+      "inColumn": false,
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Inbox",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 480,
+          "strip": false,
+          "title": "In progress",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Waiting",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Done",
+          "count": "6",
+          "headOverflows": false,
+          "cards": 6
+        }
+      },
       "scroll": {
         "scrollWidth": 1192,
         "clientWidth": 1192
@@ -204,7 +180,8 @@
     },
     "1440x900-agent-en": {
       "mode": "scroll",
-      "rail": "full",
+      "pill": "1 agent",
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 280,
@@ -215,7 +192,7 @@
           "cards": 4
         },
         "assigned": {
-          "width": 576,
+          "width": 480,
           "strip": false,
           "title": "In progress",
           "count": "8",
@@ -239,32 +216,26 @@
           "cards": 6
         }
       },
-      "agentMin": 576,
-      "agent": {
-        "column": "assigned",
-        "columnWidth": 576,
-        "readerWidth": 524
-      },
       "scroll": {
-        "scrollWidth": 1252,
-        "clientWidth": 992
+        "scrollWidth": 1192,
+        "clientWidth": 1192
       },
       "pageErrors": [],
       "menu-pointer": {
         "blocked": 280,
         "column": {
-          "x": 852,
+          "x": 1048,
           "width": 280
         },
-        "menuX": 852
+        "menuX": 1048
       },
       "menu-keyboard": {
         "blocked": 280,
         "column": {
-          "x": 852,
+          "x": 1048,
           "width": 280
         },
-        "menuX": 852
+        "menuX": 1048
       },
       "hovered": {
         "width": 280,
@@ -277,7 +248,8 @@
     },
     "1600x900-none-en": {
       "mode": "narrow",
-      "rail": null,
+      "pill": null,
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 220,
@@ -312,8 +284,6 @@
           "cards": 6
         }
       },
-      "agentMin": 640,
-      "agent": null,
       "scroll": {
         "scrollWidth": 1352,
         "clientWidth": 1352
@@ -368,7 +338,8 @@
     },
     "1600x900-agent-en": {
       "mode": "narrow",
-      "rail": "compact",
+      "pill": "1 agent",
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 220,
@@ -379,7 +350,7 @@
           "cards": 4
         },
         "assigned": {
-          "width": 720,
+          "width": 776,
           "strip": false,
           "title": "In progress",
           "count": "8",
@@ -403,32 +374,26 @@
           "cards": 6
         }
       },
-      "agentMin": 640,
-      "agent": {
-        "column": "assigned",
-        "columnWidth": 720,
-        "readerWidth": 668
-      },
       "scroll": {
-        "scrollWidth": 1296,
-        "clientWidth": 1296
+        "scrollWidth": 1352,
+        "clientWidth": 1352
       },
       "pageErrors": [],
       "menu-pointer": {
         "blocked": 220,
         "column": {
-          "x": 1216,
+          "x": 1124,
           "width": 220
         },
-        "menuX": 1216
+        "menuX": 1124
       },
       "menu-keyboard": {
         "blocked": 220,
         "column": {
-          "x": 1216,
+          "x": 1124,
           "width": 220
         },
-        "menuX": 1216
+        "menuX": 1124
       },
       "hovered": {
         "width": 220,
@@ -467,7 +432,8 @@
     },
     "1280x900-none-uk": {
       "mode": "scroll",
-      "rail": null,
+      "pill": null,
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 280,
@@ -502,8 +468,6 @@
           "cards": 6
         }
       },
-      "agentMin": 520,
-      "agent": null,
       "scroll": {
         "scrollWidth": 1156,
         "clientWidth": 1032
@@ -512,73 +476,8 @@
     },
     "1280x900-agent-uk": {
       "mode": "scroll",
-      "rail": "full",
-      "columns": {
-        "inbox": {
-          "width": 280,
-          "strip": false,
-          "title": "Вхідні",
-          "count": "3",
-          "headOverflows": false,
-          "cards": 4
-        },
-        "assigned": {
-          "width": 520,
-          "strip": false,
-          "title": "У роботі",
-          "count": "8",
-          "headOverflows": false,
-          "cards": 8
-        },
-        "blocked": {
-          "width": 48,
-          "strip": true,
-          "title": "Очікують",
-          "count": "0",
-          "headOverflows": false,
-          "cards": 0
-        },
-        "done": {
-          "width": 280,
-          "strip": false,
-          "title": "Готові",
-          "count": "6",
-          "headOverflows": false,
-          "cards": 6
-        }
-      },
-      "agentMin": 520,
-      "agent": {
-        "column": "assigned",
-        "columnWidth": 520,
-        "readerWidth": 468
-      },
-      "scroll": {
-        "scrollWidth": 1196,
-        "clientWidth": 832
-      },
-      "pageErrors": [],
-      "inboxWide": {
-        "mode": "scroll",
-        "agentMin": 520,
-        "agent": {
-          "column": "assigned",
-          "columnWidth": 520,
-          "readerWidth": 468
-        },
-        "assigned": {
-          "width": 520,
-          "strip": false,
-          "title": "У роботі",
-          "count": "8",
-          "headOverflows": false,
-          "cards": 8
-        }
-      }
-    },
-    "1440x900-none-uk": {
-      "mode": "scroll",
-      "rail": null,
+      "pill": "1 агент",
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 280,
@@ -613,8 +512,50 @@
           "cards": 6
         }
       },
-      "agentMin": 576,
-      "agent": null,
+      "scroll": {
+        "scrollWidth": 1156,
+        "clientWidth": 1032
+      },
+      "pageErrors": []
+    },
+    "1440x900-none-uk": {
+      "mode": "scroll",
+      "pill": null,
+      "inColumn": false,
+      "columns": {
+        "inbox": {
+          "width": 280,
+          "strip": false,
+          "title": "Вхідні",
+          "count": "3",
+          "headOverflows": false,
+          "cards": 4
+        },
+        "assigned": {
+          "width": 480,
+          "strip": false,
+          "title": "У роботі",
+          "count": "8",
+          "headOverflows": false,
+          "cards": 8
+        },
+        "blocked": {
+          "width": 48,
+          "strip": true,
+          "title": "Очікують",
+          "count": "0",
+          "headOverflows": false,
+          "cards": 0
+        },
+        "done": {
+          "width": 280,
+          "strip": false,
+          "title": "Готові",
+          "count": "6",
+          "headOverflows": false,
+          "cards": 6
+        }
+      },
       "scroll": {
         "scrollWidth": 1192,
         "clientWidth": 1192
@@ -669,7 +610,8 @@
     },
     "1440x900-agent-uk": {
       "mode": "scroll",
-      "rail": "full",
+      "pill": "1 агент",
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 280,
@@ -680,7 +622,7 @@
           "cards": 4
         },
         "assigned": {
-          "width": 576,
+          "width": 480,
           "strip": false,
           "title": "У роботі",
           "count": "8",
@@ -704,32 +646,26 @@
           "cards": 6
         }
       },
-      "agentMin": 576,
-      "agent": {
-        "column": "assigned",
-        "columnWidth": 576,
-        "readerWidth": 524
-      },
       "scroll": {
-        "scrollWidth": 1252,
-        "clientWidth": 992
+        "scrollWidth": 1192,
+        "clientWidth": 1192
       },
       "pageErrors": [],
       "menu-pointer": {
         "blocked": 280,
         "column": {
-          "x": 852,
+          "x": 1048,
           "width": 280
         },
-        "menuX": 852
+        "menuX": 1048
       },
       "menu-keyboard": {
         "blocked": 280,
         "column": {
-          "x": 852,
+          "x": 1048,
           "width": 280
         },
-        "menuX": 852
+        "menuX": 1048
       },
       "hovered": {
         "width": 280,
@@ -742,7 +678,8 @@
     },
     "1600x900-none-uk": {
       "mode": "narrow",
-      "rail": null,
+      "pill": null,
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 220,
@@ -777,8 +714,6 @@
           "cards": 6
         }
       },
-      "agentMin": 640,
-      "agent": null,
       "scroll": {
         "scrollWidth": 1352,
         "clientWidth": 1352
@@ -833,7 +768,8 @@
     },
     "1600x900-agent-uk": {
       "mode": "narrow",
-      "rail": "compact",
+      "pill": "1 агент",
+      "inColumn": false,
       "columns": {
         "inbox": {
           "width": 220,
@@ -844,7 +780,7 @@
           "cards": 4
         },
         "assigned": {
-          "width": 720,
+          "width": 776,
           "strip": false,
           "title": "У роботі",
           "count": "8",
@@ -868,32 +804,26 @@
           "cards": 6
         }
       },
-      "agentMin": 640,
-      "agent": {
-        "column": "assigned",
-        "columnWidth": 720,
-        "readerWidth": 668
-      },
       "scroll": {
-        "scrollWidth": 1296,
-        "clientWidth": 1296
+        "scrollWidth": 1352,
+        "clientWidth": 1352
       },
       "pageErrors": [],
       "menu-pointer": {
         "blocked": 220,
         "column": {
-          "x": 1216,
+          "x": 1124,
           "width": 220
         },
-        "menuX": 1216
+        "menuX": 1124
       },
       "menu-keyboard": {
         "blocked": 220,
         "column": {
-          "x": 1216,
+          "x": 1124,
           "width": 220
         },
-        "menuX": 1216
+        "menuX": 1124
       },
       "hovered": {
         "width": 220,

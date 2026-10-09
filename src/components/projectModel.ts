@@ -168,7 +168,9 @@ export function projectDraftWorkingDirectory(
 export interface ProjectSummary {
   project: string;
   displayName: string;
-  /** Live entries anywhere in the project (branches running right now). */
+  /** Agents working in the project now, by the one rule the board header,
+      its columns and its cards count with (`isWorkingAgent`, handed in as
+      `workingAgentCounts`). */
   liveCount: number;
   attentionCount: number;
   /** Root conversations in the project. */
@@ -177,10 +179,6 @@ export interface ProjectSummary {
   /** Present only through the full project catalog, outside the recent file set. */
   catalogOnly: boolean;
 }
-
-/* Workflow states whose strip is actively doing work: they light the rail
-   dot the way a live transcript does. */
-const WF_BUSY = new Set<Workflow["state"]>(["provisioning", "implementing", "reviewing", "finishing"]);
 
 export function buildProjectSummaries(
   files: FileEntry[],
@@ -194,6 +192,13 @@ export function buildProjectSummaries(
       rail's ⏸, the panel's section and the header carry one number; a
       dismissed lane or a paused one no longer counts. */
   needsYou?: ReadonlyMap<string, number>,
+  /** Each project's working agents: `workingAgentCounts(files, now)` over the
+      same files, the selector the board header reads. It is handed in because
+      this module is also loaded by server code, which the selector's row-state
+      reading cannot join. A workflow or a lane is not an agent, so neither adds
+      to it: the conversation it starts counts once its turn runs, under the key
+      the scanner gave it. */
+  working: ReadonlyMap<string, number> = new Map(),
 ): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   const summaryFor = (key: string, displayName = projectDisplayName(key)): ProjectSummary => {
@@ -207,7 +212,6 @@ export function buildProjectSummaries(
   for (const file of files) {
     const summary = summaryFor(projectKey(file), projectDisplayName(projectKey(file), file.projectName));
     summary.catalogOnly = false;
-    if (file.activity === "live") summary.liveCount += 1;
     /* Same membership the attention queue counts (hard-blocked plus in-TTL
        stalled), so the rail badge, the global badge and the title agree. */
     if (attentionId(file, now) !== null) summary.attentionCount += 1;
@@ -227,7 +231,6 @@ export function buildProjectSummaries(
     if (wf.state === "closed" || !wf.project) continue;
     const summary = summaryFor(wf.project, projectDisplayName(wf.project, projectDisplayNames[wf.project]));
     summary.catalogOnly = false;
-    if (WF_BUSY.has(wf.state)) summary.liveCount += 1;
     if (wf.state === "needs_decision" || wf.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(wf.createdAt) || 0) / 1000);
   }
@@ -235,13 +238,13 @@ export function buildProjectSummaries(
     if ((pipeline.state === "closed" && !pipeline.restored) || !pipeline.project) continue;
     const summary = summaryFor(pipeline.project, projectDisplayName(pipeline.project, projectDisplayNames[pipeline.project]));
     summary.catalogOnly = false;
-    if (pipeline.state === "provisioning" || pipeline.state === "running") summary.liveCount += 1;
     if (pipeline.state === "needs_decision" || pipeline.state === "needs_review" || pipeline.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(pipeline.createdAt) || 0) / 1000);
   }
   if (needsYou) {
     for (const summary of map.values()) summary.attentionCount = needsYou.get(summary.project) ?? 0;
   }
+  for (const summary of map.values()) summary.liveCount = working.get(summary.project) ?? 0;
   return [...map.values()].sort((a, b) => {
     const al = a.attentionCount > 0;
     const bl = b.attentionCount > 0;
@@ -249,6 +252,17 @@ export function buildProjectSummaries(
     if (a.liveCount !== b.liveCount) return b.liveCount - a.liveCount;
     return tick5(b.smt) - tick5(a.smt) || a.project.localeCompare(b.project);
   });
+}
+
+/**
+ * The decisions waiting on the operator across every project: the rail's
+ * Overview row 👤 and the Overview board header's «N need you» show this one
+ * number, so the two never disagree on one screen.
+ */
+export function attentionTotal(summaries: readonly ProjectSummary[]): number {
+  let count = 0;
+  for (const summary of summaries) count += summary.attentionCount;
+  return count;
 }
 
 /**
