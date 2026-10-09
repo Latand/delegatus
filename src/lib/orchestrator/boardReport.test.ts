@@ -362,8 +362,9 @@ test("a Cyrillic board stays within 6 000 bytes and keeps every heading and the 
   }));
   expect(report.bytes).toBeLessThanOrEqual(BOARD_REPORT_CAP_BYTES);
   expect(Buffer.byteLength(report.text, "utf8")).toBe(report.bytes);
-  /* No hard cut: the report ends on the GitHub block, whole. */
-  expect(report.text.endsWith("Newest without a recorded priority: #3004, #3005, #3006.")).toBe(true);
+  /* No hard cut: the GitHub block and the final attention section stay whole. */
+  expect(report.text).toContain("Newest without a recorded priority: #3004, #3005, #3006.");
+  expect(report.text.endsWith("9. Waiting for you: none.")).toBe(true);
   for (const heading of ["1. Decisions waiting on the operator (", "2. Ready to finish (", "3. Stuck (12)", "4. Running: none.", "5. Tasks with nothing running: none.", "8. GitHub issues (10 open)", "Worth starting now:"]) {
     expect(report.text).toContain(heading);
   }
@@ -438,4 +439,16 @@ test("issue numbers already on the board: #n in an open task or lane title, or a
     [lane("a", { title: "Board slice for #2270", branch: "feat/1234-board" }), lane("b", { open: false, completed: true, title: "#5 closed", branch: "fix/55" }), lane("c", { branch: "pipeline/design-423730f0" })],
   );
   expect([...numbers].sort((left, right) => left - right)).toEqual([12, 99, 776, 1234, 2270]);
+});
+
+
+test("Waiting for you lists stale evidence first and keeps the full target ids", () => {
+  const row = (id: string, stale: boolean) => ({ id, kind: "prototype" as const, title: id, line: "Choose", since: minutesAgo(60), taskId: "task-a", subject: { reviewId: id }, target: { kind: "prototype" as const, taskId: "task-a", reviewId: id }, stale, evidence: stale ? ["lane-moved-past: The publishing lane moved past this round"] : [] });
+  const report = composeBoardReport(facts({ needsYou: { project: "project-a", at: minutesAgo(0), count: 2, staleCount: 1, rows: [row("current-round", false), row("old-round", true)], cleared: [], omittedCount: 0 } }));
+  expect(report.text).toContain("9. Waiting for you");
+  expect(report.text.indexOf("old-round")).toBeLessThan(report.text.indexOf("current-round"));
+  expect(report.text).toContain("lane-moved-past");
+  expect(report.counts).toMatchObject({ waiting: 2, waitingStale: 1 });
+  expect(report.empty).toBe(false);
+  expect(composeBoardReport(facts({ needsYou: null, gaps: [{ source: "needs-you", reason: "timed out" }] })).text).toContain("9. Waiting for you: unavailable (timed out).");
 });

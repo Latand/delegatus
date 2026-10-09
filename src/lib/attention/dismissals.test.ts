@@ -327,3 +327,18 @@ test("a report subject is parsed from the operator's route; a seq that is not a 
   expect(() => parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report", seq: 0 }] }, { allowSubjects: true })).toThrow();
   expect(() => parseDismissalTarget({ kind: "subjects", subjects: [{ kind: "report" }] }, { allowSubjects: true })).toThrow();
 });
+
+
+test("a task dismissal covers its waiting prototype, keeps its reason, and undo restores it", async () => {
+  const task = { id: "task-prototype", project: "project-a", assignments: [], prototypeReview: {
+    latestReviewId: "review-a", waitingReviewId: "review-a", title: "Layout", rounds: 1, createdAt: "2026-09-24T09:00:00Z",
+  } } as unknown as BoardTask;
+  const h = harness({ tasks: [task] });
+  const first = await dismissAttention({ kind: "task", taskId: task.id }, SEAT, { ports: h.ports, reason: "The publishing lane has moved on" });
+  expect(first.dismissed).toEqual([{ kind: "prototype", taskId: task.id, reviewId: "review-a" }]);
+  expect(readAttentionDismissals().records[0]).toMatchObject({ kind: "prototype", subject: "prototype:review-a", taskId: task.id, by: SEAT, note: "The publishing lane has moved on" });
+  await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "review-a" }, SEAT, { ports: h.ports, undo: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+  const old = await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "review-old" }, SEAT, { ports: h.ports });
+  expect(old.alreadyClear).toEqual([{ kind: "prototype", taskId: task.id, reviewId: "review-old" }]);
+});

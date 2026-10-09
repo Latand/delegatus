@@ -105,6 +105,7 @@ export type ReportGithub =
   | { kind: "ranked"; ranking: IssueRanking };
 
 export interface BoardReportFacts {
+  needsYou?: import("@/lib/attention/needsYouRead").NeedsYouAnswer | null;
   projectName: string;
   seatEpoch: number;
   seatConversationId: string;
@@ -128,6 +129,8 @@ export interface BoardReportFacts {
 }
 
 export interface BoardReportCounts {
+  waiting: number;
+  waitingStale: number;
   decisions: number;
   ready: number;
   stuck: number;
@@ -447,7 +450,14 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     .map((request) => row(`pull request #${request.number} ${title(request.title)}, updated ${since(now, request.updatedAt ?? request.createdAt) ?? "unknown"} ago`));
 
   const github = githubLines(facts.github, now);
+  const waiting = [...(facts.needsYou?.rows ?? [])].sort((a,b) => Number(b.stale) - Number(a.stale)).map(item => {
+    const subject = item.subject.reviewId ?? item.subject.pipelineId ?? item.subject.reportSeq ?? item.subject.conversationId ?? item.subject.decisionId ?? item.id;
+    const evidence = item.evidence.slice(0,2).map(e => typeof e === "string" ? e : `${e.code}: ${e.detail}`).join("; ") || "no evidence";
+    return row(`${item.kind} ${subject}${item.taskId ? ` on task ${item.taskId}` : ""} ${title(item.title)}${item.since ? `, ${age(now - Date.parse(item.since))}` : ""}: ${evidence}`);
+  });
   const counts: BoardReportCounts = {
+    waiting: facts.needsYou?.count ?? 0,
+    waitingStale: facts.needsYou?.staleCount ?? 0,
     decisions: decisions.length,
     ready: ready.length,
     stuck: stuck.length,
@@ -458,7 +468,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     suggestions: github.suggestions.length,
   };
   const empty = Object.entries(counts).every(([key, value]) => key === "suggestions" || value === 0)
-    && facts.github.kind === "not-configured";
+    && facts.github.kind === "not-configured" && facts.needsYou !== null;
 
   /* ── header ── */
   const tasks = facts.tasks;
@@ -497,6 +507,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
       optional: hiddenGroups === 0,
       footer: hiddenGroups ? `(${hiddenGroups} task groups hidden by the operator are not listed.)` : null,
     },
+    waiting: { heading: "9. Waiting for you", rows: waiting, cap: 10, optional: false, note: facts.needsYou === null ? `unavailable (${facts.gaps.find(g => g.source === "needs-you")?.reason ?? "unreadable"})` : null },
     pullRequests: { heading: "7. Open pull requests no lane here carries", rows: orphanRequests, cap: CAPS.pullRequests, optional: true },
   };
   /* Rows each section shows; the byte bound cuts them in the §6 order. */
@@ -505,14 +516,15 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
 
   const renderSection = (key: string): string[] => {
     const section = sections[key]!;
+    if (key === "waiting" && facts.needsYou === null) return [`9. Waiting for you: ${section.note}.`];
     const note = section.note ? ` (${section.note})` : "";
     if (!section.rows.length) {
       if (section.optional) return [];
       return [`${section.heading}: none${note}.`, ...(section.footer ? [section.footer] : [])];
     }
     const count = shown[key]!;
-    const more = section.rows.length - count;
-    const label = key === "close"
+    const more = (key === "waiting" ? counts.waiting : section.rows.length) - count;
+    const label = key === "waiting" ? `9. Waiting for you (${counts.waiting}; ${counts.waitingStale} with evidence they no longer ask) — the operator's «Чекають на вас» for this project. Read again with dismiss_attention (no target) before clearing; each row carries its target.` : key === "close"
       ? `${section.heading} (${section.rows.length}), each with the rule that matched`
       : `${section.heading} (${section.rows.length})${note}`;
     return [label, ...section.rows.slice(0, count), ...(more > 0 ? [`(${more} more)`] : []), ...(section.footer ? [section.footer] : [])];
@@ -526,7 +538,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
       ...(showNext && github.next ? [github.next] : []),
       ...(github.newest ? [github.newest] : []),
     ];
-    return [...header, "", ...body, ...githubBlock].join("\n");
+    return [...header, "", ...body, ...githubBlock, ...renderSection("waiting")].join("\n");
   };
 
   let text = render();
@@ -537,9 +549,9 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
      section keeps its heading and "(k more)", so each heading and the GitHub
      block stay; the hard cut below is left to the header alone. */
   const order: [string | "next", number][] = [
-    ["running", 0], ["pullRequests", 0], ["close", 0], ["next", 0], ["idle", 0],
+    ["running", 0], ["pullRequests", 0], ["close", 0], ["next", 0], ["idle", 0], ["waiting", 3],
     ["stuck", 1], ["ready", 1], ["decisions", 1],
-    ["stuck", 0], ["ready", 0], ["decisions", 0],
+    ["waiting", 0], ["stuck", 0], ["ready", 0], ["decisions", 0],
   ];
   for (const [key, floor] of order) {
     while (Buffer.byteLength(text, "utf8") > BOARD_REPORT_CAP_BYTES) {

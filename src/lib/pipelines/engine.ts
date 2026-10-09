@@ -11293,16 +11293,19 @@ function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null
  * it already, so neither has a row to clear or bring back. Whether the lane
  * moved since a card drew it is the caller's check, made under this lock.
  */
-function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string): PipelinePatchResult | null {
+function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string, note?: string): PipelinePatchResult | null {
   if (pipeline.state === "draft" || pipeline.state === "closed") {
     return { error: `a ${pipeline.state} pipeline has no board row to ${dismiss ? "hide" : "show"}`, status: 409 };
   }
   if (dismiss) {
     pipeline.dismissedAt = now;
     pipeline.dismissedBy = by;
+    if (note) pipeline.dismissedNote = note;
+    else delete pipeline.dismissedNote;
   } else {
     pipeline.dismissedAt = null;
     delete pipeline.dismissedBy;
+    delete pipeline.dismissedNote;
   }
   return null;
 }
@@ -11325,12 +11328,13 @@ export async function setPipelineDismissal(
   by: DismissedBy,
   ports: PipelinePorts = defaultPipelinePorts(),
   drawnMovedAt?: number | null,
+  note?: string,
 ): Promise<PipelinePatchResult> {
   return withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
     if (dismiss && laneMovedSince(pipeline, drawnMovedAt)) return { pipeline, moved: true };
-    const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now());
+    const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now(), note);
     if (refused) return refused;
     persist();
     return { pipeline };

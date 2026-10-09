@@ -1422,3 +1422,10 @@ test("a waiting prototype counts once in needs-you and clears after the choice",
   const decided = model([task("prototype", "inbox", [], { prototypeReview: { ...review, waitingReviewId: null } })], []);
   expect(decided.totals.needsYou).toBe(0);
 });
+
+
+test("a cleared prototype round raises no needs-you count while its choice stays open", () => {
+  const review = { latestReviewId: "round-a", waitingReviewId: "round-a", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z", waitingDismissal: { at: "2026-10-02T00:00:00Z", by: { kind: "operator" as const } } };
+  expect(model([task("prototype", "inbox", [], { prototypeReview: review })], []).totals.needsYou).toBe(0);
+  expect(review.waitingReviewId).toBe("round-a");
+});

@@ -4930,7 +4930,8 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   expect(again.dismissedBy).toEqual({ kind: "agent", conversationId: "conversation_seat", role: "orchestrator" });
 
   /* The dismissal service's own write carries the attribution it derived. */
-  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports);
+  const serviced = await setPipelineDismissal(created.id, true, { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, h.ports, undefined, "The merger already holds this work");
+  expect(loadPipelines()[0]!.dismissedNote).toBe("The merger already holds this work");
   expect(serviced.pipeline!.dismissedBy).toEqual({ kind: "manager", conversationId: "conversation_seat", role: "orchestrator" });
 
   /* A card drawn before the lane's last movement clears nothing: that
@@ -4955,6 +4956,7 @@ test("dismiss and undismiss take a lane off the phone board and back without tou
   const shown = await patchPipeline(created.id, { action: "undismiss" }, h.ports);
   expect(shown.pipeline!.dismissedAt).toBeNull();
   expect(shown.pipeline!.dismissedBy).toBeUndefined();
+  expect(shown.pipeline!.dismissedNote).toBeUndefined();
   expect(loadPipelines()[0]!).toMatchObject({ state: before.state, dismissedAt: null });
 
   const closed = await closeAndDrain(created.id, { action: "close" }, h.ports);
