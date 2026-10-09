@@ -19,8 +19,9 @@ const FEED_STRIP_HEIGHT = 44;
     the control it is, and the two readings give the same rectangle. */
 export function companionReserved(): Rect[] {
   return [...document.querySelectorAll<HTMLElement>(COMPANION_ROWS)].flatMap((feed) => {
+    if (feed.checkVisibility?.({ contentVisibilityAuto: true }) === false) return [];
     const box = feed.getBoundingClientRect();
-    const shown = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].some((strip) => Math.abs(strip.getBoundingClientRect().top - box.bottom) < 2);
+    const shown = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].some((strip) => strip.checkVisibility?.({ contentVisibilityAuto: true }) !== false && Math.abs(strip.getBoundingClientRect().top - box.bottom) < 2);
     return shown || box.height <= FEED_STRIP_HEIGHT ? [] : [{ x: box.x, y: box.bottom - FEED_STRIP_HEIGHT, width: box.width, height: FEED_STRIP_HEIGHT }];
   });
 }

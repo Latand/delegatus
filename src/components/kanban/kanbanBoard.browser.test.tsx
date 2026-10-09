@@ -19512,6 +19512,58 @@ describe("parallel ask idle fallback", () => {
  * are never committed); the measurement records are written to `evidence/voice-companion/`.
  */
 describe("floating voice companion", () => {
+  browserTest("placement leaves skipped card contents unmeasured until they scroll into view", async () => {
+    const out = path.resolve(".artifacts/voice-companion-skipped-layout");
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openVoice(browser, server.base, "", { viewport: VIEWPORT, scheme: "light", lang: "en", surface: "underlay" });
+      try {
+        await page.evaluate(() => {
+          const panel = document.createElement("div");
+          panel.id = "placement-scroll-probe";
+          panel.style.cssText = "position:fixed;left:20px;top:20px;width:600px;height:240px;overflow:auto;z-index:2";
+          panel.innerHTML = '<div style="height:6000px"></div><div id="placement-skipped-card" style="content-visibility:auto;contain-intrinsic-size:900px"><div data-log-feed-scroller style="height:800px;overflow:auto">' +
+            Array.from({ length: 100 }, (_, i) => `<div data-placement-descendant style="display:contents"><button data-placement-descendant>Action ${i}</button><span data-placement-descendant>Visible when scrolled ${i}</span><div data-placement-descendant style="cursor:col-resize;width:30px;height:10px"></div><svg data-placement-descendant width="12" height="12"><path d="M0 0L12 12" /></svg></div>`).join("") + '</div></div>';
+          document.body.append(panel);
+          const reads = { boxes: 0, lines: 0 };
+          Object.assign(window, { placementProbeReads: reads });
+          const box = Element.prototype.getBoundingClientRect;
+          Element.prototype.getBoundingClientRect = function () {
+            if (this.closest("#placement-skipped-card") && this.id !== "placement-skipped-card") reads.boxes++;
+            return box.call(this);
+          };
+          const lines = Range.prototype.getClientRects;
+          Range.prototype.getClientRects = function () {
+            const parent = this.startContainer.nodeType === Node.ELEMENT_NODE ? this.startContainer as Element : this.startContainer.parentElement;
+            if (parent?.closest("#placement-skipped-card")) reads.lines++;
+            return lines.call(this);
+          };
+        });
+        await page.waitForTimeout(1_000);
+        const hidden = await page.evaluate(() => ({
+          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number } }).placementProbeReads,
+          skipped: !document.querySelector("[data-placement-descendant] button")!.checkVisibility({ contentVisibilityAuto: true }),
+        }));
+        expect(hidden.skipped).toBe(true);
+        expect(hidden.boxes).toBe(0);
+        expect(hidden.lines).toBe(0);
+
+        await page.evaluate(() => { document.getElementById("placement-scroll-probe")!.scrollTop = 6_000; });
+        await page.waitForTimeout(1_000);
+        const visible = await page.evaluate(() => ({
+          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number } }).placementProbeReads,
+          shown: document.querySelector("[data-placement-descendant] button")!.checkVisibility({ contentVisibilityAuto: true }),
+        }));
+        expect(visible.shown).toBe(true);
+        expect(visible.boxes).toBeGreaterThan(0);
+        expect(visible.lines).toBeGreaterThan(0);
+        expect(pageErrors).toEqual([]);
+        fs.writeFileSync(path.join(out, "reads.json"), JSON.stringify({ hidden, visible }, null, 2));
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  });
+
   const OUT = path.resolve(".artifacts/voice-companion");
   const HANDOFF = process.env.LLV_VOICE_COMPANION_HANDOFF?.trim() || OUT;
   const EVIDENCE = "evidence/voice-companion";

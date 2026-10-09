@@ -108,6 +108,12 @@ const TRAVEL_MS = 280;
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
 
+/** Geometry reads inside skipped content-visibility:auto cards force Chromium to lay out
+    their offscreen contents. Check before reading styles/rectangles, including in the cursor walk. */
+function hasRenderedBox(element: Element): boolean {
+  return element.checkVisibility?.({ contentVisibilityAuto: true }) ?? true;
+}
+
 /** The part of a box a pointer can reach: cut to the viewport and to every clipping element from `within` up. */
 function reachable(within: Element | null, box: { left: number; top: number; right: number; bottom: number }, clips: Map<Element, DOMRect | null>): Rect | null {
   let left = Math.max(box.left, 0);
@@ -143,6 +149,8 @@ function controlRects(self: Element | null, extra: string | undefined, rows: str
   const walk = (parent: Element, inherited: boolean) => {
     for (const child of parent.children) {
       if (child === self || !(child instanceof HTMLElement)) continue;
+      // display:contents has no box but may contain visible controls.
+      if (!hasRenderedBox(child) && getComputedStyle(child).display !== "contents") continue;
       const active = !isPassiveCursor(getComputedStyle(child).cursor);
       if (active && !inherited) nodes.add(child);
       walk(child, active);
@@ -150,7 +158,7 @@ function controlRects(self: Element | null, extra: string | undefined, rows: str
   };
   walk(document.body, !isPassiveCursor(getComputedStyle(document.body).cursor));
   for (const node of nodes) {
-    if (self?.contains(node)) continue;
+    if (self?.contains(node) || !hasRenderedBox(node)) continue;
     const style = getComputedStyle(node);
     if (style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
     const box = node.getBoundingClientRect();
@@ -189,7 +197,7 @@ function textRects(self: Element | null): Rect[] {
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const parent = node.parentElement;
     if (!parent || !node.nodeValue?.trim() || self?.contains(parent)) continue;
-    if (!shown.has(parent)) shown.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && (boxOf(parent).checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true));
+    if (!shown.has(parent)) shown.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && (boxOf(parent).checkVisibility?.({ contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true }) ?? true));
     if (!shown.get(parent)) continue;
     range.selectNodeContents(node);
     for (const line of range.getClientRects()) {
@@ -209,7 +217,7 @@ function rowGraphics(self: Element | null, rows: string | undefined): Rect[] {
   const clips = new Map<Element, DOMRect | null>();
   return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface))
     .flatMap((surface) => [...surface.querySelectorAll<Element>("img, svg, canvas, video, [role='img']")])
-    .filter((node) => !node.parentElement?.closest("svg") && (node.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true))
+    .filter((node) => !node.parentElement?.closest("svg") && (node.checkVisibility?.({ contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true }) ?? true))
     .flatMap((node) => reachable(node.parentElement, node.getBoundingClientRect(), clips) ?? []);
 }
 
@@ -217,7 +225,7 @@ function rowGraphics(self: Element | null, rows: string | undefined): Rect[] {
 function rowSurfaces(self: Element | null, rows: string | undefined): Rect[] {
   if (!rows) return [];
   const clips = new Map<Element, DOMRect | null>();
-  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface))
+  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface) && hasRenderedBox(surface))
     .flatMap((surface) => reachable(surface.parentElement, surface.getBoundingClientRect(), clips) ?? []);
 }
 
