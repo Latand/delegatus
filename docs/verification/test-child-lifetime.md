@@ -295,8 +295,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 264 files: 175 with asynchronous primitives and
-89 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 268 files: 176 with asynchronous primitives and
+92 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -352,6 +352,7 @@ repeated for this inventory correction.
 | `scripts/verify-viewer-runtime.test.ts` | 121, 139 | owned |
 | `scripts/verify-viewer-runtime.ts` | 200, 244, 383 | contained helper; direct Linux CLI enters containment, served probe owns a nested service and rejects unconfirmed shutdown |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
+| `src/app/api/attention/needs-you/route.test.ts` | 70 | owned; the isolated authority probe retains its Bun handle and awaits output and exit before assertions |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
 | `src/app/api/runtime/hosts/route.test.ts` | 31, 88, 92 | owned |
 | `src/app/api/runtime/snapshot/route.test.ts` | 177 | owned; preload records the original Bun handle before return, stdout/stderr and exit are awaited in an isolated route sandbox, and the private runner service contains interrupted probes |
@@ -494,6 +495,8 @@ repeated for this inventory correction.
 
 | File | Synchronous launch sites | Disposition |
 | --- | --- | --- |
+| `src/lib/memory/roleEgress.test.ts` | 74, 97, 183 | synchronous; privacy and Git probe results return before fixture cleanup; the runner contains interrupted descendants |
+| `src/lib/memory/roleEgressUnreadable.test.ts` | 23, 59 | synchronous; isolated store and publication probes return before fixture cleanup; the runner contains interrupted descendants |
 | `bin/agent-binaries.test.ts` | 75, 93 | synchronous |
 | `bin/envAlias.test.ts` | 65, 121 | synchronous |
 | `bin/install-cpu-placement.test.ts` | 37, 42 | synchronous; isolated installer queries are awaited and the runner contains interrupted descendants |
@@ -548,6 +551,7 @@ repeated for this inventory correction.
 | `src/lib/mcp/compactAnswers.test.ts` | 38 | synchronous |
 | `src/lib/mcp/spawnRecovery.integration.test.ts` | 251 | synchronous |
 | `src/lib/mcp/workLinks.test.ts` | 21 | synchronous |
+| `src/lib/memory/roleLaunch.test.ts` | 28 | synchronous; Git fixture commands return before the private checkout is removed; the runner contains interrupted descendants |
 | `src/lib/onboarding/healthCheck.test.ts` | 342, 346, 357, 365 | synchronous |
 | `src/lib/orchestrator/seatProjectIdentity.test.ts` | 22 | synchronous |
 | `src/lib/pipelines/controllerArtifacts.test.ts` | 22, 129 | synchronous |
