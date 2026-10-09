@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
    read below (docs/design/rename-delegatus.md §5). */
@@ -49,4 +50,16 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default function configureNext(phase: string): NextConfig {
+  if (phase === PHASE_PRODUCTION_BUILD) {
+    // Every build entry point loads this config before Next launches TypeScript.
+    // Preserve unrelated Node options and any larger caller-supplied heap.
+    const options = process.env.NODE_OPTIONS ?? "";
+    const limits = [...options.matchAll(/(?:^|\s)["']?--max[-_]old[-_]space[-_]size(?:=|\s+)["']?(\d+)/g)];
+    const heap = Math.max(6144, ...limits.map(match => Number(match[1])));
+    process.env.NODE_OPTIONS = `${options} --max-old-space-size=${heap}`.trim();
+    // Keep the full repository check in tsconfig.json for development and gates.
+    return { ...nextConfig, typescript: { tsconfigPath: "tsconfig.production.json" } };
+  }
+  return nextConfig;
+}
