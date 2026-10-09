@@ -43,7 +43,8 @@
  * settles through the ordinary resolved path and this model stops speaking.
  */
 
-import type { TFunction } from "@/lib/i18n";
+import type { MessageKey, TFunction } from "@/lib/i18n";
+import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
 
 import { deliveryResolved } from "./deliveryState";
 import { receiptIsTerminal, type HostAxis, type ReceiptStatus, type TurnAxis } from "./runtimeModel";
@@ -87,6 +88,11 @@ export interface DeliveryWait {
   /** Milliseconds since this message was admitted. */
   waitedMs: number;
   cause: DeliveryWaitCause;
+  /** What the delivery queue itself recorded about this message, when the
+      composer has read it: the wait reason, attempt and next check. */
+  progress?: DeliveryProgressRecord | null;
+  /** The clock {@link progress} is read against. */
+  nowMs?: number;
 }
 
 export interface DeliveryWaitInput {
@@ -210,6 +216,13 @@ export function deliveryWaitText(
   queuePosition?: number | null,
 ): string | null {
   const waited = formatWaited(t, wait.waitedMs);
+  /* The queue's own record outranks what the composer can infer from the
+     axes: it says why, which attempt, and when it looks again. The terminal
+     phases keep their own wording. */
+  if (wait.progress && !wait.progress.terminal
+    && wait.phase !== "uncertain" && wait.phase !== "unconfirmed-admission") {
+    return deliveryProgressText(t, wait.progress, wait.nowMs ?? Date.now(), waited);
+  }
   if (wait.phase === "uncertain") return t("runtime.receipt.unconfirmed", { waited });
   if (wait.phase === "unconfirmed-admission") return t("runtime.receipt.admissionUnconfirmed", { waited });
   if (wait.phase === "awaiting-host") return t("runtime.receipt.awaitingHostFor", { waited });
@@ -222,6 +235,51 @@ export function deliveryWaitText(
   return typeof queuePosition === "number"
     ? t("runtime.receipt.awaitingTurnPos", { position: queuePosition, waited })
     : t("runtime.receipt.awaitingTurnFor", { waited });
+}
+
+/**
+ * The sentence for a recorded wait: its reason and how long the message has
+ * waited, then the attempt when it is past the first and when the queue looks
+ * again. A phase that ran past the stall bound says so first.
+ */
+export function deliveryProgressText(
+  t: TFunction,
+  record: DeliveryProgressRecord,
+  nowMs: number,
+  waited: string,
+): string {
+  const reason = t(`delivery.wait.${record.waitReason}` as MessageKey);
+  const stalledFor = deliveryStalledFor(t, record, nowMs);
+  const head = stalledFor ? t("delivery.wait.stalled", { duration: stalledFor, reason }) : reason;
+  const parts = [t("delivery.wait.line", { reason: head, waited })];
+  if (record.attempt > 1) parts.push(t("delivery.wait.attempt", { n: record.attempt }));
+  const nextWake = record.nextWakeAt ? Date.parse(record.nextWakeAt) : NaN;
+  if (Number.isFinite(nextWake)) {
+    parts.push(nextWake > nowMs
+      ? t("delivery.wait.nextCheck", { in: formatWaited(t, nextWake - nowMs) })
+      : t("delivery.wait.checkingNow"));
+  }
+  return parts.join(" · ");
+}
+
+/** How long the recorded phase has run, when the queue marked it stalled. */
+function deliveryStalledFor(t: TFunction, record: DeliveryProgressRecord, nowMs: number): string | null {
+  const stalledSince = record.stalledSince ? Date.parse(record.stalledSince) : NaN;
+  const phaseSince = Date.parse(record.phaseSince);
+  if (record.terminal || !Number.isFinite(stalledSince) || !Number.isFinite(phaseSince)) return null;
+  return formatWaited(t, nowMs - phaseSince);
+}
+
+/**
+ * The short status a stalled delivery shows on its message without being
+ * asked: how long the phase has made no progress and what it is. Null while
+ * the queue has recorded no stall.
+ */
+export function deliveryStalledText(t: TFunction, record: DeliveryProgressRecord, nowMs: number): string | null {
+  const stalledFor = deliveryStalledFor(t, record, nowMs);
+  return stalledFor
+    ? t("delivery.stalled.status", { duration: stalledFor, reason: t(`delivery.wait.${record.waitReason}` as MessageKey) })
+    : null;
 }
 
 /**

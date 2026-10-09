@@ -187,3 +187,40 @@ test("the operator-facing conversation retry authorizes an unknown Codex fork be
   expect(authorized).toBeTrue();
   expect(registry.conversation(id)!.migration?.phase).toBe("committed");
 });
+
+test("cancel, rollback and retry commands refused for the lock change nothing, answer retryably and keep the loop free", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C2. */
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-conversation-command-refused", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    registry.reconcileConversations([observation("/sessions/command-refused.jsonl", "limited")]);
+    const id = registry.conversationForPath("/sessions/command-refused.jsonl")!.id;
+    registry.commitMigrationIntent({ engine: "codex", targetId: "default", origin: "manual", requestId: "command-refused",
+      expectedRevision: registry.engineRouting("codex").revision });
+    const before = registry.conversation(id)!.migration!;
+    for (const action of ["rollback", "retry"] as const) {
+      await holder.hold(500);
+      const { value: result, gapMs } = await longestLoopGap(() => applyConversationMigration(
+        { conversationId: id, action, expectedRevision: registry.conversation(id)!.migration!.revision },
+        { registry: () => registry, provider: () => { throw new Error("no provider is reached"); } }));
+      expect(gapMs).toBeLessThan(50);
+      expect(result).toMatchObject({ status: 503, body: { retryable: true } });
+      expect(registry.conversation(id)!.migration).toMatchObject({ phase: before.phase, revision: before.revision });
+      await Bun.sleep(550);
+    }
+    registry.transitionConversationMigration(id, before.revision, [before.phase], { phase: "waiting-turn" });
+    const waiting = registry.conversation(id)!.migration!;
+    await holder.hold(500);
+    const { value: cancel, gapMs } = await longestLoopGap(() => applyConversationMigration(
+      { conversationId: id, action: "cancel", expectedRevision: waiting.revision }, { registry: () => registry, kick: async () => {} }));
+    expect(gapMs).toBeLessThan(50);
+    expect(cancel).toMatchObject({ status: 503, body: { retryable: true } });
+    expect(registry.conversation(id)!.migration).toMatchObject({ phase: "waiting-turn", revision: waiting.revision });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});

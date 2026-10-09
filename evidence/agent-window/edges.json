@@ -1,0 +1,637 @@
+{
+  "readings": {
+    "edges-1440x900-3-en": {
+      "mode": "scroll",
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 16,
+      "column": 264,
+      "strip": {
+        "left": 264,
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1440x900-0-en": {
+      "mode": "scroll",
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 16,
+      "column": 264,
+      "strip": {
+        "left": 264,
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-3-en": {
+      "mode": "wide",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-0-en": {
+      "mode": "wide",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-3-en": {
+      "mode": "narrow",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-0-en": {
+      "mode": "narrow",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1000x800-3-en": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 175,
+        "bottom": 217
+      },
+      "bar": 128,
+      "above": 163,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 229,
+        "bottom": 265
+      },
+      "columns": 277,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1000x800-0-en": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 175,
+        "bottom": 217
+      },
+      "bar": 128,
+      "above": 163,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 229,
+        "bottom": 265
+      },
+      "columns": 277,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-700x800-3-en": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 242.5625,
+        "bottom": 284.5625
+      },
+      "bar": 195.5625,
+      "above": 230.5625,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 296.5625,
+        "bottom": 332.5625
+      },
+      "columns": 344.5625,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-700x800-0-en": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 242.5625,
+        "bottom": 284.5625
+      },
+      "bar": 195.5625,
+      "above": 230.5625,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 296.5625,
+        "bottom": 332.5625
+      },
+      "columns": 344.5625,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1440x900-3-uk": {
+      "mode": "scroll",
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 16,
+      "column": 264,
+      "strip": {
+        "left": 264,
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1440x900-0-uk": {
+      "mode": "scroll",
+      "name": 264,
+      "seat": {
+        "left": 264,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 16,
+      "column": 264,
+      "strip": {
+        "left": 264,
+        "top": 114,
+        "bottom": 142
+      },
+      "columns": 154,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-3-uk": {
+      "mode": "wide",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1920x1080-0-uk": {
+      "mode": "wide",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-3-uk": {
+      "mode": "narrow",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1600x900-0-uk": {
+      "mode": "narrow",
+      "name": 268,
+      "seat": {
+        "left": 268,
+        "top": 60,
+        "bottom": 102
+      },
+      "bar": 48,
+      "above": 48,
+      "edge": 20,
+      "column": 268,
+      "strip": null,
+      "columns": 114,
+      "titles": {
+        "inbox": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "blocked": {
+          "left": 13,
+          "top": 17.578125
+        },
+        "done": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1000x800-3-uk": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 175,
+        "bottom": 217
+      },
+      "bar": 128,
+      "above": 163,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 229,
+        "bottom": 265
+      },
+      "columns": 277,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-1000x800-0-uk": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 175,
+        "bottom": 217
+      },
+      "bar": 128,
+      "above": 163,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 229,
+        "bottom": 265
+      },
+      "columns": 277,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-700x800-3-uk": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 242.5625,
+        "bottom": 284.5625
+      },
+      "bar": 195.5625,
+      "above": 230.5625,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 296.5625,
+        "bottom": 332.5625
+      },
+      "columns": 344.5625,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    },
+    "edges-700x800-0-uk": {
+      "mode": "tabs",
+      "name": 260,
+      "seat": {
+        "left": 260,
+        "top": 242.5625,
+        "bottom": 284.5625
+      },
+      "bar": 195.5625,
+      "above": 230.5625,
+      "edge": 12,
+      "column": 260,
+      "strip": {
+        "left": 260,
+        "top": 296.5625,
+        "bottom": 332.5625
+      },
+      "columns": 344.5625,
+      "titles": {
+        "assigned": {
+          "left": 13,
+          "top": 17.578125
+        }
+      },
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

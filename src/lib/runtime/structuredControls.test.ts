@@ -1341,6 +1341,51 @@ test("«send on the current account» releases the hold and wakes the queue, onc
   expect(kicks).toBe(2);
 });
 
+for (const entry of ["keep-current", "current-account"] as const) {
+  test(`${entry} releases a held send off the loop and a refused writer keeps it eligible`, async () => {
+    const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+    const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+    const made = sqliteRegistryFixture("llv-current-account-write", { sqliteWriterDeadlineMs: 80 });
+    const holder = registryLockHolder(made.sqliteFilename);
+    const fixture = structuredConversation({ registry: made.registry });
+    const id = fixture.conversationId as `conversation_${string}`;
+    made.registry.updateConversationLaunchProfile(id, { model: "gpt-5.6-sol", effort: "high", fast: true });
+    const { journal, client } = journalClient(`writer-${entry}`);
+    let kicks = 0;
+    const command = () => entry === "keep-current"
+      ? applyConversationMigration({ conversationId: id, action: entry, requestOperationId: "release-request" },
+          { registry: () => made.registry, kick: () => { kicks += 1; } })
+      : dispatchStructuredControl({ path: fixture.path, conversationId: id, action: "reconfigure", operationId: "release-request",
+          reconfiguration: { accountId: "codex-subscription", model: "gpt-5.6-sol", effort: "high", fast: true } },
+          { registry: made.registry, client, enabled: () => true, accountExists: () => true, kick: () => { kicks += 1; } });
+    try {
+      made.registry.holdForFailedSwitch(id, { operationId: "failed-switch", accountId: "target", reason: "switch refused" });
+      const held = made.registry.holdDelivery(id, "accepted behind switch", "switch-held-key");
+      resetBlockingWaitsForTests(() => {});
+      await holder.hold(600);
+      const { value: refused, gapMs } = await longestLoopGap(command);
+      expect(gapMs).toBeLessThan(150);
+      expect(refused).toMatchObject({ status: 503, body: { retryable: true } });
+      expect(made.registry.switchHold(id)?.operationId).toBe("failed-switch");
+      expect(made.registry.snapshot().heldDeliveries[held.id]?.state).toBe(held.state);
+      expect(kicks).toBe(0);
+      expect(blockingWaitDiagnostics().longest).toContainEqual(expect.objectContaining({
+        site: "registry-lock-async", synchronous: false, label: "delivery.release-switch-hold", operationId: "release-request",
+      }));
+      await holder.release();
+      expect(await command()).toMatchObject({ status: 200 });
+      expect(made.registry.switchHold(id)).toBeNull();
+      expect(await command()).toMatchObject({ status: 200 });
+      expect(made.registry.snapshot().heldDeliveries[held.id]?.command.operationId).toBe(held.command.operationId);
+    } finally {
+      await holder.close();
+      journal.close();
+      made.registry.close();
+      made.cleanup();
+    }
+  });
+}
+
 test("structured reconfigure captures an exact ultrafast rollback profile before choosing Standard", async () => {
   const fixture = structuredConversation();
   fixture.registry.updateConversationLaunchProfile(fixture.conversationId as `conversation_${string}`, {
@@ -1358,6 +1403,30 @@ test("structured reconfigure captures an exact ultrafast rollback profile before
   expect(commands).toEqual([expect.objectContaining({
     fast: false, previousProfile: { model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" },
   })]);
+});
+
+test("provider recovery authority reaches the structured kill command", async () => {
+  const fixture = structuredConversation();
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 1, writerClaim: "fixture:1" };
+  const commands: unknown[] = [];
+  const client = { command: async (command: unknown) => {
+    commands.push(command);
+    return { operationId: "provider-retire", receipt: { operationId: "provider-retire", status: "queued" }, replayed: false };
+  } } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId,
+    action: "kill", onlyIfIdle, providerRecovery }, {
+    registry: fixture.registry, client, operationId: () => "provider-retire", enabled: () => true, kick: () => {},
+  });
+  expect(result?.status).toBe(202);
+  expect(commands).toEqual([expect.objectContaining({ kind: "kill", onlyIfIdle, providerRecovery })]);
+});
+
+
+test("provider recovery authority requires the structured idle-only kill", async () => {
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  expect(await dispatchStructuredControl({ path: "", conversationId: "conversation_fixture", action: "kill", providerRecovery },
+    { enabled: () => false })).toMatchObject({ status: 400 });
 });
 
 test("the pipeline switch adapter recognizes receipt-free native reconfigure success", async () => {

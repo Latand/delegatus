@@ -19,6 +19,8 @@ import { interruptRuntime, useRuntimeBusState, type CommandResult, type RuntimeS
 import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { useViewerSelectedContext, viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
+import { useDeliveryProgress } from "@/hooks/useDeliveryProgress";
+import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
 import { useHostTarget } from "@/hooks/useHostTarget";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -404,6 +406,7 @@ export function RuntimeComposerReceipts({
   payloadRecoveryKeys = NO_DISMISSED,
   localRecoveryKeys = NO_DISMISSED,
   onRecheck,
+  progress: pinnedProgress,
 }: {
   receipts: RuntimeReceipt[];
   actionsDisabled?: boolean;
@@ -431,6 +434,9 @@ export function RuntimeComposerReceipts({
   /** Complete local submissions whose admission has no server operation yet. */
   localRecoveryKeys?: ReadonlySet<string>;
   onRecheck?: (receipt?: RuntimeReceipt) => void;
+  /** What the delivery queue recorded each unsettled message is waiting on
+      (incident 2026-10-06). Production reads it itself; a test pins it. */
+  progress?: ReadonlyMap<string, DeliveryProgressRecord>;
 }) {
   const { t } = useLocale();
   const statusId = useId();
@@ -464,6 +470,14 @@ export function RuntimeComposerReceipts({
     return () => clearInterval(timer);
   }, [pinnedNow, unsettled]);
   const now = nowMs ?? tick;
+  const unsettledOperations = visibleAttempts
+    .filter((receipt) => deliveryWaitPossible(receipt.status) && !receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))
+    .map((receipt) => receipt.operationId);
+  const polledProgress = useDeliveryProgress(unsettledOperations, !pinnedProgress && !pinnedNow && unsettledOperations.length > 0);
+  const progress = pinnedProgress ?? polledProgress.records;
+  /* Each read re-renders the row, and the record is measured from it; a
+     pinned clock stays pinned. */
+  const progressNow = pinnedNow ? now : Math.max(now, polledProgress.readAt);
   const alternateRetry = (receipt: RuntimeReceipt) => localRecoveryKeys.has(receipt.idempotencyKey) || !payloadRecoveryKeys.has(receipt.idempotencyKey);
   const editable = (receipt: RuntimeReceipt) => alternateRetry(receipt) && isMessageReceipt(receipt)
     && (receipt.status === "failed" || receipt.status === "rejected")
@@ -481,13 +495,17 @@ export function RuntimeComposerReceipts({
      keeps it from ever crossing the uncertain bound. Automatic and explicit
      unknown-fate retries keep the same operation, so one stamp covers the
      whole time this logical message is owed. */
-  const waitFor = (group: DeliveryAttemptGroup): DeliveryWait | null => deliveryWaitFor({
-    status: group.current.status,
-    host: session?.host ?? null,
-    turn: session?.turn ?? null,
-    admittedAt: group.current.admittedAt ?? group.current.at,
-    nowMs: now,
-  });
+  const waitFor = (group: DeliveryAttemptGroup): DeliveryWait | null => {
+    const wait = deliveryWaitFor({
+      status: group.current.status,
+      host: session?.host ?? null,
+      turn: session?.turn ?? null,
+      admittedAt: group.current.admittedAt ?? group.current.at,
+      nowMs: now,
+    });
+    const recorded = progress.get(group.current.operationId);
+    return wait && recorded ? { ...wait, progress: recorded, nowMs: progressNow } : wait;
+  };
   const unknownStatusText = (receipt: RuntimeReceipt): string => t(receipt.status === "failed"
     ? "composer.deliveryCheckEnded" : "composer.deliveryChecking");
   const handoverActive = (receipt: RuntimeReceipt): boolean => receipt.status === "delivering" || receipt.status === "applying";

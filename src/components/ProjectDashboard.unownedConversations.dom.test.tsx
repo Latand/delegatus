@@ -173,7 +173,7 @@ function mount(focusRequest: Landing = null) {
 
 /* Where each lands: a reviewer round stays in its deck and opens in the window; the dashboard's jump places a
    collapsed worker or an engine's subagent on its spawner's card, and its reader opens there. */
-const TARGETS = [["an active flow's reviewer round", reviewer, "window"], ["a collapsed worker", worker, "card"], ["an engine's own subagent", engineChild, "card"]] as const;
+const TARGETS = [["an active flow's reviewer round", reviewer], ["a collapsed worker", worker], ["an engine's own subagent", engineChild]] as const;
 const boardShown = (host: HTMLElement) => host.querySelector("[data-kanban-board]") !== null;
 /** No card draws it: no tile, and no reader inside a card. */
 const onNoCard = (host: HTMLElement, file: FileEntry) =>
@@ -181,26 +181,28 @@ const onNoCard = (host: HTMLElement, file: FileEntry) =>
   && host.querySelector(`[data-kanban-card] [data-link-path="${file.path}"]`) === null;
 /** Its reader on the Board, with the transcript and the composer: the window or a card, or null. */
 const holdsPath = (element: Element, file: FileEntry) => element.matches(`[data-link-path="${file.path}"]`) || element.querySelector(`[data-link-path="${file.path}"]`) !== null;
+/* Every conversation opens in the agent window; a reader anywhere else is parked, or in a card, which is a defect. */
 const readerOf = (host: HTMLElement, file: FileEntry): "window" | "card" | null => {
   const reader = Array.from(host.querySelectorAll("[data-kanban-reader]"))
     .find((element) => holdsPath(element, file) && element.querySelector("textarea"));
   if (!reader) return null;
-  return reader.closest(".reader-full") ? "window" : reader.closest("[data-kanban-card]") ? "card" : null;
+  /* Shown in the window: not the agent it is still bringing in. */
+  return reader.closest("[data-agent-window] .reader-slot:not([data-incoming])") ? "window" : reader.closest("[data-kanban-card]") ? "card" : null;
 };
 const boardReady = (host: HTMLElement) => boardShown(host) && host.querySelector(`[data-member="${implementer.path}"]`) !== null;
 
-for (const [label, file, where] of TARGETS) {
+for (const [label, file] of TARGETS) {
   test(`${label}: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written`, async () => {
     const { host, rerender } = mount();
     expect(await waitFor(() => boardReady(host))).toBe(true);
     expect(onNoCard(host, file)).toBe(true);
 
     rerender({ path: file.path, nonce: 1, catalog: true });
-    expect(await waitFor(() => readerOf(host, file) === where)).toBe(true);
+    expect(await waitFor(() => readerOf(host, file) === "window")).toBe(true);
     expect(boardShown(host)).toBe(true);
     expect(presentationWrites).toEqual([]);
 
-    /* Closing it closes the reader, and the Board stays. */
+    /* Closing the window leaves the Board. */
     const reader = Array.from(host.querySelectorAll("[data-kanban-reader]")).find((element) => holdsPath(element, file))!;
     flushSync(() => (reader.querySelector("[data-reader-close]") as HTMLButtonElement).click());
     expect(await waitFor(() => readerOf(host, file) === null)).toBe(true);
@@ -211,7 +213,7 @@ for (const [label, file, where] of TARGETS) {
     const { host, rerender } = mount();
     expect(await waitFor(() => boardReady(host))).toBe(true);
     rerender({ path: file.path, nonce: 1, catalog: false });
-    expect(await waitFor(() => readerOf(host, file) === where)).toBe(true);
+    expect(await waitFor(() => readerOf(host, file) === "window")).toBe(true);
     expect(presentationWrites).toEqual([]);
   });
 
@@ -227,7 +229,7 @@ for (const [label, file, where] of TARGETS) {
     expect(moved).toBe(true);
     expect(await waitFor(() => readerOf(host, file) === "window")).toBe(true);
     focusHandoffBus.board()!.returnFromHandoff?.(`handoff-${file.name}`);
-    expect(await waitFor(() => readerOf(host, file) === null && host.querySelector(".reader-full") === null)).toBe(true);
+    expect(await waitFor(() => readerOf(host, file) === null && host.querySelector("[data-agent-window]") === null)).toBe(true);
   });
 }
 
@@ -236,7 +238,7 @@ test("under a standing landing, a card's link to Conversations opens Conversatio
   expect(await waitFor(() => boardReady(host))).toBe(true);
   /* A search lands on the implementer, and the landing stands. */
   rerender({ path: implementer.path, nonce: 1, catalog: true });
-  expect(await waitFor(() => host.querySelector(`[data-kanban-card].has-reader [data-link-path="${implementer.path}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => host.querySelector(`[data-agent-window] [data-link-path="${implementer.path}"]`) !== null)).toBe(true);
   const link = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-kanban-card] .refs .ref"))
     .find((button) => (button.textContent ?? "").includes("Conversations"));
   expect(link).toBeDefined();

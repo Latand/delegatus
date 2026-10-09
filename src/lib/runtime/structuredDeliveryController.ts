@@ -1,8 +1,14 @@
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
-import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
+import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
+import { settleNativeQueueEntry } from "./nativeQueueSettlement";
+import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecords } from "./recordWait";
+
+/** How many times a failed switch's hold is asked for before it is given up
+    and logged; each attempt waits up to the registry's lock deadline. */
+const SWITCH_HOLD_WRITE_ATTEMPTS = 6;
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
@@ -12,21 +18,23 @@ import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activi
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 
-import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { actingOperation } from "@/lib/deliveryActuation";
+import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
-import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
-import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
+import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -44,7 +52,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement";
+import { deliveryRouteOf, journalVerdict, mirrorSettledReceipts, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -86,6 +94,12 @@ interface HostRegistration {
 
 const DELIVERY_DRAIN_COALESCE_MS = 25;
 const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
+/** How often the delivery watchdog looks for stalls, overdue wakes and lanes
+    to reconcile. */
+const DELIVERY_WATCHDOG_MS = 1_000;
+/** How often accepted sends past their settlement deadline are ended with no
+    reader asking (incident 2026-10-06). */
+const DELIVERY_SETTLEMENT_SWEEP_MS = 15_000;
 const TERMINAL_RECONCILIATION_PAGE_SIZE = 16;
 /** One socket frame's worth of acknowledgements (#1612). */
 const TERMINAL_ACKNOWLEDGEMENT_BATCH_SIZE = 128;
@@ -398,14 +412,15 @@ async function projectLostTerminalAcknowledgement(
   const outcome = terminalDeliveryOutcome(registry, result, { conversationId: null, operationId });
   if (!outcome) return true;
   try {
-    registry.recordDeliveryOutcomeForOperation(
+    /* Still owed when the write lock stayed held; the next pass asks again. */
+    if (!await registry.recordDeliveryOutcomeForOperationOffLoop(
       outcome.conversationId,
       outcome.operationId,
       outcome.state,
       outcome.error,
       outcome.disposition,
       outcome.route,
-    );
+    )) return false;
   } catch (error) {
     console.error("[structured delivery] lost terminal acknowledgement could not be projected", {
       operationId,
@@ -429,10 +444,17 @@ async function reconcileTerminalDeliveries(
   const pendingAcknowledgements: string[] = [];
   const flushOutcomes = async () => {
     if (pendingOutcomes.length === 0) return;
-    registry.recordDeliveryOutcomesForOperations(pendingOutcomes.splice(0));
+    const outcomes = pendingOutcomes.splice(0);
+    const acknowledgements = pendingAcknowledgements.splice(0);
+    /* Off the loop (rule c). Refused, the outcomes stay owed: nothing is
+       acknowledged to the journal, whose retention keeps them, and the drain
+       and the sweep project them. */
+    const written = await registry.deliveryWrite({ label: "delivery.startup-settle", operationId: outcomes[0]?.operationId ?? null },
+      () => registry.recordDeliveryOutcomesForOperations(outcomes));
+    if (!written.acquired) return;
     /* Only after the settlement is durable: the journal's retention is what
        stands in for it until then (#1612). */
-    await acknowledgeTerminalProjection(client, pendingAcknowledgements.splice(0));
+    await acknowledgeTerminalProjection(client, acknowledgements);
   };
   for (let offset = 0; offset < unsettledDeliveries.length && isCurrent(); offset += TERMINAL_RECONCILIATION_PAGE_SIZE) {
     const page = unsettledDeliveries.slice(offset, offset + TERMINAL_RECONCILIATION_PAGE_SIZE);
@@ -727,6 +749,13 @@ export async function bindStructuredDeliveryQueue(
     /** How often session rows of ended hosts are settled; 0 leaves it to a
         direct call. Tests pass their own. */
     hostlessSettleIntervalMs?: number;
+    /** Where wait reasons are recorded; tests pass their own store. */
+    progress?: DeliveryProgressStore;
+    /** The queue's bounds; tests shorten them. */
+    queueTiming?: Partial<StructuredDeliveryQueueTiming>;
+    /** Watchdog and background settlement cadences; 0 leaves each to a direct call. */
+    watchdogIntervalMs?: number;
+    settlementSweepMs?: number;
   } = {},
 ): Promise<void> {
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -753,10 +782,8 @@ export async function bindStructuredDeliveryQueue(
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
     resolveHost: hostResolver(registry, hosts),
-    settled: (entry) => {
-      registry.recordDeliveryOutcomeForOperation(entry.conversationId as `conversation_${string}`, entry.entryId,
-        entry.state === "removed" ? "failed" : "delivered", entry.state === "removed" ? "delivery-discarded" : null);
-    },
+    /* Off the loop, a hand-off's own row included (C3, A8). */
+    settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
     binding: (conversationId) => {
       const snapshot = registry.readOnlySnapshot();
       const conversation = snapshot.conversations[conversationId];
@@ -802,8 +829,65 @@ export async function bindStructuredDeliveryQueue(
       return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
     },
   });
+  const progressStore = dependencies.progress ?? deliveryProgressStore();
+  /* The first record of an operation carries its original key and admission
+     time off the delivery record, so the record answers for the key the
+     operator holds. */
+  const progress: DeliveryProgressSink = {
+    note: (operationId, conversationId, note) => {
+      if (!progressStore.get(operationId)) {
+        const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
+        note = { ...note, originalKey: owner?.clientMessageId ?? null, admittedAt: owner?.createdAt ?? null };
+      }
+      progressStore.note(operationId, conversationId, note);
+    },
+    stalled: (operationId) => progressStore.stalled(operationId),
+    deadline: (operationId, deadlineAt, policy) => progressStore.deadline(operationId, deadlineAt, policy),
+    settle: (operationId, state, reason) => progressStore.settle(operationId, state, reason),
+    get: (operationId) => progressStore.get(operationId),
+    open: () => progressStore.open(),
+  };
   const queue = new StructuredDeliveryQueue(
     {
+      progress,
+      /* A send held before the journal is the account-migration drain's: a
+         wake of its that passed with nothing looking is lost, and that drain
+         is asked for a pass now. */
+      /* A4: the reservation is asked before a wake is called lost. The
+         operation a lane or section is acting on keeps its own phase and
+         stall; another assigned send of a conversation something works on
+         gets the observer's note; a send held behind a switch says what the
+         switch is doing. Only the rest are lost wakes. */
+      unlistedWakeDue: (records) => {
+        let lost = false;
+        for (const record of records) {
+          let reservation: HeldDelivery | null = null;
+          try {
+            reservation = Object.values(registry.deliverySnapshotForOperation(record.operationId).heldDeliveries)
+              .find((candidate) => candidate.command.operationId === record.operationId) ?? null;
+          } catch { reservation = null; }
+          const conversationId = reservation ? registry.canonicalConversationId(reservation.conversationId) : record.conversationId;
+          if (actingOperation(conversationId) === record.operationId) continue;
+          if (reservation?.state === "assigned" && conversationActorRunning(conversationId)) {
+            recordObservedWait(progressStore, registry, reservation, "an earlier delivery on this conversation is still in progress");
+            continue;
+          }
+          if (reservation?.state === "held") {
+            recordWait(progressStore, registry, reservation, { reason: "switching-accounts" });
+            continue;
+          }
+          progressStore.note(record.operationId, record.conversationId, {
+            waitReason: "wake-lost",
+            detail: "no delivery pass reached it when due",
+            nextWakeMs: ACCOUNT_MIGRATION_PASS_INTERVAL_MS,
+          });
+          lost = true;
+        }
+        if (lost) requestAccountMigrationTick();
+      },
+      /* Original-key reconciliation reads the host's own evidence: the Claude
+         delivery ledger and transcript, the Codex thread. It never writes input. */
+      confirmedDelivery: (operationId) => confirmedSend(registry.readOnlySnapshot(), operationId, true),
       handoffHeld: () => !!activeRestartGate(statePath("self-update", "auto-admission.json")),
       autonomousTurnHeld: (operationId, admittedAt) => {
         const hold = activeDrain();
@@ -816,16 +900,37 @@ export async function bindStructuredDeliveryQueue(
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
-      holdForFailedSwitch: (effect, reason) => {
-        registry.holdForFailedSwitch(effect.conversationId as ViewerConversationId, {
-          operationId: effect.operationId,
-          accountId: effect.accountId!,
-          reason,
-        });
+      /* Off the loop (rule c). The hold is written before the switch is
+         failed in the journal; a hold every attempt was refused answers
+         false, and the queue keeps the switch listed, blocking the
+         conversation's unactuated messages, until a later pass writes it. */
+      holdForFailedSwitch: async (effect, reason) => {
+        const hold = () => registry.deliveryWrite({ label: "delivery.switch-hold", operationId: effect.operationId },
+          () => registry.holdForFailedSwitch(effect.conversationId as ViewerConversationId, {
+            operationId: effect.operationId,
+            accountId: effect.accountId!,
+            reason,
+          }));
+        for (let attempt = 0; attempt < SWITCH_HOLD_WRITE_ATTEMPTS; attempt += 1) {
+          if ((await hold()).acquired) return true;
+        }
+        console.error("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
+        return false;
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
-      bindDeliveryGeneration: (operationId, generationId) => registry.bindDeliveryOperationGeneration(operationId, generationId),
-      nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
+      idleContinuationCurrent: async (conversationId, fence) => {
+        const session = await readRuntimeSession(client, { conversationId });
+        // This operation itself blocks retirement. Admission and the claim
+        // checked other work; the shared actuation section now excludes sends.
+        return !!session && runtimeIdleKillMatches({ ...session, retirementBlocked: false }, session.sessionKey, fence);
+      },
+      bindDeliveryGeneration: async (operationId, generationId) => {
+        const bound = await registry.bindDeliveryOperationGenerationOffLoop(operationId, generationId);
+        /* The queue defers the message and comes back; nothing was handed over. */
+        if (bound === null) throw new Error(REGISTRY_WRITER_BUSY);
+        return bound;
+      },
+      nativeQueueExecute: (command, refusalReason, note, step, settled) => nativeQueueExecutor.execute(command, refusalReason, note, step, settled),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
         const readyHosts = [...hosts].filter(([key, host]) => {
@@ -901,27 +1006,35 @@ export async function bindStructuredDeliveryQueue(
         if (!terminal) return;
         const conversationId = result.receipt.conversationId;
         if (!conversationId?.startsWith("conversation_")) return;
-        const settled = registry.recordDeliveryOutcomeForOperation(
-          conversationId as `conversation_${string}`,
-          result.receipt.presentationOperationId ?? operationId,
-          status === "uncertain" ? "failed" : status,
-          details?.reason ?? null,
-          /* The disposition the record has to keep: actuation began, so a
-             resend can duplicate it. Every other `failed` on a message effect
-             means the send never reached the engine and proves nothing on its
-             own, so it carries none. */
-          status === "uncertain" ? "unverified" : undefined,
-          /* The journal receipt, not these details: it carries the route the
-             delivering transition recorded, whichever executor began it. */
-          status === "delivered" ? deliveryRouteOf(result.receipt) : null,
+        /* The registry's write lock is waited for off the event loop and kept
+           for the write. A lock that stays held leaves the outcome owed: the
+           journal already has it, the queue reads this throw as a lost
+           acknowledgement and projects it on a later pass (#1612). */
+        const settled = await registry.deliveryWrite(
+          { label: "delivery.outcome", operationId: result.receipt.presentationOperationId ?? operationId },
+          () => registry.recordDeliveryOutcomeForOperation(
+            conversationId as `conversation_${string}`,
+            result.receipt.presentationOperationId ?? operationId,
+            status === "uncertain" ? "failed" : status,
+            details?.reason ?? null,
+            /* The disposition the record has to keep: actuation began, so a
+               resend can duplicate it. Every other `failed` on a message effect
+               means the send never reached the engine and proves nothing on its
+               own, so it carries none. */
+            status === "uncertain" ? "unverified" : undefined,
+            /* The journal receipt, not these details: it carries the route the
+               delivering transition recorded, whichever executor began it. */
+            status === "delivered" ? deliveryRouteOf(result.receipt) : null,
+          ),
         );
+        if (!settled.acquired) throw new Error(REGISTRY_WRITER_BUSY);
         await acknowledgeTerminalProjection(client, [result.operationId]);
         /* The board reads an operator message's delivery from the files
            projection (the card's needs-you and its first-message chip), so a
            settled delivery invalidates it now. Waiting for the next poll left
            "message not delivered" on the card for 7 to 15 s after the agent
            had answered it (2026-10-07). */
-        if (settled) void publishFilesRevision(client).catch(() => undefined);
+        if (settled.value) void publishFilesRevision(client).catch(() => undefined);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {
           const launchId = operationId.slice("spawn_message_".length);
           const receipt = registry.readOnlySnapshot().receipts[launchId];
@@ -938,7 +1051,8 @@ export async function bindStructuredDeliveryQueue(
       },
     },
     hostResolver(registry, hosts),
-    async (conversationId, expectedKey, onlyIfIdle, authority) => {
+    async (conversationId, expectedKey, onlyIfIdle, authority, providerRecovery) => {
+      if (providerRecovery && !onlyIfIdle) return false;
       if (onlyIfIdle) {
         // Re-read the journal after admission and immediately before actuation.
         // Missing evidence leaves retirement deferred, with no process effects.
@@ -946,10 +1060,23 @@ export async function bindStructuredDeliveryQueue(
         if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
+      let recoveryStartedAt: string | null = null;
+      const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
+        agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
       const durableAuthority = async (): Promise<boolean> => {
         if (!onlyIfIdle) return true;
         if (!authority || stopped || state.activeQueue !== queue) return false;
         const result = await client.operationStatus(authority.operationId).catch(() => null);
+        recoveryStartedAt = null;
+        if (providerRecovery) {
+          try {
+            const snapshot = registry.readOnlySnapshot();
+            const attempt = providerRecoveryAttempt(loadPipelinesForRetirement(), providerRecovery, recoveryTarget(),
+              id => resolveConversationAlias(snapshot, id as ViewerConversationId));
+            if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
+            recoveryStartedAt = attempt.startedAt;
+          } catch { return false; }
+        }
         // Rebind may have happened while the socket read was pending.
         return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
           && result.receipt.retirementClaim?.executorId === authority.claim.executorId
@@ -970,9 +1097,14 @@ export async function bindStructuredDeliveryQueue(
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
         try {
-          if (pipelineHostHasLiveWork(loadPipelinesForRetirement(), {
+          const pipelines = loadPipelinesForRetirement();
+          const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
+          const recoveryAttempt = providerRecovery
+            ? providerRecoveryAttempt(pipelines, providerRecovery, recoveryTarget(), resolve) : null;
+          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
+          if (pipelineHostHasLiveWork(pipelines, {
             conversationId, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null, paneId: null,
-          }, id => resolveConversationAlias(snapshot, id as ViewerConversationId))) return false;
+          }, resolve, recoveryAttempt ?? undefined)) return false;
         } catch { return false; }
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.
@@ -1020,7 +1152,7 @@ export async function bindStructuredDeliveryQueue(
             || (receipt.state === "failed" && receipt.error !== reason)) continue;
           // The registry and runtime journal settle separately. A retry must
           // finish the journal write even if the registry already recorded kill.
-          const failure = registry.failStructuredSpawn(receipt.launchId, reason);
+          const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
           if (failure.receipt?.state !== "failed" || failure.receipt.error !== reason) continue;
           const operation = await client.operationStatus(receipt.launchId);
           if (operation?.receipt.status === "pending" || operation?.receipt.status === "queued" || operation?.receipt.status === "delivering") {
@@ -1135,9 +1267,12 @@ export async function bindStructuredDeliveryQueue(
       && branchSharesRootHost(registry, registry.conversation(conversationId as `conversation_${string}`))
       ? BRANCH_SHARED_HOST_ERROR
       : null,
+    dependencies.queueTiming,
   );
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
   let settleTimer: ReturnType<typeof setInterval> | null = null;
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
@@ -1740,6 +1875,10 @@ export async function bindStructuredDeliveryQueue(
     drainTimer = null;
     if (settleTimer) clearInterval(settleTimer);
     settleTimer = null;
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    watchdogTimer = null;
+    if (settlementSweepTimer) clearInterval(settlementSweepTimer);
+    settlementSweepTimer = null;
     for (const timer of inheritedRetries.values()) clearTimeout(timer);
     inheritedRetries.clear();
     for (const registration of registrations.values()) {
@@ -1853,6 +1992,59 @@ export async function bindStructuredDeliveryQueue(
         .finally(() => { sweeping = false; });
     }, settleIntervalMs);
     settleTimer.unref?.();
+  }
+  /* The delivery watchdog and the background settlement run whether or not
+     anyone is looking at the conversation (incident 2026-10-06): a stalled
+     send is recorded and reconciled, a lost wake is replaced, and a send past
+     its deadline is ended, all with the browser closed. */
+  const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
+  if (watchdogMs > 0) {
+    watchdogTimer = setInterval(() => {
+      /* A7: it runs while startup still seats hosts. Marking stalls and lost
+         wakes only writes records; an unregistered host's target stays
+         deferred by the drain, which notes `startup` on its records. */
+      if (stopped || state.activeQueue !== queue) return;
+      void queue.tick().catch((error) => {
+        console.error("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
+      });
+    }, watchdogMs);
+    watchdogTimer.unref?.();
+  }
+  const sweepMs = dependencies.settlementSweepMs ?? DELIVERY_SETTLEMENT_SWEEP_MS;
+  if (sweepMs > 0) {
+    /* The conversations a sweep is still settling. Each one settles on its
+       own, so a sweep starts whether or not the last one has ended, and a
+       conversation whose evidence does not answer holds only itself. */
+    const settling = new Set<string>();
+    settlementSweepTimer = setInterval(() => {
+      if (stopped || state.activeQueue !== queue) return;
+      /* A3: an open record or an ending a crash or the inventory sidecar left
+         missing is restored first; once the endings are restored up to this
+         sweep, a checkpoint is taken, persisted with the records it covers.
+         Its margin covers a row stamped just before the snapshot. A sweep
+         that could not read the store, or failed a backfill, takes none. */
+      const sweptAt = Date.now();
+      try {
+        const complete = restoreMissingRecords(registry, progressStore, sweptAt);
+        mirrorSettledReceipts(registry, progressStore);
+        if (complete) progressStore.checkpoint(sweptAt - sweepMs);
+      } catch (error) {
+        console.error("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+      void settleDueSends({
+        registry,
+        client,
+        progress: progressStore,
+        running: settling,
+        onDeadline: (operationId, _conversationId, deadline) => {
+          progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
+        },
+        onSettled: () => requestDrain(),
+      }).catch((error) => {
+        console.error("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+      });
+    }, sweepMs);
+    settlementSweepTimer.unref?.();
   }
   state.everPublished = true;
   /* The successor now owns every hook, so the predecessor's teardown finds

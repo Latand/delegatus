@@ -9,6 +9,7 @@ import { parseViewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeplo
 import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
 import { RUNTIME_RPC_DEADLINE_MS, RUNTIME_SNAPSHOT_DEADLINE_MS, VIEWER_DEPLOYMENT_DEADLINE_MS } from "./deadlines";
 import { runtimeHostSocket } from "./flags";
+import { recordBlockingWait } from "@/lib/blockingWaits";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
 // its liveTurn text until its host dies — idle hosts never retire (#747), so
@@ -186,7 +187,13 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return this.call("append-session-fenced", { event });
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> { return this.call("command", { command }) as Promise<RuntimeOperationResult>; }
+  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> {
+    // Older hosts silently discard new command fields. A separate wire method
+    // makes them refuse recovery before admitting an unfenced operation.
+    const guarded = command.kind === "send" && command.onlyIfIdle
+      || command.kind === "kill" && command.providerRecovery;
+    return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
+  }
   operationStatus(operationId: string, options: { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {
       operationId,
@@ -304,6 +311,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       const startedAt = performance.now();
       let frame = "";
       let frameBytes = 0;
+      let firstByteAt: number | null = null;
       let settled = false;
       const timer = setTimeout(() => {
         const elapsedMs = performance.now() - startedAt;
@@ -356,6 +364,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
            re-scanning the whole frame on every chunk made a snapshot-sized
            answer quadratic, hundreds of milliseconds on the event loop (#1987). */
         const text = String(chunk);
+        if (method === "snapshot") firstByteAt ??= performance.now();
         frame += text;
         frameBytes += Buffer.byteLength(text);
         if (frameBytes > MAX_RESPONSE_FRAME_BYTES) return finish(new RuntimeHostUnavailableError("runtime host response exceeds limit"));
@@ -363,7 +372,14 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         if (newlineInChunk < 0) return;
         const newline = frame.length - text.length + newlineInChunk;
         try {
+          const parseStartedAt = method === "snapshot" ? performance.now() : 0;
           const response = JSON.parse(frame.slice(0, newline)) as RuntimeSocketResponse;
+          if (method === "snapshot") {
+            /* Transfer is first byte to the frame's end; the host's own
+               collection and serialization are recorded where they run. */
+            recordBlockingWait({ site: "snapshot-transfer", durationMs: parseStartedAt - (firstByteAt ?? parseStartedAt), synchronous: false, subject: `${frameBytes} bytes` });
+            recordBlockingWait({ site: "snapshot-parse", durationMs: performance.now() - parseStartedAt, synchronous: true, subject: `${frameBytes} bytes` });
+          }
           if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));
           finish(response.ok ? undefined : new RuntimeHostUnavailableError(response.error ?? "runtime host rejected request", response.code), response.result);
         } catch {

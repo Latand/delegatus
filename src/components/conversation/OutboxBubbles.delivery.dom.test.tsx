@@ -437,6 +437,50 @@ test("the same failure reads in Ukrainian, with the runtime's English sentence b
   expect(host.querySelector("[data-outbox-raw]")?.textContent).toBe(reason);
 });
 
+test("a hand-over the queue recorded as stalled says so under the message at rest, once, in both languages", async () => {
+  const { resetDeliveryProgressPollerForTests } = await import("@/hooks/useDeliveryProgress");
+  const at = (ms: number) => new Date(SUBMITTED_AT + ms).toISOString();
+  const record = {
+    operationId: "operation-stalled", conversationId: "conversation_stalled", originalKey: "key-1213", kind: "send",
+    waitReason: "dispatching" as const, detail: null, attempt: 1, admittedAt: at(0), phaseSince: at(0),
+    lastProgressAt: at(0), deadlineAt: null, deadlinePolicy: null, nextWakeAt: null, stalledSince: null,
+    wakeLostAt: null, executorId: "executor", terminal: null, updatedAt: at(0),
+  };
+  const stalledLine = (host: HTMLElement) => host.querySelector("[data-outbox-stalled-status]")?.textContent ?? null;
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      /* Moving: the spinner and nothing under the bubble. */
+      await act(async () => resetDeliveryProgressPollerForTests(new Map([[record.operationId, record]]), SUBMITTED_AT + 2_000));
+      const host = await bubble({ operationId: record.operationId }, SUBMITTED_AT + 2_000, locale);
+      expect(stalledLine(host)).toBeNull();
+
+      /* The queue marks the stall; the next read shows it with no hover or click. */
+      await act(async () => resetDeliveryProgressPollerForTests(
+        new Map([[record.operationId, { ...record, stalledSince: at(4_000), updatedAt: at(4_000) }]]), SUBMITTED_AT + 6_000));
+      expect(stalledLine(host)).toBe(translate(locale, "delivery.stalled.status", {
+        duration: translate(locale, "runtime.receipt.waitedSec", { n: 6 }),
+        reason: translate(locale, "delivery.wait.dispatching"),
+      }));
+      expect(host.querySelector("[data-outbox-detail]")).toBeNull();
+      expect(host.querySelectorAll("[data-outbox-stalled]").length).toBe(1);
+      expect(status(host)).toBe(translate(locale, "outbox.awaitingConfirmation"));
+
+      /* Opened, the disclosure carries the record and the resting line steps
+         aside: the stall is written in one place at a time. */
+      expect(await disclosed(host)).toContain(translate(locale, "delivery.wait.dispatching"));
+      expect(stalledLine(host)).toBeNull();
+
+      /* Progress clears it. */
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-outbox-progress]")!.click());
+      await act(async () => resetDeliveryProgressPollerForTests(
+        new Map([[record.operationId, { ...record, lastProgressAt: at(7_000), updatedAt: at(7_000) }]]), SUBMITTED_AT + 7_000));
+      expect(stalledLine(host)).toBeNull();
+    }
+  } finally {
+    await act(async () => resetDeliveryProgressPollerForTests());
+  }
+});
+
 test("a restart refused for Telegram says its one sentence once, and the disclosure repeats nothing", async () => {
   /* The queue's sentence is on the row and the send route's differently
      wrapped copy of it is on the receipt. The operator read the cause twice in
