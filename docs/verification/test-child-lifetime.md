@@ -295,8 +295,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 263 files: 175 with asynchronous primitives and
-88 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 264 files: 175 with asynchronous primitives and
+89 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -519,6 +519,7 @@ repeated for this inventory correction.
 | `scripts/package-revision.mjs` | 17 | synchronous; finite Git HEAD probe used by package verification; the calling test service supplies interruption and the outer deadline |
 | `scripts/privacy-media-workflow.test.ts` | 46, 77 | synchronous |
 | `scripts/publish-workflow.test.ts` | 189, 328 | synchronous |
+| `scripts/setup-whisper.test.ts` | 18, 62 | synchronous; original Python probe and setup-command results are consumed before afterEach removes the private fixture root; the setup command has a 30-second deadline, and the runner service contains interrupted installer and transcription descendants |
 | `scripts/supply-chain-check.test.ts` | 14 | synchronous |
 | `scripts/verify-bun-runtime-controls.ts` | 14 | synchronous; negative-control launches remain contained, synthetic build links verifier dependencies |
 | `scripts/verify-native-codex-delivery.mjs` | 132 | synchronous; installed Codex version probe has a five-second timeout. The separately imported native runtime fixture owns its handle; browser/runtime close in finally, 30-second scenario waits, owning verification service supplies interruption and the outer deadline |
@@ -755,3 +756,10 @@ before deleting their private databases. Spawn registration and the private
 runner service already cover these launches, including interrupted readiness,
 cycling and shutdown. Their census rows preserve the strict missing-row and
 historical-PID rejection controls.
+
+The subsequent transcription-setup merge adds synchronous Python and shell
+launches in `scripts/setup-whisper.test.ts`. The test consumes their original
+results before fixture cleanup and caps the setup command at 30 seconds.
+Its mocked installer and transcription helpers inherit the enclosing runner's
+containment. The additional synchronous census row keeps the current-tree
+audit complete with the same rejection rules.
