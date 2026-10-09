@@ -177,6 +177,10 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Local reporter identity; never exchanged with linked installs. */
+  findingKey?: string;
+  /** Occurrences in this install; a new task after Done starts at one. */
+  finding?: { count: number; lastSeenAt: string; previousTaskId?: string };
   /** Task-bound review history; linked boards exchange metadata, never media. */
   prototypeReviews?: import("@/lib/prototypeReview/types").PrototypeReviewRound[];
   /** Derived by server reads; never supplied by a task update. */

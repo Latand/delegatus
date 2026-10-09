@@ -6,7 +6,8 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { conversationFrameRole, type FrameRole } from "@/lib/roleFrames";
 
 import { attentionEntryProject, type MobileAttentionEntry } from "./attentionQueue";
-import { needLabel } from "./decision";
+import { cleanTitle } from "../utils";
+import { reasonLine, needLabel } from "./decision";
 import { laneNeed, laneStageId } from "./needReason";
 
 /*
@@ -150,4 +151,13 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
   if (entry.kind === "update" || entry.kind === "prototype") return false;
   if (entry.kind === "pipeline") return focus.laneId !== null && entry.row.pipeline.id === focus.laneId;
   return focus.path !== null && entry.item.file.path === focus.path;
+}
+
+/** The desktop panel's words, also returned by the project read. */
+export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): { title: string; line: string } {
+  if (entry.kind === "prototype") return { title: entry.notice.title, line: t("proto.notice.open") };
+  if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: t("selfUpdate.auto.decision.body") };
+  return entry.kind === "conversation"
+    ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: reasonLine(t, entry.item.reason) }
+    : { title: entry.row.task, line: needsYouLaneLine(t, entry.row.pipeline) };
 }

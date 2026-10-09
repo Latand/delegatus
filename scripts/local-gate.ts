@@ -215,6 +215,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // launcher handoff and its token. Tests assert the defaults.
   for (const key of ["LLV_LANG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT", "LLV_TOKEN", "LLV_DEBUG", "DELEGATUS_DEBUG"]) delete env[key];
   env.NODE_ENV = "test";
+  env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
   return env;
 }
 

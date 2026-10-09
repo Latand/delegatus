@@ -100,6 +100,15 @@ What it does with work you accept:
   batch; `needs-review` sends a conflict resolution to an independent review
   lane (including `git show --remerge-diff`) before a later batch, and `culprit`
   returns to its lane as a finding. See [the merger procedure](merge-batch.md).
+  A recorded lane merge wakes the project's designated orchestrator, including
+  when the lane's completion was already announced or another conversation
+  launched it. The wake names the lane, PR number and merged head. Standing
+  instructions can name what to do on that merge, including starting a release.
+  Delivery announces each merge once; an undelivered wake leaves it owed.
+  Several merges share one wake within the item bound, with the remainder owed
+  for later wakes. Merges obey the project's wake interval and expire at the
+  backlog bound; an idle seat is woken within that interval plus one check
+  interval after the merge is recorded.
 - **A lane that finishes its task**: the orchestrator marks the lane whose PR
   delivers the whole task, and that task moves to Done when the lane completes
   (setting off) or its PR merges (on), once every other started lane on the

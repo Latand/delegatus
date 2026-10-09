@@ -483,6 +483,7 @@ export function describeMcpCall(
   }
 
   if (toolName === "dismiss_attention") {
+    if (args.target === undefined) return { icon: "task", verb: "Reading", title: "Waiting for you", subtitle: replaySubtitle(result, `${typeof result.count === "number" ? result.count : 0} rows · ${typeof result.staleCount === "number" ? result.staleCount : 0} with stale evidence`), links: [] };
     /* A needs-you flag cleared off the operator's board, or brought back: what
        kind of thing, and whether anything actually moved. */
     const target = record(args.target);

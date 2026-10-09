@@ -187,6 +187,12 @@ interface Props {
       replaces the pane's card frame. Everything below the header — banners,
       feed, control strip and composer — stays the pane's own. */
   chrome?: { header: React.ReactNode; className: string; attributes?: Record<string, string> };
+  /** This pane is the operator's conversation window (the agent window's
+      reader), so the one hoisted composer renders here even while another
+      surface of the same conversation, the orchestrator seat, is mounted. */
+  composerPrimary?: boolean;
+  /** The composer's placeholder in place of its default (the orchestrator's own words). */
+  composerPlaceholder?: string;
   /** The phone's conversation screen: the related-task strip, its launch
       placeholder and the background-task rows leave the column — they are rows
       of the screen's `⋯` menu — so the feed starts directly under the bar. */
@@ -203,7 +209,7 @@ export function BranchPane(props: Props) {
   );
 }
 
-function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: hideComposer, readOnly = false, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, chromeInMenu }: Props) {
+function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: hideComposer, readOnly = false, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, composerPrimary, composerPlaceholder, chromeInMenu }: Props) {
   const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
   const noComposer = hideComposer || readOnly;
   const { t } = useLocale();
@@ -521,7 +527,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
         {dormant || isMobile || neverStarted || readOnly ? null : <AgentControlStrip file={file} />}
         {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
         {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
-        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
+        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} />}
       </section>
     </div>
   );
