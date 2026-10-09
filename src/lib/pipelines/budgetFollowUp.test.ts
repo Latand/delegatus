@@ -93,16 +93,18 @@ test.each([false, true])("follow-up ownership survives create receipt eviction a
   expect(loadTasks().filter(task => task.details?.includes(`Lane: ${lane.id}\n`))).toHaveLength(1);
 });
 
-test.each(["custody", "blocked", "cancelled", "legacy-merged"] as const)("outside merge confirms its head before filing, across retry/restart (%s)", async (state) => {
-  const lane = fixture(); const ports = portsFor(lane, true);
+test.each(["custody", "blocked", "cancelled", "legacy-merged", "closed", "hidden", "setting-off"] as const)("outside merge confirms its head before filing, across retry/restart (%s)", async (state) => {
+  const lane = fixture(); const ports = portsFor(lane, state !== "setting-off");
   lane.closedAt = "2026-10-01T00:00:00Z";
   // Completed review evidence used by the merge sweep's eligibility check.
   lane.stages = [{ id: "review", kind: "run", next: null, onFail: { to: "fix", maxRounds: 1 }, access: "read-only" }] as Pipeline["stages"];
   lane.runs[0]!.attempts[0]!.state = "failed";
-  ports.setting = () => ({ enabled: true, changedAt: "2026-09-01T00:00:00Z", changedBy: "operator" });
+  ports.setting = () => ({ enabled: state !== "setting-off", changedAt: "2026-09-01T00:00:00Z", changedBy: "operator" });
   ports.cachedState = () => "merged";
   ports.mergerBusy = () => state === "custody";
-  if (state !== "custody") lane.merge = { state: state === "legacy-merged" ? "merged" : state, repository: "acme/widgets", prNumber: 12, mergedHead: null } as Pipeline["merge"];
+  if (state === "closed") lane.state = "closed";
+  if (state === "hidden") lane.hiddenAt = "2026-10-02T00:00:00Z";
+  if (state !== "custody" && state !== "hidden") lane.merge = { state: state === "legacy-merged" ? "merged" : state === "closed" || state === "setting-off" ? "cancelled" : state, repository: "acme/widgets", prNumber: 12, mergedHead: null } as Pipeline["merge"];
   let available = false;
   ports.run = async () => {
     if (!available) throw new Error("forge temporarily unavailable");
@@ -129,7 +131,7 @@ test.each(["custody", "blocked", "cancelled", "legacy-merged"] as const)("outsid
     const { sweepBudgetFollowUps } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../forge/autoMerge.ts"))});
     const { fileBudgetFollowUp } = await import(${JSON.stringify(path.join(import.meta.dir, "budgetFollowUp.ts"))});
     const lane = ${JSON.stringify(lane)};
-    await sweepBudgetFollowUps({ now: Date.now, loadPipelines: () => [lane], setting: () => ({ enabled: true }), pullRequestOf: () => ({ repository: "acme/widgets", number: 12 }), cachedState: () => "merged", fileFollowUp: fileBudgetFollowUp, mutate: async (_id, change) => change(lane) });
+    await sweepBudgetFollowUps({ now: Date.now, loadPipelines: () => [lane], setting: () => ({ enabled: ${state !== "setting-off"} }), pullRequestOf: () => ({ repository: "acme/widgets", number: 12 }), cachedState: () => "merged", fileFollowUp: fileBudgetFollowUp, mutate: async (_id, change) => change(lane) });
     process.stdout.write(JSON.stringify(lane.reviewBudgetSpent.followUp));
   `], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   expect(child.exitCode).toBe(0);
@@ -141,7 +143,8 @@ test("an outside merge read cannot populate evidence for a replacement PR", asyn
   const lane = fixture(); const ports = portsFor(lane, true);
   lane.merge = { state: "blocked", repository: "acme/widgets", prNumber: 12, mergedHead: null } as Pipeline["merge"];
   ports.cachedState = () => "merged";
-  ports.run = async () => {
+  ports.run = async args => {
+    if (args[2] === "13") return JSON.stringify({ state: "OPEN", headRefOid: "b".repeat(40) });
     lane.merge!.prNumber = 13;
     return JSON.stringify({ state: "MERGED", headRefOid: "b".repeat(40) });
   };
@@ -163,8 +166,9 @@ test("overflow keeps whole findings then points to the durable attempt", () => {
 });
 
 
-test("an existing follow-up lane on the original task prevents a duplicate card", async () => {
-  const lane = fixture(); const ports = portsFor(lane);
+test.each([false, true])("an existing follow-up lane on the original task prevents a duplicate card (merge enabled: %s)", async (enabled) => {
+  const lane = fixture(); const ports = portsFor(lane, enabled);
+  ports.cachedState = () => "merged";
   const existing = { id: "existing-follow-up", project: lane.project, taskIds: lane.taskIds, task: "Review follow-up: Ship reviewed change", spec: `Fix the findings kept by lane ${lane.id}`, state: "running" } as Pipeline;
   ports.loadPipelines = () => [lane, existing];
   await sweepBudgetFollowUps(ports);

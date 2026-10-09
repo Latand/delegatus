@@ -584,7 +584,7 @@ async function recordOutsideMerge(pipeline: Pipeline, pr: { repository: string; 
     const view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
     if (view?.state !== "MERGED") return;
     await ports.mutate(pipeline.id, live => {
-      if (live.state !== "completed" || live.merge?.mergedHead) return false;
+      if (!["completed", "closed"].includes(live.state) || live.merge?.mergedHead) return false;
       const currentPr = live.merge ? { repository: live.merge.repository, number: live.merge.prNumber } : ports.pullRequestOf(live);
       if (currentPr?.repository !== pr.repository || currentPr.number !== pr.number) return false;
       const merge = live.merge ?? newMerge(live, pr, ports.setting(live.project), ports.now());
@@ -746,20 +746,32 @@ export async function sweepBudgetFollowUps(ports: AutoMergePorts): Promise<void>
   for (const pipeline of pipelines) {
     const spent = pipeline.reviewBudgetSpent;
     if (!spent || spent.followUp || !(laneFinishedForTasks(pipeline, ports) || pipeline.state === "closed")) continue;
-    // A cached merge has no head evidence. Confirm it before writing the task,
-    // including when a standalone merger owns the queue or polling was stopped.
-    const requiresMergedHead = pipeline.merge?.state === "merged"
-      || (pipeline.state === "completed" && ports.setting(pipeline.project).enabled && ports.pullRequestOf(pipeline) !== null);
-    if (requiresMergedHead && (pipeline.merge?.state !== "merged" || !pipeline.merge.mergedHead)) continue;
     // Legacy follow-ups were started as lanes on the same task. Their brief
     // explicitly names the source lane; unrelated work on that task is ignored.
     const existing = pipelines.find(candidate => candidate.id !== pipeline.id
       && canonicalProject(candidate.project) === canonicalProject(pipeline.project)
       && candidate.taskIds.some(id => pipeline.taskIds.includes(id))
       && /follow[- ]up/i.test(candidate.task) && candidate.spec?.includes(pipeline.id));
+    let delivery = pipeline;
+    if (!existing) {
+      // Confirm a known outside merge here too: closed and hidden lanes never
+      // enter auto-merge's queue, and disabling the setting loses no evidence.
+      const pr = pipeline.merge ? { repository: pipeline.merge.repository, number: pipeline.merge.prNumber } : ports.pullRequestOf?.(pipeline);
+      const knownMerged = pipeline.merge?.state === "merged" || Boolean(pr && ports.cachedState?.(pr.repository, pr.number) === "merged");
+      const requiresMergedHead = knownMerged || Boolean(pr && pipeline.state === "completed" && ports.setting(pipeline.project).enabled);
+      if (requiresMergedHead && (pipeline.merge?.state !== "merged" || !pipeline.merge.mergedHead)) {
+        if (!knownMerged || !pr) continue;
+        await recordOutsideMerge(pipeline, pr, ports);
+        const confirmed = ports.loadPipelines().find(candidate => candidate.id === pipeline.id);
+        if (!confirmed || confirmed.merge?.state !== "merged" || !confirmed.merge.mergedHead
+          || confirmed.reviewBudgetSpent?.followUp || confirmed.reviewBudgetSpent?.stageId !== spent.stageId
+          || confirmed.reviewBudgetSpent.attempt !== spent.attempt) continue;
+        delivery = confirmed;
+      }
+    }
     const followUp = existing
       ? { taskId: existing.taskIds.find(id => pipeline.taskIds.includes(id))!, title: existing.task.split("\n")[0]! }
-      : ports.fileFollowUp(pipeline, pipeline.merge?.mergedHead ?? pipeline.lastPassedCommit);
+      : ports.fileFollowUp(delivery, delivery.merge?.mergedHead ?? delivery.lastPassedCommit);
     await ports.mutate(pipeline.id, live => {
       const current = live.reviewBudgetSpent;
       if (!current || current.followUp || current.stageId !== spent.stageId || current.attempt !== spent.attempt) return false;
