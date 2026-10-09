@@ -211,9 +211,15 @@ directory whose name is the encoding of a recorded cwd or ends in
 `-llv-relay-conv-<lowercase uuid>` (relay.md §B.14 "Hidden"). Discovery skips
 it beside the existing `tool-results` skip (`src/lib/scanner/discover.ts:100-104`),
 and `pathAllowed` refuses any path under it (`src/lib/scanner/roots.ts:118-125`).
-So a session never appears in the sidebar, `search_transcripts` or
+So a session never appears in the scanner's catalog, `search_transcripts` or
 `conversation_messages`, and nothing can resume it with tools. Codex homes lie
 outside every scanner root already.
+
+The operator still reads them, read only, from the conversation list:
+`GET /api/external-relay/conversations` finds each record's transcript and
+the feed routes serve exactly that file to a request that passes the relay
+routes' guards (relay.md §B.14 "Seen by the operator"). The relay protocol,
+the runner and who writes into a session are unchanged.
 
 ### 4.7 One turn at a time per chat
 
