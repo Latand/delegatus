@@ -22,8 +22,12 @@ without sharing opaque log identifiers. The linked task text continues to
 travel under the existing sharing rules. `taskSync.test.ts` tests encoding,
 arrival and a peer edit of a local keyed task.
 
-After recurrence, the existing card state line shows the count and a localized
-last-seen date and time. No new control is added. Rendered measurements for
-English and Ukrainian at 1440 and 390 pixels are recorded in
+After recurrence, the existing card state line starts with the count and a
+localized last-seen date and time, before any hold details. The hold tooltip
+includes that recurrence text. No new control is added. Rendered measurements
+for quiet and held cards in English and Ukrainian, light and dark themes,
+at 1440, 1000 and 390 pixels are recorded in
 `evidence/finding-recurrence/readings.json`; the reusable kanban browser
-driver captures the cards in `.artifacts/finding-recurrence/`.
+driver captures the cards in `.artifacts/finding-recurrence/`. Measurements
+record vertical clipping and check that every recurrence fragment stays
+inside the visible state line even when later hold details are clamped.

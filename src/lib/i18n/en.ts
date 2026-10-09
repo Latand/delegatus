@@ -4065,7 +4065,7 @@ export const en = {
   "pipelineBlock.remote.asOf": "as of {time}",
   "kanban.remoteAgo": "{minutes} min ago",
   "kanban.finding.count": "Seen {count} times",
-  "kanban.finding.lastSeen": "last seen",
+  "kanban.finding.lastSeen": "last",
   "kanban.motion.needs-you": "Needs you",
   "kanban.motion.working": "Working",
   "kanban.motion.workingN": "Working · {count}",
