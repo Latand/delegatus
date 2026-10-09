@@ -180,7 +180,7 @@ export type PipelineEdgeActivation = {
       target's pass follows the source's pass edge, except a terminal advance
       gate gets one final re-check (#2247). */
   budgetSpent?: true;
-  /** The terminal gate must judge the spent fix once more; a fail parks. */
+  /** The terminal gate judges the last fix once; a fail completes with a follow-up. */
   budgetRecheck?: true;
 };
 
@@ -940,6 +940,15 @@ export type PipelineRemoteAction = {
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
 
+export interface PipelineReviewBudgetSpent {
+  stageId: string;
+  attempt: number;
+  findings: number;
+  head: string;
+  at: string;
+  followUp?: { taskId: string; title: string; at: string };
+}
+
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
@@ -1037,6 +1046,8 @@ export type Pipeline = {
   decisionAnswers?: PipelineDecisionAnswer[];
   /** Present exactly while `state` (or `pausedState`) is `needs_review` (#1938). */
   reviewPending?: PipelineReviewPending;
+  /** Failed terminal re-check completed with findings owed to a follow-up. */
+  reviewBudgetSpent?: PipelineReviewBudgetSpent;
   /** Accepted continue-review grants, oldest first (#1938). */
   reviewGrants?: PipelineReviewGrant[];
   /** Accepted accept-head answers, oldest first (#2187 §3.4). */
@@ -1197,10 +1208,10 @@ export type PatchPipelineRequest = {
   expectedRevision?: string;
   /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
   answer?: string;
-  /** for continue-review (#1938): review rounds to add, 1..MAX_FAIL_EDGE_ROUNDS. */
+  /** for continue-review (#1938): review rounds to add, 1..MAX_REVIEW_ROUNDS. */
   addRounds?: number;
   /** for preview/convert-legacy-review: the finite review limit to convert to,
-      1..MAX_FAIL_EDGE_ROUNDS; absent, the stage's recorded limit is used. */
+      1..MAX_REVIEW_ROUNDS; absent, the stage's recorded limit is used. */
   reviewLimit?: number;
   /** for preview/convert-legacy-review: the run stage whose role the fixer
       copies, when more than one run passes into the review. */

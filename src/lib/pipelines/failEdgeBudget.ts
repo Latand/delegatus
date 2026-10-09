@@ -197,3 +197,9 @@ export function pipelineCompletedUnreviewed(pipeline: Pick<Pipeline, "state" | "
   }
   return latest?.summary ?? null;
 }
+
+
+/** The lane completed with retained findings, pending or already filed. */
+export function pipelineReviewBudgetSpent(pipeline: Pipeline): Pipeline["reviewBudgetSpent"] | null {
+  return pipeline.state === "completed" || pipeline.state === "closed" ? pipeline.reviewBudgetSpent ?? null : null;
+}

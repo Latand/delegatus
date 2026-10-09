@@ -2405,6 +2405,8 @@ export const en = {
   "pipelineBlock.stop.park": { one: "Stopped: the only review round failed, and this pipeline stops before fixing.", other: "Stopped: the last of {count} review rounds failed, and this pipeline stops before fixing." },
   "pipelineBlock.stop.once": "Stopped: {stage} failed again after its last fix round.",
   "pipelineBlock.stop.legacy": "Stopped: the older review loop ends at its round limit without a last fix.",
+  "pipelineBlock.budgetSpent": { one: "Review budget spent · {count} finding → follow-up «{task}»", other: "Review budget spent · {count} findings → follow-up «{task}»" },
+  "pipelineBlock.budgetSpentPending": { one: "Review budget spent · {count} finding → follow-up after merge", other: "Review budget spent · {count} findings → follow-up after merge" },
   "pipelineBlock.unreviewedFix": { one: "Last fix not re-reviewed · {count} finding", other: "Last fix not re-reviewed · {count} findings" },
   "pipelineBlock.answer.acceptAsIs": "Accept as is",
   "pipelineBlock.answer.acceptWithoutReview": "Accept without review",

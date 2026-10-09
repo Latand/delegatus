@@ -82,7 +82,7 @@ import { describeTransientGitFailure, transientGitFailure, type TransientGitFail
 import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
-  MAX_FAIL_EDGE_ROUNDS,
+  MAX_REVIEW_ROUNDS,
   MAX_PIPELINE_GRAPH_EDITS,
   MAX_PIPELINE_STAGE_REPORTS,
   MAX_PIPELINE_STAGES,
@@ -2975,16 +2975,7 @@ function advancePipeline(
     return;
   }
   if (successor.next === null) {
-    clearEngineTaskNote(pipeline);
-    pipeline.cursor = null;
-    pipeline.state = "completed";
-    pipeline.stateDetail = detail;
-    pipeline.pausedState = null;
-    pipeline.closedAt = ports.now();
-    /* A reap that settled while this final stage still ran never saw its host,
-       and a completed pipeline with a settled reap leaves the controller index,
-       so completion reopens it until a round has probed every attempt (#1728). */
-    if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
+    completePipeline(pipeline, ports.now(), detail);
     return;
   }
   pipeline.cursor = {
@@ -3142,6 +3133,29 @@ function parkForReview(
   writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
+/** Completion also clears task notes and reopens host cleanup. */
+function completePipeline(pipeline: Pipeline, now: string, detail: string | null): void {
+  clearEngineTaskNote(pipeline);
+  pipeline.cursor = null;
+  pipeline.state = "completed";
+  pipeline.stateDetail = detail;
+  pipeline.pausedState = null;
+  pipeline.closedAt = now;
+  /* A reap that settled while this final stage still ran never saw its host,
+     and a completed pipeline with a settled reap leaves the controller index,
+     so completion reopens it until a round has probed every attempt (#1728). */
+  if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
+}
+
+function completeSpentReview(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, now: string): void {
+  pipeline.reviewBudgetSpent = {
+    stageId: stage.id, attempt: attempt.n, findings: attempt.verdict?.findings?.length ?? 0,
+    head: pipeline.lastPassedCommit, at: now,
+  };
+  delete pipeline.reviewPending;
+  completePipeline(pipeline, now, `budget spent: ${pipeline.reviewBudgetSpent.findings} findings → follow-up after merge`);
+}
+
 /** Recover terminal parks written before resumable budget metadata existed.
     The settled verdict and its passed predecessor are the durable evidence;
     a blocked reviewer or a transport-only failure has no spent review here. */
@@ -3165,17 +3179,20 @@ function terminalReviewPendingFromAttempt(
   };
 }
 
-function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
-  if (pipeline.reviewPending || (pipeline.state !== "needs_decision" && pipeline.pausedState !== "needs_decision")) return false;
+function reconcileTerminalReviewPending(pipeline: Pipeline, now: string): boolean {
+  if (pipeline.state !== "needs_decision" || pipelineSurvivorRefusal(pipeline)) return false;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const pending = stage && attempt ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
-  if (!pending) return false;
-  pipeline.reviewPending = pending;
-  if (pipeline.state === "needs_decision") {
-    pipeline.stateDetail = reviewPendingDetail(pending);
-    writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
+  if (!pending || !stage || !attempt) return false;
+  if (attempt.verdict?.status === "fail" && !attempt.decisionRequested) {
+    completeSpentReview(pipeline, stage, attempt, now);
+    return true;
   }
+  if (pipeline.reviewPending) return false;
+  pipeline.reviewPending = pending;
+  pipeline.stateDetail = reviewPendingDetail(pending);
+  writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
   return true;
 }
 
@@ -3456,6 +3473,7 @@ function routeFailedAttempt(
       answered): nothing was reviewed, so there are no findings to hand past a
       spent budget and the edge loops and parks as it always did. */
   reviewed = true,
+  now = attempt.completedAt!,
 ): boolean {
   if (!stage.onFail) return false;
   const terminalGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
@@ -3464,7 +3482,9 @@ function routeFailedAttempt(
   if (!reviewed && terminalGrant?.stageId === stage.id) return false;
   if (attempt.activatedBy?.budgetRecheck) {
     const pending = reviewed ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
-    if (pending) {
+    if (pending && parkOnExhaustedBudget && attempt.verdict?.status === "fail") {
+      completeSpentReview(pipeline, stage, attempt, now);
+    } else if (pending) {
       pipeline.reviewPending = pending;
       park(pipeline, reviewPendingDetail(pipeline.reviewPending), attempt, { kind: "review-budget" });
     } else {
@@ -4037,6 +4057,8 @@ async function settleStageVerdict(
         failEdgeInput(parsed),
         parsed.verdict.findings?.[0] ?? "stage verdict: fail",
         parsed.verdict.status === "fail",
+        true,
+        ports.now(),
       )
     ) {
       if (decisionRoutedAsFail) attempt.decisionRequested = true;
@@ -8161,7 +8183,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, controllerPorts) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, controllerPorts) || pipelineChanged;
         pipelineChanged = rebindPipelineAttemptPaths(pipeline, controllerPorts) || pipelineChanged;
-        pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
+        pipelineChanged = reconcileTerminalReviewPending(pipeline, controllerPorts.now()) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
@@ -8257,7 +8279,7 @@ const STAGE_SANDBOX_SHAPE = '"full" | "restricted" (default "full")';
 const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relative paths, each at most ${MAX_STAGE_OUTPUT_PATH_LENGTH} characters`;
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
-const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}, onExhausted?: "advance" | "stop-after-fix" | "park"} — run stages only`;
+const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_REVIEW_ROUNDS}, onExhausted?: "advance" | "stop-after-fix" | "park"} — run stages only`;
 const PIPELINE_PUBLICATION_SHAPE = '"internal" (explicit local-only policy; nothing is pushed while the pipeline runs) | "remote-branch" (publish every accepted revision before the next stage and complete only after the final revision is remote); an owner delivery defaults to remote publication when omitted';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
@@ -8339,11 +8361,11 @@ function normalizeStages(
           onFailValid = false;
         }
         const maxRounds = edge.maxRounds === undefined ? DEFAULT_FAIL_EDGE_ROUNDS : edge.maxRounds;
-        if (!Number.isInteger(maxRounds) || (maxRounds as number) < 1 || (maxRounds as number) > MAX_FAIL_EDGE_ROUNDS) {
+        if (!Number.isInteger(maxRounds) || (maxRounds as number) < 1 || ((maxRounds as number) > MAX_REVIEW_ROUNDS && preservedStage?.onFail?.maxRounds !== maxRounds)) {
           violations.push({
             field: at("onFail.maxRounds"),
-            message: `stage ${id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`,
-            expected: `integer 1–${MAX_FAIL_EDGE_ROUNDS} (default ${DEFAULT_FAIL_EDGE_ROUNDS})`,
+            message: `stage ${id} onFail maxRounds must be an integer 1–${MAX_REVIEW_ROUNDS} (default ${DEFAULT_FAIL_EDGE_ROUNDS})`,
+            expected: `integer 1–${MAX_REVIEW_ROUNDS} (default ${DEFAULT_FAIL_EDGE_ROUNDS})`,
           });
           onFailValid = false;
         }
@@ -9871,9 +9893,9 @@ function continueReview(
   if (refusal) return refusal;
   if (!actor) return { error: "continue-review needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
-    || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1 || req.addRounds! > MAX_FAIL_EDGE_ROUNDS
+    || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
-    return { error: `continue-review requires clientRequestId (up to 200 characters), addRounds (1 to ${MAX_FAIL_EDGE_ROUNDS}) and expectedRevision from get_pipeline`, status: 400 };
+    return { error: `continue-review requires clientRequestId (up to 200 characters), addRounds (1 to ${MAX_REVIEW_ROUNDS}) and expectedRevision from get_pipeline`, status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
   if (guardShape) return guardShape;
@@ -9885,6 +9907,8 @@ function continueReview(
     }
     return { pipeline, reviewContinuation: prior, replayed: true };
   }
+  // Historic receipts still replay above; only a new grant uses today's cap.
+  if (req.addRounds! > MAX_REVIEW_ROUNDS) return { error: `addRounds must be an integer between 1 and ${MAX_REVIEW_ROUNDS}`, status: 400, field: "addRounds" };
   // Rollback disables admission; needs_review records and accepted grants stay readable.
   if (process.env.LLV_PIPELINE_CONTINUE_REVIEW === "0") return { error: "continue-review is disabled", status: 409 };
   if (pipelineRevision(pipeline) !== req.expectedRevision) {
@@ -9902,6 +9926,13 @@ function continueReview(
   const fix = runFor(pipeline, pending.fixStageId)?.attempts.find((attempt) => attempt.n === pending.fixAttempt);
   if (!review?.onFail || !fix || fix.state !== "passed") {
     return { error: "the review stage or the fix it handed off to is no longer in this pipeline", status: 409 };
+  }
+  const have = failEdgeMaxRounds(pipeline, review);
+  if (have + req.addRounds! > MAX_REVIEW_ROUNDS) {
+    const reason = have >= MAX_REVIEW_ROUNDS
+      ? `${review.id} already has ${have}, so no more rounds can be granted`
+      : `${review.id} has ${have}; ${req.addRounds} more would make ${have + req.addRounds!}`;
+    return { error: `review budget is at most ${MAX_REVIEW_ROUNDS} rounds per gate, grants included: ${reason}`, status: 409, field: "addRounds" };
   }
   if (pipeline.lastPassedCommit !== pending.currentHead) {
     return { error: `the pipeline head moved from ${pending.currentHead} to ${pipeline.lastPassedCommit}; read it again`, status: 409, code: "STAGE_CHANGED" };
@@ -10664,8 +10695,8 @@ export async function patchPipeline(
           graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null, summary: `cleared the fail edge of ${from.id}` });
         } else {
           const maxRounds = req.maxRounds === undefined ? DEFAULT_FAIL_EDGE_ROUNDS : req.maxRounds;
-          if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_FAIL_EDGE_ROUNDS) {
-            return { error: `maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`, status: 400 };
+          if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_REVIEW_ROUNDS) {
+            return { error: `maxRounds must be an integer between 1 and ${MAX_REVIEW_ROUNDS}`, status: 400 };
           }
           if (req.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(req.onExhausted)) {
             return { error: "onExhausted must be advance, stop-after-fix or park", status: 400 };

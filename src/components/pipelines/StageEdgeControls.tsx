@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { Select } from "@/components/ui/Select";
-import { MAX_FAIL_EDGE_ROUNDS } from "@/lib/pipelines/limits";
+import { MAX_REVIEW_ROUNDS } from "@/lib/pipelines/limits";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline, PipelineFailEdgeExhaustion, PipelineStage } from "@/lib/pipelines/types";
 
@@ -101,12 +101,12 @@ export function StageEdgeControls({
             <input
               type="number"
               min={1}
-              max={MAX_FAIL_EDGE_ROUNDS}
+              max={MAX_REVIEW_ROUNDS}
               value={stage.onFail.maxRounds}
               disabled={disabled || busy || terminal || failFrozen}
               onChange={(event) => {
                 const rounds = Number.parseInt(event.target.value, 10);
-                if (Number.isInteger(rounds) && rounds >= 1 && rounds <= MAX_FAIL_EDGE_ROUNDS) {
+                if (Number.isInteger(rounds) && rounds >= 1 && rounds <= MAX_REVIEW_ROUNDS) {
                   void apply("fail", stage.onFail!.to, rounds, stage.onFail!.onExhausted);
                 }
               }}

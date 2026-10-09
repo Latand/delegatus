@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 41, and a v40 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(41);
+test("the default mandate is at version 42, and a v41 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -122,7 +122,8 @@ test("the default mandate is at version 41, and a v40 seat reads as stale", () =
   expect(orchestratorMandateStale(38)).toBe(true);
   expect(orchestratorMandateStale(39)).toBe(true);
   expect(orchestratorMandateStale(40)).toBe(true);
-  expect(orchestratorMandateStale(41)).toBe(false);
+  expect(orchestratorMandateStale(41)).toBe(true);
+  expect(orchestratorMandateStale(42)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -170,6 +171,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
+  42: "06da17c971ed719c2aabd559f2978273f199dc1cd5176ed5095e13eabd24d4a7",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -450,7 +452,7 @@ test("the mandate names every attention target and uses the tool schema for shap
    mandate now prints that shape as the schema declares it. */
 test("the mandate names explicit graph insertion and verified terminal exhaustion (#2247)", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('fail parks with "budget spent: N findings left"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('a fail completes as "budget spent"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
 });
 
@@ -844,9 +846,9 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* Review of #2301: the merge bar names the lanes Delegatus merges
      (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
      the last fix passed, whose kept findings the seat reads. */
-  expect(delivered).toContain("or spent their budget with the last fix passed and you have read the findings they kept");
-  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
-  expect(delivered).toContain("and nobody reads a spent budget's kept findings first;");
+  expect(delivered).toContain("or spent their budget, the project's required checks are green");
+  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed or spent their budget");
+  expect(delivered).toContain("A spent budget's kept findings become a follow-up task.");
   /* One condition for stop-after-fix, stated once (review of #2301). */
   expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
   expect(delivered).not.toContain("kept for you to read before you merge");
@@ -938,4 +940,13 @@ test("the mandate directs prototype review to the task", () => {
     expect(mandate).toContain("Prototype review: point to the task's review.");
     expect(mandate.split("Prototype review:")).toHaveLength(2);
   }
+});
+
+
+test("the mandate caps cumulative rounds and merges spent budgets with a follow-up", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
+  expect(orchestratorMandateStale(41)).toBe(true);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never more than 5 per gate, grants included.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A spent budget's kept findings become a follow-up task.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain('fail parks with "budget spent');
 });
