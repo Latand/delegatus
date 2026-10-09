@@ -4128,7 +4128,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     }
   }
   const facts = readOrchestratorTranscriptFacts(transcriptPath, session);
-  const windowPolicy = contextWindowPolicyFor(engine, model);
+  const windowPolicy = contextWindowPolicyFor(engine, model, facts);
   const context = contextReading({ policy: windowPolicy, facts });
 
   let liveness: { lifecycle: string; hostState: string; silentForMs: number | null } | null = null;

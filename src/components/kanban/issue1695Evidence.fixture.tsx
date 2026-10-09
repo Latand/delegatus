@@ -298,6 +298,7 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+const SEAT_UNCONFIRMED = SEAT_HEAD && new URLSearchParams(location.search).get("usage") === "unconfirmed";
 /* The same seat with its agent not running and its context past the rotation
    line: the status read reports both causes, as data, beside the sentences it
    writes for an agent. */
@@ -3582,9 +3583,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
       engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
-      context: { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
-      transcriptFacts: null,
-      rotation: FM_SEAT
+      context: SEAT_UNCONFIRMED
+        ? { tokens: 1_249, limit: 1_000_000, percent: 0, estimated: true, basis: "CLI post-compaction estimate; awaiting provider usage" }
+        : { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
+      transcriptFacts: SEAT_UNCONFIRMED ? { bytes: 9 * 1024 * 1024, messageCount: 100, toolCount: 20, compactionCount: 2 } : null,
+      rotation: FM_SEAT || SEAT_UNCONFIRMED
         ? { recommended: false, level: "none", reasons: [], thresholdUnknown: false }
         : SEAT_GONE
         ? {

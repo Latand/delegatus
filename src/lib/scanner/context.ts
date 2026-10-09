@@ -1,18 +1,11 @@
-import type { CtxConfidence, CtxSource, CtxUsage, FileEntry } from "../types";
+import { nativeCompaction } from "../session/compaction";
+import type { CtxUsage, FileEntry } from "../types";
 import { tailRecordsResult } from "./activity";
 import { globalCache } from "./caches";
 import { numberValue, recordValue, stringValue } from "./json";
-import { MODEL_REGISTRY_VERSION, normalizeModelKey, registryWindow } from "./modelRegistry";
+import { claudeCapacity, claudeCapacityHints, type ContextCapacity } from "./contextCapacity";
 
-const ctxCache = globalCache<[number, number, CtxUsage | null]>("ctx-v2");
-const CLAUDE_1M_MODE = "context-1m-2025-08-07";
-
-interface ContextCapacity {
-  windowTokens: number;
-  source: Exclude<CtxSource, "unknown">;
-  confidence: Exclude<CtxConfidence, "unknown">;
-  registryVersion?: string;
-}
+const ctxCache = globalCache<[number, number, CtxUsage | null, string | null]>("ctx-v3");
 
 function unknownUsage(usedTokens: number, observedAt: string): CtxUsage {
   return { usedTokens, windowTokens: null, pct: null, source: "unknown", confidence: "unknown", observedAt };
@@ -55,21 +48,7 @@ function codexCtx(obj: Record<string, unknown>, fallbackObservedAt: string): Ctx
   );
 }
 
-function claudeCapacity(message: Record<string, unknown>, model: string, modes: readonly string[]): ContextCapacity | null {
-  const runtimeWindow = numberValue(message.context_window) ?? numberValue(message.model_context_window);
-  if (runtimeWindow !== null && runtimeWindow > 0) {
-    return { windowTokens: runtimeWindow, source: "runtime", confidence: "exact" };
-  }
-  const normalized = normalizeModelKey(model);
-  if (!normalized) return null;
-  const mode = modes.some((value) => value.toLowerCase().includes(CLAUDE_1M_MODE)) ? "1m" : normalized.mode;
-  const windowTokens = registryWindow(normalized.key, mode);
-  return windowTokens === null
-    ? null
-    : { windowTokens, source: "registry", confidence: "approximate", registryVersion: MODEL_REGISTRY_VERSION };
-}
-
-function claudeCtx(obj: Record<string, unknown>, fallbackObservedAt: string): CtxUsage | null {
+function claudeCtx(obj: Record<string, unknown>, fallbackObservedAt: string, launchModel: string | null): CtxUsage | null {
   if (obj.type !== "assistant") return null;
   const message = recordValue(obj.message);
   const model = stringValue(message?.model);
@@ -80,10 +59,7 @@ function claudeCtx(obj: Record<string, unknown>, fallbackObservedAt: string): Ct
     (numberValue(usage.input_tokens) ?? 0) +
     (numberValue(usage.cache_read_input_tokens) ?? 0) +
     (numberValue(usage.cache_creation_input_tokens) ?? 0);
-  const modes = [obj.beta, obj.betas, message.beta, message.betas]
-    .flatMap((value) => (Array.isArray(value) ? value : [value]))
-    .filter((value): value is string => typeof value === "string");
-  return contextUsage(used, claudeCapacity(message, model, modes), recordObservedAt(obj, fallbackObservedAt));
+  return contextUsage(used, claudeCapacity(launchModel ?? model, claudeCapacityHints(obj)), recordObservedAt(obj, fallbackObservedAt));
 }
 
 /** Context usage from the newest in-band usage record. Capacity resolution is
@@ -93,15 +69,17 @@ export function ctxFor(entry: FileEntry): CtxUsage | null {
   if (!conversationRoot || !entry.path.endsWith(".jsonl")) return null;
   const mtimeMs = entry.mtime * 1000;
   const cached = ctxCache.get(entry.path);
-  if (cached?.[0] === entry.size && cached[1] === mtimeMs) return cached[2];
+  const launchModel = entry.launchModel ?? null;
+  if (cached?.[0] === entry.size && cached[1] === mtimeMs && cached[3] === launchModel) return cached[2];
 
   const fallbackObservedAt = new Date().toISOString();
   const tail = tailRecordsResult(entry.path, entry.size, mtimeMs);
   let ctx: CtxUsage | null = null;
   for (const obj of tail.records.reverse()) {
-    ctx = entry.root === "codex-sessions" ? codexCtx(obj, fallbackObservedAt) : claudeCtx(obj, fallbackObservedAt);
+    if (nativeCompaction(obj)) break;
+    ctx = entry.root === "codex-sessions" ? codexCtx(obj, fallbackObservedAt) : claudeCtx(obj, fallbackObservedAt, launchModel);
     if (ctx) break;
   }
-  if (tail.complete) ctxCache.set(entry.path, [entry.size, mtimeMs, ctx]);
+  if (tail.complete) ctxCache.set(entry.path, [entry.size, mtimeMs, ctx, launchModel]);
   return ctx;
 }

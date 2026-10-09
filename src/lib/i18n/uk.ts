@@ -3035,6 +3035,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.incumbentAria": "Оркестратор, який зараз тримає місце цього проєкту",
   "orchPanel.incumbentUnknown": "модель ще не визначено",
   "orchPanel.accountTitle": "Працює на акаунті {account}",
+  "orchPanel.ctxUnconfirmed": "непідтверджено",
   "orchPanel.ctxTitle": "Контекст: {used} з {window} токенів ({percent}%)",
   "orchPanel.ctxUnknownWindow": "{used} токенів у контексті; для цієї моделі вікно не налаштоване, тому відсоток не вказується",
   "orchPanel.ctxAria": "Вікно контексту заповнене на {percent}%",

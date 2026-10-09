@@ -983,3 +983,51 @@ test("transport uncertainty after creation keeps the bound recipient and origina
   expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
   expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
 });
+
+test("MCP advice uses only fresh context with native boundaries and runtime windows", async () => {
+  const transcript = path.join(sandbox, "fresh-context.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", message: { content: "x".repeat(9 * 1024 * 1024) } }) + "\n");
+  fs.appendFileSync(transcript, [
+    { type: "assistant", message: { usage: { input_tokens: 980_000 } } },
+    { type: "system", subtype: "compact_boundary", compactMetadata: { postTokens: 1_249 } },
+    { type: "system", subtype: "compact_boundary" },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const begun = testRegistry.beginSpawnRequest({ engine: "claude", cwd: sandbox, clientAttemptId: "seed_0000001", launchProfile: { model: "opus[1m]", title: "Fresh context" } });
+  seatActive("proj-a", begun.receipt.conversationId, transcript);
+  const before = JSON.stringify(orchestratorSeatFor("proj-a"));
+  const { posts, control } = controlStub();
+  const read = async () => await bindingsWith(control).get_orchestrator({ clientRequestId: crypto.randomUUID(), project: "proj-a" }) as {
+    health: { transcript: { compactionCount: number }; context: { tokens: number | null; limit: number; estimated: boolean } };
+    rotation: { level: string; causes: unknown[] };
+  };
+  const stale = await read();
+  expect(stale.health.context).toMatchObject({ tokens: null, estimated: true });
+  expect(stale.health.transcript.compactionCount).toBe(2);
+  expect(stale.rotation).toMatchObject({ level: "none", causes: [] });
+  for (const capacity of [200_000, 1_000_000]) for (const percent of [49, 50, 51]) {
+    fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", message: { context_window: capacity, usage: { input_tokens: capacity * percent / 100 } } }) + "\n");
+    const fresh = await read();
+    expect(fresh.health.context).toMatchObject({ tokens: capacity * percent / 100, limit: capacity, estimated: false });
+    expect(fresh.health.transcript.compactionCount).toBe(2);
+    expect(fresh.rotation.level).toBe(percent < 50 ? "none" : "strongly_recommend");
+  }
+  expect(posts).toEqual([]);
+  expect(JSON.stringify(orchestratorSeatFor("proj-a"))).toBe(before);
+});
+
+test("Codex native compactions are informational even with fresh runtime capacity", async () => {
+  const transcript = path.join(sandbox, "codex-context.jsonl");
+  const usage = { type: "event_msg", payload: { type: "token_count", info: { model_context_window: 200_000, last_token_usage: { input_tokens: 150_000 } } } };
+  fs.writeFileSync(transcript, [usage,
+    { type: "response_item", payload: { type: "ContextCompaction", id: "compact-a" } },
+    { type: "response_item", payload: { type: "ContextCompaction", id: "compact-b" } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const begun = testRegistry.beginSpawnRequest({ engine: "codex", cwd: sandbox, clientAttemptId: "seed_0000001", launchProfile: { model: "gpt-6.1-sol", title: "Read native compactions" } });
+  seatActive("proj-a", begun.receipt.conversationId, transcript);
+  const { control, posts } = controlStub();
+  const read = () => bindingsWith(control).get_orchestrator({ clientRequestId: crypto.randomUUID(), project: "proj-a" });
+  expect(await read()).toMatchObject({ health: { transcript: { compactionCount: 2 }, context: { tokens: null, estimated: true } }, rotation: { level: "none", threshold: null } });
+  fs.appendFileSync(transcript, JSON.stringify(usage) + "\n");
+  expect(await read()).toMatchObject({ health: { transcript: { compactionCount: 2 }, context: { tokens: 150_000, limit: 200_000, percent: 75, estimated: false } }, rotation: { level: "none", threshold: null, thresholdUnknown: true } });
+  expect(posts).toEqual([]);
+});

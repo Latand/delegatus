@@ -9,7 +9,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { RegistryConversation } from "@/lib/agent/registry";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 
-import { ROTATION_NOTE, readOrchestratorIncumbent, type IncumbentReadDependencies } from "./incumbent";
+import { ROTATION_NOTE, readOrchestratorIncumbent, productionIncumbentDependencies, type IncumbentReadDependencies } from "./incumbent";
 import { GET } from "./route";
 
 /*
@@ -121,7 +121,7 @@ function inventedBase64(bytes: number, seed: number): string {
   return Buffer.from(Array.from({ length: bytes }, (_, index) => (index * 31 + seed) % 256)).toString("base64");
 }
 
-test("a first message with 13 pasted images and no usage yet is a small estimate with no rotation advice; the next usage record replaces it", async () => {
+test("a first oversized image message with no usage is unconfirmed; provider usage replaces it", async () => {
   /* The shape read on this machine: a Claude seat's first operator message is
      one user row whose content is 13 `{type:"image",source:{type:"base64"}}`
      blocks (84–618 KB of base64 each, 4.4 MB in the row) plus the text, and
@@ -140,9 +140,9 @@ test("a first message with 13 pasted images and no usage yet is a small estimate
 
   const running = await read();
   expect(running.context).toMatchObject({ estimated: true, limit: 1_000_000 });
-  expect(running.context!.tokens!).toBeLessThan(25_000);
-  expect(running.context!.percent!).toBeLessThanOrEqual(3);
-  expect(running.context!.basis).toContain("ESTIMATE");
+  expect(running.context!.tokens).toBeNull();
+  expect(running.context!.percent).toBeNull();
+  expect(running.context!.basis).toContain("UNCONFIRMED");
   expect(running.rotation).toMatchObject({ recommended: false, level: "none", advisory: null, reasons: [] });
 
   fs.appendFileSync(
@@ -165,7 +165,7 @@ test("a model with no window policy states the usage it can prove and calls the 
   expect(body.rotation).toMatchObject({ recommended: false, thresholdUnknown: true, threshold: null });
 });
 
-test("compactions recorded in the transcript are their own recommendation reason", async () => {
+test("compactions recorded in the transcript remain informational", async () => {
   const transcript = seatWithTranscript(2_048, 10_000);
   const body = await readOrchestratorIncumbent("proj-a", dependencies({
     conversation: () => conversation(transcript),
@@ -173,8 +173,8 @@ test("compactions recorded in the transcript are their own recommendation reason
   }));
 
   expect(body.transcriptFacts).toMatchObject({ messageCount: 400, toolCount: 900, compactionCount: 3 });
-  expect(body.rotation).toMatchObject({ recommended: true, level: "recommend" });
-  expect(body.rotation?.reasons.join(" ")).toContain("compaction");
+  expect(body.rotation).toMatchObject({ recommended: false, level: "none" });
+  expect(body.rotation?.reasons).toEqual([]);
 });
 
 test("an unsettled registry generation reads as unknown rather than inventing a model to judge by", async () => {
@@ -246,4 +246,45 @@ test("a seat that holds Telegram reports what the operator has to do; a seat wit
   expect(ungranted.telegram).toBeNull();
   const vacant = await readOrchestratorIncumbent("proj-b", dependencies({ telegramAction: () => "sign_in" }));
   expect(vacant.telegram).toBeNull();
+});
+
+test("status reads native counts, fresh capacity and boundaries without changing the seat", async () => {
+  const transcript = seatWithTranscript(9 * 1024 * 1024, 980_000);
+  const snapshot = JSON.stringify((await import("@/lib/orchestrator/seats")).orchestratorSeatFor("proj-a"));
+  const read = () => readOrchestratorIncumbent("proj-a", dependencies({
+    conversation: () => conversation(transcript, { model: "opus[1m]" }),
+    sessionCounts: productionIncumbentDependencies.sessionCounts,
+  }));
+  fs.appendFileSync(transcript, [
+    { type: "system", subtype: "compact_boundary", compactMetadata: { postTokens: 1_249 } },
+    { type: "system", subtype: "compact_boundary" },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const stale = await read();
+  expect(stale.transcriptFacts?.compactionCount).toBe(2);
+  expect(stale.context).toMatchObject({ tokens: null, estimated: true });
+  expect(stale.rotation).toMatchObject({ recommended: false, level: "none", causes: [] });
+  for (const capacity of [200_000, 1_000_000]) for (const percent of [49, 50, 51]) {
+    fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", message: { context_window: capacity, usage: { input_tokens: capacity * percent / 100 } } }) + "\n");
+    const fresh = await read();
+    expect(fresh.context).toMatchObject({ tokens: capacity * percent / 100, limit: capacity, percent, estimated: false });
+    expect(fresh.rotation?.level).toBe(percent < 50 ? "none" : "strongly_recommend");
+    expect(fresh.transcriptFacts?.compactionCount).toBe(2);
+  }
+  expect(JSON.stringify((await import("@/lib/orchestrator/seats")).orchestratorSeatFor("proj-a"))).toBe(snapshot);
+});
+
+test("status shows two Codex native boundaries without inventing a rotation threshold", async () => {
+  const transcript = seatWithTranscript(2_048);
+  fs.appendFileSync(transcript, [
+    { type: "response_item", payload: { type: "ContextCompaction", id: "a" } },
+    { type: "response_item", payload: { type: "ContextCompaction", id: "b" } },
+    { type: "event_msg", payload: { type: "token_count", info: { model_context_window: 200_000, last_token_usage: { input_tokens: 150_000 } } } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const body = await readOrchestratorIncumbent("proj-a", dependencies({
+    conversation: () => ({ ...conversation(transcript, { model: "gpt-6.1-sol" }), engine: "codex" }) as RegistryConversation,
+    sessionCounts: productionIncumbentDependencies.sessionCounts,
+  }));
+  expect(body.transcriptFacts?.compactionCount).toBe(2);
+  expect(body.context).toMatchObject({ tokens: 150_000, limit: 200_000, percent: 75, estimated: false });
+  expect(body.rotation).toMatchObject({ recommended: false, threshold: null, thresholdUnknown: true });
 });

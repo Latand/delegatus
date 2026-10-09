@@ -13,7 +13,8 @@
  * nothing else — see `./health`, whose recommendation carries no action.
  */
 
-import { normalizeModelKey, registryWindow, resolveRegistryKey } from "../scanner/modelRegistry";
+import { claudeCapacity, type ContextCapacityHints } from "../scanner/contextCapacity";
+import { normalizeModelKey, resolveRegistryKey } from "../scanner/modelRegistry";
 
 export const ROTATION_THRESHOLD_FRACTION = 0.5;
 
@@ -34,19 +35,19 @@ function policyWindowName(windowTokens: number): string {
 
 /** The window policy for a model, or null when none is configured — in which
     case NO window may be assumed anywhere downstream. */
-export function contextWindowPolicyFor(engine: string | null, model: string | null): ContextWindowPolicy | null {
-  if (engine !== "claude" || !model) return null;
-  const normalized = normalizeModelKey(model);
-  if (!normalized) return null;
-  const registryKey = resolveRegistryKey(normalized.key);
-  const windowTokens = registryWindow(registryKey, normalized.mode);
-  if (windowTokens === null) return null;
+export function contextWindowPolicyFor(engine: string | null, model: string | null, hints: ContextCapacityHints = {}): ContextWindowPolicy | null {
+  if (engine !== "claude") return null;
+  const capacity = claudeCapacity(model, hints);
+  if (!capacity) return null;
+  const normalized = model ? normalizeModelKey(model) : null;
+  const registryKey = normalized ? resolveRegistryKey(normalized.key) : null;
+  const windowTokens = capacity.windowTokens;
   const windowName = policyWindowName(windowTokens);
   return {
     windowTokens,
     rotationThresholdTokens: Math.round(windowTokens * ROTATION_THRESHOLD_FRACTION),
-    policy: normalized.key === registryKey
+    policy: capacity.source === "runtime" ? `runtime:${windowName}` : normalized?.key === registryKey
       ? `registry:${registryKey}:${windowName}`
-      : `claude-${normalized.key}-${windowName}`,
+      : `claude-${normalized?.key}-${windowName}`,
   };
 }

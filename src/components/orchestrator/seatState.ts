@@ -1,3 +1,5 @@
+import { contextWindowPolicyFor, ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
+
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { currentConversationFile } from "@/lib/accounts/identity";
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
@@ -392,7 +394,7 @@ export function telegramActionLine(t: TFunction, action: IncumbentTelegramAction
 
 /** `ROTATION_THRESHOLD_FRACTION` (`@/lib/orchestrator/contextPolicy`) as a
     percentage — the same line the server's recommendation draws. */
-export const ROTATION_CONTEXT_PERCENT = 50;
+export const ROTATION_CONTEXT_PERCENT = ROTATION_THRESHOLD_FRACTION * 100;
 
 /** What a rotate draft starts from (#1452): the CURRENT built-in default when
     the incumbent's mandate is based on an older version, the incumbent's own
@@ -895,7 +897,12 @@ function rotationHintOf(file: FileEntry | null, liveness: SeatLiveness, incumben
 
   const reasons: RotationHint["reasons"] = [];
   const percent = typeof file?.ctx?.pct === "number" ? file.ctx.pct : null;
-  if (percent !== null && percent >= ROTATION_CONTEXT_PERCENT) reasons.push("context");
+  const capacity = file?.ctx?.windowTokens;
+  const policy = typeof capacity === "number" && capacity > 0
+    ? contextWindowPolicyFor(file?.engine ?? null, file?.launchModel ?? file?.model ?? null, { runtimeWindow: capacity })
+    : null;
+  const tokens = file?.ctx?.usedTokens;
+  if (policy && typeof tokens === "number" && tokens >= policy.rotationThresholdTokens) reasons.push("context");
   if (deadHere) reasons.push("dead");
   if (!reasons.length) return null;
   return {

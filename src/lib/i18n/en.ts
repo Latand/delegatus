@@ -3082,6 +3082,7 @@ export const en = {
   "orchPanel.incumbentAria": "The orchestrator holding this project's seat",
   "orchPanel.incumbentUnknown": "model not resolved yet",
   "orchPanel.accountTitle": "Running on the {account} account",
+  "orchPanel.ctxUnconfirmed": "unconfirmed",
   "orchPanel.ctxTitle": "Context: {used} of {window} tokens ({percent}%)",
   "orchPanel.ctxUnknownWindow": "{used} tokens in context; this model has no configured window, so no percentage is claimed",
   "orchPanel.ctxAria": "Context window {percent}% full",

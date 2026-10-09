@@ -24367,3 +24367,35 @@ describe("idle seat interval eligibility", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("fresh context rotation advice", () => {
+  browserTest("the seat header shows unconfirmed usage at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/rotation-context");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&usage=unconfirmed`,
+          { width, height: phone ? 844 : 900 }, "light", "uk", "reduce", phone);
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          const header = page.locator(phone ? "[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]" : "[data-kanban-seat] [data-orchestrator-incumbent]").first();
+          await header.waitFor();
+          await page.waitForFunction(() => [...document.querySelectorAll("[data-orchestrator-incumbent]")].some(node => node.textContent?.includes("непідтверджено")));
+          expect(await header.textContent()).toContain("непідтверджено");
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+          expect(overflow).toBeLessThanOrEqual(1);
+          expect(pageErrors).toEqual([]);
+          await header.screenshot({ path: path.join(out, `variant-1-${width}-uk.png`) });
+          readings.push({ width, text: await header.textContent(), overflow, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/rotation-context", { recursive: true });
+    fs.writeFileSync("evidence/rotation-context/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+  }, 90_000);
+});

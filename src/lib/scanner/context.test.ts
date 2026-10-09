@@ -76,3 +76,29 @@ describe("ctxFor", () => {
     expect(ctxFor(file)).toEqual({ usedTokens: 42_000, windowTokens: null, pct: null, source: "unknown", confidence: "unknown", observedAt: OBSERVED_AT });
   });
 });
+
+test("the board withholds pre-compaction usage until a fresh provider record", () => {
+  for (const boundary of [
+    { type: "system", subtype: "compact_boundary", compactMetadata: { postTokens: 1000 } },
+    { type: "response_item", payload: { type: "ContextCompaction" } },
+  ]) {
+    const file = entry([
+      { type: "assistant", message: { model: "opus", usage: { input_tokens: 900_000 } } },
+      boundary,
+    ], "claude-projects");
+    expect(ctxFor(file)).toBeNull();
+  }
+});
+
+test("scanner runtime capacity beats model mode and the registry", () => {
+  for (const window of [200_000, 1_000_000]) {
+    const file = entry([{ type: "assistant", message: { model: "opus[1m]", context_window: window, usage: { input_tokens: window / 2 } } }], "claude-projects");
+    expect(ctxFor(file)).toMatchObject({ windowTokens: window, pct: 50, source: "runtime" });
+  }
+});
+
+test("explicit launch mode agrees with the server policy and invalidates the capacity cache", () => {
+  const file = entry([{ type: "assistant", message: { model: "claude-sonnet-4-5", usage: { input_tokens: 100_000 } } }], "claude-projects");
+  expect(ctxFor(file)?.windowTokens).toBe(200_000);
+  expect(ctxFor({ ...file, launchModel: "sonnet-4-5[1m]" })?.windowTokens).toBe(1_000_000);
+});
