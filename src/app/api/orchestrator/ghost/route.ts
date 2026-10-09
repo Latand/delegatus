@@ -21,19 +21,19 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
-  if (rejection) return rejection;
+  if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   /* A deputy holds the seat's authority, so only the operator and the voice
      gateway may start one, and the gateway's ask stays an agent's. */
   const asker = deputyAskerOf(req);
-  if (!asker.ok) return NextResponse.json({ error: asker.error, code: asker.code }, { status: asker.status });
+  if (!asker.ok) return NextResponse.json({ error: asker.error, code: asker.code, admission: "refused" }, { status: asker.status });
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
   } catch {
-    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "invalid JSON", admission: "refused" }, { status: 400 });
   }
   const { images, error: imageError } = admitRuntimeImagePayload(body);
-  if (imageError) return NextResponse.json({ error: imageError.error }, { status: imageError.status });
+  if (imageError) return NextResponse.json({ error: imageError.error, admission: "refused" }, { status: imageError.status });
   try {
     const result = await askOrchestratorInParallel({
       seatConversationId: typeof body.seatConversationId === "string" ? body.seatConversationId : undefined,
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
       origin: asker.origin,
     }, productionDeputyCommandPorts());
     if (!result.ok) {
-      return NextResponse.json({ error: result.error, code: result.code, ...(result.askId ? { askId: result.askId } : {}) }, { status: result.status });
+      return NextResponse.json({ error: result.error, code: result.code, ...(result.admission ? { admission: result.admission } : {}), ...(result.askId ? { askId: result.askId } : {}) }, { status: result.status });
     }
     return NextResponse.json({
       ok: true,

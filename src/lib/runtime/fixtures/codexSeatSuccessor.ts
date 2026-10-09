@@ -1,3 +1,4 @@
+import "@/lib/testing/fixtureLifetime";
 import fs from "node:fs";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

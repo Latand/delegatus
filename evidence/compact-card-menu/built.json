@@ -1,6 +1,6 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
-  "comparedWithToday": true,
+  "comparedWithToday": false,
   "taps": {
     "built/1440-light-en": {
       "move to Done": 2,
@@ -330,28 +330,7 @@
       "sent": 0
     }
   },
-  "reach": {
-    "1440-light-en card": [],
-    "1440-light-en conversation": [],
-    "1440-light-uk card": [],
-    "1440-light-uk conversation": [],
-    "1440-dark-en card": [],
-    "1440-dark-en conversation": [],
-    "1440-dark-uk card": [],
-    "1440-dark-uk conversation": [],
-    "1000-light-en card": [],
-    "1000-light-en conversation": [],
-    "1000-light-uk card": [],
-    "1000-light-uk conversation": [],
-    "1000-dark-en card": [],
-    "1000-dark-en conversation": [],
-    "1000-dark-uk card": [],
-    "1000-dark-uk conversation": [],
-    "390-light-en phone-conversation": [],
-    "390-light-uk phone-conversation": [],
-    "390-dark-en phone-conversation": [],
-    "390-dark-uk phone-conversation": []
-  },
+  "reach": {},
   "sheets": [
     "sheet-card-menu.png",
     "sheet-other-menus.png"
@@ -410,7 +389,7 @@
         716,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -469,7 +448,7 @@
       "surface": "column",
       "state": "done",
       "box": [
-        1111,
+        1132,
         201,
         300,
         56.4
@@ -549,11 +528,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1440-light-en-header-rest.png"
     },
@@ -609,7 +588,7 @@
         486,
         550,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -692,7 +671,7 @@
         1104,
         250,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -731,14 +710,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-light-en-conversation-rest.png"
@@ -751,14 +730,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-light-en-conversation-open_more.png",
@@ -816,7 +795,7 @@
         716,
         250,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -875,7 +854,7 @@
       "surface": "column",
       "state": "done",
       "box": [
-        1111,
+        1132,
         201,
         300,
         56.4
@@ -895,7 +874,7 @@
       "surface": "board",
       "state": "rest",
       "box": [
-        948,
+        962,
         43.5,
         256,
         192
@@ -914,7 +893,7 @@
       "surface": "board",
       "state": "open merging",
       "box": [
-        948,
+        962,
         43.5,
         256,
         217.5
@@ -933,7 +912,7 @@
       "surface": "board",
       "state": "open seat",
       "box": [
-        948,
+        962,
         43.5,
         256,
         237.9
@@ -955,11 +934,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1440-light-uk-header-rest.png"
     },
@@ -1015,7 +994,7 @@
         486,
         550,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -1098,7 +1077,7 @@
         1104,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -1137,14 +1116,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-light-uk-conversation-rest.png"
@@ -1157,14 +1136,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-light-uk-conversation-open_more.png",
@@ -1222,7 +1201,7 @@
         716,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -1281,7 +1260,7 @@
       "surface": "column",
       "state": "done",
       "box": [
-        1111,
+        1132,
         201,
         300,
         56.4
@@ -1361,11 +1340,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1440-dark-en-header-rest.png"
     },
@@ -1421,7 +1400,7 @@
         486,
         550,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -1504,7 +1483,7 @@
         1104,
         250,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -1543,14 +1522,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-dark-en-conversation-rest.png"
@@ -1563,14 +1542,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-dark-en-conversation-open_more.png",
@@ -1628,7 +1607,7 @@
         716,
         250,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -1687,7 +1666,7 @@
       "surface": "column",
       "state": "done",
       "box": [
-        1111,
+        1132,
         201,
         300,
         56.4
@@ -1707,7 +1686,7 @@
       "surface": "board",
       "state": "rest",
       "box": [
-        948,
+        962,
         43.5,
         256,
         192
@@ -1726,7 +1705,7 @@
       "surface": "board",
       "state": "open merging",
       "box": [
-        948,
+        962,
         43.5,
         256,
         217.5
@@ -1745,7 +1724,7 @@
       "surface": "board",
       "state": "open seat",
       "box": [
-        948,
+        962,
         43.5,
         256,
         237.9
@@ -1767,11 +1746,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1440-dark-uk-header-rest.png"
     },
@@ -1827,7 +1806,7 @@
         486,
         550,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -1910,7 +1889,7 @@
         1104,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -1949,14 +1928,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-dark-uk-conversation-rest.png"
@@ -1969,14 +1948,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        963,
-        371,
+        1090,
+        96,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1440-dark-uk-conversation-open_more.png",
@@ -2034,7 +2013,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -2173,11 +2152,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1000-light-en-header-rest.png"
     },
@@ -2233,7 +2212,7 @@
         634,
         350,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -2316,7 +2295,7 @@
         634,
         350,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -2355,14 +2334,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-light-en-conversation-rest.png"
@@ -2375,14 +2354,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-light-en-conversation-open_more.png",
@@ -2440,7 +2419,7 @@
         634,
         350,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -2579,11 +2558,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1000-light-uk-header-rest.png"
     },
@@ -2639,7 +2618,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -2722,7 +2701,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -2761,14 +2740,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-light-uk-conversation-rest.png"
@@ -2781,14 +2760,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-light-uk-conversation-open_more.png",
@@ -2846,7 +2825,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -2985,11 +2964,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1000-dark-en-header-rest.png"
     },
@@ -3045,7 +3024,7 @@
         634,
         350,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -3128,7 +3107,7 @@
         634,
         350,
         300,
-        290
+        300
       ],
       "scrolls": false,
       "inside": true,
@@ -3167,14 +3146,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-dark-en-conversation-rest.png"
@@ -3187,14 +3166,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-dark-en-conversation-open_more.png",
@@ -3252,7 +3231,7 @@
         634,
         350,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -3391,11 +3370,11 @@
         7,
         36.5,
         232,
-        437
+        185
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 6,
       "clipped": [],
       "file": "built/1000-dark-uk-header-rest.png"
     },
@@ -3451,7 +3430,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -3534,7 +3513,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -3573,14 +3552,14 @@
       "surface": "conversation",
       "state": "rest",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         176.4
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 5,
+      "controls": 4,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-dark-uk-conversation-rest.png"
@@ -3593,14 +3572,14 @@
       "surface": "conversation",
       "state": "open more",
       "box": [
-        619,
-        273,
+        650,
+        48,
         300,
         346.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 7,
       "clipped": [],
       "stands": "below",
       "file": "built/1000-dark-uk-conversation-open_more.png",
@@ -3634,13 +3613,13 @@
       "state": "rest",
       "box": [
         0,
-        101.3,
+        183,
         390,
-        742.7
+        661
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 29,
+      "controls": 17,
       "clipped": [],
       "file": "built/390-light-en-phone-board-rest.png"
     },
@@ -3767,13 +3746,13 @@
       "state": "rest",
       "box": [
         0,
-        101.3,
+        183,
         390,
-        742.7
+        661
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 29,
+      "controls": 17,
       "clipped": [],
       "file": "built/390-light-uk-phone-board-rest.png"
     },
@@ -3900,13 +3879,13 @@
       "state": "rest",
       "box": [
         0,
-        101.3,
+        183,
         390,
-        742.7
+        661
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 29,
+      "controls": 17,
       "clipped": [],
       "file": "built/390-dark-en-phone-board-rest.png"
     },
@@ -4033,13 +4012,13 @@
       "state": "rest",
       "box": [
         0,
-        101.3,
+        183,
         390,
-        742.7
+        661
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 29,
+      "controls": 17,
       "clipped": [],
       "file": "built/390-dark-uk-phone-board-rest.png"
     },
@@ -4190,7 +4169,7 @@
         1008,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -4294,7 +4273,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4315,7 +4294,7 @@
         682,
         550,
         300,
-        316.6
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4336,7 +4315,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4357,7 +4336,7 @@
         682,
         550,
         300,
-        302.5
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -4378,7 +4357,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4482,7 +4461,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4503,7 +4482,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4524,7 +4503,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4545,7 +4524,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4566,7 +4545,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4587,7 +4566,7 @@
         682,
         550,
         300,
-        315
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -4608,7 +4587,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4712,7 +4691,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4733,7 +4712,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4754,7 +4733,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4775,7 +4754,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4796,7 +4775,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4817,7 +4796,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4838,7 +4817,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4880,7 +4859,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4901,7 +4880,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4922,7 +4901,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -4943,7 +4922,7 @@
         682,
         544,
         300,
-        315
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -4964,7 +4943,7 @@
         682,
         544,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5068,7 +5047,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5089,7 +5068,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5110,7 +5089,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5131,7 +5110,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5152,7 +5131,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5173,7 +5152,7 @@
         682,
         550,
         300,
-        315
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -5194,7 +5173,7 @@
         682,
         550,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5277,7 +5256,7 @@
         1008,
         250,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -5317,7 +5296,7 @@
       "state": "rest",
       "box": [
         682,
-        548,
+        538,
         300,
         280
       ],
@@ -5337,7 +5316,7 @@
       "state": "open appearance",
       "box": [
         682,
-        548,
+        538,
         300,
         342
       ],
@@ -5358,7 +5337,7 @@
       "state": "open pipelines",
       "box": [
         682,
-        548,
+        538,
         300,
         240.9
       ],
@@ -5379,9 +5358,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5400,9 +5379,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5421,9 +5400,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5442,9 +5421,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         682,
-        548,
+        538,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -5463,9 +5442,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5484,7 +5463,7 @@
       "state": "open more",
       "box": [
         682,
-        548,
+        538,
         300,
         340
       ],
@@ -5505,7 +5484,7 @@
       "state": "rest",
       "box": [
         682,
-        548,
+        538,
         300,
         280
       ],
@@ -5525,7 +5504,7 @@
       "state": "open appearance",
       "box": [
         682,
-        548,
+        538,
         300,
         342
       ],
@@ -5546,7 +5525,7 @@
       "state": "open pipelines",
       "box": [
         682,
-        548,
+        538,
         300,
         335.9
       ],
@@ -5567,9 +5546,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5588,9 +5567,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5609,9 +5588,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5630,9 +5609,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5651,9 +5630,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5672,9 +5651,9 @@
       "state": "open pipelines, pipeline 6",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5693,9 +5672,9 @@
       "state": "open pipelines, pipeline 7",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5714,7 +5693,7 @@
       "state": "open more",
       "box": [
         682,
-        548,
+        538,
         300,
         340
       ],
@@ -5735,7 +5714,7 @@
       "state": "rest",
       "box": [
         682,
-        544,
+        538,
         300,
         280
       ],
@@ -5755,7 +5734,7 @@
       "state": "open appearance",
       "box": [
         682,
-        544,
+        538,
         300,
         342
       ],
@@ -5776,7 +5755,7 @@
       "state": "open pipelines",
       "box": [
         682,
-        544,
+        538,
         300,
         346.5
       ],
@@ -5797,9 +5776,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         682,
-        544,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -5818,9 +5797,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5839,9 +5818,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5860,9 +5839,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5881,9 +5860,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5902,9 +5881,9 @@
       "state": "open pipelines, pipeline 6",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5923,9 +5902,9 @@
       "state": "open pipelines, pipeline 7",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5944,7 +5923,7 @@
       "state": "open pipelines, pipelines-more",
       "box": [
         682,
-        544,
+        538,
         300,
         240.9
       ],
@@ -5965,9 +5944,9 @@
       "state": "open pipelines, pipelines-more, pipeline 1",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -5986,9 +5965,9 @@
       "state": "open pipelines, pipelines-more, pipeline 2",
       "box": [
         682,
-        544,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -6007,9 +5986,9 @@
       "state": "open pipelines, pipelines-more, pipeline 3",
       "box": [
         682,
-        544,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6028,9 +6007,9 @@
       "state": "open pipelines, pipelines-more, pipeline 4",
       "box": [
         682,
-        544,
+        538,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -6049,9 +6028,9 @@
       "state": "open pipelines, pipelines-more, pipeline 5",
       "box": [
         682,
-        544,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6070,7 +6049,7 @@
       "state": "open more",
       "box": [
         682,
-        544,
+        538,
         300,
         340
       ],
@@ -6091,7 +6070,7 @@
       "state": "rest",
       "box": [
         682,
-        548,
+        538,
         300,
         280
       ],
@@ -6111,7 +6090,7 @@
       "state": "open appearance",
       "box": [
         682,
-        548,
+        538,
         300,
         342
       ],
@@ -6132,7 +6111,7 @@
       "state": "open pipelines",
       "box": [
         682,
-        548,
+        538,
         300,
         335.9
       ],
@@ -6153,9 +6132,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6174,9 +6153,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -6195,9 +6174,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -6216,9 +6195,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -6237,9 +6216,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6258,9 +6237,9 @@
       "state": "open pipelines, pipeline 6",
       "box": [
         682,
-        548,
+        538,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -6279,9 +6258,9 @@
       "state": "open pipelines, pipeline 7",
       "box": [
         682,
-        548,
+        538,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6300,7 +6279,7 @@
       "state": "open more",
       "box": [
         682,
-        548,
+        538,
         300,
         340
       ],
@@ -6364,7 +6343,7 @@
         634,
         350,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -6468,7 +6447,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6489,7 +6468,7 @@
         634,
         350,
         300,
-        316.6
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6510,7 +6489,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6531,7 +6510,7 @@
         634,
         350,
         300,
-        302.5
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -6552,7 +6531,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6656,7 +6635,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6677,7 +6656,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6698,7 +6677,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6719,7 +6698,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6740,7 +6719,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6761,7 +6740,7 @@
         634,
         350,
         300,
-        315
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -6782,7 +6761,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6886,7 +6865,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6907,7 +6886,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6928,7 +6907,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6949,7 +6928,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6970,7 +6949,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -6991,7 +6970,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7012,7 +6991,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7054,7 +7033,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7075,7 +7054,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7096,7 +7075,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7117,7 +7096,7 @@
         634,
         344,
         300,
-        315
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -7138,7 +7117,7 @@
         634,
         344,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7242,7 +7221,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7263,7 +7242,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7284,7 +7263,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7305,7 +7284,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7326,7 +7305,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7347,7 +7326,7 @@
         634,
         350,
         300,
-        315
+        325
       ],
       "scrolls": false,
       "inside": true,
@@ -7368,7 +7347,7 @@
         634,
         350,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7451,7 +7430,7 @@
         634,
         350,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -7491,7 +7470,7 @@
       "state": "rest",
       "box": [
         634,
-        348,
+        338,
         300,
         280
       ],
@@ -7511,7 +7490,7 @@
       "state": "open appearance",
       "box": [
         634,
-        348,
+        338,
         300,
         342
       ],
@@ -7532,7 +7511,7 @@
       "state": "open pipelines",
       "box": [
         634,
-        348,
+        338,
         300,
         240.9
       ],
@@ -7553,9 +7532,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7574,9 +7553,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -7595,9 +7574,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7616,9 +7595,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         634,
-        348,
+        338,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -7637,9 +7616,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7658,7 +7637,7 @@
       "state": "open more",
       "box": [
         634,
-        348,
+        338,
         300,
         340
       ],
@@ -7679,7 +7658,7 @@
       "state": "rest",
       "box": [
         634,
-        348,
+        338,
         300,
         280
       ],
@@ -7699,7 +7678,7 @@
       "state": "open appearance",
       "box": [
         634,
-        348,
+        338,
         300,
         342
       ],
@@ -7720,7 +7699,7 @@
       "state": "open pipelines",
       "box": [
         634,
-        348,
+        338,
         300,
         335.9
       ],
@@ -7741,9 +7720,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7762,9 +7741,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -7783,9 +7762,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -7804,9 +7783,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -7825,9 +7804,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7846,9 +7825,9 @@
       "state": "open pipelines, pipeline 6",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -7867,9 +7846,9 @@
       "state": "open pipelines, pipeline 7",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7888,7 +7867,7 @@
       "state": "open more",
       "box": [
         634,
-        348,
+        338,
         300,
         340
       ],
@@ -7909,7 +7888,7 @@
       "state": "rest",
       "box": [
         634,
-        344,
+        338,
         300,
         280
       ],
@@ -7929,7 +7908,7 @@
       "state": "open appearance",
       "box": [
         634,
-        344,
+        338,
         300,
         342
       ],
@@ -7950,7 +7929,7 @@
       "state": "open pipelines",
       "box": [
         634,
-        344,
+        338,
         300,
         346.5
       ],
@@ -7971,9 +7950,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         634,
-        344,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -7992,9 +7971,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8013,9 +7992,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8034,9 +8013,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8055,9 +8034,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8076,9 +8055,9 @@
       "state": "open pipelines, pipeline 6",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8097,9 +8076,9 @@
       "state": "open pipelines, pipeline 7",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8118,7 +8097,7 @@
       "state": "open pipelines, pipelines-more",
       "box": [
         634,
-        344,
+        338,
         300,
         240.9
       ],
@@ -8139,9 +8118,9 @@
       "state": "open pipelines, pipelines-more, pipeline 1",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8160,9 +8139,9 @@
       "state": "open pipelines, pipelines-more, pipeline 2",
       "box": [
         634,
-        344,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8181,9 +8160,9 @@
       "state": "open pipelines, pipelines-more, pipeline 3",
       "box": [
         634,
-        344,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -8202,9 +8181,9 @@
       "state": "open pipelines, pipelines-more, pipeline 4",
       "box": [
         634,
-        344,
+        338,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -8223,9 +8202,9 @@
       "state": "open pipelines, pipelines-more, pipeline 5",
       "box": [
         634,
-        344,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -8244,7 +8223,7 @@
       "state": "open more",
       "box": [
         634,
-        344,
+        338,
         300,
         340
       ],
@@ -8265,7 +8244,7 @@
       "state": "rest",
       "box": [
         634,
-        348,
+        338,
         300,
         280
       ],
@@ -8285,7 +8264,7 @@
       "state": "open appearance",
       "box": [
         634,
-        348,
+        338,
         300,
         342
       ],
@@ -8306,7 +8285,7 @@
       "state": "open pipelines",
       "box": [
         634,
-        348,
+        338,
         300,
         335.9
       ],
@@ -8327,9 +8306,9 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -8348,9 +8327,9 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8369,9 +8348,9 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8390,9 +8369,9 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8411,9 +8390,9 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -8432,9 +8411,9 @@
       "state": "open pipelines, pipeline 6",
       "box": [
         634,
-        348,
+        338,
         300,
-        341.6
+        351.6
       ],
       "scrolls": false,
       "inside": true,
@@ -8453,9 +8432,9 @@
       "state": "open pipelines, pipeline 7",
       "box": [
         634,
-        348,
+        338,
         300,
-        329.1
+        339.1
       ],
       "scrolls": false,
       "inside": true,
@@ -8474,7 +8453,7 @@
       "state": "open more",
       "box": [
         634,
-        348,
+        338,
         300,
         340
       ],
@@ -8538,7 +8517,7 @@
         716,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -8621,7 +8600,7 @@
         716,
         250,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -8704,7 +8683,7 @@
         716,
         250,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -8787,7 +8766,7 @@
         716,
         250,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -8870,7 +8849,7 @@
         634,
         337,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -8953,7 +8932,7 @@
         634,
         337,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,
@@ -9036,7 +9015,7 @@
         634,
         337,
         300,
-        302.5
+        312.5
       ],
       "scrolls": false,
       "inside": true,
@@ -9119,7 +9098,7 @@
         634,
         337,
         300,
-        327.5
+        337.5
       ],
       "scrolls": false,
       "inside": true,

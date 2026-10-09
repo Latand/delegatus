@@ -1,3 +1,4 @@
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess } from "node:child_process";
 
 import { afterEach, expect, test } from "bun:test";
@@ -76,7 +77,7 @@ function snapshot(over: {
 const fixtures: ChildProcess[] = [];
 
 function spawnFixtureTree(): { pid: number; startIdentity: string } {
-  const child = spawn("/bin/sh", ["-c", "sleep 30 & wait"], { detached: true, stdio: "ignore" });
+  const child = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30 & wait"], { detached: true, stdio: "ignore" }));
   fixtures.push(child);
   const pid = child.pid;
   if (pid === undefined) throw new Error("fixture tree did not start");
@@ -86,10 +87,10 @@ function spawnFixtureTree(): { pid: number; startIdentity: string } {
 }
 
 function spawnPersistentWrapperTree(): { pid: number; startIdentity: string } {
-  const child = spawn("/bin/sh", ["-c", "trap '' TERM; sleep 30 & wait; while :; do sleep 30; done"], {
+  const child = ownFixtureTree(spawn("/bin/sh", ["-c", "trap '' TERM; sleep 30 & wait; while :; do sleep 30; done"], {
     detached: true,
     stdio: "ignore",
-  });
+  }));
   fixtures.push(child);
   const pid = child.pid;
   if (pid === undefined) throw new Error("fixture wrapper did not start");
@@ -114,14 +115,8 @@ function ref(over: Partial<StructuredHostKillRef> & Pick<StructuredHostKillRef, 
   };
 }
 
-afterEach(() => {
-  for (const child of fixtures.splice(0)) {
-    try {
-      if (child.pid) process.kill(-child.pid, "SIGKILL");
-    } catch {
-      /* the test under it already took the tree down */
-    }
-  }
+afterEach(async () => {
+  for (const child of fixtures.splice(0)) await stopFixtureTree(child);
 });
 
 test("the inventory carries role, model, stage and ownership for every structured host", () => {

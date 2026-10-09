@@ -4189,3 +4189,22 @@ test("storage health exposes fresh preserved registry ids without an auto-update
     expect(scans).toBe(0);
   } finally { db.close(); }
 });
+
+
+test("the internal needs-you read shares the operator summary and its warm cache, with prototype dismissals", async () => {
+  const { operatorBoardRepresentation } = await import("./operatorProjection");
+  const { dismissAttention } = await import("@/lib/attention/dismissals");
+  const task = { id: "prototype-task", project: "project-a", status: "inbox", placement: "unplaced", text: "Layout", assignments: [], sources: [], createdAt: "2026-10-06T09:00:00Z", updatedAt: "2026-10-06T09:00:00Z", prototypeReview: { latestReviewId: "round-a", waitingReviewId: "round-a", title: "Layout", rounds: 1, createdAt: "2026-10-06T10:00:00Z" } };
+  boardTasksStore = () => [task];
+  scannedFiles = [];
+  const first = await operatorBoardRepresentation();
+  const operator = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).json();
+  expect(first.files).toEqual(operator.files);
+  expect(first.tasks).toEqual(operator.tasks);
+  expect(first.tasks[0]!.prototypeReview?.waitingReviewId).toBe("round-a");
+  const scansBefore = scans;
+  expect((await operatorBoardRepresentation()).tasks).toEqual(operator.tasks);
+  expect(scans).toBe(scansBefore);
+  await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "round-a" }, { kind: "operator" }, { ports: { now: () => new Date(), task: () => task as never, resolveConversation: () => null, pipelines: () => [], pipeline: () => null, setPipelineDismissal: async () => ({}), resolveReports: () => ({ resolved: [], alreadyClear: [], unknown: [] }) } });
+  expect((await operatorBoardRepresentation()).tasks[0]!.prototypeReview?.waitingDismissal?.by).toEqual({ kind: "operator" });
+});

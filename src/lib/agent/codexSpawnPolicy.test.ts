@@ -1,3 +1,5 @@
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { ownFixtureTree, stopFixtureTree, stopFixtureProcess, stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import zlib from "node:zlib";
@@ -97,11 +99,10 @@ test("an explicit synchronous Guardian reviewer is overridden only for denied la
       XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"),
       LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
     const child = spawn(binary, [...codexSubagentArgs(binary, allowed, env), "app-server"], { env, stdio: ["pipe", "pipe", "pipe"] });
-    const pid = child.pid;
     const lines = createInterface({ input: child.stdout });
     let reaped = false;
     const done = new Promise<void>((resolve) => { child.once("close", () => { reaped = true; resolve(); }); });
-    const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } } }, 10_000);
+    const timer = setTimeout(() => { if (!reaped) child.kill("SIGKILL"); }, 10_000);
     child.stderr.resume();
     let observed = false;
     try {
@@ -123,7 +124,7 @@ test("an explicit synchronous Guardian reviewer is overridden only for denied la
     } finally {
       lines.close();
       child.stdin.end();
-      if (!reaped && pid) { try { process.kill(pid, "SIGTERM"); } catch { /* already exited */ } }
+      await stopFixtureProcess(child);
       await done;
       clearTimeout(timer);
       fs.rmSync(root, { recursive: true, force: true });
@@ -176,7 +177,6 @@ test("native app-server threads deny hostile legacy aliases and never request a 
     ...Object.entries(codexSubagentConfig(inventory, false)).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
     "app-server", "--enable", "realtime_conversation"];
   const child = spawn(binary, args, { env, cwd: root, stdio: ["pipe", "pipe", "pipe"] });
-  const pid = child.pid;
   child.stderr.resume();
   let reaped = false;
   const done = new Promise<void>((resolve) => child.once("close", () => { reaped = true; resolve(); }));
@@ -199,7 +199,7 @@ test("native app-server threads deny hostile legacy aliases and never request a 
     pending.set(id, { resolve, reject });
     child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
   });
-  const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(pid, "SIGKILL"); } catch { /* exited */ } } }, 15_000);
+  const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
   const run = async () => {
     await rpc("initialize", { clientInfo: { name: "policy-fixture", version: "1" }, capabilities: { experimentalApi: true } });
     child.stdin.write(JSON.stringify({ method: "initialized", params: {} }) + "\n");
@@ -220,7 +220,7 @@ test("native app-server threads deny hostile legacy aliases and never request a 
   } finally {
     lines.close();
     child.stdin.end();
-    if (!reaped && pid) { try { process.kill(pid, "SIGTERM"); } catch { /* exited */ } }
+    if (!reaped) await stopFixtureProcess(child);
     await done;
     clearTimeout(timer);
     provider.stop(true);
@@ -355,11 +355,10 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
         const seed = spawn(binary, ["exec", "--skip-git-repo-check", "--json", "Return fixture complete."],
           { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
         let output = ""; seed.stdout.on("data", (bytes) => { output += bytes; }); seed.stderr.resume();
-        const seedPid = seed.pid;
-        const seedTimer = setTimeout(() => { if (seedPid) { try { process.kill(seedPid, "SIGKILL"); } catch { /* exited */ } } }, 10000);
+        const seedTimer = setTimeout(() => seed.kill("SIGKILL"), 10000);
         let seedCode: number | null;
         try { seedCode = await new Promise<number | null>((resolve, reject) => { seed.once("close", resolve); seed.once("error", reject); }); }
-        finally { clearTimeout(seedTimer); }
+        finally { clearTimeout(seedTimer); await stopFixtureProcess(seed); }
         expect(seedCode).toBe(0);
         const threadId = output.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((row) => row.type === "thread.started")?.thread_id;
         expect(typeof threadId).toBe("string");
@@ -401,11 +400,11 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
         for (let i = 0; i < 500; i++) { if (predicate()) return; await Bun.sleep(20); }
         throw new Error(`installed CLI did not reach the stub provider through the tmux pane: ${(await run(["capture-pane", "-p", "-t", "fixture:0.0"])).stdout.slice(-1500).replaceAll(root, "<sandbox>")}`);
       };
-      let serverPid: number | undefined;
+      let serverIdentity: ProcessIdentity | undefined;
       try {
         expect((await run(["new-session", "-d", "-x", "120", "-y", "40", "-s", "fixture",
           `bash --noprofile --rcfile ${shellQuote(rc)} -i`])).code).toBe(0);
-        serverPid = Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim());
+        serverIdentity = captureProcessIdentity(Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim()));
         await waitFor(() => fs.existsSync(ready));
         await Bun.sleep(30);
         await sendShellCommandToPane("fixture:0.0", root, terminalCommand, run);
@@ -415,18 +414,18 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
         expect(tools.has("exec_command")).toBe(true);
       } finally {
         // Reap the pane's CLI before stopping this one recorded tmux server.
-        if (serverPid) {
+        if (serverIdentity) {
           await run(["send-keys", "-t", "fixture:0.0", "C-c"]);
           await Bun.sleep(100);
           await run(["send-keys", "-t", "fixture:0.0", "C-d"]);
           await Bun.sleep(100);
-          try { process.kill(serverPid, "SIGTERM"); } catch { /* private server exited */ }
+          await stopFixtureIdentity(serverIdentity);
         }
         fs.rmSync(socketRoot, { recursive: true, force: true });
       }
       return;
     }
-    const child = spawn(command, argv, { cwd: root, env: childEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = ownFixtureTree(spawn(command, argv, { cwd: root, env: childEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
     let terminalOutput = "";
     child.stdout.on("data", (bytes: Buffer) => {
       terminalOutput = (terminalOutput + bytes.toString()).slice(-4000);
@@ -435,15 +434,17 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
     child.stdin.end(stdin ?? undefined);
     let diagnostic = "";
     child.stderr.on("data", (bytes: Buffer) => { diagnostic = (diagnostic + bytes.toString()).slice(-2000); });
-    const pid = child.pid;
     let reaped = false;
     const completed = new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code) => { reaped = true; resolve(code); });
     });
-    const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(-pid, "SIGKILL"); } catch { /* already exited */ } } }, 10_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Codex ${policy} policy fixture exceeded 10000ms`)), 10_000);
+    });
     try {
-      const code = await completed;
+      const code = await Promise.race([completed, timeout]);
       if (code !== 0) throw new Error(`Codex ${policy} policy fixture exited ${code}: ${(diagnostic + terminalOutput).replaceAll(root, "<sandbox>")}`);
       expect(code).toBe(0);
       expect(requests).toBeGreaterThan(0);
@@ -453,7 +454,7 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
       if (policy !== "ephemeral") expect(tools.has("exec_command")).toBe(true);
     } finally {
       clearTimeout(timer);
-      if (!reaped && pid) { try { process.kill(-pid, "SIGKILL"); } catch { /* already exited */ } await completed.catch(() => {}); }
+      if (!reaped) { await stopFixtureTree(child); await completed.catch(() => {}); }
     }
   } finally {
     provider.stop(true);
