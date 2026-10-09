@@ -66,7 +66,8 @@ export function StagesSheet(props: {
   flowsById: ReadonlyMap<string, Flow>;
   /** The stage the sheet opened on. */
   initialFocus: string | null;
-  fullReader: string | null;
+  /** The pane conversation the agent window shows, which stands there and not in its pane. */
+  windowReader: string | null;
   placement: ReaderPlacement;
   drafts: StageDrafts;
   ports: PipelinePorts;
@@ -75,7 +76,8 @@ export function StagesSheet(props: {
   onChooseAttempt: (stageId: string, n: number) => void;
   onStageMenu: (stage: PipelineStage, anchor: HTMLElement) => void;
   onOpenRecorded: (conversation: { path: string | null; conversationId: string | null }) => void;
-  onLeaveFull: (key: string) => void;
+  /** Close the agent window, which puts its conversation back in its pane. */
+  onLeaveWindow: () => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
@@ -408,11 +410,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
       </div>
     );
-  } else if (pane.readerKey && props.fullReader === pane.readerKey) {
+  } else if (pane.readerKey && props.windowReader === pane.readerKey) {
     body = (
       <div className="pane-conv away" data-pane-away={pane.readerKey}>
         <p className="pane-note">{t("kanban.stages.inFullPane")}</p>
-        <button type="button" className="btn quiet" onClick={() => props.onLeaveFull(pane.readerKey!)}>{t("kanban.readerLeaveFull")}</button>
+        <button type="button" className="btn quiet" onClick={props.onLeaveWindow}>{t("kanban.stages.showHere")}</button>
       </div>
     );
   } else if (pane.readerKey) {

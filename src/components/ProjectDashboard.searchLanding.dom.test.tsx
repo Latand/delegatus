@@ -201,9 +201,8 @@ function mount(focusRequest: { path: string; nonce: number; catalog?: boolean } 
 
 const listShown = (host: HTMLElement) => host.textContent?.includes(translate("en", "list.title")) ?? false;
 const composer = (host: HTMLElement) => host.querySelector("textarea");
-/* The desktop board is the kanban (#1695): the landed conversation is open as a reader in its card. */
-const card = (host: HTMLElement) => Array.from(host.querySelectorAll("[data-kanban-card].has-reader"))
-  .find((element) => (element.getAttribute("aria-label") ?? "").startsWith(found.title ?? "")) ?? null;
+/* The desktop board is the kanban (#1695): the landed conversation is open in its agent window. */
+const card = (host: HTMLElement) => host.querySelector(`[data-agent-window] [data-reader-path="${FOUND_PATH}"]`);
 const chatShell = (host: HTMLElement) => host.querySelector('[data-testid="mobile-chat-shell"]');
 
 test("desktop: a search landing opens the conversation with its composer even from saved «Список»", async () => {
