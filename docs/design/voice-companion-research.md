@@ -162,7 +162,9 @@ under the companion at 1440, which stands over the sidebar, and 57 to 58 % at
 for the row by becoming its tile (`scenarios.json`, `delegatedRowAsItAppeared`).
 
 Where the older sections below speak of a proposal waiting for the operator's
-Send tap, read them as describing a confirmation the model asked for.
+Send tap, read them as describing a confirmation the model asked for. Where §5
+says a tap is the only confirmation and spoken confirmation is not built, it
+records the prototype: point 3 above is the spoken answer as built.
 
 ## Operator amendment 2026-10-06
 
