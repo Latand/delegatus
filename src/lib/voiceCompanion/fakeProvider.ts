@@ -3,6 +3,8 @@ import type { Locale } from "./contract";
 import type { BackendRequest } from "./sessionConfig";
 
 type Item = Record<string, unknown>;
+const APPENDS = new Set(["session.commentary.append", "session.thinking.append", "session.instructions.append"]);
+const APPEND_LIMIT_BYTES = 500;
 /** A Responses result in the documented shape: output items and usage. */
 export function backendResponse(id: string, output: Item[], usage: Item = { input_tokens: 100, input_tokens_details: { cached_tokens: 50 }, output_tokens: 20 }) {
   return { id, object: "response", status: "completed", output, usage };
@@ -63,11 +65,22 @@ export class FakeLiveProvider implements LiveProvider {
     this.receivers.set(id, { event, lost });
     return { send: command => {
       if (this.disconnected.has(id)) throw new Error("PROVIDER_ERROR");
+      // Commentary, thinking and instructions take at most 500 tokens. A token
+      // holds at least one byte, so text past 500 UTF-8 bytes may be over the
+      // limit, and the fake answers it with the documented error event.
+      if (APPENDS.has(command.type) && (typeof command.content !== "string" || Buffer.byteLength(command.content) > APPEND_LIMIT_BYTES)) {
+        this.refused.push(command);
+        queueMicrotask(() => this.replay(id, { type: "error", event_id: `${id}-refused-${this.refused.length}`,
+          error: { type: "invalid_request_error", code: "string_above_max_length", param: "content", message: "Content is limited to 500 tokens." } }));
+        return;
+      }
       this.commands.push(command);
       if (command.type === "session.close" && this.autoClose)
         queueMicrotask(() => this.replay(id, { type: "session.closed", event_id: `${id}-closed`, reason: "close_requested", session: { id }, usage: { seconds: 18 } }));
     }, dispose: () => { this.receivers.delete(id); } };
   }
+  /** Appended text the provider would refuse: over its documented 500 tokens. */
+  readonly refused: LiveCommand[] = [];
   replay(id: string, ...events: unknown[]): void { for (const event of events) this.receivers.get(id)?.event(event); }
   disconnect(id: string): void { this.disconnected.add(id); this.receivers.get(id)?.lost(); }
   get attached() { return this.receivers.size; }

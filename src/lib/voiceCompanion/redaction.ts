@@ -23,6 +23,10 @@ function separator(code: number): boolean {
   return code <= 0x20 || code === 0x85 || code === 0xa0 || code === 0xad || code === 0x1680 || (code >= 0x2000 && code <= 0x200f)
     || (code >= 0x2028 && code <= 0x202f) || (code >= 0x205f && code <= 0x2064) || code === 0x3000 || code === 0xfeff;
 }
+/** A text with its separators taken out: a credential laid out in pieces reads whole. */
+export function withoutSeparators(text: string): string {
+  return Array.from(text).filter(char => !separator(char.charCodeAt(0))).join("");
+}
 /** The shortest beginning of a credential still arriving at the end of a
  * stream that is withheld. A beginning this short names a format at most. */
 const STREAM_TAIL = 3;
@@ -38,7 +42,7 @@ function credentialSpans(text: string, secrets: readonly string[], edge: number)
   const at: number[] = [];
   for (let index = 0; index < text.length; index += 1) if (!separator(text.charCodeAt(index))) { joined += text[index]; at.push(index); }
   for (const raw of secrets) {
-    const sought = Array.from(raw).filter(char => !separator(char.charCodeAt(0))).join("");
+    const sought = withoutSeparators(raw);
     if (sought.length < 8) continue;
     for (let found = joined.indexOf(sought); found !== -1; found = joined.indexOf(sought, found + 1)) mask.fill(1, at[found], at[found + sought.length - 1] + 1);
     for (let length = Math.min(sought.length - 1, joined.length); length >= edge; length -= 1)

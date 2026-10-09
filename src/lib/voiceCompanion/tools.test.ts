@@ -95,6 +95,40 @@ test("a delayed spoken answer stays bound to the proposal included in its backen
   expect(admission.outcome(session.id, b.state === "awaiting" ? b.proposal.proposalId : "missing")).toMatchObject({ state: "awaiting" });
 });
 
+test("the model resolves a pending voice confirmation without a server-side consent phrase list", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "fixture", conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" }), reports: () => [],
+    send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; },
+  });
+  const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  admission.input(session.id, { itemId: "request", text: "Ask the orchestrator to review the plan.", final: true, turn: 1 });
+  const request = await runCompanionTool({ project: "fixture", sessionId: session.id, callId: "proposal", delegationId: "request", sourceTurn: 1,
+    admission, reads, endConversation: () => undefined }, "request_orchestrator_delegation",
+  { instruction: "Review the plan", confirmation_reason: "Two plans exist." }) as { status: string };
+  expect(request.status).toBe("awaiting_confirmation");
+  const proposal = admission.awaiting(session.id)!;
+  admission.input(session.id, { itemId: "answer", text: "Please proceed with that.", final: true, turn: 2 });
+  const context = { project: "fixture", sessionId: session.id, callId: "answer", delegationId: "answer", sourceTurn: 2,
+    confirmationProposalId: proposal.proposalId, admission, reads, endConversation: () => undefined };
+
+  expect(await runCompanionTool(context, "resolve_orchestrator_confirmation", { decision: "send" }))
+    .toMatchObject({ status: "sent", delivery: "delivered" });
+  expect(sent).toEqual(["Review the plan"]);
+  await runCompanionTool(context, "resolve_orchestrator_confirmation", { decision: "send" });
+  expect(sent).toEqual(["Review the plan"]);
+
+  admission.input(session.id, { itemId: "request-2", text: "Ask the orchestrator to check the release.", final: true, turn: 3 });
+  const second = await admission.delegate(session.id, "proposal-2", "request-2", "Check the release", { sourceTurn: 3, confirmation: "Check the target." });
+  if (second.state !== "awaiting") throw new Error("expected a pending confirmation");
+  const cancel = await runCompanionTool({ ...context, callId: "cancel", sourceTurn: 4, confirmationProposalId: second.proposal.proposalId },
+    "resolve_orchestrator_confirmation", { decision: "cancel" });
+  expect(cancel).toMatchObject({ status: "refused", code: "operator_cancelled" });
+  expect(sent).toEqual(["Review the plan"]);
+});
+
 test("asking first is the model's judgment in the schema: an optional reason, and no list of words anywhere in the registry", () => {
   const tool = COMPANION_TOOLS.find(row => row.name === "request_orchestrator_delegation")!;
   expect(tool.parameters.properties.confirmation_reason).toMatchObject({ type: ["string", "null"] });
