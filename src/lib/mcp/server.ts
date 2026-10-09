@@ -2377,6 +2377,21 @@ export class McpDispatchVerdictError extends McpToolRefusal {
   }
 }
 
+/** A final dispatch was affirmatively refused after an earlier effect was
+    confirmed. The binding preserves that effect separately; the composite
+    request closes with a refusal and cannot authorize another creation. */
+export class McpDispatchSettledRefusalError extends McpToolRefusal {
+  constructor(message: string, details: McpToolPayload) {
+    super(message, {
+      ...details,
+      outcome: "settled",
+      evidence: "dispatch-refused",
+      nextAction: "follow-disposition",
+    });
+    this.name = "McpDispatchSettledRefusalError";
+  }
+}
+
 function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller, toolName: McpToolName): boolean {
   return recorded.kind === current.kind
     && recorded.project === current.project
@@ -2957,10 +2972,11 @@ export function createMcpToolService(
           outcome = error instanceof DeadlineExceededError ? "deadline" : "failure";
           const refusal = error instanceof McpToolRefusal || error instanceof McpDispatchNotExecutedError ? error.details : {};
           const admitted = typeof refusal.operationId === "string" || typeof refusal.launchId === "string";
-          const proven = !admitted && (
+          const terminalRefusal = error instanceof McpDispatchSettledRefusalError;
+          const proven = terminalRefusal || (!admitted && (
             error instanceof McpDispatchNotExecutedError
             || !dispatch.attempted
-          );
+          ));
           if (!proven) {
             outcome = context.signal?.aborted ? "cancelled" : "failure";
             const message = error instanceof Error ? error.message : String(error);
@@ -2972,16 +2988,16 @@ export function createMcpToolService(
           }
           const details: McpToolPayload = {
             ...refusal,
-            outcome: "not-executed",
+            outcome: terminalRefusal ? "settled" : "not-executed",
             evidence: "dispatch-refused",
-            nextAction: "new-request-permitted",
+            nextAction: terminalRefusal ? "follow-disposition" : "new-request-permitted",
           };
           settled = failure(
             typedTool,
             requestId,
-            "tool_failed",
+            terminalRefusal && typeof refusal.code === "string" ? refusal.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            true,
+            !terminalRefusal,
             false,
             details,
           );

@@ -211,6 +211,7 @@ import {
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpDispatchVerdictError,
+  McpDispatchSettledRefusalError,
   McpToolRefusal,
   McpUnadmittedRefusal,
   type McpRecoverableTool,
@@ -3930,13 +3931,13 @@ function reportFields(project: string, dependencies: ViewerMcpDomainDependencies
   };
 }
 
-/** Explicit admission refusals and client-error verdicts carry no admitted work. */
+/** Only affirmative admission refusals prove that a request admitted no work.
+    A bare 4xx can follow an accepted spawn whose activation was superseded. */
 function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedError | null {
   if (!(error instanceof McpDispatchVerdictError)) return null;
   const details = error.details;
   if (typeof details.operationId === "string" || typeof details.launchId === "string" || details.actuation === "started") return null;
-  const status = details.status as number;
-  if (details.admission !== "refused" && !(status >= 400 && status < 500 && status !== 408)) return null;
+  if (details.admission !== "refused") return null;
   return new McpDispatchNotExecutedError(error.message, details);
 }
 
@@ -4008,6 +4009,18 @@ function orchestratorProjectBinding(
           evidence: "dispatch-refused",
           nextAction: "new-request-permitted",
         });
+        // These tools do not have send's recovery binding. Preserve an
+        // inconclusive dispatch as unknown instead of a retryable plain error.
+        if (error instanceof McpDispatchVerdictError || error instanceof McpDispatchUncertainError) {
+          throw new McpToolRefusal(error.message, {
+            ...error.details,
+            code: text(error.details.code) || "outcome_unknown",
+            retryable: false,
+            outcome: "unknown",
+            evidence: "dispatch-verdict",
+            nextAction: "original-key-lookup",
+          });
+        }
         throw error;
       }
     },
@@ -4857,7 +4870,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
 /** Resolve once at claim time and dispatch through the shared send receipt path.
     An existing claim always recovers its recorded recipient, including after
     the project's seat rotates. Creating a missing seat is a separate effect;
-    any failure after that dispatch stays uncertain. */
+    a definite message refusal records that creation alongside the refusal. */
 async function sendMessageToOrchestrator(
   args: McpToolArgs,
   control: ViewerControlDependencies,
@@ -4915,9 +4928,12 @@ async function sendMessageToOrchestrator(
       } : {}),
     });
   } catch (error) {
-    // A refused second POST cannot prove the preceding creation had no effect.
+    const refusal = error instanceof McpDispatchNotExecutedError ? error : orchestratorDispatchRefusal(error);
+    if (created && refusal && typeof refusal.details.status === "number") throw new McpDispatchSettledRefusalError(refusal.message, {
+      ...refusal.details, project, created: true, conversationId: recipient,
+      messageOutcome: "not-executed",
+    });
     if (created) throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
-    const refusal = orchestratorDispatchRefusal(error);
     if (refusal) throw refusal;
     throw error;
   }
@@ -7153,7 +7169,7 @@ export function viewerMcpBindings(
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
     dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
-    bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
     /* Async bindings expose synchronous refusals as rejected promises. */

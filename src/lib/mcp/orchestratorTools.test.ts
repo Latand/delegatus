@@ -4,17 +4,19 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { POST as seatPOST } from "@/app/api/orchestrator/seat/route";
 
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { requireOperatorAuthority, rotationActor, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setBridgeReports } from "@/lib/projects/settings";
 
 import { viewerMcpBindings, viewerMcpRecoverableTools, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 
-import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
+import { createMcpToolService, McpDispatchUncertainError, MemoryMcpReceiptStore } from "./server";
 
 /*
  * The two-axis orchestration surface: get / create / send / rotate. All four
@@ -514,13 +516,14 @@ test("rotate_orchestrator relays to the rotation route and reports the lineage i
 
 function projectService(control: ViewerControlDependencies, projects = [
   { project: "project-a", displayName: "Example project" },
-]) {
+], overrides: Partial<ViewerMcpDomainDependencies> = {}) {
   const domain = {
     registrySnapshot: () => ({ conversations: { conversation_caller: { id: "conversation_caller", projectOwnership: { project: "caller-project" }, generations: [], continuityPaths: [] } }, conversationAliases: {} }),
     callerAttribution: () => ({ kind: "agent", role: "orchestrator", conversationId: "conversation_caller" }),
     attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
     authorizedSeats: () => [{ project: "caller-project", conversationId: "conversation_caller", path: null }],
     completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: projects.map(project => ({ ...project, smt: 1, conversations: 1 })), complete: true } }),
+    ...overrides,
   } as unknown as ViewerMcpDomainDependencies;
   const receipts = new MemoryMcpReceiptStore();
   return { receipts, service: createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) }) };
@@ -576,10 +579,11 @@ test("get_orchestrator resolves a display name and explicitly refuses an unknown
 });
 
 test("server 403 on seat creation retains its cause and closes the send as not executed", async () => {
+  asCapabilityCaller();
   const posts: string[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     posts.push(new URL(request.url).pathname);
-    return Response.json({ error: "seat designation requires operator authority" }, { status: 403 });
+    return seatPOST(request as never);
   } });
   const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
   process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
@@ -587,7 +591,7 @@ test("server 403 on seat creation retains its cause and closes the send as not e
     const { service } = projectService(productionViewerControlDependencies());
     const args = { clientRequestId: "refused-create", project: "Example project", text: "status?" };
     const result = await service.callTool("send_message_to_orchestrator", args);
-    expect(result).toMatchObject({ ok: false, error: "seat designation requires operator authority", details: { status: 403, outcome: "not-executed", nextAction: "new-request-permitted" } });
+    expect(result).toMatchObject({ ok: false, error: "this is an operator-only action; an agent may not perform it, whatever role it holds", details: { status: 403, admission: "refused", outcome: "not-executed", nextAction: "new-request-permitted" } });
     expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ...result, replayed: true });
     expect(posts).toEqual(["/api/orchestrator/seat"]);
     expect(orchestratorSeatFor("Example project").active).toBeNull();
@@ -595,6 +599,7 @@ test("server 403 on seat creation retains its cause and closes the send as not e
     if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
     else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
     await server.stop(true);
+    restoreCapabilityCaller();
   }
 });
 
@@ -643,7 +648,7 @@ test("display names shared by aliases of one key resolve to one seat", async () 
 
 test("orchestrator creation, rotation and parallel asks preserve definite server refusals", async () => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
-    return Response.json({ error: "orchestrator request is invalid", code: "invalid_orchestrator_request" }, { status: 422 });
+    return Response.json({ error: "orchestrator request is invalid", code: "invalid_orchestrator_request", admission: "refused" }, { status: 422 });
   } });
   const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
   process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
@@ -659,4 +664,129 @@ test("orchestrator creation, rotation and parallel asks preserve definite server
     else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
     await server.stop(true);
   }
+});
+
+for (const tool of ["create_orchestrator", "send_message_to_orchestrator"] as const) {
+  test(`${tool} never permits a new request after an admitted spawn loses activation`, async () => {
+    let admitted = 0;
+    const deps: SeatCommandDependencies = {
+      spawn: async (body) => {
+        admitted++;
+        failOrchestratorSeatIntent("project-a", String(body.clientAttemptId), "superseded", AT);
+        beginOrchestratorSeatIntent({ project: "project-a", mandate: "new designation", clientRequestId: "newer-designation", mode: "spawn", now: AT });
+        return { status: 202, body: { ok: true, conversationId: SEATED_ID, launchId: "fixture-launch" } };
+      },
+      deliver: async () => { throw new Error("unexpected delivery"); },
+      conversationTarget: () => null,
+      summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
+      launchSettlement: () => ({ kind: "unknown" }),
+      stampRegistryIdentity: () => { throw new Error("unexpected activation"); },
+      runtimeIdentity: () => ({ engine: null, model: null }),
+      resolvedConversation: () => null,
+      projectRoot: () => sandbox,
+      now: () => AT,
+    };
+    const replies: { status: number; body: Record<string, unknown> }[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const reply = await executeOrchestratorSeatRequest(await request.json(), deps);
+      replies.push(reply);
+      return Response.json(reply.body, { status: reply.status });
+    } });
+    const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+    process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+    try {
+      const { service } = projectService(productionViewerControlDependencies());
+      const args = { clientRequestId: `superseded-${tool}`, project: "Example project", text: "status?" };
+      const result = await service.callTool(tool, args);
+      expect(admitted).toBe(1);
+      expect(replies).toEqual([{ status: 409, body: { error: "seat intent was superseded by a newer designation" } }]);
+      expect(result).toMatchObject({ ok: false, retryable: false, details: { outcome: "unknown", nextAction: "original-key-lookup" } });
+      const replay = await service.callTool(tool, args);
+      expect(replay).toMatchObject({ ok: false, retryable: false, details: { outcome: "unknown", nextAction: "original-key-lookup" } });
+      expect(admitted).toBe(1);
+    } finally {
+      if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+      else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+      await server.stop(true);
+    }
+  });
+}
+
+test("bridge directives resolve explicit display names and aliases while keeping omitted-project routing", async () => {
+  persistProjectAliases([{ source: "older-key", target: "project-a", displayName: "Example project" }]);
+  const { posts, control } = controlStub();
+  const { service } = projectService(control, undefined, {
+    callerProject: () => "project-a",
+    authorizedSeats: () => [{ project: "project-a", conversationId: SEATED_ID, path: null }],
+  });
+  for (const project of ["project-a", "Example project", "older-key", undefined]) {
+    const result = await service.callTool("bridge_directive", { clientRequestId: `directive-${posts.length}`, project, rootTurnId: "turn_fixture", utterance: posts.length, instruction: "check progress" });
+    expect(result).toMatchObject({ ok: true });
+    expect(posts.at(-1)!.body).toMatchObject({ conversationId: SEATED_ID });
+  }
+  expect(posts).toHaveLength(4);
+});
+
+test("unknown and ambiguous bridge projects refuse before receipt access or delivery", async () => {
+  const { posts, control } = controlStub();
+  const { service, receipts } = projectService(control, [
+    { project: "project-a", displayName: "Example project" },
+    { project: "project-b", displayName: "Example project" },
+  ]);
+  for (const [project, code] of [["Missing project", "unknown_project"], ["Example project", "ambiguous_project"]]) {
+    const key = `directive-${code}`;
+    const result = await service.callTool("bridge_directive", { clientRequestId: key, project, rootTurnId: "turn_fixture", utterance: 0, instruction: "check progress" });
+    expect(result).toMatchObject({ ok: false, code, details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+    if (code === "ambiguous_project") expect(result.details?.candidates).toEqual(["project-a", "project-b"]);
+    expect(receipts.lookup(`bridge_directive:${key}`)).toBeNull();
+  }
+  expect(posts).toEqual([]);
+});
+
+test("a definite message refusal after seat creation preserves both the cause and created recipient", async () => {
+  const posts: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const pathname = new URL(request.url).pathname;
+    posts.push(pathname);
+    return pathname === "/api/orchestrator/seat"
+      ? Response.json({ ok: true, seat: { conversationId: SEATED_ID } })
+      : Response.json({ error: "the recipient cannot accept this relay", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
+  } });
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  try {
+    const { service, receipts } = projectService(productionViewerControlDependencies());
+    const args = { clientRequestId: "created-then-refused", project: "Example project", text: "status?" };
+    const result = await service.callTool("send_message_to_orchestrator", args);
+    expect(result).toMatchObject({
+      ok: false, code: "orchestrator_relay_refused", error: "the recipient cannot accept this relay", retryable: false,
+      details: { status: 403, code: "orchestrator_relay_refused", outcome: "settled", messageOutcome: "not-executed", created: true, conversationId: SEATED_ID },
+    });
+    expect(result.details?.nextAction).not.toBe("new-request-permitted");
+    expect(receipts.lookup("send_message_to_orchestrator:created-then-refused")).toMatchObject({ stage: "settled", binding: { target: { identity: SEATED_ID } } });
+    expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ...result, replayed: true });
+    expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
+  } finally {
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+    await server.stop(true);
+  }
+});
+
+test("transport uncertainty after creation keeps the bound recipient and original-key recovery", async () => {
+  const posts: string[] = [];
+  const control: ViewerControlDependencies = { post: async (pathname) => {
+    posts.push(pathname);
+    if (pathname === "/api/orchestrator/seat") return { ok: true, seat: { conversationId: SEATED_ID } };
+    throw new McpDispatchUncertainError("the connection reset after the message request was sent");
+  } };
+  const { service, receipts } = projectService(control);
+  const args = { clientRequestId: "created-then-uncertain", project: "Example project", text: "status?" };
+  expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
+    ok: false, code: "outcome_unknown", retryable: false,
+    details: { outcome: "unknown", nextAction: "original-key-lookup" },
+  });
+  expect(receipts.lookup("send_message_to_orchestrator:created-then-uncertain")).toMatchObject({ stage: "dispatching", binding: { target: { identity: SEATED_ID } } });
+  expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+  expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
 });

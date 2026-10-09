@@ -178,7 +178,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
      Checked before the body is read; a refusal changes nothing. */
   const operator = requireOperatorAuthority(req);
   if (!operator.ok) {
-    return NextResponse.json({ error: operator.error }, { status: operator.status });
+    return NextResponse.json({ error: operator.error, admission: "refused" }, { status: operator.status });
   }
   let body: Record<string, unknown>;
   try {

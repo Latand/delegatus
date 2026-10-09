@@ -97,6 +97,12 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
   else delete process.env.LLV_SPAWN_CAPABILITY;
   const domain: Partial<ViewerMcpDomainDependencies> = {
     registrySnapshot: () => registry.readOnlySnapshot(),
+    completedFileScan: async () => ({ snapshot: {
+      files: [], complete: true, projectCatalog: [
+        { project: "project-a", displayName: "Example sender", smt: 1, conversations: 1 },
+        { project: "project-b", displayName: "Example recipient", smt: 1, conversations: 0 },
+      ],
+    } }),
     attentionAuthority: () => sender ? { kind: "worker", conversationId: sender.id, role: null } : { kind: "unidentified" },
     recoveryPredecessors: () => [],
     callerAttribution: () => sender
