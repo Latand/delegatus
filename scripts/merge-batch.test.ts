@@ -1439,12 +1439,15 @@ for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"
   test(`resolution native-main per-file comparison: ${shape}`, async () => {
     const samples: { cwd: string; head: string; home: string; temp: string; state: string }[] = [];
     const f = landingFixture("green", async (cwd, args, env) => {
-      if (args[1] !== "bun" || args[2] !== "test") return successfulCommand(args);
-      const files = args.slice(3).filter(arg => /\.test\.ts$/.test(arg));
+      // The gate invokes /bin/bash, GATE_SLOT, then the command. Execute the
+      // fixture tests in the enclosing test service, as the other real samplers do.
+      if (args[2] !== "bun" || args[3] !== "test") return successfulCommand(args);
+      expect(args.slice(0, 2)).toEqual(["/bin/bash", GATE_SLOT]);
+      const files = args.slice(4).filter(arg => /\.test\.ts$/.test(arg));
       expect(files).toHaveLength(1);
       expect(env!.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:9");
       samples.push({ cwd, head: git(cwd, ["rev-parse", "HEAD"]), home: env!.HOME!, temp: env!.TMPDIR!, state: env!.LLV_STATE_DIR! });
-      return commandRunner(cwd, args.slice(1), env);
+      return commandRunner(cwd, args.slice(2), env);
     });
     const imports = "const { test, expect, afterAll } = require('bun:test');\n";
     const marker = imports + "globalThis.mergeBundleFixture = true;\ntest('setup', () => expect(true).toBe(true));\n";
@@ -1530,8 +1533,8 @@ for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"
 
 for (const mainCase of ["absent", "unreported", "skipped"] as const) {
   test(`resolution withholds a failing case in native main's incomplete file (${mainCase})`, async () => {
-    const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
-      ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+    const f = landingFixture("green", async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
+      ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args));
     const imports = "const { test, expect } = require('bun:test');\n";
     f.seed("story.js", "exports.value = 'first';\n");
     f.seed("story.test.ts", imports + (mainCase === "unreported"
