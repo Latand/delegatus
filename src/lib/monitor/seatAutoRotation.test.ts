@@ -27,6 +27,9 @@ describe("context auto-rotation decision", () => {
   test.each([
     [seat, "rotate"], [busy, "wait"], [{ ...seat, turn: "busy", activity: null }, "wait"],
     [{ ...seat, turn: "busy", activity: { lifecycle: "waiting", turnState: "idle" } }, "rotate"],
+    [{ ...seat, turn: "busy", activity: { lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy" } }, "wait"],
+    [{ ...seat, turn: "busy", activity: { lifecycle: "stalled", turnState: "unknown" } }, "wait"],
+    [{ ...seat, turn: "busy", activity: { lifecycle: "waiting" } }, "wait"],
     [{ ...seat, turn: "unknown" }, "wait"], [{ ...seat, turn: "terminal" }, "rotate"],
   ] as const)("turn %j yields %s", (value, expected) => expect(autoRotationStep({ ...base, seat: value as SeatTickSeatInput }).kind).toBe(expected));
   test("outstanding wake fences an otherwise idle seat", () => {
@@ -42,6 +45,13 @@ describe("context auto-rotation decision", () => {
     const nextEpoch = { ...busy, seatEpoch: 2 };
     const nextState = { ...state, autoRotation: { ...nudged.next, overSince: { seatEpoch: 2, at: at(-15) } } };
     expect(autoRotationStep({ ...base, seat: nextEpoch, state: nextState }).kind).toBe("nudge");
+  });
+  test("a silent busy turn receives the bounded handoff nudge and remains deferred", () => {
+    const stalled = { ...busy, activity: { lifecycle: "stalled", turnState: "busy" } } as SeatTickSeatInput;
+    const state = { ...base.state, autoRotation: { overSince: { seatEpoch: 1, at: at(-15) } } };
+    const result = autoRotationStep({ ...base, seat: stalled, state });
+    expect(result.kind).toBe("nudge");
+    expect(autoRotationStep({ ...base, seat: stalled, state: { ...state, autoRotation: result.next } }).kind).toBe("wait");
   });
   test("estimates wait, compaction clears the episode, equality triggers", () => {
     expect(autoRotationStep({ ...base, usage: { ...usage, tokens: 1_500_000, estimated: true } }).kind).toBe("wait");

@@ -8565,19 +8565,19 @@ describe("seat authentication recovery through production seams", () => {
 describe("seat auto-rotation through production seams", () => {
   const AT = "2026-10-09T03:00:00.000Z";
   const TS = Date.parse(AT);
-  async function fixture(run: (f: Awaited<ReturnType<typeof makeFixture>>) => Promise<void>, tokens: number | null = 720_000, enabled = true) {
+  async function fixture(run: (f: Awaited<ReturnType<typeof makeFixture>>) => Promise<void>, tokens: number | null = 720_000, enabled = true, history = false) {
     const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL };
     const dir = fs.mkdtempSync(path.join(SANDBOX, "auto-case-"));
     process.env.LLV_STATE_DIR = path.join(dir, "state");
     process.env.LLV_CLAUDE_HOME = path.join(dir, "legacy-claude");
     process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
-    try { await run(await makeFixture(dir, tokens, enabled)); }
+    try { await run(await makeFixture(dir, tokens, enabled, history)); }
     finally {
       setAgentRegistryForTests(null);
       for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     }
   }
-  async function makeFixture(dir: string, tokens: number | null, enabled: boolean) {
+  async function makeFixture(dir: string, tokens: number | null, enabled: boolean, history: boolean) {
     const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
     const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
     const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
@@ -8613,7 +8613,7 @@ describe("seat auto-rotation through production seams", () => {
         turn: { state: value ? "busy" : "idle", source: value ? "tool" : "assistant", terminalAt: value ? null : new Date(clock).toISOString() }, observedAt: new Date(clock).toISOString() }]);
     }
     turn(false); setAgentRegistryForTests(registry);
-    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results.", engine: "claude", model: "opus", clientRequestId: "seed_rotation_fixture", mode: "spawn", now: AT });
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results." + (history ? "\n\n## Rotation history\nPrior decisions" : ""), engine: "claude", model: "opus", clientRequestId: "seed_rotation_fixture", mode: "spawn", now: AT });
     completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "seed_rotation_fixture", conversationId: conversation.id, path: transcript, now: AT });
     const original = orchestratorSeatFor(PROJECT).active!;
     writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Keep reporting owed work", ...(enabled ? {
@@ -8682,6 +8682,16 @@ describe("seat auto-rotation through production seams", () => {
     expect(nudges).toHaveLength(1); expect(nudges[0]!.policy).toBe("steer-or-queue");
     expect(f.spawns).toHaveLength(0); f.turn(false); await f.check(); expect(f.spawns).toHaveLength(1);
   }));
+  test.each(["busy", "unknown"] as const)("stalled seat with %s liveness keeps authority until positive idle evidence", turnState => fixture(async f => {
+    f.turn(true);
+    f.rig.deps.sources!.liveness = async () => [{ conversationId: f.original.conversationId, lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState } as AgentLivenessRecord];
+    await f.check();
+    expect(f.active().conversationId).toBe(f.original.conversationId);
+    expect(f.spawns).toHaveLength(0);
+    expect(f.state().autoRotation?.lastAttempt).toBeUndefined();
+    f.turn(false); await f.check();
+    expect(f.spawns).toHaveLength(1);
+  }));
   test("a large estimate waits until the transcript reports usage", () => fixture(async f => {
     for (let i = 0; i < 3; i++) { expect((await f.check())?.detail).toContain("waiting for a provider-reported figure"); f.advance(5); }
     expect(f.spawns).toHaveLength(0); f.appendUsage(720_000); await f.check(); expect(f.spawns).toHaveLength(1);
@@ -8698,6 +8708,25 @@ describe("seat auto-rotation through production seams", () => {
     expect(f.cards()).toHaveLength(2); expect(f.cards().every(c => c.status === "done")).toBe(true);
     expect(f.reports()).toHaveLength(2); expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
   }));
+  test.each(["usage read", "handoff digest"])("a turn starting during %s defers automatic replacement until completion", seam => fixture(async f => {
+    if (seam === "usage read") {
+      const read = f.rig.deps.sources!.seatContextUsage!;
+      f.rig.deps.sources!.seatContextUsage = id => { f.turn(true); return read(id); };
+    } else {
+      f.command.summarizeHandoffs = async () => { f.turn(true); return { kind: "fallback", reason: "unavailable" }; };
+    }
+    await f.check();
+    expect(f.active().conversationId).toBe(f.original.conversationId);
+    expect(f.spawns).toHaveLength(0);
+    expect(f.cards()).toHaveLength(0); expect(f.reports()).toHaveLength(0);
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("pending");
+    // A deferral consumes no failure or cooldown: the next idle tick retries.
+    f.rig.deps.sources!.seatContextUsage = (await import("./seatTickSources")).defaultSeatTickSources().seatContextUsage;
+    f.command.summarizeHandoffs = async () => ({ kind: "fallback", reason: "unavailable" });
+    f.turn(false); await f.check();
+    expect(f.spawns).toHaveLength(1);
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
+  }, 720_000, true, seam === "handoff digest"));
   test("off by default reads no usage and keeps the ordinary controller journal identical", () => fixture(async f => {
     let reads = 0;
     f.rig.deps.sources!.seatContextUsage = () => { reads++; throw new Error("off must not read usage"); };
@@ -8767,5 +8796,33 @@ describe("seat auto-rotation through production seams", () => {
     expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
     expect(f.spawns).toHaveLength(1); expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
     expect(f.cards()).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+  }));
+  test.each(["busy", "unknown"] as const)("an update-held attempt waits on stalled/%s before replay", turnState => fixture(async f => {
+    const spawn = f.command.spawn;
+    f.command.spawn = async () => ({ status: 409, body: { code: "AUTO_UPDATE_DRAIN", error: "fixture update hold" } });
+    await f.check();
+    const key = f.state().autoRotation!.lastAttempt!.id;
+    f.command.spawn = spawn; f.turn(true);
+    f.rig.deps.sources!.liveness = async () => [{ conversationId: f.original.conversationId, lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState } as AgentLivenessRecord];
+    await f.check();
+    expect(f.spawns).toHaveLength(0); expect(f.active().conversationId).toBe(f.original.conversationId);
+    expect(f.state().autoRotation?.lastAttempt).toMatchObject({ id: key, state: "pending" });
+    f.turn(false); await f.check();
+    expect(f.spawns).toHaveLength(1); expect(f.state().autoRotation?.lastAttempt).toMatchObject({ id: key, state: "rotated" });
+  }));
+  test("positive idle liveness corrects a stale busy registry turn at admission", () => fixture(async f => {
+    f.turn(true);
+    f.rig.deps.sources!.liveness = async () => [{ conversationId: f.original.conversationId, lifecycle: "waiting", reason: "host_alive_turn_idle", turnState: "idle" } as AgentLivenessRecord];
+    await f.check();
+    expect(f.spawns).toHaveLength(1); expect(f.state().autoRotation?.lastAttempt?.state).toBe("rotated");
+  }));
+  test("a turn starting while spawn is awaited keeps incumbent authority and reports one failed replacement", () => fixture(async f => {
+    const spawn = f.command.spawn;
+    f.command.spawn = async (...args) => { const result = await spawn(...args); f.turn(true); return result; };
+    await f.check();
+    expect(f.active().conversationId).toBe(f.original.conversationId);
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("failed");
+    expect(f.reports()).toHaveLength(1);
+    await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
   }));
 });

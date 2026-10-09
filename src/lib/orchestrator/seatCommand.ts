@@ -111,6 +111,9 @@ import {
 export interface SeatLaunchAdmission {
   autonomous?: boolean;
   assertAccount?(accountId: string): void;
+  /** Automatic rotation's fresh turn fence. Checked before handoff work and
+   * after reconciliation, immediately before admitting a replacement. */
+  replacementHold?(): SeatCommandResult | null | Promise<SeatCommandResult | null>;
 }
 
 export interface SeatCommandDependencies {
@@ -497,14 +500,26 @@ async function activate(
     model?: string | null;
   },
   dependencies: SeatCommandDependencies,
-): Promise<{ seat: OrchestratorSeat } | null> {
+  admission?: SeatLaunchAdmission,
+): Promise<{ seat: OrchestratorSeat; hold?: never } | { hold: SeatCommandResult; seat?: never } | null> {
   let projectedSeat: OrchestratorSeat | null = null;
+  let refused: SeatCommandResult | null = null;
   /* Activation follows an await (the spawn, the delivery), so nothing here
      depends on staying synchronous, and by now a launch may already be running
      for this intent. It therefore queues for the lock instead of asking once:
      a writer that holds it for a few milliseconds must not cost the project
      the seat its launch was accepted for. */
-  const completed = await withAccountMutationLockAsync(() => {
+  const completed = await withAccountMutationLockAsync(async () => {
+    const replacementCheck = admission?.replacementHold?.();
+    const hold = replacementCheck instanceof Promise ? await replacementCheck : replacementCheck;
+    if (hold) {
+      // The launch has already been admitted. Terminalize its seat intent so
+      // reconciliation cannot revoke a predecessor that started another turn.
+      const error = "automatic replacement refused because the incumbent turn became busy or unknown after successor launch";
+      failOrchestratorSeatIntent(input.project, input.clientRequestId, error, dependencies.now());
+      refused = { status: 409, body: { code: "rotation_turn_changed_after_launch", error } };
+      return { kind: "missing" } as const;
+    }
     const result = completeOrchestratorSeatIntent({
       project: input.project,
       clientRequestId: input.clientRequestId,
@@ -518,6 +533,7 @@ async function activate(
     if (result.kind !== "missing") projectedSeat = reconcileAuthorityProjections(result.seat, dependencies);
     return result;
   }, { holder: "orchestrator seat activation", waitMs: dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS });
+  if (refused) return { hold: refused };
   if (completed.kind === "missing") return null;
   const seat: OrchestratorSeat = projectedSeat ?? completed.seat;
   /* Once per new seat epoch — a fresh seat, an adopted conversation, a
@@ -975,6 +991,10 @@ async function runOrchestratorSeatRequest(
   const completedReplay = reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
   if (completedReplay) return replayedSeatResponse(completedReplay);
 
+  const replacementCheck = admission?.replacementHold?.();
+  const replacementHold = replacementCheck instanceof Promise ? await replacementCheck : replacementCheck;
+  if (replacementHold) return replacementHold;
+
   /* Issue #1067: rotation reads its incumbent, then awaits the summarizer, and
      the reconciliation directly above can seat a launch that settled during
      that wait — an intent that was still `unknown` when the rotation read the
@@ -1072,8 +1092,9 @@ async function runOrchestratorSeatRequest(
         },
       };
     }
-    const activated = await activate({ project, clientRequestId, conversationId: deliveryTarget.conversationId, path: deliveryTarget.path }, dependencies);
+    const activated = await activate({ project, clientRequestId, conversationId: deliveryTarget.conversationId, path: deliveryTarget.path }, dependencies, admission);
     if (!activated) return { status: 409, body: { error: "seat intent was superseded by a newer designation" } };
+    if (activated.hold) return activated.hold;
     return {
       status: 200,
       body: {
@@ -1259,8 +1280,9 @@ async function runOrchestratorSeatRequest(
     launchId: launchId || null,
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
-  }, dependencies);
+  }, dependencies, admission);
   if (!activated) return { status: 409, body: { error: "seat intent was superseded by a newer designation" } };
+  if (activated.hold) return activated.hold;
   return {
     status: spawned.status,
     body: {
@@ -1483,6 +1505,9 @@ async function runOrchestratorRotation(
   // before composition, which may itself launch a handoff summarizer.
   const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy, admission?.autonomous);
   if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
+  const replacementCheck = admission?.replacementHold?.();
+  const replacementHold = replacementCheck instanceof Promise ? await replacementCheck : replacementCheck;
+  if (replacementHold) return replacementHold;
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
   const predecessor = predecessorTarget?.kind === "eligible" ? predecessorTarget : null;

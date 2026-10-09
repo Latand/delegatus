@@ -4,8 +4,8 @@ import { bridgeReportsEnabled, reportHeaderName } from "@/lib/projects/settings"
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import type { deliverConversationMessage } from "@/lib/delivery";
-import type { executeOrchestratorRotation } from "@/lib/orchestrator/seatCommand";
-import { AUTO_ROTATE_COOLDOWN_MS, AUTO_ROTATE_NUDGE_AFTER_MS, seatTurnProgressing } from "./seatTick";
+import type { executeOrchestratorRotation, SeatCommandResult } from "@/lib/orchestrator/seatCommand";
+import { AUTO_ROTATE_COOLDOWN_MS, AUTO_ROTATE_NUDGE_AFTER_MS } from "./seatTick";
 import { redactMonitorText } from "./redact";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import type { readSeatTickState, writeSeatTickState } from "./seatTickState";
@@ -69,6 +69,13 @@ export function seatAutoRotationKey(id: string): string {
 
 type AutoRotationDecision = { kind: "none" | "wait" | "nudge" | "rotate"; detail: string | null; next: SeatAutoRotationState | undefined };
 
+/** Silence is no proof of completion. Liveness may correct a stale busy row
+ * only when it positively observed an idle turn. */
+function rotationTurnSettled(seat: SeatTickSeatInput): boolean {
+  return seat.turn === "idle" || seat.turn === "terminal"
+    || (seat.turn === "busy" && seat.activity?.turnState === "idle");
+}
+
 /** Only the controller's observations enter this decision; no store, clock or transport. */
 export function autoRotationStep(input: {
   settings: EffectiveSeatTickSettings;
@@ -96,15 +103,15 @@ export function autoRotationStep(input: {
   const attempt = next?.lastAttempt;
   if (attempt && Date.parse(attempt.startedAt) + AUTO_ROTATE_COOLDOWN_MS > now) return answer("wait", `cooldown until ${new Date(Date.parse(attempt.startedAt) + AUTO_ROTATE_COOLDOWN_MS).toISOString()}`);
   if (input.drainHeld) return answer("wait", "held for the automatic update");
-  const progressing = seatTurnProgressing(seat);
-  const settled = seat.turn === "idle" || seat.turn === "terminal" || (seat.turn === "busy" && seat.activity !== null && !progressing);
+  const settled = rotationTurnSettled(seat);
+  const busy = !settled && (seat.turn === "busy" || seat.activity?.turnState === "busy");
   if (settled && input.state.outstandingWake?.conversationId !== seat.conversationId) return answer("rotate", "context threshold reached at an idle point");
-  if (progressing && settings.enabled && next?.nudged?.seatEpoch !== seat.seatEpoch
+  if (busy && settings.enabled && next?.nudged?.seatEpoch !== seat.seatEpoch
     && now - Date.parse(next!.overSince!.at) >= AUTO_ROTATE_NUDGE_AFTER_MS) {
     next = { ...next, nudged: { seatEpoch: seat.seatEpoch, at: new Date(now).toISOString() } };
     return answer("nudge", "seat is mid-turn; asking it to finish and hand off");
   }
-  return answer("wait", progressing ? "seat is mid-turn" : "turn state is unknown or a wake is in flight");
+  return answer("wait", busy ? "seat is mid-turn" : "turn state is unknown or a wake is in flight");
 }
 
 /** Persist intent before effects. The normal rotation command owns handoff and authority. */
@@ -209,7 +216,7 @@ export async function runSeatAutoRotation(
   const replaySafe = pending && input.seat?.seatEpoch === pending.seatEpoch && input.seat.path !== null
     && (!pendingSeat || pendingSeat.intent.clientRequestId === seatAutoRotationKey(pending.id)) && !activeDrain()
     && (!input.state.authIncident || input.state.authIncident.recoveredThrough !== undefined)
-    && (input.seat.turn === "idle" || input.seat.turn === "terminal" || (input.seat.turn === "busy" && input.seat.activity !== null && !seatTurnProgressing(input.seat)))
+    && rotationTurnSettled(input.seat)
     && input.state.outstandingWake?.conversationId !== input.seat.conversationId;
   if ((decision.kind === "rotate" || replaySafe) && input.seat && usage) {
     const a: AutoRotationAttempt = pending ?? {
@@ -219,11 +226,30 @@ export async function runSeatAutoRotation(
     };
     auto = { ...auto, lastAttempt: a }; persist();
     try {
+      // This fence travels through the normal command. Idle registry evidence
+      // is synchronous; only a stale busy row needs a fresh liveness reading.
+      const replacementHold = (): SeatCommandResult | null | Promise<SeatCommandResult | null> => {
+        const held: SeatCommandResult = { status: 409, body: { code: "rotation_turn_unsettled", error: "automatic rotation is waiting for the incumbent turn to end" } };
+        const row = sources.registry().seatTickConversation(a.conversationId);
+        if (row?.turn.state === "idle" || row?.turn.state === "terminal") return null;
+        if (row?.turn.state !== "busy") return held;
+        const observedTurn = JSON.stringify(row.turn);
+        return (async () => {
+          try {
+            const rows = await sources.liveness({ conversationId: a.conversationId, stallAfterMs: input.policy.stallAfterMs, limit: 1 });
+            const currentTurn = sources.registry().seatTickConversation(a.conversationId)?.turn;
+            if (currentTurn?.state === "idle" || currentTurn?.state === "terminal") return null;
+            const activity = rows.find(row => row.conversationId === a.conversationId);
+            return JSON.stringify(currentTurn) === observedTurn && activity?.turnState === "idle" ? null : held;
+          } catch { return held; }
+        })();
+      };
       const rotate = ports.rotate ?? (await import("@/lib/orchestrator/seatCommand")).executeOrchestratorRotation;
       const result = await rotate({ project: input.project, clientRequestId: seatAutoRotationKey(a.id), expectedIncumbentSeatEpoch: a.seatEpoch,
-        handoffNotes: `Automatic rotation at the context threshold: ${a.tokens} of ${a.windowTokens} tokens (${Math.round(a.tokens / a.windowTokens * 100)}%, provider-reported); threshold ${a.thresholdPercent}%.` }, undefined, null, { autonomous: true });
+        handoffNotes: `Automatic rotation at the context threshold: ${a.tokens} of ${a.windowTokens} tokens (${Math.round(a.tokens / a.windowTokens * 100)}%, provider-reported); threshold ${a.thresholdPercent}%.` }, undefined, null, { autonomous: true, replacementHold });
       current = sources.seatFor(input.project).active;
       if (result.body.code === "launch_held_for_update" || result.body.code === "AUTO_UPDATE_DRAIN") return "auto-rotation: held for the automatic update";
+      if (result.body.code === "rotation_turn_unsettled") return "auto-rotation: waiting for the incumbent turn to end";
       if (current?.intent.clientRequestId === seatAutoRotationKey(a.id) && current.seatEpoch !== a.seatEpoch && result.status >= 200 && result.status < 300 && result.body.ok !== false) {
         a.state = "rotated"; a.successorConversationId = current.conversationId ?? undefined;
       } else if (result.body.code === "incumbent_changed" || current?.seatEpoch !== a.seatEpoch) a.state = "superseded";
