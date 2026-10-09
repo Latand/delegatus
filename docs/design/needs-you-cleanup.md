@@ -638,6 +638,13 @@ The merge keeps all of main's kanban checks and the cleanup's cleared-prototype
 check. The restored hidden-provisioning fixture preserves the older scenario
 under the current counting rule. Production counting needs no additional change.
 
+A fresh review also exercised a failed launch explicitly assigned to a project
+different from its working directory. Its dismissal now uses the existing
+conversation-target attribution helper, preserving durable ownership and
+explicit launch intent ahead of cwd. The regression takes the target from a
+real failed receipt's projection, refuses the cwd project's seat without a
+write, and checks the owning seat's clear and undo.
+
 ## Notes
 
 - Risk: `operatorBoardRepresentation` must not run the task-board migration or

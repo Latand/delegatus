@@ -241,11 +241,51 @@ test("a failed launch absent from the scanner resolves its project from the rece
   const path = "spawn:launch-failed";
   const service = serviceAs(ROOT, state, new MemoryMcpReceiptStore(), {
     listFiles: async () => [],
-    registrySnapshot: () => ({ conversations: {}, conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: { "launch-failed": { launchProfile: { cwd: "/fixture/launch-project" } } } }),
+    registrySnapshot: () => ({ conversations: {}, conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: { "launch-failed": { cwd: "/fixture/launch-project", launchProfile: { cwd: "/fixture/launch-project" } } } }),
     dismissalPorts: { ...ports(state), resolveConversation: () => ({ conversationId: null, path }) },
   });
   expect(await service.callTool("dismiss_attention", { clientRequestId: "launch-clear", target: { kind: "conversation", path, reasonId: `${path}:launch-failed` }, reason: "A later launch succeeded" })).toMatchObject({ ok: true });
   expect(readAttentionDismissals().records).toMatchObject([{ path, reasonId: `${path}:launch-failed`, note: "A later launch succeeded" }]);
+});
+
+test("a failed launch's projected target belongs to its explicit project when the cwd names another project", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { projectLaunchConversations } = await import("@/lib/agent/spawnProjection");
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const { needsYouAnswer } = await import("@/lib/attention/needsYouRead");
+  const cwd = path.join(sandbox, "launch-project");
+  fs.mkdirSync(cwd);
+  const cwdProject = projectForCwd(cwd)!;
+  expect(cwdProject).not.toBe(PROJECT);
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd, transport: "structured", explicitProject: PROJECT, launchProfile: emptyLaunchProfile({ cwd, title: "Failed launch" }) });
+  if (begun.kind !== "created") throw new Error("fixture launch was not admitted");
+  registry.failSpawn(begun.receipt.launchId, "Fixture launch failed");
+  const snapshot = registry.readOnlySnapshot();
+  const files = projectLaunchConversations([], snapshot).cards;
+  const answer = needsYouAnswer({ files, tasks: [], pipelines: [] }, null, Date.now() / 1000, PROJECT, { tasks: [], pipelines: [], dismissals: [], reports: null, admissions: [], unavailable: [] });
+  expect(answer.rows).toHaveLength(1);
+  const target = answer.rows[0]!.target;
+  expect(target).toMatchObject({ kind: "conversation", conversationId: begun.receipt.conversationId, path: `spawn:${begun.receipt.launchId}` });
+  let writes = 0;
+  const state = world();
+  const overrides = {
+    registrySnapshot: () => snapshot,
+    authorizedSeats: () => [...SEATS.filter(seat => seat.conversationId !== OTHER_SEAT.conversationId), { conversationId: OTHER_SEAT.conversationId, path: "/cwd-seat.jsonl", project: cwdProject }],
+    listFiles: async () => [],
+    dismissalPorts: { ...ports(state), resolveConversation: (ref: { path?: string }) => { writes++; return { conversationId: null, path: ref.path! }; } },
+  };
+  const foreign = await serviceAs(OTHER_SEAT, state, new MemoryMcpReceiptStore(), overrides).callTool("dismiss_attention", { clientRequestId: "launch-cwd-seat", target });
+  expect(foreign).toMatchObject({ ok: false, details: { code: "DISMISS_NOT_PERMITTED" } });
+  expect(writes).toBe(0);
+  expect(readAttentionDismissals().records).toEqual([]);
+  const owner = serviceAs(MANAGER, state, new MemoryMcpReceiptStore(), overrides);
+  expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-seat", target })).toMatchObject({ ok: true });
+  expect(writes).toBe(1);
+  expect(readAttentionDismissals().records).toMatchObject([{ path: target.kind === "conversation" ? target.path : undefined, by: { kind: "manager", conversationId: SEAT } }]);
+  expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-undo", target, undo: true })).toMatchObject({ ok: true });
+  expect(readAttentionDismissals().records).toEqual([]);
 });
 
 test("clearing one report resolves it in the log and leaves the seat's other question readable; undo restores it", async () => {

@@ -5738,7 +5738,7 @@ function latestPendingLaunchReceiptForConversation(
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
 }
 
-function projectForArchiveTarget(
+function projectForConversationTarget(
   conversation: RegistrySnapshot["conversations"][string] | null,
   receipt: RegistrySnapshot["receipts"][string] | null,
   fallbackProject: string | null = null,
@@ -5804,7 +5804,7 @@ function resolveArchiveTargetFromRegistry(
     ...generationPaths,
     ...(placeholderPath ? [placeholderPath] : []),
   ])];
-  const project = projectForArchiveTarget(conversation, receipt);
+  const project = projectForConversationTarget(conversation, receipt);
   if (!project) return null;
   return { conversationId: conversationId ?? null, transcriptPath, transcriptPaths, project };
 }
@@ -6532,10 +6532,11 @@ async function dismissThroughService(
     if (!task) throw new McpToolRefusal("prototype task not found", { code: "TASK_NOT_FOUND" });
     rawProject = task.project;
   } else if (target.kind === "conversation" && target.path?.startsWith("spawn:")) {
-    const receipt = dependencies.registrySnapshot().receipts?.[target.path.slice(6)];
-    const cwd = receipt?.launchProfile?.cwd;
-    if (!cwd) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND" });
-    const project = projectForCwd(cwd);
+    const snapshot = dependencies.registrySnapshot();
+    const receipt = snapshot.receipts?.[target.path.slice(6)];
+    if (!receipt) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND" });
+    const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(receipt.conversationId);
+    const project = projectForConversationTarget(conversation, receipt);
     if (!project) throw new McpToolRefusal("launch project unavailable", { code: "CONVERSATION_NOT_FOUND" });
     rawProject = project;
     focus = { kind: "conversation", path: target.path };
