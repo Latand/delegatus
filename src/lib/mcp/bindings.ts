@@ -1,3 +1,5 @@
+import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
+import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
@@ -3108,6 +3110,13 @@ function conversationMessagesSince(value: unknown): string | undefined {
   return value;
 }
 
+/** Narrow read path for the voice companion. No MCP inventory or caller
+ * supplied path, role, cursor or expansion flags cross this boundary. */
+export async function voiceConversationTail(conversationId: string, dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> = productionDomainDependencies): Promise<Array<{ role: string; text: string }>> {
+  const result = await conversationMessages({ conversationId, kinds: ["message"], roles: ["user", "assistant"], limit: 4, maxChars: 320 }, dependencies);
+  return (result.records ?? []) as Array<{ role: string; text: string }>;
+}
+
 async function conversationMessages(
   args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext">,
@@ -4159,7 +4168,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     }
   }
   const facts = readOrchestratorTranscriptFacts(transcriptPath, session);
-  const windowPolicy = contextWindowPolicyFor(engine, model);
+  const windowPolicy = contextWindowPolicyFor(engine, model, facts);
   const context = contextReading({ policy: windowPolicy, facts });
 
   let liveness: { lifecycle: string; hostState: string; silentForMs: number | null } | null = null;
@@ -4217,14 +4226,14 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
          from a pure function. Nothing on this code path spawns, delivers,
          designates, revokes, interrupts, or calls the control plane at all —
          crossing the threshold changes what this payload SAYS and nothing
-         else. Rotation happens only through an explicit rotate_orchestrator. */
+         else. The opted-in seat tick reads context usage independently. */
       ...rotationRecommendation({
         context,
         facts,
         activity: liveness?.lifecycle === "gone" ? "dead" : liveness?.lifecycle ?? null,
         policy: windowPolicy,
       }),
-      note: "recommendation only — rotation never happens automatically; call rotate_orchestrator explicitly",
+      note: ROTATION_NOTE,
     },
   });
 }
@@ -4288,6 +4297,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
   if (args.enabled !== undefined) change.enabled = args.enabled as boolean;
   if (args.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = args.wakeIntervalMinutes as number | null;
@@ -4346,6 +4356,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const verbose = args.verbose === true || args.full === true;
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
+  delete settingsWithoutPrompt.autoRotate;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4405,6 +4416,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
+    autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
+      ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
+      ...autoRotationFailureAnswer(project) },
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a

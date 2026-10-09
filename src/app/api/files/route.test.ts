@@ -16,6 +16,9 @@ import { createManualProject, setProjectCrown } from "@/lib/projects/curation";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { archivedTranscriptPaths } from "@/lib/scanner";
 import { globalCache } from "@/lib/scanner/caches";
+import { ctxFor } from "@/lib/scanner/context";
+import { entryModels } from "@/lib/scanner/model";
+import { deriveOrchestratorPanelState } from "@/components/orchestrator/seatState";
 import { describe as describeTranscript, projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
 import { initializeStateCollections, injectStateWriteFaultForTests, SqliteStateCollection, readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import { writeSessionTitle } from "@/lib/session/titleStore";
@@ -173,7 +176,64 @@ const { resetPresenceForTest, upsertPresence } = await import("@/lib/view/presen
 const { controllerFileScan } = await import("@/lib/pipelines/controller");
 const { allowedKillTarget, buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
 const { GET } = await import("./route");
-const { consolidateProjectCatalogByRepository } = await import("./response");
+const { buildFilesResponse, consolidateProjectCatalogByRepository } = await import("./response");
+
+test.each([
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, tokens: 120_000, window: 1_000_000, percent: 12, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, tokens: 120_000, window: 200_000, percent: 60, source: "runtime", advice: "strongly_recommend" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", tokens: 120_000, window: 1_000_000, percent: 12, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, tokens: 240_000, window: 1_000_000, percent: 24, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: null, tokens: 240_000, window: null, percent: null, source: "unknown", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, tokens: 240_000, window: 200_000, percent: 100, source: "runtime", advice: "strongly_recommend" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", tokens: 240_000, window: 1_000_000, percent: 24, source: "registry", advice: "none" },
+])("files projection and panel fallback preserve launch mode and capacity provenance: %j", async ({ launchModel, runtimeWindow, beta, tokens, window, percent, source, advice }) => {
+  const artifactPath = path.join(registryRoot, "rotation-context.jsonl");
+  fs.writeFileSync(artifactPath, JSON.stringify({ type: "assistant", message: {
+    model: "claude-sonnet-4-5", usage: { input_tokens: tokens },
+    ...(runtimeWindow ? { context_window: runtimeWindow } : {}),
+    ...(beta ? { beta: [beta] } : {}),
+  } }) + "\n");
+  const stat = fs.statSync(artifactPath);
+  const scanned = { ...file(artifactPath), root: "claude-projects" as const, engine: "claude" as const,
+    fmt: "claude" as const, size: stat.size, mtime: stat.mtimeMs / 1000 };
+  const models = entryModels(scanned);
+  const entry = { ...scanned, model: models.display, launchModel: models.launch };
+  entry.ctx = ctxFor(entry);
+  expect(entry.launchModel).toBe("claude-sonnet-4-5");
+  expect(entry.ctx?.windowTokens).toBe(runtimeWindow ?? (beta ? 1_000_000 : tokens > 200_000 ? null : 200_000));
+
+  const registry = agentRegistry();
+  const cwd = process.cwd();
+  const launchProfile = emptyLaunchProfile({ cwd, model: launchModel });
+  const begun = registry.beginSpawnRequest({ engine: "claude", cwd, transport: "structured", launchProfile });
+  if (begun.kind !== "created") throw new Error("expected a rotation-context reservation");
+  registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "claude", sessionId: "rotation-context" }, artifactPath, cwd, accountId: null, launchProfile,
+    status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+
+  const response = await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+    listFilesWithProjectCatalog: async () => ({ files: [{ ...entry }], projectCatalog: [], complete: true }),
+  });
+  const body = await response.json() as { files: FileEntry[] };
+  const projected = body.files.find((candidate) => candidate.path === artifactPath)!;
+  expect(projected.launchModel).toBe(launchModel);
+  expect(projected.ctx).toMatchObject({ usedTokens: tokens, windowTokens: window, pct: percent, source });
+  const state = deriveOrchestratorPanelState({
+    status: { seat: {
+      project: projected.project, seatEpoch: 1, conversationId: begun.receipt.conversationId, path: artifactPath,
+      mandate: "run the board", promptVersion: 3, predecessorConversationId: null, state: "active",
+      intent: { clientRequestId: "rotation-context-request", mode: "spawn", launchId: begun.receipt.launchId, error: null },
+      designatedAt: "2026-10-09T10:00:00.000Z", activatedAt: "2026-10-09T10:00:00.000Z",
+    }, pending: null, exists: true, viewerMcpRegistered: false },
+    statusFailed: false, submitting: false, submitFailure: null, file: projected, surface: "live-root", incumbent: null,
+  });
+  expect(state.kind).toBe("live");
+  if (state.kind !== "live") throw new Error("expected a live panel fallback");
+  expect(state.rotation?.level ?? "none").toBe(advice);
+  if (window === null) expect(state.rotation).toBeNull();
+  if (advice === "strongly_recommend") expect(state.rotation?.contextPercent).toBe(percent);
+});
 
 test("repository-backed catalog rows collapse to the current repository identity", () => {
   const repositoryRoot = process.cwd();

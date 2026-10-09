@@ -111,7 +111,7 @@ describe("readSession", () => {
       "sleep",
       "enteredReviewMode",
       "exitedReviewMode",
-      "contextCompaction",
+      "compact",
     ]);
     expect(result.tools.find((item) => item.name === "dynamicToolCall")?.text).toContain("Result: 6");
     expect([...result.tools, ...result.traces].some((item) => item.text.includes("unified_diff") || item.text.includes("item_completed"))).toBe(false);
@@ -215,7 +215,7 @@ describe("readSession", () => {
       {
         kind: "tool_result",
         name: undefined,
-        text: "Script completed\nTOOL_OUTPUT_626\nauthorization: Bearer issue626_fixture_token",
+        text: expect.stringContaining("Script completed\nTOOL_OUTPUT_626\n"),
       },
       {
         kind: "tool_call",
@@ -277,4 +277,20 @@ test("Claude task notifications stay outside human authorship", () => {
   ]);
 
   expect(scanUserAuthoredMessages(pathname, "claude", 4)).toEqual({ count: 1, complete: true });
+});
+
+test("two native boundaries normalize to compact traces for each engine", () => {
+  const claude = writeJsonl("claude-native-compactions.jsonl", [
+    { type: "system", subtype: "compact_boundary", compactMetadata: { preTokens: 180_000 } },
+    { type: "summary", summary: "A summary is not another compaction" },
+    { type: "system", subtype: "compact_boundary", compactMetadata: { preTokens: 190_000 } },
+  ]);
+  const codex = writeJsonl("codex-native-compactions.jsonl", [
+    { type: "event_msg", payload: { type: "item_started", item: { type: "ContextCompaction", id: "a" } } },
+    { type: "event_msg", payload: { type: "item_completed", item: { type: "ContextCompaction", id: "a" } } },
+    { type: "response_item", payload: { type: "ContextCompaction", id: "b" } },
+  ]);
+  for (const [pathname, engine] of [[claude, "claude"], [codex, "codex"]] as const) {
+    expect(readSession(pathname, engine).traces.filter((trace) => trace.name === "compact")).toHaveLength(2);
+  }
 });

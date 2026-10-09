@@ -1,3 +1,4 @@
+import { normalizeSeatAutoRotation } from "./seatAutoRotation";
 import { normalizeSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 import { normalizeSeatAuthIncident, normalizeSeatAuthTelegramNotice, normalizeSeatAuthCardNotice } from "./seatAuthIncident";
 import fs from "node:fs";
@@ -235,6 +236,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     if (typeof count === "number" && Number.isInteger(count) && count >= 0) wakesWithoutChange[kind] = count;
   }
   return {
+    ...(normalizeSeatAutoRotation(raw.autoRotation) ? { autoRotation: normalizeSeatAutoRotation(raw.autoRotation) } : {}),
     authIncident: normalizeSeatAuthIncident(raw.authIncident),
     ...(Array.isArray(raw.authNoticesOwed) ? { authNoticesOwed: raw.authNoticesOwed.flatMap((value) => {
       const incident = normalizeSeatAuthIncident(value);
@@ -360,6 +362,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
   return {
     ...emptySeatTickState(),
     seatEpoch,
+    autoRotation: row.autoRotation,
     authIncident: row.authIncident,
     authNoticesOwed: row.authNoticesOwed,
     authTelegramOwed: row.authTelegramOwed,

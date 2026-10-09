@@ -1755,9 +1755,10 @@ test("original-key payload checks survive delivery text removal and reservation 
     const delivered = active.registry.readOnlySnapshot();
     expect(delivered.heldDeliveries[accepted.deliveryId]!.text).toBe("");
     expect(lookupOriginalSend(delivered, binding)).toMatchObject({ kind: "found" });
-    delete delivered.heldDeliveries[accepted.deliveryId];
-    expect(lookupOriginalSend(delivered, binding)).toMatchObject({ kind: "found" });
-    expect(lookupOriginalSend(delivered, { ...binding, text: "another payload" })).toEqual({ kind: "contradictory" });
+    const compacted = structuredClone(delivered);
+    delete compacted.heldDeliveries[accepted.deliveryId];
+    expect(lookupOriginalSend(compacted, binding)).toMatchObject({ kind: "found" });
+    expect(lookupOriginalSend(compacted, { ...binding, text: "another payload" })).toEqual({ kind: "contradictory" });
   } finally { active.close(); }
 });
 

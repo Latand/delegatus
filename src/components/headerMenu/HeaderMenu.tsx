@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Activity, Bell, Brain, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleArrowUp, Compass, KeyRound, Languages, LifeBuoy, Link2,
+  Activity, AudioLines, Bell, Brain, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleArrowUp, Compass, KeyRound, Languages, LifeBuoy, Link2,
   ListChecks, LogOut, MessagesSquare, Mic, QrCode, Route, Settings, ShieldCheck, SlidersHorizontal, Users, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -25,6 +25,7 @@ import { SoundToggle } from "@/components/SoundToggle";
 import { teamMobileMenuEntry } from "@/components/team/menuEntry";
 import { useTeamView } from "@/components/team/teamClient";
 import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
+import { openVoiceCompanionSettings } from "@/components/voiceCompanion/VoiceCompanionSetting";
 import { useLocale } from "@/lib/i18n";
 
 import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
@@ -136,6 +137,8 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
         return <button key={item} type="button" data-rail-menu-agent-mapping="" className={ROW} onClick={act(() => openOnboarding("mapping"))}><Icon icon={SlidersHorizontal} /><Title>{t("headerMenu.mapping")}</Title></button>;
       case "dictation":
         return <button key={item} type="button" data-rail-menu-dictation="" className={ROW} onClick={act(() => openOnboarding("voice"))}><Icon icon={Mic} /><Title>{t("onboarding.menu.voice")}</Title></button>;
+      case "voice":
+        return <button key={item} type="button" data-rail-menu-voice-companion="" className={ROW} onClick={act(openVoiceCompanionSettings)}><Icon icon={AudioLines} /><Title>{t("voiceCompanion.settings.label")}</Title></button>;
       case "linked":
         return <button key={item} type="button" data-rail-menu-linked-settings="" className={ROW} onClick={act(openLinkedSettings)}><Icon icon={Link2} /><Title>{t("links.title")}</Title></button>;
       case "relay":
