@@ -833,7 +833,7 @@ browserTest("linked installs: a failed Settings read keeps the dialog usable", a
  * with its first target unfolded, and with the relay's ⋯ open. Then the setup
  * guide's optional step, which lets a pairing start only while an account of
  * the chosen engine is signed in. Frames go to `.artifacts/external-relay`,
- * readings to `evidence/external-relay/settings.json`; the browser's PID is
+ * readings to `evidence/external-relay/card.json`; the browser's PID is
  * recorded there and checked gone after the run.
  */
 browserTest("external relay: settings and the setup guide's step at 390 and desktop widths in en and uk, light and dark", async () => {
@@ -1038,7 +1038,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
     if (browserPid !== null) { try { process.kill(browserPid, 0); failures.push(`the browser ${browserPid} outlived its close`); process.kill(browserPid, "SIGKILL"); } catch { /* gone */ } }
   }
   fs.mkdirSync("evidence/external-relay", { recursive: true });
-  fs.writeFileSync("evidence/external-relay/settings.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", browser: { pid: browserPid, closed: true }, readings, failures }, null, 2)}\n`);
+  fs.writeFileSync("evidence/external-relay/card.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", browser: { pid: browserPid, closed: true }, readings, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 900_000);
 
