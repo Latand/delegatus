@@ -158,7 +158,7 @@ test("get_orchestrator reports health with labelled estimates and a recommendati
   expect(health.context.estimated).toBe(true);
   expect(health.context.basis).toContain("ESTIMATE");
   const rotation = result.rotation as { recommended: boolean; reasons: string[]; note: string };
-  expect(rotation.note).toContain("never happens automatically");
+  expect(rotation.note).toBe((await import("@/app/api/orchestrator/seat/status/incumbent")).ROTATION_NOTE);
 });
 
 test("crossing the rotation threshold changes WORDS ONLY: prominent advisory, zero side effects", async () => {

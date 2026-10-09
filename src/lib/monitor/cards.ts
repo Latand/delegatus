@@ -43,6 +43,12 @@ export function monitorRefIn(text: string): string | null {
   return match ? match[1]! : null;
 }
 
+/** A task's monitor ref: in its text, or in its `details` for a card whose
+    text is meant for the operator alone (an automatic rotation's). */
+export function taskMonitorRef(task: { text: string; details?: string }): string | null {
+  return monitorRefIn(task.text) ?? (task.details ? monitorRefIn(task.details) : null);
+}
+
 function askedLine(request: OperatorRequest): string {
   const when = request.at.slice(0, 16).replace("T", " ");
   return `Asked ${when} UTC in project ${request.project}.`;

@@ -116,6 +116,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
      one place that decides what each field may be, and it names the field and
      the rule in the refusal it returns. */
   const change: SeatTickSettingsChange = {};
+  if (body.autoRotate !== undefined) change.autoRotate = body.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (body.maintenance !== undefined) change.maintenance = body.maintenance as SeatTickSettingsChange["maintenance"];
   if (body.enabled !== undefined) change.enabled = body.enabled as boolean;
   if (body.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = body.wakeIntervalMinutes as number | null;
