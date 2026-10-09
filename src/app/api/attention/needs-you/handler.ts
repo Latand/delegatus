@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { readBoundedJson } from "@/lib/attention/validation";
+import { AttentionRequestError, readBoundedJson } from "@/lib/attention/validation";
 import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import { NEEDS_YOU_ROW_KINDS, type NeedsYouAnswer, type NeedsYouReadOptions } from "@/lib/attention/needsYouRead";
 import { DismissalError } from "@/lib/attention/dismissals";
@@ -33,7 +33,7 @@ export function needsYouHandler(ports: NeedsYouRoutePorts) {
       const answer = await ports.read(project, { kinds: fields.kinds as NeedsYouReadOptions["kinds"], full: fields.full as boolean | undefined, cursor: fields.cursor as string | undefined });
       return Response.json(answer, { headers });
     } catch (error) {
-      if (error instanceof DismissalError) return Response.json({ code: error.code, error: error.message }, { status: error.status, headers });
+      if (error instanceof DismissalError || error instanceof AttentionRequestError) return Response.json({ code: error.code, error: error.message }, { status: error.status, headers });
       throw error;
     }
   };

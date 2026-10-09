@@ -27,6 +27,43 @@ test("a cross-origin read reaches no authority or projection", async () => {
   expect((await handler(request("project-a", "http://foreign.example"))).status).toBe(403);
 });
 
+for (const [name, body, status, code] of [
+  ["malformed JSON", "{", 400, "INVALID_REQUEST"],
+  ["an oversized body", JSON.stringify({ project: "x".repeat(17000) }), 413, "PAYLOAD_TOO_LARGE"],
+] as const) {
+  test(`the operator receives a bounded error response for ${name} before projection`, async () => {
+    let reads = 0;
+    const handler = needsYouHandler({
+      caller: () => ({ authority: { kind: "root", conversationId: null }, seats: [], maintainer: null }),
+      read: async project => { reads++; return { project, rows: [] } as unknown as NeedsYouAnswer; },
+    });
+    const response = await handler(new NextRequest("http://localhost/api/attention/needs-you", {
+      method: "POST", headers: { Host: "localhost", "Content-Type": "application/json" }, body,
+    }));
+    expect(response.status).toBe(status);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toMatchObject({ code });
+    expect(reads).toBe(0);
+  });
+
+  test(`an unauthorized worker is refused before reading ${name}`, async () => {
+    let reads = 0;
+    const handler = needsYouHandler({
+      caller: () => ({ authority: { kind: "worker", conversationId: "worker", role: "builder" }, seats: [], maintainer: null }),
+      read: async project => { reads++; return { project, rows: [] } as unknown as NeedsYouAnswer; },
+    });
+    const input = new NextRequest("http://localhost/api/attention/needs-you", {
+      method: "POST", headers: { Host: "localhost", "Content-Type": "application/json" }, body,
+    });
+    const response = await handler(input);
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toMatchObject({ code: "NEEDS_YOU_READ_NOT_PERMITTED" });
+    expect(input.bodyUsed).toBe(false);
+    expect(reads).toBe(0);
+  });
+}
+
 test("POST validates durable seat ownership, revocation, supersession and migration before projection", async () => {
   // Module substitutions stay in a child; the real caller adapter and shared
   // authority resolver run over registry/store boundary fixtures.
