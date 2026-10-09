@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import ts from "typescript";
+import type { Pipeline } from "@/lib/pipelines/types";
 
 const root = path.resolve(import.meta.dir, "../../..");
 const clientI18n = path.join(root, "src/lib/i18n");
@@ -13,6 +15,33 @@ test("role-copy functions used by server attention reads remain outside the clie
   // references. The shared row-text path must be callable in both graphs.
   expect(source.statements.some(statement => ts.isExpressionStatement(statement)
     && ts.isStringLiteral(statement.expression) && statement.expression.text === "use client")).toBe(false);
+});
+
+// Run after a fresh production build: the ordinary Bun run does not perform
+// Next's client-reference transform, and a leftover build may be older than HEAD.
+test.skipIf(process.env.LLV_ATTENTION_COMPILED_TEST !== "1")("compiled server attention reads label role-bearing parked lanes in both locales", () => {
+  const require = createRequire(path.join(root, "package.json"));
+  require(path.join(root, ".next/server/app/api/attention/needs-you/route.js"));
+  type Answer = typeof import("@/lib/attention/needsYouRead").needsYouAnswer;
+  const runtime = require(path.join(root, ".next/server/webpack-runtime.js")) as {
+    (id: number): { needsYouAnswer: Answer };
+    m: Record<string, (...args: unknown[]) => unknown>;
+  };
+  const entry = Object.entries(runtime.m).find(([, factory]) => factory.toString().includes("omittedCount") && factory.toString().includes("stale-first"));
+  expect(entry, "the built needs-you module must be present").toBeDefined();
+  const { needsYouAnswer } = runtime(Number(entry![0]));
+  expect(typeof needsYouAnswer).toBe("function");
+  const now = Date.now() / 1000;
+  for (const [roleId, labels] of [["builder", { en: "builder", uk: "білдер" }], ["legacy-fixture", { en: "legacy-fixture", uk: "legacy-fixture" }]] as const) {
+    const pipeline = { id: "named-role", task: "Build", taskIds: [], project: "project-a", state: "needs_decision", createdAt: new Date((now - 100) * 1000).toISOString(), stages: [{ id: "run", kind: "run", role: { roleId } }], runs: [], cursor: { stageId: "run", state: "reported", input: null, activatedBy: null }, stateDetail: null } as unknown as Pipeline;
+    const body = { files: [], tasks: [], pipelines: [pipeline] };
+    const ports = { tasks: [], pipelines: [pipeline], dismissals: [], reports: null, admissions: [], unavailable: [] };
+    for (const locale of ["en", "uk"] as const) {
+      const answer = needsYouAnswer(body, null, now, "project-a", ports, { locale });
+      expect(answer.count).toBe(1);
+      expect(answer.rows[0]!.line).toContain(labels[locale]);
+    }
+  }
 });
 
 function importsClientI18n(specifier: string, file: string): boolean {

@@ -49,7 +49,7 @@ test("role-bearing rows retain localized lane labels and the conversation's ques
     for (const locale of ["en", "uk"] as const) {
       const answer = needsYouAnswer(body, null, now, "project-a", { ...ports(), tasks: [], pipelines: [pipeline] }, { locale });
       expect(answer.count).toBe(2);
-      expect(answer.rows.find(row => row.kind === "lane-decision")!.line).toContain(labels[locale]);
+      expect(answer.rows.find(row => row.kind === "lane-decision")!.line).toContain(labels[locale].toLocaleLowerCase());
       expect(answer.rows.find(row => row.kind === "question")!.line).toBe("Choose");
     }
   }
