@@ -295,7 +295,7 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 256 files: 169 with asynchronous primitives and
+The reconciled census contains 259 files: 172 with asynchronous primitives and
 87 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
@@ -354,6 +354,7 @@ repeated for this inventory correction.
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
 | `src/app/api/runtime/hosts/route.test.ts` | 31, 88, 92 | owned |
+| `src/app/api/runtime/snapshot/route.test.ts` | 177 | owned; preload records the original Bun handle before return, stdout/stderr and exit are awaited in an isolated route sandbox, and the private runner service contains interrupted probes |
 | `src/app/api/spawn/route.test.ts` | 2421, 2561 | owned |
 | `src/app/servedPayloadSecrets.test.ts` | 104 | owned |
 | `src/components/LogFeed.prependAnchor.dom.test.tsx` | 324 | owned |
@@ -480,10 +481,12 @@ repeated for this inventory correction.
 | `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
 | `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
+| `src/runtime-host/journalStartup.test.ts` | 78 | owned; preload records the original Bun handle before return, the interrupted backfill child deliberately signals itself and its exit is awaited inside the private runner service |
 | `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
 | `src/runtime-host/mcpRuntimeRelease.test.ts` | 78, 120, 175, 280, 318 | owned |
 | `src/runtime-host/runtimeHostFence.test.ts` | 60, 115, 124 | owned |
 | `src/runtime-host/runtimeHostStartup.test.ts` | 175 | owned |
+| `src/runtime-host/runtimeHostSuccession.process.test.ts` | 36 | owned; original host handles are retained before readiness, finally cleanup awaits TERM with three-second KILL escalation, and the private runner service contains interrupted succession |
 | `test-preload.ts` | 19 | contained helper |
 
 | File | Synchronous launch sites | Disposition |
@@ -730,3 +733,7 @@ prefix. The focused run passes all seven cases, including withheld regressions,
 fresh native-main samples, bundled-only failures and incomplete baseline cases.
 Fixture subprocesses retain the enclosing test service's containment and
 spawn-time registration. The ownership layer and audit rules are unchanged.
+The strict audit also discovered three launch files added by current main:
+the snapshot route, journal startup and runtime-host succession tests. Their
+original handles, awaited exits and service containment are recorded in the
+updated census; the signal and missing-row rejection controls remain intact.
