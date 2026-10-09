@@ -57,7 +57,7 @@ function equalsSent(merged: BoardTask, row: WireTask, self: { id: string; prefix
   return TASK_SYNC_GROUPS.every((group) => mine.s[group] === row.s[group] && wireGroup(mine, group) === wireGroup(row, group));
 }
 
-function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write: TaskSyncWrite): BoardTask | null {
+function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write: TaskSyncWrite, tasks: readonly BoardTask[]): BoardTask | null {
   const self = write.self;
   if (!local) {
     const task: BoardTask = { id: row.id, project: row.project, status: row.status, text: row.text, placement: row.placement,
@@ -91,6 +91,10 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
     // Only the owner hands a task on, judged by the link the call came over.
     if (group === "machine" && (local.machine ?? self.id) !== link.install) continue;
     if (group === "handover" && row.handover && row.handover.to !== link.install) continue;
+    // Finding identity stays local. Hold a conflicting status and its stamp;
+    // independent groups still merge, and a later replay can retry the status.
+    if (group === "status" && row.status !== "done" && local.findingKey !== undefined
+      && tasks.some(task => task.id !== local.id && task.project === local.project && task.status !== "done" && task.findingKey === local.findingKey)) continue;
     if (restoresTitle) {
       merged.text = row.text;
       merged.chosen = true;
@@ -156,7 +160,7 @@ export function applyTaskRows(rows: readonly WireRow[], link: ApplyLink, options
         continue;
       }
       if (write.read(stubKey(row.id))) write.remove(stubKey(row.id));
-      const merged = mergeRow(local, row, link, write);
+      const merged = mergeRow(local, row, link, write, tasks);
       if (!merged) continue;
       if (position === undefined) {
         // Admission changes only the receiving board preference; every row is kept.

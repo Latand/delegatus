@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
+import { canonicalProject } from "@/lib/projects/aliases";
 
 import { readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
@@ -350,7 +351,7 @@ export function createTask(
   recentCreates: RecentCreate[] = [],
   deps: TaskCommandDeps = {},
 ): CreateTaskResult {
-  const project = normalizeProject(input.project);
+  let project = normalizeProject(input.project);
   if (!project) return { ok: false, error: "project is required", status: 400 };
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
@@ -374,6 +375,8 @@ export function createTask(
   const findingKey = readFindingKey(input.findingKey);
   if (!findingKey.ok) return findingKey;
   const key = findingKey.key;
+  // Keyed admission uses the same project identity the store persists.
+  if (key !== undefined) project = canonicalProject(project);
   const now = deps.now?.() ?? isoNow();
   const receipt = (taskId: string, matched = false): RecentCreate[] => clientRequestId
     ? [...recentCreates.filter(entry => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId, ...(key !== undefined ? { matched } : {}) }].slice(-RECENT_CREATES_CAP)

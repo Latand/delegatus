@@ -1,14 +1,16 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTask, patchTask, type CreateTaskInput } from "./commands";
 import { loadTasksFile, mutateTasksFile } from "./store";
 import { readFindingKey } from "./finding";
+import { persistProjectAliases } from "@/lib/projects/aliases";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-finding-"));
 const file = path.join(root, "tasks.json");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+beforeEach(() => mutateTasksFile(() => ({ state: { tasks: [], recentCreates: [] }, result: undefined }), file));
 const first = "2026-10-09T08:00:00.000Z";
 const later = "2026-10-09T09:00:00.000Z";
 const input = { project: "finding-project", text: "Preserve the operator's title", placement: "unplaced", findingKey: " log:socket " } as const;
@@ -22,6 +24,32 @@ function create(body: CreateTaskInput, now = first) {
 }
 
 describe("finding identity", () => {
+  test("an old project alias matches the open finding", () => {
+    expect(persistProjectAliases([{ source: "dir-legacy", target: "repo-current", displayName: "Current project" }])).toBe(true);
+    const keyed = { ...input, project: "repo-current", findingKey: "alias:socket" };
+    const initial = create(keyed);
+    const match = create({ ...keyed, project: "dir-legacy", text: "Reporter wording", note: "Seen through alias" }, later);
+    expect(match).toMatchObject({ matched: true, task: { id: initial.task.id, project: keyed.project, text: input.text, finding: { count: 2, lastSeenAt: later } } });
+    expect(loadTasksFile(file).tasks.filter(task => task.findingKey === keyed.findingKey)).toHaveLength(1);
+  });
+
+  test("an old project alias links the Done predecessor of a fresh finding", () => {
+    expect(persistProjectAliases([{ source: "dir-legacy", target: "repo-current", displayName: "Current project" }])).toBe(true);
+    const keyed = { ...input, project: "repo-current", findingKey: "alias:done" };
+    const initial = create(keyed);
+    mutateTasksFile(state => {
+      const done = patchTask(state.tasks, initial.task.id, { status: "done" }, later);
+      if (!done.ok) throw new Error(done.error);
+      return { state: { ...state, tasks: done.tasks }, result: undefined };
+    }, file);
+    const successor = create({ ...keyed, project: "dir-legacy" }, later);
+    expect(successor).toMatchObject({ matched: false, task: { project: keyed.project, finding: { count: 1, previousTaskId: initial.task.id } } });
+    expect(successor.task.id).not.toBe(initial.task.id);
+    const again = create(keyed, later);
+    expect(again).toMatchObject({ matched: true, task: { id: successor.task.id, finding: { count: 2, previousTaskId: initial.task.id } } });
+    expect(loadTasksFile(file).tasks.filter(task => task.findingKey === keyed.findingKey && task.status !== "done")).toHaveLength(1);
+  });
+
   test("persists recurrence and retry receipts without replacing the original text or other fields", () => {
     const initial = create({ ...input, details: "Keep this context", note: "First observation", clientRequestId: "first" });
     expect(create({ ...input, clientRequestId: "first" })).toMatchObject({ replay: true, matched: false, task: { finding: { count: 1 } } });
