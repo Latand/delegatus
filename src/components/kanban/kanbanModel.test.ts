@@ -1294,6 +1294,19 @@ test("a step operator hold keeps its note, age, needs-you total and first positi
 });
 
 
+test("hidden provisioning work keeps its motion outside visible columns with zero working agents", () => {
+  const hidden = task("t908", "assigned", [], { groupHidden: { at: iso(NOW), by: "operator", admitted: [] } });
+  const lane = buildingLane("hidden-provisioning", hidden.id, { startedAt: iso(NOW - 60) });
+  lane.state = "provisioning";
+  const board = model([hidden], [], { pipelines: [lane] });
+  expect(board.hiddenGroups).toHaveLength(1);
+  expect(board.hiddenGroups[0]!.members).toHaveLength(0);
+  expect(board.hiddenGroups[0]!.motion.key).toBe("working");
+  expect(board.totals.working).toBe(0);
+  expect(board.columns.assigned.working).toBe(0);
+  expect(board.columns.assigned.shown).toHaveLength(0);
+});
+
 test("a hidden group's working agent remains in the header but outside the visible columns", () => {
   const agent = file(908, { activity: "live", proc: "running", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } });
   const hidden = task("t908", "assigned", [agent.path], { groupHidden: { at: iso(NOW), by: "operator", admitted: [agent.conversationId!] } });
@@ -1426,4 +1439,11 @@ test("a waiting prototype counts once in needs-you and clears after the choice",
   expect(waiting.columns.inbox.needsYou).toBe(1);
   const decided = model([task("prototype", "inbox", [], { prototypeReview: { ...review, waitingReviewId: null } })], []);
   expect(decided.totals.needsYou).toBe(0);
+});
+
+
+test("a cleared prototype round raises no needs-you count while its choice stays open", () => {
+  const review = { latestReviewId: "round-a", waitingReviewId: "round-a", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z", waitingDismissal: { at: "2026-10-02T00:00:00Z", by: { kind: "operator" as const } } };
+  expect(model([task("prototype", "inbox", [], { prototypeReview: review })], []).totals.needsYou).toBe(0);
+  expect(review.waitingReviewId).toBe("round-a");
 });

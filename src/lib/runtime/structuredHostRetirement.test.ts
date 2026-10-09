@@ -1,3 +1,5 @@
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -208,7 +210,7 @@ function observedIdentity(pid: number) {
    process group: the grandchild calls setsid, which is the whole point of the
    fixture, so `kill(-pid)` leaves it running past the end of the suite — the
    orphan leak this feature exists to avoid, reproduced by its own tests. */
-const fixturePids: number[] = [];
+const fixtureIdentities: ProcessIdentity[] = [];
 const scratchDirs: string[] = [];
 
 function fixtureTreeScript(): string {
@@ -232,14 +234,14 @@ async function spawnFixtureHostTree(): Promise<{ pid: number; startIdentity: str
   child.unref();
   const pid = child.pid;
   if (pid === undefined) throw new Error("fixture host tree did not start");
-  fixturePids.push(pid);
+  fixtureIdentities.push(captureProcessIdentity(pid));
   let tree: number[] = [];
   for (let attempt = 0; attempt < 200 && tree.length < 2; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25));
     tree = descendantPids(pid, procBackend.ppidMap());
   }
   if (tree.length < 2) throw new Error("fixture host tree grew no child");
-  fixturePids.push(...tree);
+  fixtureIdentities.push(...tree.map(pid => captureProcessIdentity(pid)));
   const startIdentity = procBackend.processIdentity(pid);
   if (startIdentity === null) throw new Error("fixture host tree has no process identity");
   return { pid, startIdentity, tree };
@@ -256,10 +258,8 @@ function processGroupId(pid: number): number | null {
   }
 }
 
-afterEach(() => {
-  for (const pid of fixturePids.splice(0)) {
-    try { process.kill(pid, "SIGKILL"); } catch { /* the test already took it down */ }
-  }
+afterEach(async () => {
+  for (const identity of fixtureIdentities.splice(0).reverse()) await stopFixtureIdentity(identity);
   for (const directory of scratchDirs.splice(0)) {
     try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* scratch only */ }
   }

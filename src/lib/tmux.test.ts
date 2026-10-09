@@ -1,3 +1,5 @@
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -667,7 +669,7 @@ for (const shell of ["bash", "zsh"]) {
     for (let i = 0; i < 150; i++) { if (predicate()) return; await Bun.sleep(20); }
     throw new Error("private tmux shell did not deliver fixture argv");
   };
-  let serverPid: number | undefined;
+  let serverIdentity: ProcessIdentity | undefined;
   try {
     fs.writeFileSync(binary, `#!/bin/sh\nif [ "$3" = mcp ]; then printf "[]"; exit; fi\nfor arg do [ "$arg" = app-server ] && exit 1; done\nexec '${process.execPath}' -e 'require("fs").writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(1)))' -- "$@"\n`, { mode: 0o700 });
     const rc = shell === "bash" ? path.join(root, "bashrc") : path.join(root, ".zshrc");
@@ -680,7 +682,7 @@ for (const shell of ["bash", "zsh"]) {
       const shellCommand = shell === "bash" ? `bash --noprofile --rcfile '${rc}' -i` : "zsh -i";
       const created = await run(["new-session", "-d", "-s", "fixture", shellCommand]);
       expect(created.code).toBe(0);
-      serverPid = Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim());
+      serverIdentity = captureProcessIdentity(Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim()));
       await waitFor(() => fs.existsSync(ready));
       await Bun.sleep(30);
       const spec = resume
@@ -700,10 +702,11 @@ for (const shell of ["bash", "zsh"]) {
       if (!allowSubagents) expect(expectedArgv.filter((arg: string) => arg === "--disable")).toHaveLength(112);
       if (resume) expect(expectedArgv.slice(-2)).toEqual(["resume", threadId]);
       expect(await run(["kill-session", "-t", "fixture"])).toMatchObject({ code: 0 });
-      serverPid = undefined;
+      await stopFixtureIdentity(serverIdentity);
+      serverIdentity = undefined;
     }
   } finally {
-    if (serverPid) { try { process.kill(serverPid, "SIGTERM"); } catch { /* private server exited */ } }
+    if (serverIdentity) await stopFixtureIdentity(serverIdentity);
     fs.rmSync(socketRoot, { recursive: true, force: true });
     restore(); restoreShell();
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
