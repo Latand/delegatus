@@ -1,5 +1,6 @@
+import { x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
-import { checkedAnswer, descriptorSchema, requestSchema } from "./protocol";
+import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 
 test("request limits and additive fields", () => {
@@ -168,4 +169,23 @@ test("a descriptor allows a null or absent icon URL", () => {
   };
   for (const icon_url of [null, undefined, "https://relay.example/icon.png"])
     expect(descriptorSchema.safeParse({ ...descriptor, icon_url }).success).toBe(true);
+});
+
+test("X1 tool indexes keep their compact wire bytes and every result parses", () => {
+  for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin"]) {
+    const raw = x1Claim(role);
+    const parsed = requestSchema.parse(raw);
+    expect(JSON.stringify(parsed.input.tools)).toBe(JSON.stringify(raw.input.tools));
+    expect(parsed.input.tool_guidance).toBe(raw.input.tool_guidance);
+  }
+  expect(Object.keys(x1Results)).toHaveLength(26);
+  for (const value of Object.values(x1Results)) expect(toolCallResultSchema.safeParse(value).success).toBe(true);
+  for (const change of [{ audience: "everyone" }, { status: "future" }, { calls_remaining: 17 }, { output: "😀".repeat(16001) }])
+    expect(toolCallResultSchema.safeParse({ ...x1Results.ok, ...change }).success).toBe(false);
+  const request = x1Request("member");
+  const call = { action: "call", text: "", reply_to: null, calls: [{ tool: "search_docs", arguments: "{}", cursor: null }] };
+  expect(checkedRound(call, request)).toMatchObject({ kind: "calls", calls: call.calls });
+  expect(checkedAnswer(call, request)).toBeNull();
+  expect(checkedRound({ action: "reply", text: "Done", reply_to: null, calls: [] }, request))
+    .toEqual(checkedAnswer({ action: "reply", text: "Done", reply_to: null }, request));
 });

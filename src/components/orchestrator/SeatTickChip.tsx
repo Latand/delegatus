@@ -1,6 +1,5 @@
 "use client";
 
-import { Timer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -8,8 +7,9 @@ import { useAnchoredBox } from "@/components/feed/SpeakMenu";
 import { useModalLayer } from "@/components/modalLayer";
 import { useLocale } from "@/lib/i18n";
 
-import { SeatTickActions, SeatTickBody, SeatTickDot, useSeatTickDraft } from "./SeatTickBody";
+import { SeatTickActions, SeatTickBody, useSeatTickDraft } from "./SeatTickBody";
 import { onSeatTickPanelRequest, takePendingSeatTickPanel } from "./openSeatTick";
+import { SeatTickSwitch } from "./SeatTickSwitch";
 import { seatTickReading } from "./seatTickView";
 import { useSeatTickSettings, type SeatTickSettingsRead } from "./useSeatTickSettings";
 import { Z } from "@/components/layers";
@@ -17,12 +17,13 @@ import { Z } from "@/components/layers";
 /*
  * The seat tick beside the orchestrator's own controls (#1681).
  *
- * One chip in the incumbent row, immediately before Rotate, so it appears in
- * both hosts of that row — the dock at every width and the kanban seat's
- * inline header — from one mount. The face is two tokens, because at the
- * dock's 360 px floor the row has no space for a sentence: a timer glyph, the
- * configured schedule in a word, and a 6 px dot for the actual state. The
- * whole closed summary rides the `title` and the accessible label.
+ * One control in the incumbent row, immediately before Rotate, so it appears
+ * in both hosts of that row — the dock at every width and the kanban seat's
+ * inline header — from one mount. It is the switch with four stops
+ * (`SeatTickSwitch`): the thumb's word is the configured schedule, the 6 px dot
+ * outside the pill is the actual state, and the whole closed summary rides the
+ * `title` and the value text. A press that does not move opens the popover
+ * below, as the chip did; a drag changes the stop.
  *
  * The popover is PORTALLED to the body at fixed coordinates. It has to be: the
  * kanban seat clips its panel with `overflow: hidden` and the dock is 360 px at
@@ -40,9 +41,10 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
      previous project's tick for a round-trip, and this closes it in render. */
   const [openFor, setOpenFor] = useState<string | null>(null);
   const open = openFor === project;
-  const anchorRef = useRef<HTMLButtonElement>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const read = useSeatTickSettings(project, true);
-  const reading = seatTickReading(read, Date.now(), t);
+  const now = Date.now();
+  const reading = seatTickReading(read, now, t);
 
   /* The board's tick notice card asks for this project's panel. A seat that was
      folded unfolds first, and this chip mounts with it: the request is claimed
@@ -62,21 +64,17 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
 
   return (
     <>
-      <button
-        ref={anchorRef}
-        type="button"
-        data-seat-tick-chip={reading.state}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={t("seatTick.chipAria", { line: reading.line })}
-        title={reading.line}
-        onClick={() => setOpenFor((previous) => (previous === project ? null : project))}
-        className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-control border border-border bg-card px-2 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
-      >
-        <Timer className="h-3 w-3" aria-hidden />
-        <span data-seat-tick-face className="max-w-[72px] truncate">{reading.chip}</span>
-        <SeatTickDot tone={reading.tone} />
-      </button>
+      <SeatTickSwitch
+        anchorRef={anchorRef}
+        read={read}
+        reading={reading}
+        now={now}
+        surface="desktop"
+        open={open}
+        onOpen={() => setOpenFor((previous) => (previous === project ? null : project))}
+        onRefused={() => setOpenFor(project)}
+        className={className}
+      />
       {open ? (
         <SeatTickPopover
           anchorRef={anchorRef}
@@ -91,7 +89,7 @@ export function SeatTickChip({ project, projectName, className = "" }: { project
 }
 
 function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
-  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  anchorRef: React.RefObject<HTMLElement | null>;
   project: string;
   projectName: string;
   read: SeatTickSettingsRead;

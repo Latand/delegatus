@@ -43,7 +43,7 @@ export type PipelineRoleId =
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
- * `confirm: "deploy"` gate (resolveSpawnRole / DraftAgentPane) that a pipeline —
+ * `confirm: "deploy"` gate (resolveSpawnRole) that a pipeline —
  * which spawns its stages automatically, without a per-stage confirmation — has
  * no way to honor, so it is excluded from the builder and rejected by the API.
  */
@@ -413,7 +413,13 @@ export type PipelineStageAttempt = {
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
   /** Recovery expenditure survives condition changes and host relaunches. */
-  providerRecoveryBudget?: { tries: number; startedAt: string };
+  providerRecoveryBudget?: {
+    tries: number; startedAt: string; engine?: FlowEngine; triedAccounts?: string[];
+    /** Auth and exhausted target failures remain excluded across quota resets. */
+    failedAccounts?: string[];
+  };
+  /** Unknown-reset fallback is spent across automatic stage replacements. Manual retry starts anew. */
+  providerFallbackRetries?: number;
   providerWait?: {
     condition: import("./providerConditions").ProviderCondition;
     text: string;
@@ -424,9 +430,15 @@ export type PipelineStageAttempt = {
     resumeAt: string;
     resetsAt: number | null;
     actionAt?: string;
+    /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
+    continuationRequestedAt?: string;
     switchedAccountId?: string;
     failedAccounts?: string[];
     capacityProbes?: number;
+    retryCancelled?: boolean;
+    /** A parked quota cut owes a fresh retry-stage after resumeAt. An operator
+        control change or a different park cancels this obligation. */
+    stageRetry?: { controlGeneration: string | null; detail: string; fallback?: boolean };
   };
   providerRecoveries?: Array<{
     at: string;
@@ -508,7 +520,14 @@ export type PipelineStageAttempt = {
   };
   /** Prompt context for a fresh attempt created after this attempt was interrupted.
       `cause` is absent on records written before causes were told apart. */
-  restartContext?: { previousAttempt: number; transcriptPath: string; cause?: PipelineStageInterruptionCause };
+  restartContext?: {
+    previousAttempt: number;
+    /** Null when the attempt was cut before its transcript was discovered. */
+    transcriptPath: string | null;
+    cause?: PipelineStageInterruptionCause;
+    /** The interrupted attempt's newest message, bounded, for the replacement's first message. */
+    lastReport?: string;
+  };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it

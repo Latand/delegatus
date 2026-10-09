@@ -52,6 +52,7 @@ import {
   type RuntimeHostReleaseRecord,
   type RuntimeHostRollbackTarget,
 } from "./hostRelease";
+import { probeRuntimeHostSuccessor } from "./runtimeHostStartup";
 import { requestRuntimeHostRollback } from "./hostRollback";
 import { runtimeHostSuccessorName } from "./hostSuccessor";
 
@@ -149,6 +150,7 @@ export function runtimeHostRehearsalEnvironment(
        completion: no deployment is requested, and the release target file is
        deliberately absent, so the proxy answers its own 503 — which is the
        raw-write path that took the host down, exercised on every probe. */
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_VIEWER_DEPLOYMENTS: "1",
     LLV_VIEWER_DEPLOY_ADAPTER: path.join(options.root, "scripts", "runtime-host-viewer-adapter.ts"),
     LLV_VIEWER_DEPLOY_TARGET: path.join(options.stateDir, "viewer-release.json"),
@@ -410,8 +412,10 @@ export function runtimeHostRehearsalPorts(options: RuntimeHostRehearsalRunOption
   installRehearsalTools(options);
   const { failed, retained } = runtimeHostRehearsalGenerations(options.port, new Date().toISOString());
   let found: RuntimeHostRollbackTarget | null = null;
+  let readyGeneration = failed;
   return {
     start: async (role) => {
+      readyGeneration = role === "predecessor" ? failed : retained;
       if (role === "predecessor") {
         /* A handoff to the failed generation, as its predecessor staged it:
            it completes this at boot and keeps `retained` as its rollback target. */
@@ -443,6 +447,10 @@ export function runtimeHostRehearsalPorts(options: RuntimeHostRehearsalRunOption
     },
     seed: () => seedJournal(socketPath),
     probeListener: (probe) => probeStableListener(options.port, probe),
+    probeReady: async () => {
+      try { await probeRuntimeHostSuccessor(socketPath, identity(readyGeneration)); return true; }
+      catch { return false; }
+    },
     /* The snapshot, because it is the large answer: a peer that leaves during
        one of these is the write that took production down. */
     probeSocket: (probe) => probeRuntimeSocket(socketPath, { id: "rehearsal-snapshot", method: "snapshot", params: {} }, probe),
