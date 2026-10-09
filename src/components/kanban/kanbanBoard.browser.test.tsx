@@ -24061,7 +24061,7 @@ describe("short questionnaire rendered evidence", () => {
         for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
           try {
-            await page.waitForSelector(false ? "[data-mobile2-bar]" : "[data-attention-count]");
+            await page.waitForSelector("[data-attention-count]");
             if (taskId === "t-search") {
               await page.locator("[data-attention-count]").click();
               const notice = page.locator('[data-needs-you-panel] [data-attention-prototype="t-search"]');
@@ -24073,9 +24073,9 @@ describe("short questionnaire rendered evidence", () => {
               await page.screenshot({ path: path.join(out, `${lang}-${scheme}-needs-you.png`) });
               await notice.click();
             } else {
-            const opener = page.locator(`[data-prototype-button="${taskId}"]`);
-            await opener.scrollIntoViewIfNeeded();
-            await opener.click();
+              const opener = page.locator(`[data-prototype-button="${taskId}"]`);
+              await opener.scrollIntoViewIfNeeded();
+              await opener.click();
             }
             await page.waitForSelector("[data-prototype-questions]");
             const reading = await capturePrototypeQuestions(page, false);
@@ -24083,7 +24083,7 @@ describe("short questionnaire rendered evidence", () => {
             expect(reading.pillOverflow).toBe(0);
             expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
             expect(reading.actions.every(a => a.visible)).toBe(true);
-            if (taskId === "t-upload" && !false) { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
+            if (taskId === "t-upload") { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
             if (taskId === "t-search") { expect(reading.stageWidth).toBeNull(); expect(reading.questionCount).toBe(5); }
             if (taskId === "t-export") { expect(reading.readonly).toBe(true); expect(reading.skipped).toBe(true); }
             const label = `${lang}-${scheme}-${taskId}`;

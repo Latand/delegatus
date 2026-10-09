@@ -776,7 +776,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             <MicButtonView {...dictation} start={startDictation} busy={review.saving} onText={insertSpoken} anchored />
           </span>
         </div>
-        <div data-prototype-actions="" className={hasQuestions ? "flex shrink-0 justify-end gap-2" : "contents"}>
+        <div data-prototype-actions="" className={hasQuestions ? phone ? "grid shrink-0 grid-cols-2 gap-2" : "flex shrink-0 justify-end gap-2" : "contents"}>
           {hasQuestions ? <button type="button" className={SECONDARY} data-prototype-skip="" aria-label={t("proto.skipAria")} disabled={!canSend} onClick={() => void save(true)}>{t("proto.skip")}</button> : null}
           <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}

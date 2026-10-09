@@ -23,7 +23,7 @@ function target(task: BoardTask, summary: PrototypeReviewSummary) {
 
 /** The mark before the word: the review's while a round waits, a check once
     the latest round is decided, a warning while its message is undelivered.
-    The chosen numbers are in the label; the button always says «Prototype». */
+    The accessible label carries the chosen numbers or questionnaire status. */
 function StateMark({ state, questions = false, className = "" }: { state: PrototypeButtonState; questions?: boolean; className?: string }) {
   if (state === "decided") return <Check className={`${className} text-success`} aria-hidden />;
   if (state === "unsent") return <TriangleAlert className={`${className} text-warning`} aria-hidden />;

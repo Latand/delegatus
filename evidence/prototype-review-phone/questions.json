@@ -20,16 +20,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -48,16 +51,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -76,16 +82,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -104,16 +113,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -129,6 +141,7 @@
     "optionHeight": 44,
     "pillOverflow": 0,
     "actions": [],
+    "actionsWidth": null,
     "readonly": true,
     "skipped": true
   },
@@ -153,16 +166,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -181,16 +197,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -209,16 +228,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -237,16 +259,19 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 243.296875,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 302.640625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -262,6 +287,7 @@
     "optionHeight": 44,
     "pillOverflow": 0,
     "actions": [],
+    "actionsWidth": null,
     "readonly": true,
     "skipped": true
   },
@@ -286,16 +312,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -314,16 +343,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -342,16 +374,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -370,16 +405,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -395,6 +433,7 @@
     "optionHeight": 44,
     "pillOverflow": 0,
     "actions": [],
+    "actionsWidth": null,
     "readonly": true,
     "skipped": true
   },
@@ -419,16 +458,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -447,16 +489,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -475,16 +520,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -503,16 +551,19 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 177.0625,
-        "y": 794
+        "x": 16,
+        "y": 794,
+        "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 281.15625,
-        "y": 794
+        "x": 199,
+        "y": 794,
+        "width": 175
       }
     ],
+    "actionsWidth": 358,
     "readonly": false,
     "skipped": false
   },
@@ -528,6 +579,7 @@
     "optionHeight": 44,
     "pillOverflow": 0,
     "actions": [],
+    "actionsWidth": null,
     "readonly": true,
     "skipped": true
   }

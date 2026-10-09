@@ -785,7 +785,9 @@ twice is a fixed point.
 Rendered evidence uses the existing board and phone drivers, at 1440 and 390,
 in English and Ukrainian, light and dark. Each matrix covers questions only,
 questions with images, multi-select, maximum question and option text, answered
-and skipped states, and the needs-you row. Measurements are in
+and skipped states, and the needs-you row. The phone footer checks equal-width
+buttons filling its row; that check failed on the initial layout before the fix.
+Measurements are in
 `evidence/prototype-review/questions.json` and
 `evidence/prototype-review-phone/questions.json`; screenshots are local artifacts
 under `.artifacts/prototype-review/questions` and

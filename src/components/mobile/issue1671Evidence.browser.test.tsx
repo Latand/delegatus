@@ -8728,7 +8728,7 @@ describe("short questionnaire rendered evidence", () => {
         for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
           try {
-            await page.waitForSelector(true ? "[data-mobile2-bar]" : "[data-attention-count]");
+            await page.waitForSelector("[data-mobile2-bar]");
             await page.waitForSelector("[data-phone-kanban]");
             await page.locator('[data-phone-kanban-tab="assigned"]').click();
             if (taskId === "t-search") {
@@ -8742,9 +8742,9 @@ describe("short questionnaire rendered evidence", () => {
               await page.screenshot({ path: path.join(out, `${lang}-${scheme}-needs-you.png`) });
               await notice.click();
             } else {
-            const opener = page.locator(`[data-phone-card-prototype-button="${taskId}"]`);
-            await opener.scrollIntoViewIfNeeded();
-            await opener.click();
+              const opener = page.locator(`[data-phone-card-prototype-button="${taskId}"]`);
+              await opener.scrollIntoViewIfNeeded();
+              await opener.click();
             }
             await page.waitForSelector("[data-prototype-questions]");
             const reading = await capturePrototypeQuestions(page, true);
@@ -8752,7 +8752,10 @@ describe("short questionnaire rendered evidence", () => {
             expect(reading.pillOverflow).toBe(0);
             expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
             expect(reading.actions.every(a => a.visible)).toBe(true);
-            if (taskId === "t-upload" && !true) { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
+            if (reading.actions.length === 2) {
+              expect(Math.abs(reading.actions[0]!.width - reading.actions[1]!.width)).toBeLessThanOrEqual(1);
+              expect(Math.abs(reading.actions.reduce((sum, action) => sum + action.width, 8) - reading.actionsWidth!)).toBeLessThanOrEqual(1);
+            }
             if (taskId === "t-search") { expect(reading.stageWidth).toBeNull(); expect(reading.questionCount).toBe(5); }
             if (taskId === "t-export") { expect(reading.readonly).toBe(true); expect(reading.skipped).toBe(true); }
             const label = `${lang}-${scheme}-${taskId}`;
