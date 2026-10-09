@@ -24029,7 +24029,7 @@ describe("creation-time review budget controls", () => {
             expect(await surface.locator("select").nth(1).isEnabled()).toBe(true);
             expect(await surface.locator("select").nth(2).isEnabled()).toBe(true);
           }
-          const reading = await surface.evaluate(element => ({ text: element.textContent, width: element.clientWidth, clipped: element.scrollWidth > element.clientWidth + 1 }));
+          const reading = await surface.evaluate(element => ({ text: element.textContent, controlWidth: element.clientWidth, clipped: element.scrollWidth > element.clientWidth + 1 }));
           expect(reading.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
           readings.push({ lang, width, state, ...reading });

@@ -1,58 +1,66 @@
 [
   {
     "lang": "en",
-    "width": 496,
+    "width": 1440,
     "state": "draft",
     "text": "ConnectionsOn pass, continue to— completes the pipelineBuilderOn fail, loop back to— park for the operator↺ this stage (retry itself)BuilderMax loop rounds (default 3)When the rounds are spentFix, then continueFix, then wait for meThe builder fixes the last findings; the pipeline then moves on or completes.",
+    "controlWidth": 496,
     "clipped": false
   },
   {
     "lang": "en",
-    "width": 496,
+    "width": 1440,
     "state": "running",
     "text": "ConnectionsOn pass, continue to— completes the pipelineBuilderOn fail, loop back to— park for the operator↺ this stage (retry itself)BuilderMax loop rounds (default 3)When the rounds are spentFix, then continueFix, then wait for meThe builder fixes the last findings; the pipeline then moves on or completes.This fail target and exhaustion are frozen evidence. You can lower the rounds.",
+    "controlWidth": 496,
     "clipped": false
   },
   {
     "lang": "en",
-    "width": 366,
+    "width": 390,
     "state": "draft",
     "text": "ConnectionsOn pass, continue to— completes the pipelineBuilderOn fail, loop back to— park for the operator↺ this stage (retry itself)BuilderMax loop rounds (default 3)When the rounds are spentFix, then continueFix, then wait for meThe builder fixes the last findings; the pipeline then moves on or completes.",
+    "controlWidth": 366,
     "clipped": false
   },
   {
     "lang": "en",
-    "width": 366,
+    "width": 390,
     "state": "running",
     "text": "ConnectionsOn pass, continue to— completes the pipelineBuilderOn fail, loop back to— park for the operator↺ this stage (retry itself)BuilderMax loop rounds (default 3)When the rounds are spentFix, then continueFix, then wait for meThe builder fixes the last findings; the pipeline then moves on or completes.This fail target and exhaustion are frozen evidence. You can lower the rounds.",
+    "controlWidth": 366,
     "clipped": false
   },
   {
     "lang": "uk",
-    "width": 496,
+    "width": 1440,
     "state": "draft",
     "text": "З'єднанняПісля проходження — до— завершує конвеєрБілдерУ разі невдачі — назад до— зупинка для оператора↺ цей етап (повтор себе)БілдерМакс. раундів циклу (типово 3)Коли раунди вичерпаноВиправити й продовжитиВиправити й чекати на менеБудівельник виправляє останні зауваження; далі пайплайн іде сам або закінчується.",
+    "controlWidth": 496,
     "clipped": false
   },
   {
     "lang": "uk",
-    "width": 496,
+    "width": 1440,
     "state": "running",
     "text": "З'єднанняПісля проходження — до— завершує конвеєрБілдерУ разі невдачі — назад до— зупинка для оператора↺ цей етап (повтор себе)БілдерМакс. раундів циклу (типово 3)Коли раунди вичерпаноВиправити й продовжитиВиправити й чекати на менеБудівельник виправляє останні зауваження; далі пайплайн іде сам або закінчується.Ціль і дія після вичерпання зафіксовані як свідчення. Кількість раундів можна зменшити.",
+    "controlWidth": 496,
     "clipped": false
   },
   {
     "lang": "uk",
-    "width": 366,
+    "width": 390,
     "state": "draft",
     "text": "З'єднанняПісля проходження — до— завершує конвеєрБілдерУ разі невдачі — назад до— зупинка для оператора↺ цей етап (повтор себе)БілдерМакс. раундів циклу (типово 3)Коли раунди вичерпаноВиправити й продовжитиВиправити й чекати на менеБудівельник виправляє останні зауваження; далі пайплайн іде сам або закінчується.",
+    "controlWidth": 366,
     "clipped": false
   },
   {
     "lang": "uk",
-    "width": 366,
+    "width": 390,
     "state": "running",
     "text": "З'єднанняПісля проходження — до— завершує конвеєрБілдерУ разі невдачі — назад до— зупинка для оператора↺ цей етап (повтор себе)БілдерМакс. раундів циклу (типово 3)Коли раунди вичерпаноВиправити й продовжитиВиправити й чекати на менеБудівельник виправляє останні зауваження; далі пайплайн іде сам або закінчується.Ціль і дія після вичерпання зафіксовані як свідчення. Кількість раундів можна зменшити.",
+    "controlWidth": 366,
     "clipped": false
   }
 ]
