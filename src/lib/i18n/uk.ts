@@ -4875,7 +4875,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.autoRotate.enableAria": "Увімкнути автоматичну ротацію",
   "seatTick.autoRotate.disableAria": "Вимкнути автоматичну ротацію",
   "seatTick.autoRotate.about": "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з передачею справ.",
-  "seatTick.autoRotate.thresholdLabel": "Ротувати, коли контекст заповнено на, %",
+  "seatTick.autoRotate.thresholdLabel": "Поріг контексту, %",
   "seatTick.autoRotate.thresholdPlaceholder": "{percent}",
   "seatTick.autoRotate.lastFailed": "Спроба о {time} не замінила оркестратора, поточний працює далі. Наступна — після {next}.",
   "seatTick.autoRotate.windowUnknown": "Для моделі цього оркестратора розмір контекстного вікна невідомий, тому автоматична ротація для нього не спрацює.",
