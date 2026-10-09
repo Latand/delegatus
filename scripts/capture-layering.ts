@@ -385,24 +385,21 @@ const ACCOUNTS_DIALOG = '[role="dialog"][aria-label="Claude accounts"]';
 
 const coverage = (page: Page, selector: string) => page.evaluate(readCoverage, selector);
 
-/** Opens the orchestrator conversation's reader inside its board card. */
+/** Opens the orchestrator conversation from its board card, in the agent window. */
 async function dockOrchestrator(page: Page, steps: string[]): Promise<string> {
   await page.locator('button.tile[aria-label^="Kanban orchestrator,"]').first().click({ timeout: 10_000 });
-  steps.push("clicked the orchestrator's tile on its board card");
-  const reader = ".column [data-reader-path]";
+  steps.push("clicked the orchestrator's tile on its board card, which opens it in the agent window");
+  const reader = "[data-agent-window] [data-reader-path]";
   await page.locator(reader).first().waitFor({ state: "visible", timeout: 20_000 });
   await page.waitForTimeout(800);
   return reader;
 }
 
-/** Expands the docked reader into the full-window reader, the board's conversation modal. */
+/** The agent window, the board's conversation modal. */
 async function expandOrchestrator(page: Page, steps: string[]): Promise<string> {
-  const reader = await dockOrchestrator(page, steps);
-  await page.locator(`${reader} button[aria-label="Open as a full pane"]`).first().click();
-  steps.push("opened the reader as a full pane (the expanded conversation modal)");
-  await page.locator(".reader-full").waitFor({ state: "visible", timeout: 10_000 });
+  await dockOrchestrator(page, steps);
   await page.waitForTimeout(600);
-  return ".reader-full";
+  return ".agent-window";
 }
 
 /** On the phone, a conversation opens in the full-screen focus view. */
@@ -585,7 +582,7 @@ const CASES: Record<string, { desktop: Step; phone: Step }> = {
   "mic-menu-docked-conversation": {
     desktop: async (page, steps) => {
       const reader = await dockOrchestrator(page, steps);
-      await rightClickMic(page, reader, steps, "the reader docked in its board card");
+      await rightClickMic(page, reader, steps, "the conversation opened from its board card");
       return { selector: MIC_MENU };
     },
     phone: async (page, steps) => {
