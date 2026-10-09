@@ -3949,8 +3949,8 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const { active, pending, history } = orchestratorSeatFor(project);
   const remote = await readRemoteAgentRows(project);
   const linkedSeats = linkedContext().links.filter(link => link.projects.has(project)).map(link => {
-    const row = remote.rows.find(row => row.peer === link.label && row.seat === 1);
-    return { machine: link.label, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
+    const row = remote.rows.find(row => row.install === link.install && row.seat === 1);
+    return { machine: link.label, install: link.install, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
       : peerSeatMessages(link.key) ? null : "unknown" };
   });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);

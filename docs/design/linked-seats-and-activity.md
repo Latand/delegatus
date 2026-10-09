@@ -445,12 +445,15 @@ registry join of §5.1. A receiver at an older build drops both, because
 
 ```json
 "linkedSeats": [
-  {"machine": "B", "seat": {"engine": "claude", "model": "claude-opus-5-5", "state": "working",
+  {"machine": "B", "install": "<linked install id>", "seat": {"engine": "claude", "model": "claude-opus-5-5", "state": "working",
                             "lastActivity": "2026-10-09T00:01:39Z", "stale": false}}
 ]
 ```
 
-one entry per live link that shares the project. `seat` is `null` when that
+one entry per live link that shares the project. The receiver attaches
+`install` from its link and joins seat rows by that id, so duplicate machine
+labels retain distinct seats. Pass that id as `machine` to address either one.
+`seat` is `null` when that
 machine advertises seat messages (§3.4) and publishes no seat row for the
 project, and `"unknown"` when it runs an older build. The rows come through
 `readRemoteAgentRows` (`bindings.ts:5229-5240`), which already reads the

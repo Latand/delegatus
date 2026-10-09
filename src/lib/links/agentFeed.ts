@@ -261,13 +261,13 @@ export function dropAgents(id: string): void { feeds.delete(id); received.delete
 export function receivedAgentRows(id: string): readonly AgentRow[] { return [...(received.get(id)?.rows.values() ?? [])]; }
 export function receivedLaneRows(id: string): readonly LaneRow[] { return [...(received.get(id)?.lanes.values() ?? [])]; }
 export function touchAgents(id: string): void { const state = received.get(id); if (state) state.at = Date.now(); }
-export function remoteAgents(project: string, taskId?: string): Array<AgentRow & { peer: string; stale: boolean; asOf: number }> {
+export function remoteAgents(project: string, taskId?: string): Array<AgentRow & { peer: string; install: string; stale: boolean; asOf: number }> {
   const context = linkedContext();
   return context.links.flatMap((link) => {
     const state = received.get(link.key);
     if (!state || !link.projects.has(project)) return [];
     return [...state.rows.values()].filter((row) => row.p === project && (taskId === undefined || row.task === taskId))
-      .map((row) => ({ ...row, peer: link.label, stale: Date.now() - state.at > 900_000, asOf: state.at }));
+      .map((row) => ({ ...row, peer: link.label, install: link.install, stale: Date.now() - state.at > 900_000, asOf: state.at }));
   });
 }
 /** The lanes of one project that linked peers published, each with the peer

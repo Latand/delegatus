@@ -75,3 +75,18 @@ test("get_orchestrator ignores a peer seat timestamp outside the JavaScript date
   const bindings = viewerMcpBindings(undefined, { post: async () => ({}) }, domain);
   expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [{ machine: "Other", seat: null }] });
 });
+
+test("get_orchestrator distinguishes seats on linked installs with the same machine label", async () => {
+  const second = randomUUID();
+  atomicWrite(linkFile("peers"), { v: 1, peers: [install, second].map(id => ({ id, install: id, grantId: randomUUID(), token: "fixture", label: "Other", url: "http://127.0.0.1:1", store: randomUUID(), state: "active", lastCall: Date.now(), error: null })) });
+  updateRemoteProjects(second, [{ key: project.project, name: "widget" }], randomUUID());
+  for (const [id, engine] of [[install, "codex"], [second, "claude"]] as const) {
+    recordSeatMessages(`peer:${id}`, true);
+    acceptAgents(`peer:${id}`, { cursor: "0011223344556677:3", reset: true, rows: [{ k: "a:0011223344556677", p: project.project, t: "orchestrator", ro: "orchestrator", seat: 1, e: engine, m: "fixture-model", st: "working", at: Date.now() }] }, new Set([project.project]));
+  }
+  const bindings = viewerMcpBindings(undefined, { post: async () => ({}) }, domain);
+  expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [
+    { machine: "Other", install, seat: { engine: "codex" } },
+    { machine: "Other", install: second, seat: { engine: "claude" } },
+  ] });
+});
