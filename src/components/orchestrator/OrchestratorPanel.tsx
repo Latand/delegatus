@@ -611,8 +611,8 @@ export function OrchestratorPanel({
             </button>
           ) : null}
           {/* The expand button: the seat's conversation in the agent window,
-              like any agent, in the place and the glyph the reader's full-pane
-              button had before #2612 removed it. */}
+              like any agent, in the glyph the reader's «Open as a full pane»
+              button wore before #2612 removed it. */}
           {windowFile && onOpenWindow ? (
             <button
               type="button"
