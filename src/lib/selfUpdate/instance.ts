@@ -12,8 +12,6 @@ import { censusIndex, ownerProcessAlive, registryOwners, rowKeyId, type Ownerles
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { structuredDeliveryHeldHosts } from "@/lib/runtime/structuredDeliveryController";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
-import { readStableTailRecords } from "@/lib/scanner/activity";
-import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { Engine } from "@/lib/types";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -136,8 +134,10 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
   const turns = new Map<string, number>();
   const turnOwners = new Map<string, { key: string; epoch: number }>();
   const rowKeys = new Map<string, string>();
+  const rowEpochs = new Map<string, number>();
   const statements = new Map<string, Map<string | null, number | null>>();
   const checkpoints = new Set<string>();
+  const terminals = new Map<string, number>();
   const turnKey = (key: string, turn: string) => `${key}\0${turn}`;
   const prefix = `engine-host:${owner.entryKey}:`;
   for (const event of events) {
@@ -149,6 +149,7 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
       if (key?.engine && key.sessionId) rowKeys.set(event.scope.id, rowKeyId(key));
       const epoch = fenceEpoch(typeof payload.writerClaim === "string" ? payload.writerClaim : null);
       if (!key?.engine || !key.sessionId || epoch === null || !("host" in payload && "turn" in payload && "activeTurnId" in payload)) continue;
+      rowEpochs.set(event.scope.id, epoch);
       const id = rowKeyId(key);
       const active = typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
       const busy = sessionClaimsOpenTurn(payload as unknown as RuntimeSession);
@@ -164,15 +165,19 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
         const claims = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
         if (busy) {
           checkpoints.delete(event.scope.id);
+          terminals.delete(event.scope.id);
           const previous = claims.get(active);
           claims.set(active, previous === undefined || previous === null ? cursor : cursor === null ? null : Math.max(previous, cursor));
         } else {
           // Append order cannot make a queued, older health sample newer than
           // an engine event. A missing source cursor cannot settle a claim.
           for (const [turn, started] of claims) if (cursor !== null && started !== null && cursor > started) claims.delete(turn);
-          // The engine's durable high-water mark survives retention. Only an
-          // own publication beyond it can settle an engine start we lost.
-          if (cursor !== null && engineCursor !== null && engineCursor > 0 && cursor > engineCursor) checkpoints.add(event.scope.id);
+          // Equality at a missing start proves nothing. An own idle that
+          // includes a retained own terminal covers the lost prefix. Later
+          // output adds no claim; a retained new start clears this proof.
+          const terminal = terminals.get(event.scope.id);
+          if (cursor !== null && engineCursor !== null && engineCursor > 0
+            && (cursor > engineCursor || (terminal !== undefined && cursor >= terminal))) checkpoints.add(event.scope.id);
         }
         statements.set(event.scope.id, claims);
       }
@@ -199,6 +204,8 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
     // the epoch is absent from retained history, ambiguity holds the owner.
     if (prior !== undefined && prior !== owner.writerEpoch) continue;
     if (event.kind === "turn-started") {
+      checkpoints.delete(event.scope.id);
+      terminals.delete(event.scope.id);
       turns.set(turnKey(owner.entryKey!, turn), owner.writerEpoch!);
       turnOwners.set(turnKey(event.scope.id, turn), { key: owner.entryKey!, epoch: owner.writerEpoch! });
       const active = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
@@ -207,6 +214,10 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
       active.set(turn, previous === undefined || previous === null ? cursor : Math.max(previous, cursor));
       statements.set(event.scope.id, active);
     } else {
+      if (prior === owner.writerEpoch
+        || (rowKeys.get(event.scope.id) === owner.entryKey && rowEpochs.get(event.scope.id) === owner.writerEpoch)) {
+        terminals.set(event.scope.id, Number(producer.slice(prefix.length)));
+      }
       const claims = statements.get(event.scope.id);
       const started = claims?.get(turn);
       if (started !== undefined && started !== null && Number(producer.slice(prefix.length)) > started) claims!.delete(turn);
@@ -418,21 +429,11 @@ export function ownerCensusReader(
             const cursor = history.incomplete && kind ? await readProducerCursor(kind, `engine-host:${owner.entryKey}:`) : null;
             reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor);
           } else if (owner.entry && ["starting", "live", "handoff"].includes(owner.entry.status)) {
-            // A standalone input can be accepted before its transcript start.
-            // The completion must follow this owner's live admission record.
-            const at = Date.parse(owner.entry.updatedAt);
-            reading.settlementAfter = Number.isFinite(at) ? at : Infinity;
+            // Another prompt can be accepted without changing updatedAt or
+            // the tail. Only this owner's idle state or death ends ambiguity.
+            reading.standaloneClaim = true;
           }
           reading.tail = await tail(owner.artifactPath, owner.engine);
-          if (reading.settlementAfter !== undefined && reading.tail?.turn === "idle" && owner.artifactPath
-            && (owner.engine === "codex" || owner.engine === "claude")) {
-            // Record freshness includes output after a completion. Date the
-            // actual terminal marker, so such output cannot settle new work.
-            const records = await readStableTailRecords(owner.artifactPath, undefined, { strict: true });
-            const turn = records.integrity === "complete" ? turnStateFromRecords(records.records, owner.engine) : null;
-            const at = turn?.state === "terminal" && turn.terminalAt ? Date.parse(turn.terminalAt) : NaN;
-            reading.tail = { ...reading.tail, settledAt: Number.isFinite(at) ? at : null };
-          }
         }
         owners.push(reading);
       });

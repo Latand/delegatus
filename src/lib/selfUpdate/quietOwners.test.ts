@@ -103,6 +103,7 @@ test.each(["known identity", "missing identity"])("proved standalone turn remain
   expect((await probe(fresh, now + FIVE_MINUTES + 2)).quiet).toBe(false);
   expect((await probe(ports(), now + TWELVE_HOURS)).quiet).toBe(false);
   writeFileSync(path, transcriptText("settled", new Date(now + TWELVE_HOURS + 1).toISOString()));
+  f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!, status: "idle" });
   expect((await probe(ports(), now + TWELVE_HOURS + 2)).quiet).toBe(true);
   rmSync(path);
   await exit(worker);
@@ -536,21 +537,25 @@ describe("the tmux successor", () => {
 
   for (const under of ["own key", "A's key"] as const) {
     for (const status of ["idle", "live"] as const) {
-      test(`B under ${under} with status ${status}: the copy and A's late turn event release B over a settled tail`, async () => {
+      test(`B under ${under} with status ${status}: A's late turn event cannot change B's custody`, async () => {
         const t = await tmuxSuccessor(under, status);
         const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(t.bKey)]!;
         writeFileSync(entry.artifactPath, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 1).toISOString()));
         await fallback();
         event(t.id, t.key, "turn-started", "a-late");
         expect(row(t.id)).toMatchObject({ writerClaim: null, turn: "running" });
-        expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+        expect(await probe()).toMatchObject({ quiet: status === "idle", blockers: { turns: status === "idle" ? 0 : 1 } });
+        f.registry.upsert({ ...entry, status: "idle" });
+        expect((await probe()).quiet).toBe(true);
       });
     }
-    test(`B under ${under} with A's fence still on the row is released over a settled tail`, async () => {
+    test(`B under ${under} with A's fence still on the row waits for its own idle settlement`, async () => {
       const t = await tmuxSuccessor(under, "live");
       const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(t.bKey)]!;
       writeFileSync(entry.artifactPath, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 1).toISOString()));
       expect(row(t.id)).toMatchObject({ writerClaim: t.claimA.fence, turn: "running" });
+      expect((await probe()).quiet).toBe(false);
+      f.registry.upsert({ ...entry, status: "idle" });
       expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
     });
     test(`B under ${under} with an open tail holds as turn-open, with or without A's late event`, async () => {
@@ -907,10 +912,11 @@ describe("a proven turn whose evidence is lost", () => {
         expect(await probe(fresh, now + FIVE_MINUTES + 2)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0 } });
         expect(await probe(ports(), now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
         loss.settle(s.path, now + TWELVE_HOURS);
+        f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, status: "idle" });
         expect(await probe(ports(), now + TWELVE_HOURS + 1)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
       });
     }
-    test(`${loss.name}: the live owner holds past five minutes until its own tail settles`, async () => {
+    test(`${loss.name}: the live owner holds past five minutes until its own idle settlement`, async () => {
       const now = Date.now();
       const s = await standalone(now);
       loss.lose(s.path, now + 1);
@@ -920,6 +926,7 @@ describe("a proven turn whose evidence is lost", () => {
         turnList: [{ conversationId: s.id, reason: "turn-open" }] } });
       expect(await probe(s.p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
       loss.settle(s.path, now + TWELVE_HOURS);
+      f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, status: "idle" });
       expect(await probe(s.p, now + TWELVE_HOURS + 1)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
     });
     test(`${loss.name}: the owner's exit releases it`, async () => {
@@ -1698,6 +1705,41 @@ describe("each owner's evidence beside another record", () => {
 });
 
 // The three retained review reproductions, through the production drain seam.
+test("safety comparison: an accepted second standalone prompt keeps custody after the first completion", async () => {
+  const path = transcript("settled", new Date(Date.now() - 60_000).toISOString()), c = conversation(path);
+  const child = Bun.spawn([process.execPath, "-e",
+    "process.stdin.on('data', () => process.stdout.write('WORK_ACCEPTED\\n')); setInterval(() => {}, 1000);"],
+  { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.push(child);
+  const identity = captureProcessIdentity(child.pid)!;
+  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live",
+    host: tmuxHost(identity), claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+  const reader = child.stdout.getReader();
+  const accept = async (text: string) => {
+    child.stdin.write(`${text}\n`);
+    child.stdin.flush();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("WORK_ACCEPTED");
+  };
+  await accept("first prompt");
+  const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
+  writeFileSync(path, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 1).toISOString()));
+  const warm = ports();
+  await probe(warm);
+  await accept("second prompt");
+  await fallback();
+  expect(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!.updatedAt).toBe(entry.updatedAt);
+  expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running" });
+  for (const p of [warm, ports()]) expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  // Its own idle settlement ends the ambiguity while the process still lives.
+  writeFileSync(path, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 2).toISOString()));
+  f.registry.upsert({ ...entry, status: "idle" });
+  expect((await probe(warm)).quiet).toBe(true);
+  f.registry.upsert({ ...entry, status: "live" });
+  expect((await probe(warm)).quiet).toBe(false);
+  await exit({ child });
+  expect((await probe(warm)).quiet).toBe(true);
+});
+
 test("safety comparison: live standalone tmux owner accepts a new turn over an older completed tail", async () => {
   const path = transcript("settled", new Date(Date.now() - 60_000).toISOString());
   const c = conversation(path);
@@ -1723,11 +1765,15 @@ test("safety comparison: live standalone tmux owner accepts a new turn over an o
   appendFileSync(path, JSON.stringify({ timestamp: new Date(admission + 1).toISOString(),
     type: "response_item", payload: { type: "reasoning", summary: [] } }) + "\n");
   expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-  // A strictly newer terminal marker settles this owner's admitted work.
+  // A newer marker still cannot distinguish an accepted unjournaled prompt.
   appendFileSync(path, JSON.stringify({ timestamp: new Date(admission + 2).toISOString(),
     type: "event_msg", payload: { type: "task_complete" } }) + "\n");
+  expect((await probe()).quiet).toBe(false);
+  const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
+  f.registry.upsert({ ...entry, status: "idle" });
   expect((await probe()).quiet).toBe(true);
-  // Losing that settlement restores custody while the process still answers.
+  // A new admission restores custody while the process still answers.
+  f.registry.upsert({ ...entry, status: "live" });
   writeFileSync(path, transcriptText("settled", new Date(admission - 1).toISOString()));
   expect((await probe()).quiet).toBe(false);
   await exit({ child });
@@ -1785,4 +1831,71 @@ test("safety comparison: busy answering handle with no start identity must survi
   expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
   await exit(worker);
   expect((await probe(p)).quiet).toBe(true);
+});
+
+test.each(["minimal", "production"])("safety comparison: caught-up production idle publisher settles retained work under %s retention", async (retention) => {
+  const path = transcript("settled", new Date(Date.now() - 60_000).toISOString()), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "live", null);
+  publish(c.id, c.key, path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "current-turn", seq: 20 } as never)!);
+  publish(c.id, c.key, path, claim.fence, null, 10);
+  await fallback();
+  if (retention === "production") {
+    for (let i = 0; i < 19_998; i++) f.journal.append({ scope: { type: "session", id: "noise" }, kind: "delta",
+      producer: { kind: "codex-app-server", eventKey: `noise:${i}` }, payload: { text: "output" } });
+  } else f.journal.compact(2);
+  expect(f.journal.replay(0).reset).toBe(true);
+  publish(c.id, c.key, path, claim.fence, null, 20);
+  expect((await probe()).quiet).toBe(false); // Caught up to a missing start, with no terminal proof.
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "current-turn", seq: 30, status: "completed" } as never)!);
+  expect(f.journal.producerCursor("codex-app-server", `engine-host:${sessionKeyId(c.key)}:`)).toBe(30);
+  publish(c.id, c.key, path, claim.fence, null, 10);
+  expect((await probe()).quiet).toBe(false); // Queued idle still precedes the missing start.
+  publish(c.id, c.key, path, claim.fence.replace(/:\d+$/, `:${claim.epoch + 1}`), null, 30);
+  expect((await probe()).quiet).toBe(false); // A foreign checkpoint cannot settle this writer.
+  const held = heldHost(worker.child.pid, { status: "idle", activeTurnRef: null, eventCursor: 30 });
+  await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+  expect(row(c.id).writerStatus).toMatchObject({ writerClaim: claim.fence, turn: "idle", activeTurnId: null });
+  for (const at of [Date.now(), Date.now() + TWELVE_HOURS]) {
+    expect(await probe(ports(), at)).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
+  }
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "delta", turnId: "current-turn", seq: 31, text: "final output" } as never)!);
+  expect((await probe()).quiet).toBe(true); // Output does not revoke the earlier terminal checkpoint.
+  await held.fire({ eventCursor: 31 });
+  expect((await probe()).quiet).toBe(true); // A pump caught up beyond the terminal also settles.
+  if (retention === "minimal") {
+    f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "second-turn", seq: 40 } as never)!);
+    expect((await probe()).quiet).toBe(false);
+    publish(c.id, c.key, path, claim.fence.replace(/:\d+$/, `:${claim.epoch + 1}`), null, 40);
+    f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "second-turn", seq: 50, status: "completed" } as never)!);
+    expect((await probe()).quiet).toBe(false); // The old checkpoint cannot settle the new retained start.
+    publish(c.id, c.key, path, claim.fence, null, 31);
+    expect((await probe()).quiet).toBe(false);
+    publish(c.id, c.key, path, claim.fence, null, 50);
+    expect((await probe()).quiet).toBe(true);
+  }
+  const unknown = ports({ owners: ownerCensusReader(productionLivenessSources, {
+    readEvents: async (after) => f.journal.replay(after), readProducerCursor: async () => 0,
+    readSession: (query) => f.client.readSession!(query),
+  }) });
+  expect((await probe(unknown)).quiet).toBe(false);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+}, 120_000);
+
+test("safety comparison: a retained foreign terminal cannot justify an equal own checkpoint", async () => {
+  const c = conversation(transcript("settled")), worker = spawn();
+  const claim = claimHost(c.key, c.path, worker.identity, "live", null);
+  const foreign = claim.fence.replace(/:\d+$/, `:${claim.epoch + 1}`);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "missing-own-turn", seq: 20 } as never)!);
+  publish(c.id, c.key, c.path, foreign, "foreign-turn", 25);
+  f.journal.compact(2);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "foreign-turn", seq: 30, status: "completed" } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 30);
+  expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
 });
