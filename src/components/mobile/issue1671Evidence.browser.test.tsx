@@ -8360,6 +8360,84 @@ describe("account-switch message receipts", () => {
   }, 90000);
 });
 
+describe("agent window on the phone: a swipe that lands on another task's agent says so", () => {
+  /* docs/design/agent-window.md, Phone. The phone opens an agent full screen
+     and its bar's swipe walks every agent of the project, where the desktop
+     window walks the agents the operator opened; so a swipe that lands on
+     another task's agent names that task in the bar for a moment, in the meta
+     line's place. The kanban fixture's `stages` scenario at 390×844 with a
+     touch screen, in English and Ukrainian, light and dark: the board, the
+     retry banner's task, its Review opened, a swipe onto the next agent (of
+     another task), and the bar once the notice has gone. Frames go to
+     AGENT_WINDOW_PNG_DIR, readings to evidence/agent-window/phone.json. */
+  browserTest("390×844, en and uk, light and dark: open an agent, swipe onto another task's agent", async () => {
+    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
+    const out = path.resolve(".artifacts/agent-window-phone");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser = await launchChromium();
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          const label = `390-${lang}-${scheme}`;
+          const fail = (message: string) => failures.push(`${label}: ${message}`);
+          if (!browser.isConnected()) browser = await launchChromium();
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 390, height: 844 }, scheme, lang, "no-preference", true);
+          try {
+            const bar = () => page.evaluate(() => ({
+              title: document.querySelector("[data-mobile2-title-text]")?.textContent ?? null,
+              notice: document.querySelector("[data-mobile2-chat-task-change]")?.textContent ?? null,
+              state: document.querySelector("[data-mobile2-chat-state]")?.textContent ?? null,
+            }));
+            await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-rounds"]', { timeout: 30_000 });
+            await pause(page, 800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-p1-board.png`) });
+            await page.locator('[data-phone-card="task:t-rounds"]').first().click();
+            await page.waitForSelector("[data-open-conversation]", { timeout: 15_000 });
+            await pause(page, 600);
+            await page.screenshot({ path: path.join(pngDir, `${label}-p2-task.png`) });
+            await page.locator("[data-open-conversation]").first().click();
+            await page.waitForSelector("[data-mobile2-chat-title]", { timeout: 15_000 });
+            await pause(page, 900);
+            await page.screenshot({ path: path.join(pngDir, `${label}-p3-agent.png`) });
+            const opened = await bar();
+            if (opened.notice) fail(`opening an agent named another task: ${opened.notice}`);
+            const cdp = await context.newCDPSession(page);
+            const box = await rectOf(page, "[data-mobile2-bar]");
+            if (!box) throw new Error("no bar");
+            const y = box.y + box.height / 2;
+            await touch(cdp, along([340, y], [40, y + 3], 12), 16);
+            await pause(page, 350);
+            const swiped = await bar();
+            await page.screenshot({ path: path.join(pngDir, `${label}-p4-swiped.png`) });
+            const prefix = translate(lang, "mobile2.chat.otherTask" as never, { title: "" } as never);
+            if (swiped.title === opened.title) fail(`the swipe stayed on ${opened.title}`);
+            else if (!swiped.notice?.startsWith(prefix) || swiped.notice.length <= prefix.length) fail(`the swipe onto another task's agent reads ${JSON.stringify(swiped)}`);
+            await pause(page, 3_300);
+            const settled = await bar();
+            await page.screenshot({ path: path.join(pngDir, `${label}-p5-settled.png`) });
+            if (settled.notice || !settled.state) fail(`the notice did not give the meta line back ${JSON.stringify(settled)}`);
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+            readings[label] = { opened, swiped, settled, pageErrors };
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/agent-window", { recursive: true });
+    fs.writeFileSync("evidence/agent-window/phone.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
 describe("prototype review on the phone", () => {
   /*
    * Operator, 2026-10-07: on an iPhone a phone-width frame in the review

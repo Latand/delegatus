@@ -5,11 +5,10 @@ import { mobileRowState, type MobileRowDot, type MobileRowStateKey } from "@/com
 import { readerFrameRole, readerNames, type ReaderView } from "./KanbanReaders";
 
 /**
- * The agents open on the board, for the rail at its side: every reader the
- * operator opened in a card, in the order they were opened, each with the
- * short name, role and state its reader shows. A conversation no card holds,
- * open only in the whole window, and one a Stages pane shows without a reader
- * of its own are not open on the board and are not listed.
+ * The agents open on the board, for the agent window's list: every
+ * conversation the operator opened, in the order they were opened, each with
+ * the short name, role and state its reader shows. One a Stages pane shows
+ * without being opened is not listed.
  */
 export interface OpenAgent {
   key: string;
@@ -21,9 +20,6 @@ export interface OpenAgent {
   tone: MobileRowDot;
   live: boolean;
   state: MobileRowStateKey;
-  /** A draft the operator has not sent yet. It stands in the rail so the strip
-      is already there when the launch turns it into a conversation. */
-  draft?: boolean;
 }
 
 export function openAgents(t: TFunction, views: readonly ReaderView[], open: readonly { key: string }[], now: number): OpenAgent[] {
@@ -43,20 +39,6 @@ export function openAgents(t: TFunction, views: readonly ReaderView[], open: rea
       state: row.key,
     }];
   });
-}
-
-/** The agent drafts on the board, drawn as agents the rail already holds a place for. */
-export function draftAgents(t: TFunction, cards: readonly { id: string; title: string; titlePending: boolean; task: unknown; drafts: readonly string[] }[]): OpenAgent[] {
-  return cards.flatMap((card) => card.drafts.map((id) => ({
-    key: `draft::${id}`,
-    name: t("kanban.openAgents.draft"),
-    card: card.task ? (card.titlePending ? t("kanban.untitled") : card.title) : null,
-    role: "neutral" as FrameRole,
-    tone: "neutral" as const,
-    live: false,
-    state: "done" as const,
-    draft: true,
-  })));
 }
 
 /** The agent a cycling step lands on: the next (or previous) after the
