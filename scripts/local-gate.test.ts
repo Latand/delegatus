@@ -5,10 +5,28 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { codexFixture, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { nativeBatches } from "./verify-native-codex-runtime";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
-afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+const owned: ProcessIdentity[] = [];
+async function recordFixtureIdentities(files: string[]): Promise<ProcessIdentity[]> {
+  const until = Date.now() + 2_000;
+  const identities: ProcessIdentity[] = [];
+  for (const file of files) {
+    while (!existsSync(file) && Date.now() < until) await Bun.sleep(10);
+    const identity = captureProcessIdentity(Number(readFileSync(file, "utf8")));
+    owned.push(identity);
+    identities.push(identity);
+    expect(processIdentityStatus(identity), "fixture reported with live PID/start/boot identity").toBe("alive");
+  }
+  return identities;
+}
+afterEach(async () => {
+  for (const identity of owned.splice(0)) await stopFixtureIdentity(identity);
+  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 function context(overrides: Partial<PlanEnvironment> = {}): PlanEnvironment {
   return { base: "base", existing: new Set(["src/example.ts", "src/example.test.ts", "src/example.integration.test.ts", "src/example.browser.test.tsx", "image.png", "package.json"]), tests: ["src/example.test.ts", "src/example.integration.test.ts", "src/example.browser.test.tsx"], skippedMedia: [], linux: false, runtime: false, native: false, linuxTests: ["src/platform.test.ts"], runtimeTests: ["scripts/runtime.test.ts"], codexVersions: ["0.154.0", "0.159.0"], ...overrides };
 }
@@ -232,22 +250,27 @@ const userManager = process.platform === "linux" && Bun.which("systemd-run") !==
   && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status === 0;
 test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers that left the tree included, and no other scope is touched", async () => {
   // A neighbour scope this run must leave alone.
-  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "sleep", "60"], stdio: ["ignore", "ignore", "ignore"] });
+  const neighbourDir = mkdtempSync(path.join(tmpdir(), "gate-neighbour-")); roots.push(neighbourDir);
+  const neighbourFile = path.join(neighbourDir, "pid");
+  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", `echo $$ > '${neighbourFile}'; exec sleep 60`], stdio: ["ignore", "ignore", "ignore"] });
   try {
-    // gate-slot as the step's own command, and gate-slot under a process that
-    // stays in this hook's cgroup while the work runs in a run-*.scope.
+    const [neighbourIdentity] = await recordFixtureIdentities([neighbourFile]);
+    // Exercise actual transient scopes directly and below an intermediate.
+    // gate-slot now owns a service; its lifetime is verified by owned-runner.
     for (const wrapped of [false, true]) {
       const dir = mkdtempSync(path.join(tmpdir(), "gate-scope-")); roots.push(dir);
-      writeFileSync(path.join(dir, "pressure"), "some avg10=0.00 avg60=0.00 avg300=0.00 total=1\n");
-      const env = { ...process.env, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir };
+      const env = { ...process.env };
       // One helper keeps the step's environment and one starts from an empty
       // one; both are reparented away from the step's process tree.
-      const script = `cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
-      const slot = ["bash", path.join(root, "scripts/gate-slot.sh"), "bash", "-c", script];
-      const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...slot] : slot;
+      const script = `echo $$ > '${dir}/root.pid'; cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
+      const scoped = ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", script];
+      const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...scoped] : scoped;
       const started = performance.now();
-      const error = await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},
+      const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},
         prepare: () => ({ command, env }) }).then(() => null, (caught: unknown) => caught);
+      try { await recordFixtureIdentities(["root", "kept", "bare"].map(name => path.join(dir, `${name}.pid`))); }
+      finally { await pending; }
+      const error = await pending;
       expect(performance.now() - started).toBeLessThan(10_000);
       expect(existsSync(path.join(dir, "ready")), "the work started before the deadline").toBeTrue();
       expect(error).toBeInstanceOf(NoVerdict);
@@ -258,6 +281,7 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
       for (const helper of ["kept", "bare"]) expect(alive(Number(readFileSync(path.join(dir, `${helper}.pid`), "utf8"))), `${helper}, wrapped: ${wrapped}`).toBeFalse();
       expect(scopeProcesses(scope)).toEqual([]);
       expect(alive(neighbour.pid)).toBeTrue();
+      expect(processIdentityStatus(neighbourIdentity!)).toBe("alive");
     }
   } finally {
     neighbour.kill("SIGKILL");
@@ -282,9 +306,10 @@ await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: ${J
 `);
   const started = performance.now();
   const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
+  const [identity] = await recordFixtureIdentities([rootPid]);
   const code = await hook.exited;
   const elapsed = performance.now() - started;
-  const pid = Number(readFileSync(rootPid, "utf8"));
+  const pid = identity!.pid;
   try {
     // The deadline, the three-second cleanup allowance and Bun's start-up; never the child's own nine seconds.
     expect(elapsed).toBeLessThan(5_500);
@@ -296,7 +321,7 @@ await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: ${J
     expect(hookBudgetStop(said)).toBeNull();
     expect(alive(pid), "the survivor really was left running").toBeTrue();
   } finally {
-    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    await stopFixtureIdentity(identity!);
   }
 }, 30_000);
 for (const budget of [null, 60_000]) test(`a group member that cannot be prepared stops the rest of its group before the hook exits (deadline: ${budget ?? "none"})`, async () => {
@@ -311,15 +336,18 @@ const members = ["native Codex 0.154.0", "native Codex 0.159.0"].map(name => ({ 
 await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: budget === null ? null : { at: startedAt + budget, startedAt }, logDir: ${JSON.stringify(dir)},
   prepare: async step => {
     if (step.name.endsWith("0.154.0")) return { command: ["bash", "-c", "echo $$ > ${pidFile("root")}; sleep 15 & echo $! > ${pidFile("helper")}; wait"], env: process.env };
-    while (!existsSync(${JSON.stringify(pidFile("helper"))})) await Bun.sleep(10);
+    while (!existsSync(${JSON.stringify(path.join(dir, "release"))})) await Bun.sleep(10);
     throw new Error("installing @openai/codex@0.159.0 failed (1)");
   } }).catch((error: unknown) => endHook("pre-push", error));
 `);
   const started = performance.now();
   const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
+  let identities: ProcessIdentity[];
+  try { identities = await recordFixtureIdentities(["root", "helper"].map(pidFile)); }
+  finally { writeFileSync(path.join(dir, "release"), "ready"); await hook.exited; }
   const code = await hook.exited;
   const elapsed = performance.now() - started;
-  const pids = ["root", "helper"].map(name => Number(readFileSync(pidFile(name), "utf8")));
+  const pids = identities.map(identity => identity.pid);
   try {
     // The cleanup allowance and Bun's start-up; never the helper's fifteen seconds or the deadline.
     expect(elapsed).toBeLessThan(5_500);
@@ -335,7 +363,7 @@ await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: bu
     expect(publicationFailurePhase({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1_000, outputTail: said })).toBe("native Codex 0.159.0");
     expect(hookBudgetStop(said)).toBeNull();
   } finally {
-    for (const pid of pids) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    for (const identity of identities) await stopFixtureIdentity(identity);
   }
 }, 30_000);
 test("a native Codex group names its unfinished or failed version, never a member that passed", async () => {
@@ -407,6 +435,7 @@ test("state isolation replaces inherited roots and removes the live owner claim"
   for (const key of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) expect(env[key]).toBeUndefined();
   expect(env.LLV_GATE_LOCK_DIR).toBe("/var/tmp");
   expect(isolatedEnvironment(sandbox, { NODE_ENV: "test", LLV_GATE_LOCK_DIR: sandbox }).LLV_GATE_LOCK_DIR).toBe(sandbox);
+  expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
 });
 test("scope uses executed import closure and the workflow test lists", () => {
   const doc = discover(root, "HEAD", ["CONTRIBUTING.md"]);
@@ -435,6 +464,7 @@ function hookFixture(realLint = false) {
     symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
   }
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
+  symlinkSync(path.join(root, "scripts/owned-runner.ts"), path.join(dir, "scripts/owned-runner.ts"));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
   writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
@@ -442,7 +472,7 @@ function hookFixture(realLint = false) {
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts || ( "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ) ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
   }
-  const env = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), HOOK_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
+  const env = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), HOOK_BUN: process.execPath, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, stdio: "pipe" });
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
   writeFileSync(path.join(dir, "package.json"), "{}"); writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");

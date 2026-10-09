@@ -1,6 +1,8 @@
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { fixtureReport, ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, test } from "bun:test";
 import { copyFileSync, existsSync, readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { installAction, launcherService, runInstallAction, unitRunsLauncher } from "./actions";
 const record = { launcher: { pid: 12, startIdentity: "7" }, checkout: "/srv/checkout", releasePointer: "/state/release.json" };
@@ -306,17 +308,16 @@ test.each([
 /* After the first self-update the entry the unit starts hands off to the
    selected release and stays as its parent: the unit's main process is the
    bootstrap, and the recorded launcher is its child. */
-async function bootstrapped(script: (root: string) => string): Promise<{ root: string; bootstrap: number; launcher: number; stop(): void }> {
+async function bootstrapped(script: (root: string) => string): Promise<{ root: string; bootstrap: number; launcher: number; stop(): Promise<void> }> {
   const root = mkdtempSync(join(managed, "install-")); mkdirSync(join(root, "bin"));
   writeFileSync(join(root, "bin", "cli.mjs"), `import { spawn } from "node:child_process";
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-console.log(child.pid); setInterval(() => {}, 1000);
+console.log(JSON.stringify({ launcher: child.pid })); setInterval(() => {}, 1000);
 `);
-  const parent = Bun.spawn([process.execPath, script(root), "--no-open"], { cwd: root, stdout: "pipe", stderr: "ignore" });
-  const reader = parent.stdout.getReader(); let text = "";
-  while (!text.includes("\n")) { const chunk = await reader.read(); if (chunk.done) break; text += new TextDecoder().decode(chunk.value); }
-  const launcher = Number(text.trim());
-  return { root, bootstrap: parent.pid, launcher, stop: () => { for (const pid of [launcher, parent.pid]) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } } };
+  const parent = ownFixtureTree(spawn(process.execPath, [script(root), "--no-open"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] }));
+  const { launcher } = await fixtureReport<{ launcher: number }>(parent, "bootstrap launcher", [], 1_000);
+  const identity = captureProcessIdentity(launcher);
+  return { root, bootstrap: parent.pid!, launcher, stop: async () => { await stopFixtureIdentity(identity); await stopFixtureProcess(parent); } };
 }
 test.each([
   ["an absolute entry", (root: string) => join(root, "bin", "cli.mjs")],
@@ -336,5 +337,5 @@ test.each([
       expect(calls[0]?.slice(-4)).toEqual(["systemctl", "--user", "restart", unit]);
       expect(() => runInstallAction(action!, command => calls.push(command), undefined, { root: "/srv/elsewhere", launcherPid: tree.launcher })).toThrow("not proven");
     });
-  } finally { tree.stop(); }
+  } finally { await tree.stop(); }
 });

@@ -1,3 +1,4 @@
+import { permitMaintainerTool } from "./toolAllowlist";
 import { expect, test } from "bun:test";
 
 import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
@@ -194,4 +195,10 @@ test("nothing the caller states participates: the verdict reads authority and se
     TARGET_PROJECT,
   );
   expect(verdict.allowed).toBe(false);
+});
+
+
+test("maintenance can read needs-you but every dismissal field remains refused", () => {
+  expect(permitMaintainerTool("dismiss_attention", { project: "project-a" }).allowed).toBe(true);
+  for (const field of ["target", "undo", "reason"]) expect(permitMaintainerTool("dismiss_attention", { [field]: field === "undo" ? false : "value" }).allowed).toBe(false);
 });

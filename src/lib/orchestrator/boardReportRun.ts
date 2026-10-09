@@ -375,9 +375,10 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
   const reportLanes = projectLanes.map(reportLaneFrom);
   const livenessWork = agentLivenessSnapshot({ project, liveOnly: true, stallAfterMs: DEFAULT_SEAT_TICK_POLICY.stallAfterMs, limit: 200 }, productionLivenessSources())
     .then((answer) => answer.conversations, () => "unreadable" as const);
-  const [liveness, github] = await Promise.all([
+  const [liveness, github, needsRead] = await Promise.all([
     withDeadline(livenessWork, deadlineMs, clock),
     readBoardReportGithub({ root, onBoard: issueNumbersOnBoard(reportTasks, reportLanes), deadlineMs, clock }),
+    withDeadline(import("@/lib/attention/needsYouRead").then(m => m.readNeedsYou(project, {}, "stale-first")).catch(() => null), deadlineMs, clock),
   ]);
 
   let agents: ReportAgent[] | null = null;
@@ -396,7 +397,11 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
 
   const laneBranches = new Set([...hot, ...archived].map((pipeline) => pipeline.branch).filter(Boolean));
   const origin = delegatusMessageOrigin(BOARD_REPORT_ORIGIN_ROLE, project);
+  let needsYou: BoardReportFacts["needsYou"] = null;
+  if (needsRead && needsRead !== "timed-out") needsYou = needsRead;
+  else gaps.push({ source: "needs-you", reason: needsRead === "timed-out" ? "timed out" : "unreadable" });
   return {
+    needsYou,
     projectName: origin.project ?? projectDisplayName(project),
     seatEpoch: seat.seatEpoch,
     seatConversationId: seat.conversationId,

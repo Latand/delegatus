@@ -69,3 +69,16 @@ test("questionnaire summaries and notices ask for answers and record an answered
   expect(prototypeReviewSummary([questionRound])?.decision).toMatchObject({ answered: true, chosen: [] });
   expect(prototypeReviewNotices([task([questionRound])])).toEqual([]);
 });
+
+test("a covered waiting round leaves the attention queue, undo and a newer round ask again", () => {
+  const held = task([round("review-a", "Layout", "2026-10-02T00:00:00Z", false)]);
+  const record = { kind: "prototype" as const, taskId: held.id, subject: "prototype:review-a", conversationId: null, path: null,
+    at: "2026-10-03T00:00:00Z", by: { kind: "operator" as const }, reason: null, reasonId: null };
+  const index = new Map([[record.subject, record]]);
+  const covered = withPrototypeReviewSummaries([held], index);
+  expect(covered[0]!.prototypeReview?.waitingDismissal).toEqual({ at: record.at, by: record.by });
+  expect(prototypeReviewNotices(covered)).toEqual([]);
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([held], new Map()))).toHaveLength(1);
+  held.prototypeReviews!.push(round("review-b", "Next", "2026-10-04T00:00:00Z", false));
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([held], index))[0]!.reviewId).toBe("review-b");
+});

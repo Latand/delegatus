@@ -53,7 +53,7 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[]): PrototypeRe
   return tasks.flatMap(task => {
     const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
     const reviewId = summary?.waitingReviewId;
-    if (!summary || !reviewId) return [];
+    if (!summary || !reviewId || !prototypeWaitsOnOperator(summary)) return [];
     /* The notice names the task the jump lands on; the waiting round's own title, which may be older than the latest, rides second. */
     const waiting = (task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? []).find(round => round.id === reviewId);
     const roundTitle = waiting?.title ?? (reviewId === summary.latestReviewId ? summary.title : undefined);
@@ -61,4 +61,8 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[]): PrototypeRe
       ...(waiting?.questions?.length || summary.asks === "questions" ? { asks: "questions" as const } : {}),
       createdAt: summary.createdAt, target: { kind: "prototype-review" as const, taskId: task.id, reviewId } }];
   });
+}
+
+export function prototypeWaitsOnOperator(summary: PrototypeReviewSummary | undefined): boolean {
+  return !!summary?.waitingReviewId && !summary.waitingDismissal;
 }

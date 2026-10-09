@@ -776,9 +776,9 @@ controls, old notice text and old mandate directive before their implementations
 The focused checks also cover malformed answers, shared Other text, skip replay,
 message-size refusal before storage, and the production runtime delivery after reload.
 
-The mandate at version 42 measures 29 361 delivered bytes, with 39 bytes inside
-its 29 400-byte ceiling. The rotation-history margin is 33 bytes. Delivery adds
-15 027 bytes to an empty mandate, inside the deliberate 15 100-byte directive
+The merged mandate at version 43 measures 29 370 delivered bytes, with 30 bytes inside
+its 29 400-byte ceiling. The rotation-history margin is 24 bytes. Delivery adds
+15 036 bytes to an empty mandate, inside the deliberate 15 100-byte directive
 budget. Existing fingerprints remain intact, and delivering a shipped old pointer
 twice is a fixed point.
 

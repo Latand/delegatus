@@ -13,6 +13,7 @@ import {
   openBridgeChannel,
   readBridgeChannel,
   readBridgeReportLog,
+  resolveBridgeAsks,
 } from "./store";
 import { persistedBridgeChannel, persistedBridgeReportRowsText } from "./storeFixture";
 import {
@@ -280,4 +281,16 @@ test("the drain tolerates a channel that was never opened", () => {
   const batch = drainBridgeReports();
   expect(batch.reports.map((entry) => entry.seq)).toEqual([1]);
   expect(fs.existsSync(bridgeReportLogPath())).toBe(true);
+});
+
+
+test("a report dismissal retains its note through reads, fences the project, and undo removes only that mark", () => {
+  sandbox();
+  const { appended } = appendBridgeReports([report("ask-a", { class: "question" }), report("ask-b", { class: "question" }), report("ask-other", { class: "question", project: "repo-project-b" })]);
+  const seq = appended[0]!.seq;
+  const options = { by: { kind: "operator" as const }, at: "2026-07-27T12:10:00Z", note: "The later turn answered it", inProject: (project: string) => project === "repo-project-a" };
+  expect(resolveBridgeAsks([seq, appended[2]!.seq], options)).toEqual({ resolved: [seq], alreadyClear: [], unknown: [appended[2]!.seq] });
+  expect(readBridgeReportLog().resolvedAsks).toEqual([{ seq, at: options.at, by: options.by, note: options.note }]);
+  expect(resolveBridgeAsks([seq], { ...options, undo: true }).resolved).toEqual([seq]);
+  expect(readBridgeReportLog().resolvedAsks).toEqual([]);
 });

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
+import { fixtureReport } from "@/lib/testing/fixtureProcess";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -136,9 +137,11 @@ async function settles(assertion: () => boolean, what: string, attempts = 600): 
 /** Tracks a process this test is responsible for ending; teardown kills are
     not product signals, so they bypass the spy. */
 function track(pid: number, identity: ProcessIdentity = captureProcessIdentity(pid)): Tracked {
-  const alive = () => procBackend.pidAlive(pid);
+  const alive = () => processIdentityStatus(identity) === "alive";
   const end = async () => {
-    try { realKill.call(process, pid, "SIGKILL"); } catch { /* gone */ }
+    if (alive()) {
+      try { realKill.call(process, pid, "SIGKILL"); } catch { /* gone */ }
+    }
     await settles(() => !alive(), `process ${pid} exit`);
   };
   const created = { pid, identity, alive, end };
@@ -198,38 +201,28 @@ type AdoptReport = {
     line, so a generation that completes a later pass is read the same way. */
 type Generation<Report> = Tracked & { report: Report; reports: Report[] };
 
-async function generation<Report extends { generation: ProcessIdentity }>(
+function generation<Report extends { generation: ProcessIdentity }>(
   mode: "spawn" | "adopt",
   lane: { registryPath: string; directory: string },
   hostShape: "single" | "tree" = "single",
 ): Promise<Generation<Report>> {
   const child: ChildProcess = spawn(process.execPath, ["run", generationFixture, mode, lane.registryPath, lane.directory, hostShape], {
     cwd: repoRoot,
-    env: generationEnvironment as NodeJS.ProcessEnv,
+    env: { ...generationEnvironment, NODE_ENV: "test", LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (child.pid === undefined) throw new Error("generation did not start");
-  const errors: string[] = [];
-  child.stderr?.on("data", (chunk) => errors.push(String(chunk)));
+  const pid = child.pid;
+  const created = track(pid);
   const reports: Report[] = [];
-  const report = await new Promise<Report>((resolve, reject) => {
-    let buffered = "";
-    child.stdout?.on("data", (chunk) => {
-      buffered += String(chunk);
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim().startsWith("{")) continue;
-        const parsed = JSON.parse(line) as Report;
-        reports.push(parsed);
-        resolve(parsed);
-      }
-    });
-    child.once("exit", (code) => reject(new Error(`generation ${mode} exited with ${code} before reporting:\n${errors.join("")}`)));
+  const ready = fixtureReport<Report>(child, `stageHostGeneration ${mode}`, reports).then(report => {
+    expect(report.generation.pid).toBe(pid);
+    return Object.assign(created, { report, reports });
   });
-  const created = track(child.pid, report.generation);
-  expect(report.generation.pid).toBe(child.pid);
-  return Object.assign(created, { report, reports });
+  // A concurrent assertion can fail before the caller awaits readiness.
+  // Teardown still reaps the child; awaiting ready still receives its error.
+  void ready.catch(() => {});
+  return ready;
 }
 
 /* ---------- lane fixture ---------- */
@@ -299,10 +292,13 @@ function holdWork(current: Lane): void {
 
 /** A successor Viewer generation boots against the lane's registry and the
     runtime host, running the product's startup adoption. */
-async function successor(current: Lane): Promise<Generation<AdoptReport>> {
-  const booted = await generation<AdoptReport>("adopt", { registryPath: current.registryPath, directory: current.directory });
-  for (const adopted of booted.report.adopted) track(adopted.host.pid, adopted.host);
-  return booted;
+function successor(current: Lane): Promise<Generation<AdoptReport>> {
+  const ready = generation<AdoptReport>("adopt", { registryPath: current.registryPath, directory: current.directory }).then(booted => {
+    for (const adopted of booted.report.adopted) track(adopted.host.pid, adopted.host);
+    return booted;
+  });
+  void ready.catch(() => {});
+  return ready;
 }
 
 /* ---------- pipeline fixture ---------- */

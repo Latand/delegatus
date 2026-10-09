@@ -437,7 +437,7 @@ test("#1279: a refusal from the account resolver stops the digest before any tur
    growth is checked here rather than discovered as a silently trimmed digest
    or a refused designation. */
 test("the delivered default mandate fits the delivery bound with room for a rotation's history and handoff", () => {
-  // Questionnaire mandate: delivered 29 361 bytes; rotation history margin 33 bytes.
+  // Merged questionnaire mandate: delivered 29 370 bytes; rotation history margin 24 bytes.
   const preflight = mandatePreflight(ORCHESTRATOR_SYSTEM_PROMPT, "spawn", { mode: "standard" });
   expect(preflight.ok).toBe(true);
   /* A rotation composes core + history + handoff against the same envelope;

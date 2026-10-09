@@ -3337,9 +3337,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   publish_prototype_review: "questions (3–7): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id, and skipped:true means the operator took the recommendations. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
-    "Clear a needs-you flag the operator is shown, without answering anything (docs/design/needs-attention.md): a conversation's question, plan, prompt or undelivered message, a lane parked on a decision or a spent review budget, or everything on a task's card stops raising needs-you until something newer asks. Nothing else moves \u2014 no question is answered, no lane changes state, no message is dropped \u2014 and the card says who cleared it.",
-    "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
-    "Targets: { kind: \"conversation\", conversationId | path }, { kind: \"pipeline\", pipelineId }, or { kind: \"task\", taskId } for its conversations and the lanes filed under it. undo: true brings back what was cleared. The answer lists what was dismissed and what was alreadyClear (a lane that asks nothing, one already cleared, an undo of nothing), neither of which is an error. Attributed to the calling session on the server; idempotent by clientRequestId. pipeline_action dismiss/undismiss is the same write.",
+    "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
+    "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
+    'Targets: {kind:"conversation",conversationId|path,reasonId}, {kind:"pipeline",pipelineId,laneMovedAt}, {kind:"report",seq}, {kind:"prototype",taskId,reviewId}, {kind:"task",taskId}. Optional reason is one line up to 200 characters, retained beside server attribution in the read\'s cleared list. undo:true restores the mark. New reasons and rounds ask again. Dismissal resolves a report question in its log and leaves prototype choices open. pipeline_action dismiss/undismiss is the same lane write.',
   ].join(" "),
   bridge_report: [
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
@@ -3666,6 +3666,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
+    findingKey: z.string().max(400).refine(value => [...value].length <= 200).optional()
+      .describe("Opaque finding identity, at most 200 characters, unique among this project's open tasks. A recurring create increments count and lastSeenAt, replaces note (omitted clears it), preserves text, and answers the existing id with matched:true. After Done a new task links through finding.previousTaskId. Local to this install; never synced."),
+    note: z.string().nullable().optional().describe("Current situation for a keyed finding, at most 280 characters. Author and time are server-derived; omitted clears the previous note on a match."),
     project: z.string().min(1),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
@@ -3695,6 +3698,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   update_task: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
+    findingKey: z.string().max(400).refine(value => [...value].length <= 200).nullable().optional()
+      .describe("Set an opaque finding identity of at most 200 characters; null clears it and its occurrence metadata. Another open task holding it in this project refuses the update, including a reopen. Setting a new key starts count at one. Local to this install; never synced."),
     note: z.string().nullable().optional().describe("Current situation for the operator, at most 280 characters; replaces the note, null clears it. Author and updatedAt are server-derived."),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     taskId: entityIdSchema.optional().describe("Required for every update except refine; refine defaults to every pending task the calling conversation is linked to."),
@@ -4122,11 +4127,20 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       z.object({
         kind: z.literal("conversation"),
         conversationId: z.string().min(1).optional().describe('Durable "conversation_…" id. The form to prefer.'),
+        reasonId: z.string().min(1).optional(),
         path: z.string().min(1).optional().describe("Transcript .jsonl path. Supply at least one of the two."),
       }).passthrough(),
-      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1) }).passthrough(),
+      z.object({ kind: z.literal("pipeline"), pipelineId: z.string().min(1), laneMovedAt: z.number().nullable().optional() }).passthrough(),
       z.object({ kind: z.literal("task"), taskId: z.string().min(1).describe("Board task id: its assignments and the lanes filed under it.") }).passthrough(),
-    ]).describe("What to clear."),
+      z.object({ kind: z.literal("update"), decisionId: z.string().optional() }).passthrough(),
+      z.object({ kind: z.literal("report"), seq: z.number().int().positive() }).passthrough(),
+      z.object({ kind: z.literal("prototype"), taskId: z.string().min(1), reviewId: z.string().min(1) }).passthrough(),
+    ]).optional().describe("What to clear; omit to read the project panel."),
+    project: z.string().min(1).optional().describe("Read form; defaults to your seat or maintenance project."),
+    kinds: z.array(z.enum(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"])).optional(),
+    full: z.boolean().optional(),
+    cursor: z.string().optional(),
+    reason: z.string().max(200).optional().describe("One line retained beside who cleared the row."),
     undo: z.boolean().optional().describe("true brings back what an earlier dismissal cleared."),
   }).passthrough(),
   bridge_report: z.object({

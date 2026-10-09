@@ -1,3 +1,4 @@
+import "@/lib/testing/fixtureLifetime";
 /** The composer's delivery and queue routes served by the real handlers over a
  * real runtime host journal, delivering to the installed Codex app-server.
  *

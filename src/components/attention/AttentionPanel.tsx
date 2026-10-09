@@ -9,9 +9,8 @@ import type { Pipeline } from "@/lib/pipelines/types";
 
 import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
 import { RoleTag } from "../RoleFrameMark";
-import { cleanTitle, fmtAge } from "../utils";
+import { fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
-import { reasonLine } from "./decision";
 import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay";
 import {
   isFocusedNeedsYouEntry,
@@ -19,7 +18,7 @@ import {
   needsYouDismissibleCount,
   needsYouEntryRole,
   needsYouEntrySince,
-  needsYouLaneLine,
+  needsYouRowText,
   needsYouSections,
 } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
@@ -282,8 +281,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
-  const title = entry.kind === "conversation" ? entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90) : entry.row.task;
-  const line = entry.kind === "conversation" ? reasonLine(t, entry.item.reason) : needsYouLaneLine(t, entry.row.pipeline);
+  const { title, line } = needsYouRowText(t, entry);
   const permission = entry.kind === "conversation" && entry.item.reason.kind === "permission" && entry.item.file.pendingPermission ? entry.item.file : null;
   return (
     <div

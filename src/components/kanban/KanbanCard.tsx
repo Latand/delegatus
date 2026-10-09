@@ -631,7 +631,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
-      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs}
+      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs}
         taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
         onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
         referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)

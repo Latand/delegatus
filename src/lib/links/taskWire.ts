@@ -1,7 +1,7 @@
 /**
  * A task on the wire of `boards/sync` (docs/design/linked-installs.md M.5).
  * Only the merged groups cross; assignments, holds, sources, attachments,
- * deadlines and group hides never do. Project sharing consents to task text;
+ * deadlines, group hides, finding keys and occurrence metadata never do. Project sharing consents to task text;
  * board membership crosses on arrival. Every field has a bound, checked by the sender before
  * it encodes a row and by the receiver like a local write.
  */
