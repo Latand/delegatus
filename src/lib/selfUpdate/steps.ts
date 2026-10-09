@@ -13,7 +13,7 @@ import { setPriority } from "node:os";
 import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
-import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
+import { readStartIdentity, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
 import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepName, type Step, type StepFailure, type UpdateState } from "./types";
 
@@ -37,6 +37,8 @@ export interface StepPorts {
   publish(release: Release): void | Promise<void>;
   now(): number;
   abort?(): void;
+  /** False only when the child ended without an exit status. A recorded exit
+      status remains valid while run() drains output and settles the step. */
   childAlive?(): boolean;
   /** The commit whose build passed the ready check in this directory, when
       the directory records one; a new build withdraws the record first. */
@@ -310,6 +312,7 @@ export interface RealPorts extends StepPorts { abort(): void }
 export function realPorts(publish: (release: Release) => void | Promise<void>,
   cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
+  let completion: { ended: boolean; code: number | null } | null = null;
   let waiting: AbortController | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
@@ -326,9 +329,18 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         } finally { waiting = null; }
       }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-      const exited = new Promise<number>((resolve) => {
-        child.once("error", (error) => { onLine(error.message); resolve(127); });
-        child.once("close", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+      const result = { ended: false, code: null as number | null };
+      completion = result;
+      const exited = new Promise<number | null>((resolve) => {
+        const finish = (code: number | null) => {
+          if (result.ended) return;
+          result.ended = true;
+          result.code = code;
+          resolve(code);
+        };
+        child.once("error", (error) => { onLine(error.message); finish(127); });
+        child.once("exit", (code) => finish(code));
+        child.once("close", (code) => finish(code));
       });
       const identity = child.pid ? readStartIdentity(child.pid) : null;
       if (child.pid && identity) current = { pid: child.pid, startIdentity: identity };
@@ -337,16 +349,24 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       }
       try {
         await Promise.all([pumpLines(child.stdout, onLine), pumpLines(child.stderr, onLine)]);
-        return await exited;
+        const code = await exited;
+        if (code === null) throw new StepError({ kind: "interrupted" }, "child process ended without an exit status");
+        return code;
       } finally {
-        current = null;
+        if (completion === result) {
+          current = null;
+          completion = null;
+        }
       }
     },
     abort() {
       waiting?.abort();
       if (current) signalGroup(current, "SIGTERM");
     },
-    childAlive: () => current === null || sameProcess(current),
+    // A PID can disappear before its exit event is delivered, and its pipes
+    // can stay open after that event. Let the child report its status; the
+    // step deadline still bounds a missing event or output that never closes.
+    childAlive: () => completion === null || !completion.ended || completion.code !== null,
     memAvailableMb,
     async revParse(ref, cwd) {
       return (await runGit(["rev-parse", "--verify", "--quiet", ref], cwd)).stdout.trim();
