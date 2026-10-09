@@ -122,7 +122,7 @@ test("the periodic reaper releases a completed conversation's dead structured-ho
   }
 });
 
-test("the issue 652 convergence pass stops a no-progress intent and terminalizes its held delivery", () => {
+test("the issue 652 convergence pass stops a no-progress intent and terminalizes its held delivery", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-stale-migration-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const conversation = registry.ensureConversation("codex", "/stale-migration.jsonl", "source");
@@ -136,7 +136,7 @@ test("the issue 652 convergence pass stops a no-progress intent and terminalizes
   const held = registry.holdDelivery(conversation.id, "queued before abandonment", "stale-held");
 
   try {
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now() + 6 * 60_000,
     );
@@ -154,7 +154,7 @@ test("the issue 652 convergence pass stops a no-progress intent and terminalizes
   }
 });
 
-test("the issue 652 convergence pass settles a requested member with no live source owner", () => {
+test("the issue 652 convergence pass settles a requested member with no live source owner", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-dead-migration-source-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const conversation = registry.ensureConversation("codex", "/dead-migration-source.jsonl", "source");
@@ -168,7 +168,7 @@ test("the issue 652 convergence pass settles a requested member with no live sou
   const held = registry.holdDelivery(conversation.id, "queued without an owner", "dead-source-held");
 
   try {
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(registry);
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(registry);
 
     expect(terminalized).toEqual([held.id]);
     expect(registry.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "draining" });
@@ -213,14 +213,14 @@ function rolledBackFixture(directory: string, options: { intentState?: "draining
   };
 }
 
-test("a delivery created after a rollback survives the hygiene sweep (issue 972)", () => {
+test("a delivery created after a rollback survives the hygiene sweep (issue 972)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-post-rollback-delivery-"));
   const { registry, conversation } = rolledBackFixture(directory);
   const assigned = registry.holdDelivery(conversation.id, "sent after the rollback", "post-rollback-delivery");
   expect(assigned).toMatchObject({ state: "assigned", attempts: 0 });
 
   try {
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(registry);
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(registry);
 
     expect(terminalized).toEqual([]);
     expect(registry.snapshot().heldDeliveries[assigned.id]).toMatchObject({
@@ -233,7 +233,7 @@ test("a delivery created after a rollback survives the hygiene sweep (issue 972)
   }
 });
 
-test("the same reservation reauthorized after rollback survives the hygiene sweep (issue 972)", () => {
+test("the same reservation reauthorized after rollback survives the hygiene sweep (issue 972)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-reauthorized-delivery-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const conversation = registry.ensureConversation("codex", "/reauthorized-delivery.jsonl", "source");
@@ -251,7 +251,7 @@ test("the same reservation reauthorized after rollback survives the hygiene swee
 
   try {
     expect(reauthorized).toMatchObject({ id: original.id, state: "assigned", error: null });
-    expect(terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
     expect(registry.snapshot().heldDeliveries[reauthorized.id]).toMatchObject({
       state: "assigned",
       error: null,
@@ -308,7 +308,7 @@ test("rollback terminalization rechecks a reservation reauthorized after snapsho
   }
 });
 
-test("a stale rolled-back intent settles without cancelling post-rollback delivery (issue 972)", () => {
+test("a stale rolled-back intent settles without cancelling post-rollback delivery (issue 972)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-stale-rolled-back-"));
   const { registry, conversation, intent, rolledBackAt } = rolledBackFixture(directory);
   const snapshot = registry.snapshot();
@@ -338,7 +338,7 @@ test("a stale rolled-back intent settles without cancelling post-rollback delive
   const fresh = reopened.holdDelivery(conversation.id, "sent after rollback", "fresh-stale-rollback");
 
   try {
-    expect(terminalizeStaleUndeliverableHeldDeliveries(reopened)).toEqual(["owned-stale-rollback"]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(reopened)).toEqual(["owned-stale-rollback"]);
     expect(reopened.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "stopped" });
     expect(reopened.conversation(conversation.id)?.migration).toMatchObject({
       phase: "rolled-back",
@@ -351,7 +351,7 @@ test("a stale rolled-back intent settles without cancelling post-rollback delive
   }
 });
 
-test("the sweep still settles a delivery the rolled-back migration owned (issue 972)", () => {
+test("the sweep still settles a delivery the rolled-back migration owned (issue 972)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-owned-rollback-delivery-"));
   const { registry, conversation, rolledBackAt } = rolledBackFixture(directory);
   const snapshot = registry.snapshot();
@@ -386,7 +386,7 @@ test("the sweep still settles a delivery the rolled-back migration owned (issue 
   const fresh = reopened.holdDelivery(conversation.id, "sent after the rollback", "post-rollback-delivery");
 
   try {
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(reopened);
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(reopened);
 
     expect(terminalized).toEqual(["owned-by-rollback"]);
     expect(reopened.snapshot().heldDeliveries["owned-by-rollback"]).toMatchObject({
@@ -404,13 +404,13 @@ test("the sweep still settles a delivery the rolled-back migration owned (issue 
   }
 });
 
-test("a settled intent's rolled-back residue clears after post-rollback delivery settles (issue 972)", () => {
+test("a settled intent's rolled-back residue clears after post-rollback delivery settles (issue 972)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-rollback-residue-"));
   const { registry, conversation } = rolledBackFixture(directory, { intentState: "stopped" });
   const assigned = registry.holdDelivery(conversation.id, "sent after the rollback", "post-rollback-delivery");
 
   try {
-    expect(terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
     expect(registry.conversation(conversation.id)?.migration).toMatchObject({ phase: "rolled-back" });
     expect(registry.snapshot().heldDeliveries[assigned.id]).toMatchObject({
       state: "assigned",
@@ -418,15 +418,15 @@ test("a settled intent's rolled-back residue clears after post-rollback delivery
       error: null,
     });
     registry.discardDelivery(assigned.id);
-    expect(terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
     expect(registry.conversation(conversation.id)?.migration).toBeNull();
-    expect(terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(registry)).toEqual([]);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("a live structured source with no migration progress reaches terminal accounting", () => {
+test("a live structured source with no migration progress reaches terminal accounting", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-live-migration-source-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const pathname = "/live-migration-source.jsonl";
@@ -465,7 +465,7 @@ test("a live structured source with no migration progress reaches terminal accou
   });
 
   try {
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now() + 6 * 60_000,
       {
@@ -487,7 +487,7 @@ test("a live structured source with no migration progress reaches terminal accou
   }
 });
 
-test("a source host on another engine cannot prove current migration ownership", () => {
+test("a source host on another engine cannot prove current migration ownership", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-wrong-engine-source-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const pathname = "/wrong-engine-source.jsonl";
@@ -503,7 +503,7 @@ test("a source host on another engine cannot prove current migration ownership",
 
   try {
     const wrongEngineHost = { ...runtimeHost(pathname), engine: "claude" as const };
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now(),
       {},
@@ -518,7 +518,7 @@ test("a source host on another engine cannot prove current migration ownership",
   }
 });
 
-test("a dead requested member without its own held input cannot cancel a live-owned member", () => {
+test("a dead requested member without its own held input cannot cancel a live-owned member", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-member-delivery-owner-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const dead = registry.ensureConversation("codex", "/dead-member.jsonl", "source");
@@ -534,7 +534,7 @@ test("a dead requested member without its own held input cannot cancel a live-ow
 
   try {
     expect(registry.conversation(dead.id)?.migration?.phase).toBe("requested");
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now(),
       {},
@@ -549,7 +549,7 @@ test("a dead requested member without its own held input cannot cancel a live-ow
   }
 });
 
-test("a dead requested member settles only its own delivery while a live member keeps the intent active", () => {
+test("a dead requested member settles only its own delivery while a live member keeps the intent active", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-member-scope-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const dead = registry.ensureConversation("codex", "/dead-owned-member.jsonl", "source");
@@ -565,7 +565,7 @@ test("a dead requested member settles only its own delivery while a live member 
   const liveHeld = registry.holdDelivery(live.id, "fixture", "live-member-delivery");
 
   try {
-    const terminalized = terminalizeStaleUndeliverableHeldDeliveries(
+    const terminalized = await terminalizeStaleUndeliverableHeldDeliveries(
       registry,
       Date.now(),
       {},
@@ -2454,3 +2454,79 @@ test("the reaper actuates a due pinned tmux queue exactly once without a runtime
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("the inventory sidecar's hygiene waits for the lock off its loop, and an ending the lock refused leaves the pair for the next cycle", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C4: measured in the process
+     that runs it, as the sidecar would. */
+  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-reaper-hygiene-offloop", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const conversation = registry.ensureConversation("codex", "/hygiene-offloop.jsonl", "source");
+    const intent = registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: "hygiene-offloop",
+      expectedRevision: registry.engineRouting("codex").revision });
+    const held = registry.holdDelivery(conversation.id, "queued without an owner", "hygiene-held");
+
+    /* Refused: the ending and the rollback stay together for the next cycle. */
+    await holder.hold(500);
+    const { value: refused, gapMs: refusedGap } = await longestLoopGap(() => terminalizeStaleUndeliverableHeldDeliveries(registry));
+    expect(refusedGap).toBeLessThan(50);
+    expect(refused).toEqual([]);
+    expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
+    expect(registry.conversation(conversation.id)?.migration?.phase).not.toBe("rolled-back");
+    await Bun.sleep(550);
+
+    const hook = holdBeforeEachWrite(registry, holder, 100, /reaperRuntime\.ts/);
+    const { value: settled, gapMs } = await longestLoopGap(() => terminalizeStaleUndeliverableHeldDeliveries(registry));
+    hook.restore();
+    expect(hook.unwrapped).toEqual([]);
+    expect(gapMs).toBeLessThan(50);
+    expect(settled).toEqual([held.id]);
+    expect(registry.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "draining" });
+    expect(registry.conversation(conversation.id)?.migration).toMatchObject({ phase: "rolled-back" });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});
+
+for (const intervening of ["retry", "new-attempt", "live-owner", "unchanged"] as const) {
+  test(`stale uncertain hygiene rechecks ${intervening} after the SQLite writer wait`, async () => {
+    const { sqliteRegistryFixture, registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+    const made = sqliteRegistryFixture("llv-hygiene-retry-race");
+    const registry = made.registry;
+    const holder = registryLockHolder(made.sqliteFilename);
+    try {
+      const conversation = registry.ensureConversation("codex", "/hygiene-retry.jsonl", "source");
+      const delivery = registry.holdDelivery(conversation.id, "keep the authorized send", "hygiene-retry-key");
+      registry.beginDeliveryAttempt(delivery.id, delivery.generationId!);
+      const later = Date.now() + 3 * 24 * 60 * 60_000;
+      await holder.hold(10_000);
+      const sweep = terminalizeStaleUndeliverableHeldDeliveries(registry, later);
+      await Bun.sleep(30);
+      await holder.release();
+      if (intervening === "retry") registry.retryUncertainDeliveryForOperation(delivery.command.operationId);
+      if (intervening === "new-attempt") {
+        const retried = registry.retryUncertainDeliveryForOperation(delivery.command.operationId)!;
+        registry.beginDeliveryAttempt(retried.id, retried.generationId!);
+      }
+      if (intervening === "live-owner") registry.upsert({
+        key: { engine: "codex", sessionId: "hygiene-live-owner" }, artifactPath: "/hygiene-retry.jsonl",
+        cwd: "/repo", accountId: "source", status: "live", host: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "test:live", process: { pid: process.pid, startIdentity: null },
+          eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+        claimEpoch: 1, claimOwner: "test-owner", pendingAction: null,
+      });
+      expect(await sweep).toEqual(intervening === "unchanged" ? [delivery.id] : []);
+      expect(registry.snapshot().heldDeliveries[delivery.id]?.state)
+        .toBe(intervening === "unchanged" ? "failed" : intervening === "retry" ? "assigned" : "delivery-uncertain");
+      expect(registry.snapshot().heldDeliveries[delivery.id]?.text).toBe("keep the authorized send");
+    } finally {
+      await holder.close();
+      registry.close();
+      made.cleanup();
+    }
+  });
+}

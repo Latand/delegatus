@@ -1,4 +1,5 @@
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
+import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
 import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
@@ -1668,7 +1669,11 @@ async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
       { code: "OPERATION_UNKNOWN" },
     );
   }
-  return { ...receipt };
+  /* Why it is still waiting, or why it settled, as the delivery queue
+     recorded it: wait reason, attempt, last progress, deadline and next wake.
+     An explanation beside the verdict; a store that cannot be read omits it. */
+  const progress = readDeliveryProgress([operationId]).get(operationId);
+  return { ...receipt, ...(progress ? { progress } : {}) };
 }
 
 /**

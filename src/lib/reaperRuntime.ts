@@ -854,25 +854,37 @@ function unsettledDeliveryIdsForIntent(
     .map((delivery) => delivery.id);
 }
 
-export function terminalizeStaleUndeliverableHeldDeliveries(
+/**
+ * The hygiene the inventory sidecar runs over accepted sends. Every write
+ * waits for the registry lock off the loop (docs/design/
+ * delivery-progress-and-drain.md, C4): the sidecar drains held sends too, so
+ * a wait here would hold its own lanes. A write the lock refused leaves its
+ * row for the next cycle; a refused ending skips its conversation's rollback,
+ * so the pair stays together.
+ */
+export async function terminalizeStaleUndeliverableHeldDeliveries(
   registry: AgentRegistry,
   now: number = Date.now(),
   liveness: AccountLivenessOptions = {},
   observedHosts: readonly TranscriptHost[] = [],
-): string[] {
+): Promise<string[]> {
   const snapshot = registry.readOnlySnapshot();
+  const offLoop = async <T>(label: string, id: string | null, write: () => T): Promise<{ value: T } | null> => {
+    const operationId = id ? snapshot.heldDeliveries[id]?.command.operationId ?? null : null;
+    const written = await registry.deliveryWrite({ label, operationId }, write);
+    return written.acquired ? { value: written.value } : null;
+  };
   const probe = livenessProbe({ ...liveness, now: () => now });
   const observedSourcePaths = new Set(observedHosts.flatMap((host) =>
     (host.primaryPath ? [host.primaryPath, ...host.claimedPaths] : host.claimedPaths)
       .map((pathname) => `${host.engine}:${pathname}`)));
   const terminalized = new Set<string>();
   for (const id of staleUndeliverableHeldDeliveryIds(snapshot, { ...liveness, now: () => now })) {
-    const settled = registry.recordDeliveryOutcome(
-      id,
-      "failed",
-      "delivery-uncertain abandoned: owning migration settled with no live host or receipt (#652)",
-    );
-    if (settled.state === "failed") terminalized.add(id);
+    const expected = snapshot.heldDeliveries[id]!;
+    const settled = await offLoop("delivery.hygiene", id, () => registry.terminalizeStaleUndeliverableHeldDelivery(
+      expected, { ...liveness, now: () => now },
+    ));
+    if (settled?.value?.state === "failed") terminalized.add(id);
   }
   for (const intent of Object.values(snapshot.migrationIntents)) {
     const owned = Object.values(snapshot.conversations)
@@ -886,19 +898,24 @@ export function terminalizeStaleUndeliverableHeldDeliveries(
       if (conversation.migration?.phase !== "rolled-back") continue;
       rolledBackConversationIds.add(conversation.id);
     }
-    let activeIds = ids.filter((id) => {
+    let activeIds: string[] = [];
+    for (const id of ids) {
       const delivery = snapshot.heldDeliveries[id];
-      if (!delivery) return true;
-      if (!rolledBackConversationIds.has(delivery.conversationId)) return true;
-      const settled = registry.terminalizeRolledBackMigrationDelivery(
+      if (!delivery || !rolledBackConversationIds.has(delivery.conversationId)) {
+        activeIds.push(id);
+        continue;
+      }
+      const settled = await offLoop("delivery.hygiene", id, () => registry.terminalizeRolledBackMigrationDelivery(
         id,
         intent.id,
         ROLLED_BACK_MIGRATION_DELIVERY_REASON,
-      );
-      if (!settled) return true;
+      ));
+      if (!settled?.value) {
+        activeIds.push(id);
+        continue;
+      }
       terminalized.add(id);
-      return false;
-    });
+    }
     /* Once its intent is settled and its owned deliveries are terminal, the
        rolled-back block is spent residue: clearing it here disarms every later
        hygiene pass that would otherwise keep matching this conversation. A
@@ -907,7 +924,7 @@ export function terminalizeStaleUndeliverableHeldDeliveries(
        atomic ownership fence above already protects new messages meanwhile. */
     if (intent.state !== "draining") {
       for (const conversationId of rolledBackConversationIds) {
-        registry.clearRolledBackConversationMigration(conversationId, intent.id);
+        await offLoop("migration.rollback", null, () => registry.clearRolledBackConversationMigration(conversationId, intent.id));
       }
       continue;
     }
@@ -920,19 +937,23 @@ export function terminalizeStaleUndeliverableHeldDeliveries(
           || !deliveryConversationIds.has(conversation.id)
           || migrationSourceHasLiveOwner(snapshot, conversation, probe, observedSourcePaths)) continue;
         const reason = `delivery cancelled because source conversation ${conversation.id} has no live owner; send again to authorize a fresh delivery`;
+        let refused = false;
         for (const id of activeIds) {
           if (snapshot.heldDeliveries[id]?.conversationId !== conversation.id) continue;
-          const settled = registry.terminalizeHeldDelivery(id, reason);
-          if (settled.state === "failed") terminalized.add(id);
+          const settled = await offLoop("delivery.hygiene", id, () => registry.terminalizeHeldDelivery(id, reason));
+          if (!settled) { refused = true; continue; }
+          if (settled.value.state === "failed") terminalized.add(id);
         }
-        registry.rollbackConversationMigration(conversation.id, conversation.migration.revision);
+        if (refused) continue;
+        const revision = conversation.migration.revision;
+        await offLoop("migration.rollback", null, () => registry.rollbackConversationMigration(conversation.id, revision));
         activeIds = activeIds.filter((id) => snapshot.heldDeliveries[id]?.conversationId !== conversation.id);
       }
     }
     if (!noProgress) continue;
     const reason =
       `delivery cancelled because its owning account migration made no progress for ${MIGRATION_INTENT_PROGRESS_TIMEOUT_MS}ms; send again to authorize a fresh delivery`;
-    registry.setMigrationIntentState(intent.id, "stopped", intent.revision, reason);
+    if (!await offLoop("migration.stop", null, () => registry.setMigrationIntentState(intent.id, "stopped", intent.revision, reason))) continue;
     const settledSnapshot = registry.readOnlySnapshot();
     for (const id of activeIds) {
       if (settledSnapshot.heldDeliveries[id]?.state === "failed") terminalized.add(id);
@@ -959,7 +980,7 @@ export async function runReaperCycle(options: {
      so it runs regardless of `LLV_REAPER_ENABLED`; failure never blocks the
      reaper. */
   try {
-    terminalizeStaleUndeliverableHeldDeliveries(registry, now, {}, options.hosts);
+    await terminalizeStaleUndeliverableHeldDeliveries(registry, now, {}, options.hosts);
   } catch (error) {
     console.error("[reaper] stale undeliverable held-delivery convergence failed", error);
   }
@@ -969,7 +990,10 @@ export async function runReaperCycle(options: {
      attempted deliveries remain untouched. Pure registry mutation, independent
      of the runtime client, byte-stable when there is nothing to do. */
   try {
-    registry.terminalizeFailedSpawnDeliveries();
+    /* Off the loop; refused, the next cycle converges it (C4). */
+    if (registry.failedSpawnDeliveryCandidates()) {
+      await registry.deliveryWrite({ label: "delivery.hygiene" }, () => registry.terminalizeFailedSpawnDeliveriesNow());
+    }
   } catch (error) {
     console.error("[reaper] failed-spawn held-delivery convergence failed", error);
   }
