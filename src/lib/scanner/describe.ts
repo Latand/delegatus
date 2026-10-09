@@ -408,6 +408,52 @@ export function parseWorktreeGitdir(cwd: string, gitFileText: string): { repo: s
   return { repo: joinPathSegments(parts.slice(0, index - 1)), worktree };
 }
 
+/** A separate Git directory has no path back to its checkout. Match its
+    common-directory metadata to a known main checkout's .git pointer instead
+    of guessing from a sibling name or equating repositories by remote. */
+function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cwd): WorktreeInfo | null {
+  const conventional = parseWorktreeGitdir(cwd, gitFileText);
+  if (conventional) return conventional;
+  const target = /^gitdir:\s*(.+?)\s*$/m.exec(gitFileText)?.[1];
+  if (!target) return null;
+  try {
+    const directory = fs.realpathSync.native(path.resolve(accessibleCwd, target));
+    const commonText = fs.readFileSync(path.join(directory, "commondir"), "utf8").trim();
+    if (!commonText) return null; // A main checkout with a separate .git pointer.
+    const common = fs.realpathSync.native(path.resolve(directory, commonText));
+    const relative = path.relative(common, directory).split(path.sep);
+    if (relative.length !== 2 || relative[0] !== "worktrees" || !relative[1]) return null;
+    const backlink = fs.readFileSync(path.join(directory, "gitdir"), "utf8").trim();
+    if (!backlink || fs.realpathSync.native(path.resolve(directory, backlink)) !== fs.realpathSync.native(path.join(accessibleCwd, ".git"))) return null;
+
+    const roots = new Set<string>();
+    for (const [, , info] of projectInfoCwdCache.values()) if (info?.repo) roots.add(info.repo);
+    for (const info of worktreeMap().values()) roots.add(info.repo);
+    const catalog = recordValue(readStateJson("project-catalog.json"));
+    for (const file of Object.values(recordValue(catalog?.files) ?? {})) {
+      const root = stringValue(recordValue(file)?.projectRoot);
+      if (root) roots.add(root);
+    }
+    const curation = recordValue(readStateJson("project-curation.json"));
+    for (const entry of recordsValue(curation?.manualProjects)) {
+      const root = stringValue(entry.root);
+      if (root) roots.add(root);
+    }
+    const matches = new Set<string>();
+    for (const root of roots) {
+      try {
+        const repo = fs.realpathSync.native(root);
+        const marker = path.join(repo, ".git");
+        const stat = fs.lstatSync(marker);
+        const pointer = stat.isFile() ? /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(marker, "utf8"))?.[1] : undefined;
+        const gitDirectory = stat.isDirectory() ? marker : pointer ? path.resolve(repo, pointer) : null;
+        if (gitDirectory && fs.realpathSync.native(gitDirectory) === common && projectIdentityFromRepositoryRoot(repo)) matches.add(repo);
+      } catch { /* A stale known root provides no ownership evidence. */ }
+    }
+    return matches.size === 1 ? { repo: [...matches][0]!, worktree: relative[1] } : null;
+  } catch { return null; }
+}
+
 type ProjectInfo = {
   project: string;
   displayName: string;
@@ -591,7 +637,7 @@ export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { re
   let info: { repo: string; worktree: string } | null = null;
   try {
     const gitPath = path.join(accessibleCwd, ".git");
-    if (fs.lstatSync(gitPath).isFile()) info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
+    if (fs.lstatSync(gitPath).isFile()) info = liveWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"), accessibleCwd);
   } catch {
     return null;
   }
@@ -617,7 +663,7 @@ export function observeWorktreeResolution(cwd: string): WorktreeInfo | null {
       const stat = fs.lstatSync(marker);
       if (stat.isDirectory()) return null; // An independent nested repository.
       if (stat.isFile()) {
-        const info = parseWorktreeGitdir(current, fs.readFileSync(marker, "utf8"));
+        const info = liveWorktreeGitdir(current, fs.readFileSync(marker, "utf8"));
         if (!info) return null;
         rememberWorktree(current, info);
         /* A symlinked checkout must survive deletion under either spelling. */
@@ -823,9 +869,11 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   /* Observation records facts before any early return. Grouping still uses
      the canonical pure recognizers first, followed by the live pointer. */
   const liveWorktree = worktreeFromGitFile(cwd);
+  const liveRepositoryRoot = liveWorktree?.repo || repositoryRootForPath(cwd);
   const resolutionState = requestedState ?? projectResolutionStateKey();
   const cached = projectInfoCwdCache.get(cwd);
   if (cached && cached[0] > Date.now() && cached[1] === resolutionState
+    && (!liveRepositoryRoot || cached[2]?.repo === liveRepositoryRoot)
     && (cached[2]?.worktree || !liveWorktree)) return cached[2];
   const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
@@ -842,7 +890,7 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
     (codexWorktree ? liveWorktree ?? codexWorktree : liveWorktree);
-  if (!worktree && !hasGitMarker(cwd)) {
+  if (!worktree && !liveRepositoryRoot && !hasGitMarker(cwd)) {
     /* An arbitrary-path worktree that has since been deleted: no live
        recognizer matched and its `.git` is gone, but a resolution we recorded
        while it was alive still names the parent repo. */
@@ -865,7 +913,7 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
       ? { project: identity.project, displayName: identity.displayName, ...(worktree?.worktree ? { worktree: worktree.worktree } : {}) }
       : unresolvedProjectInfo(worktree?.worktree);
   };
-  const root = worktree?.repo || repositoryRootForPath(cwd);
+  const root = worktree?.repo || liveRepositoryRoot;
   if (!root) {
     const resolvedInfo = codexWorktree?.projectHint
       ? aliasedProjectInfo(codexWorktree.projectHint, worktree?.worktree)

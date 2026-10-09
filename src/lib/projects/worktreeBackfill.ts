@@ -31,25 +31,46 @@ export interface WorktreeBackfillReport {
   rescanned: boolean;
 }
 
-/** Bounded engine-native metadata only. Never infer a repository from prose. */
+const TRANSCRIPT_HINT_MAX_BYTES = 16 * 1024 * 1024;
+const NATIVE_RECORD_MAX_BYTES = 1024 * 1024;
+
+/** Check complete native records, including those after a large prompt. A
+    transcript over 16 MiB, a record over 1 MiB, or incomplete JSON vetoes the
+    checkout: unchecked bytes may hold conflicting evidence. Never infer a
+    repository from prose. */
 function transcriptHints(filename: string): { branches: string[]; remotes: string[]; unreadable: boolean } {
   const branches = new Set<string>();
   const remotes = new Set<string>();
   let fd: number | undefined;
   try {
     fd = fs.openSync(filename, "r");
-    const buffer = Buffer.alloc(64 * 1024);
-    const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
-    const text = buffer.toString("utf8", 0, bytes);
-    const lines = text.split("\n");
-    if (bytes === buffer.length) lines.pop();
-    for (const line of lines) {
-      let obj: Record<string, unknown>;
-      try { obj = JSON.parse(line); } catch { continue; }
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > TRANSCRIPT_HINT_MAX_BYTES) throw new Error("Transcript exceeds evidence bound");
+    const buffer = Buffer.alloc(stat.size + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const read = fs.readSync(fd, buffer, bytes, buffer.length - bytes, bytes);
+      if (read === 0) break;
+      bytes += read;
+    }
+    const after = fs.fstatSync(fd);
+    if (bytes !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("Transcript changed during evidence read");
+    for (let offset = 0; offset < bytes;) {
+      const newline = buffer.indexOf(0x0a, offset);
+      const end = newline < 0 || newline >= bytes ? bytes : newline;
+      if (end - offset > NATIVE_RECORD_MAX_BYTES) throw new Error("Native record exceeds evidence bound");
+      const line = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(offset, end));
+      offset = end + 1;
+      if (!line.trim()) continue;
+      const obj = JSON.parse(line) as Record<string, unknown>;
       if (!obj || typeof obj !== "object") continue;
       const meta = obj.type === "session_meta" ? obj.payload as Record<string, unknown> : obj;
-      if (!meta || typeof meta !== "object") continue;
+      if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new Error("Invalid native metadata");
       const git = meta.git as Record<string, unknown> | undefined;
+      if (git !== undefined && (!git || typeof git !== "object" || Array.isArray(git))) throw new Error("Invalid native Git metadata");
+      for (const value of [meta.gitBranch, git?.branch, git?.repository_url]) {
+        if (value !== undefined && value !== null && typeof value !== "string") throw new Error("Invalid native Git hint");
+      }
       for (const value of [meta.gitBranch, git?.branch]) if (typeof value === "string" && value.trim()) branches.add(value);
       for (const value of [git?.repository_url]) if (typeof value === "string" && value.trim()) remotes.add(value);
     }

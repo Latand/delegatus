@@ -1052,9 +1052,10 @@ test("first scan of a sibling worktree descendant records it before outside dele
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
 });
 
-test("a real linked sibling removed by git survives a fresh resolver process", () => {
-  const state = useStateDirectory("git-outside-removal-state");
-  const repo = path.join(SANDBOX, "git-outside-repository");
+test.each(["ordinary", "separate"])("a real linked sibling with %s Git directory survives removal in a fresh resolver", layout => {
+  const separate = layout === "separate";
+  const state = useStateDirectory(`git-outside-removal-state-${separate}`);
+  const repo = path.join(SANDBOX, `git-outside-repository-${separate}`);
   const checkout = repo + "-review";
   fs.mkdirSync(repo);
   const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
@@ -1063,12 +1064,24 @@ test("a real linked sibling removed by git survives a fresh resolver process", (
     const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, ...args], { env, encoding: "utf8" });
     expect(result.status).toBe(0);
   };
-  git("init"); git("commit", "--allow-empty", "-m", "fixture");
+  git("init", ...(separate ? ["--separate-git-dir=" + path.join(SANDBOX, "git-data")] : []));
+  git("commit", "--allow-empty", "-m", "fixture");
   git("remote", "add", "origin", "https://example.invalid/team/widgets.git");
+  const identity = projectIdentityFromRepositoryRoot(repo)!;
+  expect(projectInfoFromCwd(repo)).toMatchObject({ project: identity.project, repo });
+  // A second checkout with the same remote cannot establish common-directory ownership.
+  const clone = path.join(SANDBOX, `git-unrelated-clone-${layout}`);
+  createRepository(clone, "https://example.invalid/team/widgets.git");
+  expect(projectInfoFromCwd(clone)?.project).toBe(identity.project);
+  expect(fs.existsSync(path.join(state, "worktree-map.json"))).toBe(false);
   git("worktree", "add", "--detach", checkout);
   const cwd = path.join(checkout, "src"); fs.mkdirSync(cwd);
-  const identity = projectIdentityFromRepositoryRoot(repo)!;
-  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+  const transcript = path.join(state, "session.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cwd } }) + "\n");
+  expect(describe("codex-sessions", state, transcript, fs.statSync(transcript))).toMatchObject({
+    project: identity.project, projectName: identity.displayName, projectRoot: repo, worktree: path.basename(checkout),
+  });
+  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
   fs.rmdirSync(cwd);
   git("worktree", "remove", checkout);
   const script = `const { projectInfoFromCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
@@ -1076,6 +1089,23 @@ test("a real linked sibling removed by git survives a fresh resolver process", (
   const result = spawnSync(process.execPath, ["-e", script], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...env, LLV_STATE_DIR: state }, encoding: "utf8" });
   expect(result.status).toBe(0);
   expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});
+
+test("a remembered sibling cannot claim descendants of an independent nested repository", () => {
+  useStateDirectory("nested-repository-memory");
+  const repo = path.join(SANDBOX, "memory-parent");
+  const parent = createRepository(repo);
+  const checkout = repo + "-review";
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "review")}\n`);
+  expect(projectInfoFromCwd(checkout)?.project).toBe(parent.project);
+  const nested = path.join(checkout, "foreign");
+  const cwd = path.join(nested, "src"); fs.mkdirSync(cwd, { recursive: true });
+  expect(projectInfoFromCwd(cwd)?.project).toBe(parent.project); // Warm the overlay before the nested repository appears.
+  const foreign = createRepository(nested, "https://example.invalid/team/foreign.git");
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: foreign.project, repo: nested });
+  globalCache("project-info-cwd-v2").clear();
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: foreign.project, repo: nested });
 });
 
 test("a path-recognized live checkout is recorded on its first observation", () => {

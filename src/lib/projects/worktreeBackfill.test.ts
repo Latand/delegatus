@@ -176,6 +176,79 @@ test("conflicting descendants veto the whole checkout and remain separate after 
   expect(fs.existsSync(path.join(f.state, "worktree-map.json"))).toBe(false);
 });
 
+test("large native metadata retains conflicting hints through preview, apply and catalog rescan", async () => {
+  const f = fixture();
+  const checkout = f.repo + "-lane-7";
+  const mainFile = f.transcript(checkout, { branch: "lane/7" });
+  const foreignCwd = path.join(checkout, "foreign");
+  const foreignFile = f.transcript(foreignCwd);
+  fs.writeFileSync(foreignFile, JSON.stringify({ type: "session_meta", payload: {
+    cwd: foreignCwd, base_instructions: { text: "x".repeat(70 * 1024) },
+    git: { repository_url: "https://example.invalid/team/foreign.git" },
+  } }) + "\n");
+  const raw = Object.keys(f.files).map(filename => ({
+    rootName: "codex-sessions" as const, root: f.disk, path: filename, st: fs.statSync(filename),
+  }));
+  const first = await projectCatalogSnapshotFromRaw(raw);
+  expect(first.projectByPath.get(foreignFile)).toBe(directoryProjectId(foreignCwd));
+  const before = fs.readFileSync(path.join(f.state, "project-catalog.json"));
+  const preview = await backfillWorktreeProjects();
+  expect(preview.folded).toEqual([]);
+  expect(preview.leftAlone.map(item => item.reason)).toEqual(["conflicting-repository-hint", "conflicting-repository-hint"]);
+  expect(fs.readFileSync(path.join(f.state, "project-catalog.json"))).toEqual(before);
+  let rescanned: typeof first | undefined;
+  const applied = await backfillWorktreeProjects({ dryRun: false }, async () => {
+    rescanned = await projectCatalogSnapshotFromRaw(raw);
+  });
+  expect(applied.folded).toEqual([]);
+  expect(applied.leftAlone).toEqual(preview.leftAlone);
+  expect(rescanned!.projectByPath.get(mainFile)).toBe(directoryProjectId(checkout));
+  expect(rescanned!.projectByPath.get(foreignFile)).toBe(directoryProjectId(foreignCwd));
+  expect(fs.existsSync(path.join(f.state, "worktree-map.json"))).toBe(false);
+  for (const cwd of [checkout, foreignCwd]) expect(canonicalProject(directoryProjectId(cwd))).toBe(directoryProjectId(cwd));
+});
+
+test.each(["over-bound", "transcript-bound", "malformed", "invalid-hint", "invalid-utf8"])("incomplete %s metadata vetoes the entire checkout despite positive evidence", async kind => {
+  const f = fixture();
+  const checkout = f.repo + "-lane-7";
+  f.transcript(checkout, { branch: "lane/7" });
+  const child = path.join(checkout, "child");
+  const filename = f.transcript(child, { repository_url: "https://example.invalid/team/widgets.git" });
+  if (kind === "over-bound") {
+    fs.appendFileSync(filename, JSON.stringify({ type: "session_meta", payload: { cwd: child,
+      base_instructions: { text: "x".repeat(1024 * 1024) }, git: { repository_url: "https://example.invalid/team/foreign.git" },
+    } }) + "\n");
+  } else if (kind === "transcript-bound") {
+    fs.truncateSync(filename, 16 * 1024 * 1024 + 1);
+  } else if (kind === "invalid-hint") {
+    fs.appendFileSync(filename, JSON.stringify({ type: "session_meta", payload: { git: { repository_url: 42 } } }) + "\n");
+  } else if (kind === "invalid-utf8") {
+    fs.appendFileSync(filename, Buffer.from([0xff]));
+  } else {
+    fs.appendFileSync(filename, '{"type":"session_meta","payload":{"git":');
+  }
+  f.write();
+  const preview = await backfillWorktreeProjects();
+  expect(preview.folded).toEqual([]);
+  expect(preview.leftAlone.map(item => item.reason)).toEqual(["unreadable-transcript", "unreadable-transcript"]);
+  const applied = await backfillWorktreeProjects({ dryRun: false }, async () => {});
+  expect(applied.folded).toEqual([]);
+  expect(applied.leftAlone).toEqual(preview.leftAlone);
+  expect(fs.existsSync(path.join(f.state, "worktree-map.json"))).toBe(false);
+  for (const cwd of [checkout, child]) expect(canonicalProject(directoryProjectId(cwd))).toBe(directoryProjectId(cwd));
+});
+
+test("complete large native records corroborate recovery, including a final record without newline", () => {
+  const f = fixture();
+  const checkout = f.repo + "-review";
+  const filename = f.transcript(checkout);
+  fs.writeFileSync(filename, JSON.stringify({ type: "session_meta", payload: {
+    cwd: checkout, base_instructions: { text: "x".repeat(70 * 1024) },
+    git: { repository_url: "https://example.invalid/team/widgets.git" },
+  } }));
+  expect(planWorktreeBackfill(f.files, {}).folded[0]?.reason).toBe("sibling-name-and-repository-hint");
+});
+
 test("descendant evidence is checked even when only another subdirectory needs recovery", () => {
   const f = fixture();
   const checkout = f.repo + "-lane-7";
