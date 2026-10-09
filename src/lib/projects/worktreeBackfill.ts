@@ -41,6 +41,7 @@ const NATIVE_RECORD_MAX_BYTES = 1024 * 1024;
 function transcriptHints(filename: string): { branches: string[]; remotes: string[]; unreadable: boolean } {
   const branches = new Set<string>();
   const remotes = new Set<string>();
+  let checkedRecord = false;
   let fd: number | undefined;
   try {
     fd = fs.openSync(filename, "r");
@@ -63,7 +64,7 @@ function transcriptHints(filename: string): { branches: string[]; remotes: strin
       offset = end + 1;
       if (!line.trim()) continue;
       const obj = JSON.parse(line) as Record<string, unknown>;
-      if (!obj || typeof obj !== "object") continue;
+      if (!obj || typeof obj !== "object") throw new Error("Invalid native record");
       const meta = obj.type === "session_meta" ? obj.payload as Record<string, unknown> : obj;
       if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new Error("Invalid native metadata");
       const git = meta.git as Record<string, unknown> | undefined;
@@ -73,7 +74,9 @@ function transcriptHints(filename: string): { branches: string[]; remotes: strin
       }
       for (const value of [meta.gitBranch, git?.branch]) if (typeof value === "string" && value.trim()) branches.add(value);
       for (const value of [git?.repository_url]) if (typeof value === "string" && value.trim()) remotes.add(value);
+      checkedRecord = true;
     }
+    if (!checkedRecord) throw new Error("No complete native record");
     return { branches: [...branches], remotes: [...remotes], unreadable: false };
   } catch {
     return { branches: [], remotes: [], unreadable: true };

@@ -208,7 +208,7 @@ test("large native metadata retains conflicting hints through preview, apply and
   for (const cwd of [checkout, foreignCwd]) expect(canonicalProject(directoryProjectId(cwd))).toBe(directoryProjectId(cwd));
 });
 
-test.each(["over-bound", "transcript-bound", "malformed", "invalid-hint", "invalid-utf8"])("incomplete %s metadata vetoes the entire checkout despite positive evidence", async kind => {
+test.each(["over-bound", "transcript-bound", "malformed", "invalid-hint", "invalid-utf8", "empty", "whitespace", "non-object"])("incomplete %s metadata vetoes the entire checkout despite positive evidence", async kind => {
   const f = fixture();
   const checkout = f.repo + "-lane-7";
   f.transcript(checkout, { branch: "lane/7" });
@@ -224,6 +224,8 @@ test.each(["over-bound", "transcript-bound", "malformed", "invalid-hint", "inval
     fs.appendFileSync(filename, JSON.stringify({ type: "session_meta", payload: { git: { repository_url: 42 } } }) + "\n");
   } else if (kind === "invalid-utf8") {
     fs.appendFileSync(filename, Buffer.from([0xff]));
+  } else if (kind === "empty" || kind === "whitespace" || kind === "non-object") {
+    fs.writeFileSync(filename, kind === "empty" ? "" : kind === "whitespace" ? " \n\t\n" : "null\n");
   } else {
     fs.appendFileSync(filename, '{"type":"session_meta","payload":{"git":');
   }
