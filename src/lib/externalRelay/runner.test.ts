@@ -1921,3 +1921,34 @@ test("a read effect returned for an indexed action never restores handoff", asyn
   expect(run.rounds[1].schema.properties.action.enum).not.toContain("handoff");
   expect(run.completion).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
 });
+
+// Captured by replaying the accepted slice 2b runner before enabling any slice 3 path.
+test("slice 3 dark and ineligible paths preserve the slice 2b wire and records", async () => {
+  const fixtureFile = path.join(x1Dir, "switches-off-2b-hashes.json");
+  const snapshot = JSON.parse(fs.readFileSync(fixtureFile, "utf8"));
+  const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
+  const surfaces: Record<string, unknown> = {};
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  async function replay(role: string) {
+    const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
+    const run = await runLoopCase({ request, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
+    const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
+    return { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))), calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+  }
+  for (const role of cases) surfaces[role] = await replay(role);
+  if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
+  expect(surfaces).toEqual(snapshot.surfaces);
+  const { setRelaySwitch } = await import("./switches");
+  const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
+  try {
+    for (const raw of [JSON.stringify({ v: 1, chat_conversations: false, compact: false, owner_api: false }), "{", JSON.stringify({ v: 2, chat_conversations: true })]) {
+      fs.writeFileSync(switchFile, raw);
+      for (const role of cases) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+    }
+    setRelaySwitch("owner_api", true);
+    for (const role of cases) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+    setRelaySwitch("chat_conversations", true);
+    for (const role of ["admin", "anonymous_admin", "actions_admin"]) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
+  } finally { fs.rmSync(switchFile, { force: true }); }
+}, 30000);

@@ -2920,12 +2920,12 @@ Without a subscription, the dot and the banner are the whole notice.
 
 ## B.14 [delta] Chat conversations
 
-**[rc] Not implemented.** Nothing in this section runs today. Every request
-is answered one-shot by a fresh, session-less run (§B.5); the claim does not
-list `chat_conversations`; `Request.chat.key` is used only for the member
-limit and answer records, and nothing resumes or serializes by it; the run directory
-and the `runs.json` entry are removed when the run settles. What outlives an
-exchange is its read-only answer record (§B.2), which nothing resumes.
+**[slice 3, dark]** Chat conversations are implemented behind the
+`chat_conversations` switch, which defaults off. The slice 3 design in
+`relay-slice3.md` defines separate member and owner records, with non-owner
+administrators continuing one-shot. With the switch off every request still
+uses the slice 2b session-less profile and claim bytes. `/compact` and the
+owner API each have their own default-off switch.
 
 **Identity and map.** A (relay id, target id, chat key) maps to one record in
 `conversations.json` (§B.2), created by the first request with that key. The
@@ -3308,3 +3308,16 @@ local tool parameter validation, a persistent install call ledger, automatic
 paging, tool-result reply targets and a call-detail UI remain deferred.
 The explicit 2b seams and conditions for revisiting these choices are in
 [slice 2b Deferred](relay-slice2b-actions.md#deferred--not-currently-justified).
+
+
+### Slice 3 revision (dark)
+
+The install implements persistent member and owner conversations per chat,
+compact requests, and owner operations through the runner proxy. Each is
+behind its own default-off switch; compact also requires conversations.
+Administrators answer one-shot. The owner key is bound through the service,
+kept outside relay records and agent context, and used only by the proxy.
+See [relay-slice3.md](relay-slice3.md) for the boundaries and lifecycle.
+`evidence/external-relay/install_compact_loop.json` records the real poller
+and runner replay against the service's X3 claims. Activation awaits the
+final-head cross-check and the operators' go.

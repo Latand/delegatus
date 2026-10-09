@@ -1,3 +1,8 @@
+import { readRelaySwitches } from "./switches";
+import { compactRequestSchema } from "./protocol";
+import { runCompactRequest } from "./compact";
+import { ownerToolsFor } from "./ownerApi";
+import { conversationContext, reserveConversations, releaseConversation, prepareConversationAccount, conversationCodexHome, sweepConversations, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,7 +29,7 @@ import {
   type ExternalRelayProgress,
 } from "./protocol";
 import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
-import { answerPrompt, toolRoundPrompt } from "./prompt";
+import { answerPrompt, toolRoundPrompt, ownerToolSection, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
 import { answerRecorder, countMemberAnswers, type RelayAnswerDelivery } from "./answers";
@@ -112,7 +117,7 @@ const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
   detail: null,
 });
 /** The completion as sent, and whether the service acknowledged it. */
-async function complete(
+export async function completeRelayRequest(
   relay: PairedRelay,
   requestId: string,
   body: ExternalRelayCompletion,
@@ -157,6 +162,13 @@ export async function runClaimedRequest(
   onFreed?: () => void,
   runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number },
 ): Promise<ExternalRelayCompletion | null> {
+  if (readRelaySwitches().compact && raw && typeof raw === "object" && (raw as Record<string, unknown>).kind === "compact") {
+    const compact = compactRequestSchema.safeParse(raw);
+    if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
+    const invalid = raw as Record<string, unknown>;
+    if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
+    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), Date.now, 45000)).body;
+  }
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
   const rawId =
@@ -205,7 +217,7 @@ export async function runClaimedRequest(
       delivery: "unconfirmed",
       ...loopRecord(),
     });
-    const sent = await complete(relay, requestId, body, () => heartbeatAt, stallMs);
+    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs);
     const completion = sent.body;
     recorder?.recordDelivery({
       outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
@@ -256,6 +268,10 @@ export async function runClaimedRequest(
   }
   const profile = answerProfileFor(requester);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
+  let conversation: RelayConversation | null = null;
+  let conversationEvidence: { sessionId?: string | null; promptTokens?: number | null; compacted?: boolean } = {};
+  let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
+  let conversationBroken = false;
   let runDir: string | null = null;
   let recorded = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
@@ -286,9 +302,16 @@ export async function runClaimedRequest(
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
     markActive(relay, target);
+    const context = conversationContext(request.input.requester);
+    if (readRelaySwitches().chat_conversations && request.chat && context) {
+      sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);
+      const reserved = reserveConversations(relay, target, request.chat.key, requestId, [context]);
+      if (!reserved) return await finish(declined(leaseId, "busy", null, "chat busy"));
+      conversation = reserved[0]!;
+    }
     const selection = accountManager.resolveHeadlessSpawn(
       target.engine,
-      null,
+      conversation?.accountId ?? null,
       [],
       target.project,
       target.model,
@@ -303,6 +326,8 @@ export async function runClaimedRequest(
             : null,
         ),
       );
+    if (conversation) { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+    const ownerTools = await ownerToolsFor(relay, request);
     let newestProgress: ExternalRelayProgress | null = null;
     let leaseUnavailable = false;
     let beatBusy = false;
@@ -353,7 +378,7 @@ export async function runClaimedRequest(
       }
     };
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
-    if (callableTools(request).length) loop = createToolLoop(relay, request, {
+    if (callableTools(request).length || ownerTools.length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -370,7 +395,7 @@ export async function runClaimedRequest(
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
         noteRelayProgress(relay.id, target.id, newestProgress);
       }
-    });
+    }, ownerTools);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
@@ -378,13 +403,19 @@ export async function runClaimedRequest(
       runFinished = false;
       try {
         if (rounds === 1 && activeDrain()) return await finish(declined(leaseId, "busy"));
+        const promptRequest = ownerTools.length ? { ...request, input: { ...request.input, tools: [...(request.input.tools ?? []), ...ownerTools.map(({ name, summary, effect, parameters, audience, mode }) => ({ name, summary, effect, parameters, audience, mode }))] } } : request;
+        const roundPrompt = loop ? toolRoundPrompt(promptRequest, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
+        const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
+        if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, ownerTools, frame);
+        const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt + ownerToolSection(ownerTools);
         run = runEphemeralAgent({
+          ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
           engine: target.engine,
           model: target.model,
           effort: target.effort,
           account: selection.account,
-          ["prompt"]: loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request),
+          ["prompt"]: conversation || ownerTools.length ? persistentPrompt : roundPrompt,
           schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,
@@ -438,6 +469,12 @@ export async function runClaimedRequest(
       }
       if (leaseUnavailable) launchedRun.cancel();
       result = await launchedRun.done;
+      if (conversation) {
+        if (result.sessionId) conversation.sessionId = result.sessionId;
+        else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }
+        if (result.status === "violation" || result.status === "failed") conversationBroken = true;
+        conversationEvidence = { sessionId: conversation.sessionId, promptTokens: result.promptTokens ?? conversationEvidence.promptTokens, compacted: conversationEvidence.compacted || result.compacted };
+      }
       if (pendingBeat) await pendingBeat;
       cancelStalledRun();
       if (leaseUnavailable) return null;
@@ -490,6 +527,13 @@ export async function runClaimedRequest(
   } finally {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
+    if (conversation) {
+      const compacted = conversationEvidence.compacted || typeof conversationEvidence.promptTokens === "number" && typeof conversation.lastPromptTokens === "number" && conversationEvidence.promptTokens < conversation.lastPromptTokens;
+      releaseConversation(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+        ...(conversationEvidence.sessionId ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
+          lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
+          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) });
+    }
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.
     if (recorder?.begun && !recorder.finished)

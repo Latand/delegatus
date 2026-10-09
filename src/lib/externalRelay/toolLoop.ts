@@ -1,3 +1,4 @@
+import { callOwnerApi, type OwnerTool, type OwnerCallResult } from "./ownerApi";
 import { createHash } from "node:crypto";
 import { ExternalRelayError, relayCall } from "./client";
 import { toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
@@ -48,9 +49,10 @@ export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> 
 /** Request-scoped memory only. The service owns the durable C6 ledger. */
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
   signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>;
-}, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void) {
-  const tools = callableTools(request);
-  const effectOf = (name: string) => request.input.tools?.find((tool) => tool.name === name)?.effect;
+}, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, ownerTools: OwnerTool[] = []) {
+  const tools = [...callableTools(request), ...ownerTools];
+  const ownerBudget = { calls: 0 };
+  const effectOf = (name: string) => request.input.tools?.find((tool) => tool.name === name)?.effect ?? ownerTools.find((tool) => tool.name === name)?.effect;
   const cache = new Map<string, Promise<{ result: ToolCallResult | null; code?: string; output?: string; unknown?: boolean }>>();
   const cursors = new Map<string, string>();
   const accounted = new Set<string>();
@@ -73,11 +75,19 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     try { await sleep(ms, callSignal); }
     catch (error) { if (lease.signal.aborted || !rejectionCode) throw error; }
   };
-  const callsLeft = () => terminal ? 0 : Math.max(0, Math.min(remaining, 16 - sent));
+  const callsLeft = () => terminal ? 0 : Math.max(ownerTools.length ? 20 - ownerBudget.calls : 0, Math.max(0, Math.min(remaining, 16 - sent)));
   async function send(body: ReturnType<typeof callBody>, tool: string) {
     if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
     lease.signal.throwIfAborted();
     const action = effectOf(tool) === "action";
+    const ownerTool = ownerTools.find((item) => item.name === tool);
+    if (ownerTool) {
+      if (!("arguments" in body)) return { result: null, code: "invalid_arguments", output: "" };
+      const value = await callOwnerApi(relay, ownerTool, body.arguments!, ownerBudget, lease.signal, runtime);
+      if (action && value.sent) actionSent = true;
+      if (value.status === "outcome_unknown") { sawUnknown = true; terminal = true; }
+      return { result: null, code: value.code, output: value.output, owner: value };
+    }
     const unknown = () => {
       terminal = true; sawUnknown = true;
       return { result: null, unknown: true, output: "The service did not confirm whether this action happened." };
@@ -168,7 +178,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     // Reserve the action identity immediately, but release its send only after reads settle.
     const scheduled = calls.map((call, index) => {
       const local = (code: string, output = "") => ({ call, local: true, body: null, task: Promise.resolve({ result: null, code, output }) });
-      if (index >= allowance) return local("too_many_calls");
+      if (index >= allowance || !ownerTools.some((t) => t.name === call.tool) && (remaining <= 0 || sent >= 16)) return local("too_many_calls");
       if (!tools.some((tool) => tool.name === call.tool)) return local("not_permitted");
       let logical: Parameters<typeof callBody>[1];
       if (call.cursor !== null) {
@@ -188,14 +198,14 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (action) roundAction = body.call_id;
       let task = cache.get(body.call_id);
       if (!task) {
-        if (!action) sent++;
+        if (!action && !ownerTools.some((t) => t.name === call.tool)) sent++;
         const tool = tools.find((tool) => tool.name === call.tool)!;
         task = (async () => {
           if (action) {
             await readsSettled;
             lease.signal.throwIfAborted();
             if (rejectionCode || callsLeft() === 0) return { result: null, code: "too_many_calls", output: "" };
-            sent++;
+            if (!ownerTools.some((t) => t.name === call.tool)) sent++;
           }
           if (!tool.audience) onProgress?.(call.tool, false, false);
           return send(body, call.tool);
@@ -212,13 +222,14 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
     function project(index: number, value: Awaited<typeof scheduled[number]["task"]>) {
       const { call, local, body } = scheduled[index]!;
       const action = effectOf(call.tool) === "action";
+      const owner = "owner" in value ? value.owner as OwnerCallResult : undefined;
       const raw = value.result;
       const withheld = !!raw && !mayQuote(raw.audience, request.input.requester);
       let output = withheld ? "" : raw?.output ?? value.output ?? "";
       let code = withheld && !action ? "not_permitted" : raw?.code ?? value.code;
-      let status = withheld && !action ? "denied" : raw?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
+      let status = owner?.status ?? (withheld && !action ? "denied" : raw?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error"));
       if (withheld && action) terminal = true;
-      let truncated = !withheld && (raw?.truncated ?? false);
+      let truncated = owner?.truncated ?? (!withheld && (raw?.truncated ?? false));
       if (body && !accounted.has(body.call_id)) {
         accounted.add(body.call_id);
         const bytes = Buffer.byteLength(output);
@@ -249,9 +260,9 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (body) projected.add(body.call_id);
       }
       if (!withheld && raw?.cursor) cursors.set(raw.cursor, call.tool);
-      rows.set(index, { round, tool: call.tool, page: call.cursor !== null, status: raw?.status ?? status,
+      rows.set(index, { ...(ownerTools.some((t) => t.name === call.tool) ? { source: "owner_api" as const } : {}), round, tool: call.tool, page: call.cursor !== null, status: raw?.status ?? status,
         code: raw?.code ?? code ?? null, audience: raw?.audience ?? null,
-        truncated: raw?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
+        truncated: raw?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: owner ? !owner.sent : local || !raw,
         ...(action ? { effect: "action" as const } : {}) });
     }
     const readIndexes = scheduled.flatMap((item, index) => effectOf(item.call.tool) !== "action" ? [index] : []);

@@ -8634,3 +8634,35 @@ describe("prototype review on the phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+browserTest("external relay owner key: write-only states at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture(); const browser = await launchChromium();
+  const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
+  const readings: Record<string, unknown>[] = [];
+  try {
+    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+      await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+      const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+      try {
+        await page.goto(`${base}/?relay=owner-key`);
+        if (width === 390) await page.locator('[data-mobile2-open="menu"]').click(); else await page.locator("[data-rail-menu]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
+        await page.locator("[data-owner-key-row]").first().waitFor();
+        for (const [index, state] of ["none", "bound", "expired", "rejected"].entries()) {
+          const row = page.locator("[data-owner-key-row]").nth(index); await row.scrollIntoViewIfNeeded();
+          const reading = await row.evaluate((element) => ({ text: (element as HTMLElement).innerText, overflow: element.scrollWidth > element.clientWidth,
+            inputType: element.querySelector("input")?.getAttribute("type"), autocomplete: element.querySelector("input")?.getAttribute("autocomplete"),
+            minControlHeight: Math.min(...Array.from(element.querySelectorAll<HTMLElement>("input, button, a")).map((node) => node.getBoundingClientRect().height)) }));
+          expect(reading.overflow).toBe(false); expect(reading.inputType).toBe("password"); expect(reading.autocomplete).toBe("off"); expect(reading.minControlHeight).toBeGreaterThanOrEqual(40);
+          const name = `variant-1-owner-key-${state}-${width}-${locale}.png`;
+          await row.screenshot({ path: path.join(out, name) }); readings.push({ locale, width, state, ...reading, frame: name });
+        }
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.mkdirSync(path.resolve("evidence/external-relay"), { recursive: true });
+    fs.writeFileSync(path.resolve("evidence/external-relay/owner-key-settings.json"), JSON.stringify({ readings }, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 90000);

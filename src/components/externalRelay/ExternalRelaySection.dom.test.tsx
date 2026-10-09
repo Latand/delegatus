@@ -661,3 +661,19 @@ test("the member limit shows the default, saves a number on leaving the field, a
   await act(async () => settle());
   expect(patches().at(-1)).toEqual({ target: { id: "bot-1", memberLimitPerHour: null } });
 });
+
+test("owner key is write-only and clears after submit", async () => {
+  const key = "clst_dom_fixture_key";
+  answers.relay = { relays: [relay({ ownerApi: { offered: true, state: "none", boundAt: null, expiresAt: null, keyUrl: "https://relay.example/key" } })], pending: [], status: [] };
+  let sent: unknown;
+  route((url, init) => { if (url.endsWith("/owner-key")) { sent = JSON.parse(String(init?.body)); return jsonResponse({ ownerApi: { state: "bound" } }); } });
+  const host = await mount(<ExternalRelaySection />);
+  const input = host.querySelector<HTMLInputElement>("[data-owner-key-input]");
+  expect(input?.type).toBe("password");
+  await act(async () => typeInto(input!, key));
+  expect(host.innerHTML).not.toContain(key);
+  await click(host.querySelector("[data-owner-key-save]"));
+  expect(sent).toEqual({ key });
+  expect(input?.value).toBe("");
+  expect(host.innerHTML).not.toContain(key);
+});

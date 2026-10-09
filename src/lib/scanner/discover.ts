@@ -1,3 +1,4 @@
+import { isRelayConversationDir } from "@/lib/externalRelay/conversationPrivacy";
 import fs from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -100,7 +101,7 @@ async function walkPaths(rootName: RootKey, root: string, dir: string, limit: Li
   const chunks = await Promise.all(entries.map(async (entry): Promise<PathDiscovery> => {
     if (entry.isDirectory()) {
       if (entry.name.startsWith(".git")) return { paths: [], complete: true };
-      if (rootName === "claude-projects" && entry.name === "tool-results") return { paths: [], complete: true };
+      if (rootName === "claude-projects" && (entry.name === "tool-results" || isRelayConversationDir(entry.name))) return { paths: [], complete: true };
       return walkPaths(rootName, root, path.join(dir, entry.name), limit);
     }
     if (!entry.isFile() || !EXTS.some((ext) => entry.name.endsWith(ext))) return { paths: [], complete: true };
