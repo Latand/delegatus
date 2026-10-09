@@ -11,6 +11,7 @@ export async function foreignAccountHolder(state = process.env.LLV_STATE_DIR!) {
   const modulePath = path.join(import.meta.dir, "accountMutation.ts");
   const child = Bun.spawn({
     cmd: [process.execPath, "-e", `
+      await import(${JSON.stringify(path.resolve(import.meta.dir, "../testing/fixtureLifetime.ts"))});
       const fs = await import("node:fs");
       const { withAccountMutationLockAsync } = await import(${JSON.stringify(modulePath)});
       await withAccountMutationLockAsync(async () => {

@@ -89,6 +89,15 @@ export const RUNTIME_DELIVERY_DISCARDED_REASON = "delivery-discarded";
  * of its own has to be bounded by this number, and the only way to keep them
  * bounded by the SAME number is for there to be one.
  */
+/** The operation id the runtime journal gives the new attempt of a terminal
+    operation: deterministic, so the Viewer writes the attempt's owner row and
+    record under it before the retry command leaves the process
+    (docs/design/delivery-progress-and-drain.md, A2). The journal computes the
+    same id itself; a test pins the two together. */
+export function terminalRetryOperationId(operationId: string): string {
+  return `retry_${createHash("sha256").update(operationId).digest("hex")}`;
+}
+
 export const RUNTIME_IDEMPOTENCY_KEY_LIMIT = 200;
 
 /** Whether the runtime journal would admit an operation under this key. The

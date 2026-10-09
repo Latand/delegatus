@@ -97,7 +97,7 @@ const ask = { project: PROJECT, text: "Add a task: reviewer for #2244", clientRe
 test("refused while the seat is idle: the plain send is right then", async () => {
   const { ports: idle, calls } = ports({ seatBusy: async () => false });
   const result = await askOrchestratorInParallel(ask, idle);
-  expect(result).toMatchObject({ ok: false, code: "seat_not_busy", status: 409 });
+  expect(result).toMatchObject({ ok: false, code: "seat_not_busy", status: 409, admission: "refused" });
   expect(readDeputies()).toEqual([]);
   expect(calls.forks).toEqual([]);
 });
@@ -106,13 +106,24 @@ test("refused while another deputy of the seat is live", async () => {
   beginDeputy({ project: PROJECT, seatConversationId: SEAT_ID, seatEpoch: 4, seatPath: SEAT_PATH, clientRequestId: "ask-0", ask: { text: "earlier", images: 0, sender: null }, now: new Date("2026-09-26T11:58:00.000Z") });
   const { ports: busy, calls } = ports();
   const result = await askOrchestratorInParallel(ask, busy);
-  expect(result).toMatchObject({ ok: false, code: "deputy_limit", status: 409 });
+  expect(result).toMatchObject({ ok: false, code: "deputy_limit", status: 409, admission: "refused" });
   expect(calls.forks).toEqual([]);
 });
 
 test("a Codex seat is refused in slice 1", async () => {
   const { ports: codex } = ports({ seatGeneration: () => ({ engine: "codex", path: SEAT_PATH, accountId: null, launchProfile: emptyLaunchProfile() }) });
-  expect(await askOrchestratorInParallel(ask, codex)).toMatchObject({ ok: false, code: "seat_not_claude" });
+  expect(await askOrchestratorInParallel(ask, codex)).toMatchObject({ ok: false, code: "seat_not_claude", admission: "refused" });
+});
+
+test("a replay that already forked has no pre-admission refusal evidence when its seat vanishes", async () => {
+  const uncertain = ports({ deliver: async () => ({ ok: false, error: "runtime host did not answer", uncertain: true }) });
+  expect(await askOrchestratorInParallel(ask, uncertain.ports)).toMatchObject({ ok: true, deliveryUncertain: true });
+  const gone = ports({ activeSeat: () => null });
+  const result = await askOrchestratorInParallel(ask, gone.ports);
+  expect(result).toMatchObject({ ok: false, code: "seat_not_found", askId: readDeputies()[0]!.askId });
+  expect(result).not.toHaveProperty("admission");
+  expect(gone.calls.forks).toEqual([]);
+  expect(gone.calls.delivered).toEqual([]);
 });
 
 test("the record is written before the fork, and the fork runs under the seat's profile beside the seat", async () => {

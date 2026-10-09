@@ -470,3 +470,42 @@ test("#1213 an unexplained wait carries an unexplained cause into its terminal r
     .toBe(t("runtime.receipt.unconfirmedWhyUnknown"));
   view.cleanup();
 });
+
+test("incident 2026-10-06: the stack names the wait the delivery queue recorded, its attempt and its next check", () => {
+  const recorded = {
+    operationId: "op-1213",
+    conversationId: "conversation_1213",
+    originalKey: "msg-1213",
+    kind: "send",
+    waitReason: "interrupt-reconciling" as const,
+    detail: "no host evidence it arrived; interrupting the running turn again",
+    attempt: 3,
+    admittedAt: SUBMITTED_AT,
+    phaseSince: new Date(at(40_000)).toISOString(),
+    lastProgressAt: new Date(at(40_000)).toISOString(),
+    deadlineAt: null,
+    deadlinePolicy: null,
+    nextWakeAt: new Date(at(41_000)).toISOString(),
+    stalledSince: null,
+    wakeLostAt: null,
+    executorId: "executor",
+    terminal: null,
+    updatedAt: new Date(at(40_000)).toISOString(),
+  };
+  const view = mount(
+    <RuntimeComposerReceipts
+      receipts={[receipt({ status: "queued" }), DECIDED]}
+      nowMs={at(40_500)}
+      session={BUSY}
+      progress={new Map([["op-1213", recorded]])}
+      onRetry={noop}
+      onEdit={noop}
+    />,
+  );
+  const details = open(view.host);
+  const chip = details.querySelector("[data-receipt-status]")!;
+  expect(chip.textContent).toContain(t("delivery.wait.interrupt-reconciling"));
+  expect(chip.textContent).toContain(t("delivery.wait.attempt", { n: 3 }));
+  expect(chip.textContent).toContain(t("delivery.wait.nextCheck", { in: t("runtime.receipt.waitedSec", { n: 1 }) }));
+  view.cleanup();
+});

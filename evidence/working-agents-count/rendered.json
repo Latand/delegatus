@@ -1,0 +1,121 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "lang": "en",
+      "width": 1440,
+      "row": "5",
+      "rowTitle": "atlas · 3 need you · 5 working · 21 conversations · updated 30s",
+      "overview": "8",
+      "rows": [
+        {
+          "project": "acme-ledger",
+          "live": "2"
+        },
+        {
+          "project": "harbor-docs",
+          "live": null
+        },
+        {
+          "project": "atlas",
+          "live": "5"
+        },
+        {
+          "project": "river-mesh",
+          "live": null
+        },
+        {
+          "project": "northwind-customer-data-platform-migration",
+          "live": "1"
+        },
+        {
+          "project": "paper-kite",
+          "live": null
+        }
+      ],
+      "header": "5 working",
+      "column": "3 working",
+      "sum": 8
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "overview",
+      "railNeeds": "5",
+      "railLive": "8",
+      "topLine": "8 agents working in 3 projects · Only what is working right now",
+      "summary": "16 tasks on the board",
+      "island": "5",
+      "column": "3 working"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "row": "atlas 5 working 3",
+      "header": 5,
+      "colour": {
+        "working": "rgb(23, 122, 55)",
+        "dot": true,
+        "success": "rgb(23, 122, 55)"
+      }
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "row": "5",
+      "rowTitle": "atlas · 3 чекають на вас · 5 працюють · 21 розмова · оновлено 30 с",
+      "overview": "8",
+      "rows": [
+        {
+          "project": "acme-ledger",
+          "live": "2"
+        },
+        {
+          "project": "harbor-docs",
+          "live": null
+        },
+        {
+          "project": "atlas",
+          "live": "5"
+        },
+        {
+          "project": "river-mesh",
+          "live": null
+        },
+        {
+          "project": "northwind-customer-data-platform-migration",
+          "live": "1"
+        },
+        {
+          "project": "paper-kite",
+          "live": null
+        }
+      ],
+      "header": "5 працюють",
+      "column": "3 працюють",
+      "sum": 8
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "overview",
+      "railNeeds": "5",
+      "railLive": "8",
+      "topLine": "8 агентів працюють у 3 проєктах · Тільки те, над чим працюють зараз",
+      "summary": "16 задач на дошці",
+      "island": "5",
+      "column": "3 працюють"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "row": "atlas 5 працюють 3",
+      "header": 5,
+      "colour": {
+        "working": "rgb(23, 122, 55)",
+        "dot": true,
+        "success": "rgb(23, 122, 55)"
+      }
+    }
+  ]
+}

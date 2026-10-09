@@ -15,6 +15,14 @@ import type { MessageOrigin } from "./messageOrigin";
     A send with no origin is stamped operator by the Codex host. */
 export const RECOVERY_NOTICE_ORIGIN: MessageOrigin = { kind: "agent", role: "startup-recovery" };
 
+/** The prefix of the deterministic operation id (and key) of that prompt. */
+export const INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX = "recovery-continuation";
+
+/** Whether a client message id is startup's interrupted-Codex continuation. */
+export function isInterruptedCodexContinuationId(id: string | null | undefined): boolean {
+  return typeof id === "string" && id.startsWith(`${INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX}-`);
+}
+
 /** The standing prompt startup sends to every interrupted Codex conversation. */
 export const INTERRUPTED_CODEX_CONTINUATION_TEXT = "Continue the interrupted turn from the transcript.";
 

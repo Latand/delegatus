@@ -65,6 +65,20 @@ function typesFor(pipelineId: string): string[] {
   return queryLifecycleEvents({ pipelineId, limit: 200 }).events.map((event) => event.type);
 }
 
+test("the merge journal retains lane, PR and merged head after the lane leaves the hot store", () => {
+  const id = "pipeline_merge_record";
+  const head = "a".repeat(40);
+  const pipeline = pipelineFixture(id, { state: "completed", cursor: null,
+    merge: { state: "merged", prNumber: 17, mergedHead: head, mergedAt: T0, updatedAt: T0, by: "auto-merge" } as Pipeline["merge"] });
+  refreshLifecycleJournal({ pipelines: [pipeline] }, { force: true });
+  refreshLifecycleJournal({ pipelines: [] }, { force: true });
+  const events = queryLifecycleEvents({ pipelineId: id, type: "pipeline_merged" }).events;
+  expect(events).toHaveLength(1);
+  expect(events[0]!.summary).toContain("ship the lifecycle journal");
+  expect(events[0]!.summary).toContain("#17");
+  expect(events[0]!.summary).toContain(head);
+});
+
 test("pausing and resuming a pipeline through the real action emits stage_paused and stage_resumed (#686)", async () => {
   const id = "pipeline_pause_real";
   savePipelines([pipelineFixture(id)]);

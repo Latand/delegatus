@@ -357,3 +357,43 @@ test("Telegram intake reaches the real durable seat reservation and runtime jour
     expect(store.pendingReportReplies()).toHaveLength(0);
   } finally { registry.close(); journal.close(); }
 });
+
+/* docs/design/delivery-progress-and-drain.md, P23 (C2): the recipient-rotation
+   withdrawal decides inside the write it waited for. Another process holds the
+   SQLite writer; once it lets go, the switch is cancelled and an attempt claims
+   the row in the same tick, before the withdrawal's next probe. `withdrawn`
+   would let the reply go to the new recipient beside the original send. */
+test("a recipient-rotation withdrawal that waited for the writer leaves a row an attempt claimed meanwhile, and never answers withdrawn", async () => {
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { Database } = await import("bun:sqlite");
+  const sqlitePath = path.join(directory, "agent-registry.sqlite");
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: sqlitePath });
+  const conversation = registry.ensureConversation("codex", path.join(directory, "seat.jsonl"), null);
+  registry.setConversationMigration(conversation.id, {
+    intentId: "rotation-race-intent", phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: now.toISOString(),
+  });
+  const held = registry.holdDelivery(conversation.id, "Operator reply", "rotation-race-key");
+  expect(held.state).toBe("held");
+  setAgentRegistryForTests(registry);
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = "";
+  const holder = new Database(sqlitePath);
+  holder.exec("PRAGMA busy_timeout = 5000");
+  holder.exec("BEGIN IMMEDIATE");
+  try {
+    const withdrawing = productionReportReplyPorts.withdraw(held.command.operationId, held.id);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    holder.exec("ROLLBACK");
+    registry.setConversationMigration(conversation.id, null);
+    const assigned = registry.requeueHeldDelivery(held.id);
+    expect(registry.beginDeliveryAttempt(held.id, assigned.generationId!)?.state).toBe("delivery-uncertain");
+    expect(await withdrawing).toBe("unknown");
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "delivery-uncertain", text: "Operator reply" });
+  } finally {
+    holder.close();
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});

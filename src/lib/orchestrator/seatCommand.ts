@@ -427,6 +427,7 @@ function incumbentChangedResult(
     body: {
       error: `the orchestrator seat for ${project} changed while this rotation composed its handoff (designation epoch ${expectedSeatEpoch} is no longer current); rotate again to hand off from the seated orchestrator`,
       code: "incumbent_changed",
+      admission: "refused",
       currentSeatEpoch: current?.seatEpoch ?? null,
       currentConversationId: current?.conversationId ?? null,
     },
@@ -438,9 +439,12 @@ export interface SeatCommandResult {
   body: Record<string, unknown>;
 }
 
-function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null, autonomous = false): SeatCommandResult | null {
+function agentSeatLaunchHold(project: string, clientRequestId: string, triggeredBy: OrchestratorSeatTrigger | null, autonomous = false): SeatCommandResult | null {
   const hold = autonomous || triggeredBy?.kind === "agent" ? activeDrain() : null;
-  return hold ? { status: 409, body: { ...launchHoldRefusal(hold) } } : null;
+  if (!hold) return null;
+  // A pending replay may already have launched before its answer was lost.
+  const replay = orchestratorSeatFor(project).pending?.intent.clientRequestId === clientRequestId;
+  return { status: 409, body: { ...launchHoldRefusal(hold), ...(!replay ? { admission: "refused" } : {}) } };
 }
 
 function text(value: unknown): string {
@@ -470,6 +474,7 @@ function inProgressSeatResponse(seat: OrchestratorSeat): SeatCommandResult {
     body: {
       error: "an orchestrator seat transition is already in progress for this project",
       code: "seat_intent_in_progress",
+      admission: "refused",
       seat,
     },
   };
@@ -910,7 +915,7 @@ function agentSeatSizingRefusal(
     ? normalizeClaudeLaunchModel(incumbent.model) === normalizeClaudeLaunchModel(runtime.model)
     : (incumbent.model ?? null) === runtime.model);
   const refusal = continued ? null : mappingRowRefusal("orchestrator", runtime);
-  return refusal ? { status: 400, body: { error: refusal, code: "sizing_refused" } } : null;
+  return refusal ? { status: 400, body: { error: refusal, code: "sizing_refused", admission: "refused" } } : null;
 }
 
 export function executeOrchestratorSeatRequest(
@@ -936,21 +941,21 @@ async function runOrchestratorSeatRequest(
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
-  if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
+  if (!namedProject) return { status: 400, body: { error: "project must be a valid project key", admission: "refused" } };
   /* #1874: a key the named checkout has since moved on from (the folder gained
      a repository or an origin) is recorded as succeeded first, so the seat is
      designated under the key its lanes will be written to. */
   recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(namedProject), text(rawBody.cwd))]);
   const project = canonicalOrchestratorProject(namedProject);
   const mandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
-  if (!mandate.trim()) return { status: 400, body: { error: "mandate is required" } };
+  if (!mandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
-    return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters" } };
+    return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters", admission: "refused" } };
   }
   const existingConversationId = text(rawBody.conversationId);
   if (existingConversationId && !existingConversationId.startsWith("conversation_")) {
-    return { status: 400, body: { error: "conversationId is invalid" } };
+    return { status: 400, body: { error: "conversationId is invalid", admission: "refused" } };
   }
   const promptVersion = typeof rawBody.promptVersion === "number" && Number.isInteger(rawBody.promptVersion)
     ? rawBody.promptVersion
@@ -963,7 +968,7 @@ async function runOrchestratorSeatRequest(
      before either begin, so no durable intent can exist for a mandate that
      cannot be delivered. */
   const preflight = mandatePreflight(mandate, existingConversationId ? "existing" : "spawn", rawBody.roleParams);
-  if (!preflight.ok) return { status: 413, body: mandateTooLargeBody(preflight) };
+  if (!preflight.ok) return { status: 413, body: { ...mandateTooLargeBody(preflight), admission: "refused" } };
 
   /* Before anything reads the incumbent: a seat still standing on a launch that
      died is not an incumbent, and rolling it back here is what puts the
@@ -995,14 +1000,14 @@ async function runOrchestratorSeatRequest(
 
   if (existingConversationId) {
     const target = dependencies.conversationTarget(existingConversationId);
-    if (!target) return { status: 404, body: { error: "conversation is unknown to the registry" } };
+    if (!target) return { status: 404, body: { error: "conversation is unknown to the registry", admission: "refused" } };
     if (target.kind === "ineligible") {
-      return { status: 409, body: { error: target.error, code: target.code } };
+      return { status: 409, body: { error: target.error, code: target.code, admission: "refused" } };
     }
     if (target.project !== project) {
       return {
         status: 409,
-        body: { error: "conversation belongs to a different project", code: "project_mismatch" },
+        body: { error: "conversation belongs to a different project", code: "project_mismatch", admission: "refused" },
       };
     }
     const adoptedSizing = target.engine
@@ -1102,6 +1107,7 @@ async function runOrchestratorSeatRequest(
       body: {
         error: `an orchestrator is already designated for ${project}; use rotate_orchestrator for an explicit handoff, or pass replaceIncumbent: true to replace deliberately`,
         code: "already_designated",
+        admission: "refused",
         incumbentSeatEpoch: incumbent.seatEpoch,
       },
     };
@@ -1114,13 +1120,13 @@ async function runOrchestratorSeatRequest(
     effort: rawBody.effort,
   });
   if (!resolvedRuntime.ok || !resolvedRuntime.value) {
-    return { status: 400, body: { error: resolvedRuntime.ok ? "orchestrator runtime is unavailable" : resolvedRuntime.error } };
+    return { status: 400, body: { error: resolvedRuntime.ok ? "orchestrator runtime is unavailable" : resolvedRuntime.error, admission: "refused" } };
   }
   const spawnSizing = agentSeatSizingRefusal(triggeredBy, resolvedRuntime.value.config, incumbent);
   if (spawnSizing) return spawnSizing;
   // Reconciliation and completed replay above can settle admitted work. A
   // fresh agent spawn still needs admission after any awaited handoff work.
-  const hold = agentSeatLaunchHold(triggeredBy, admission?.autonomous);
+  const hold = agentSeatLaunchHold(project, clientRequestId, triggeredBy, admission?.autonomous);
   if (hold) return hold;
   if (admission?.assertAccount) admission.assertAccount(text(rawBody.accountId));
   /* A seat holds the grant wherever Telegram is set up, whatever its
@@ -1191,7 +1197,10 @@ async function runOrchestratorSeatRequest(
     const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
     return {
       status: 409,
-      body: { error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal), seat: terminalized?.seat ?? null },
+      body: {
+        error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal), seat: terminalized?.seat ?? null,
+        ...(begun.kind === "begun" ? { admission: "refused" } : {}),
+      },
     };
   }
   const cwd = resolveOrchestratorCwd(project, rawBody.cwd, dependencies);
@@ -1203,6 +1212,7 @@ async function runOrchestratorSeatRequest(
       body: {
         error: `${reason}: nothing recorded for this project points at a folder that still exists — check the project's folder, or pass cwd`,
         code: "cwd_unresolved",
+        ...(begun.kind === "begun" ? { admission: "refused" } : {}),
         seat: terminalized?.seat ?? null,
       },
     };
@@ -1248,8 +1258,18 @@ async function runOrchestratorSeatRequest(
         : !spawnedConversationId
           ? "spawn response omitted conversationId"
           : "spawn did not report an accepted launch");
+    // A fresh validator refusal can close admission only while the spawn's
+    // durable fence confirms that its downstream key reserved no launch.
+    // A pending replay may already have launched, so it retains uncertainty.
+    let refused = false;
+    if (begun.kind === "begun" && spawned.status >= 400 && spawned.status < 500
+      && !launchId && !text(spawned.body.operationId) && spawned.body.actuation !== "started") {
+      const { fenceSpawnAdmissionRejection } = await import("@/lib/agent/spawnCommand");
+      const fence = await fenceSpawnAdmissionRejection(spawnBody, spawned.status, error, { registry: agentRegistry });
+      refused = fence?.kind === "fenced";
+    }
     const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
-    return { status: spawned.status, body: { ...spawned.body, seat: terminalized?.seat ?? null } };
+    return { status: spawned.status, body: { ...spawned.body, ...(refused ? { admission: "refused" } : {}), seat: terminalized?.seat ?? null } };
   }
   const activated = await activate({
     project,
@@ -1433,11 +1453,11 @@ async function runOrchestratorRotation(
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
-  if (!namedProject) return { status: 400, body: { error: "project must be a valid project key" } };
+  if (!namedProject) return { status: 400, body: { error: "project must be a valid project key", admission: "refused" } };
   const project = canonicalOrchestratorProject(namedProject);
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
-    return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters" } };
+    return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters", admission: "refused" } };
   }
   /* An accepted launch whose request died may hold the seat this rotation must
      replace, and one that DIED may still be holding it; converge both so the
@@ -1470,6 +1490,7 @@ async function runOrchestratorRotation(
       body: {
         error: "no orchestrator is designated for this project — use create_orchestrator instead of rotating",
         code: "no_incumbent",
+        admission: "refused",
         ...rollbackReport,
       },
     };
@@ -1480,7 +1501,7 @@ async function runOrchestratorRotation(
   }
   // An accepted rotation can be replayed during a hold. Defer a fresh one
   // before composition, which may itself launch a handoff summarizer.
-  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(triggeredBy, admission?.autonomous);
+  const hold = incumbent.intent.clientRequestId === clientRequestId ? null : agentSeatLaunchHold(project, clientRequestId, triggeredBy, admission?.autonomous);
   if (hold) return { ...hold, body: { ...hold.body, triggeredBy } };
 
   const predecessorTarget = dependencies.conversationTarget(incumbent.conversationId);
@@ -1551,7 +1572,7 @@ async function runOrchestratorRotation(
     const conflict = incumbentChangedResult(project, incumbent.seatEpoch, current);
     return { status: conflict.status, body: { ...conflict.body, rotatedFrom, triggeredBy } };
   }
-  if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, rotatedFrom, triggeredBy } };
+  if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, admission: "refused", rotatedFrom, triggeredBy } };
 
   const outcome = await executeOrchestratorSeatRequest({
     project,

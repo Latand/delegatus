@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Run the three executable red-path controls for the pinned Bun verifiers. */
 import { spawnSync } from "node:child_process";
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -66,10 +66,11 @@ try {
 
   const subject = path.join(scratch, "unloadable-viewer");
   mkdirSync(path.join(subject, ".next/server"), { recursive: true });
-  mkdirSync(path.join(subject, "scripts"), { recursive: true });
+  // Preserve the verifier's real dependency graph while the build under test
+  // stays synthetic. Copying a single entry hid its new cleanup imports.
+  symlinkSync(path.join(repo, "scripts"), path.join(subject, "scripts"), "dir");
   writeFileSync(path.join(subject, "package.json"), "{}\n");
   writeFileSync(path.join(subject, ".next/server/control.js"), "module.exports = {};\n");
-  copyFileSync(verifier, path.join(subject, "scripts/verify-viewer-runtime.ts"));
   copyNextRuntimeWithFailure(subject);
   const broken = run([path.join(subject, "scripts/verify-viewer-runtime.ts")], subject);
   if (broken.status === 0 || !broken.output.includes(runtimeModule)) {
