@@ -2165,3 +2165,98 @@ test("linked relay refuses workers and operator callers and rejects injected wir
   expect((await request(a, `/test/seat-receipt?operationId=${sent.body.operationId}`)).body).toMatchObject({ state: "refused", code: "malformed" });
   expect((await request(b, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
 });
+
+
+for (const revoked of [false, true]) for (const side of ["receiver", "caller"] as const) {
+  test(`${revoked ? "link revoked" : "sharing removed"} during held ${side} delivery exports no project data`, async () => {
+    const names = [`sharing-await-${side}-${revoked}-a`, `sharing-await-${side}-${revoked}-b`];
+    let a = await install(names[0]!); const b = await install(names[1]!);
+    const id = await link(a, b);
+    for (const base of [a, b]) await request(base, "/test/seat", "POST", { project: key });
+    const grant = ((await request(b, "/api/links/grants")).body.grants as { id: string; label: string }[])[0]!;
+    let receiving = side === "receiver" ? b : a;
+    const sender = side === "receiver" ? a : b;
+    const inbound = await request(sender, "/test/seat-send", "POST", { project: key, machine: sender === a ? id : grant.label,
+      text: "Trigger held delivery.", clientMessageId: "held-inbound" });
+    expect(inbound.status).toBe(200);
+    if (side === "caller") {
+      // Leave a received row for the caller's next outbound preparation.
+      await request(a, "/test/seat-crash?point=before");
+      await request(a, `/api/links/peers/${id}`, "POST").catch(() => null);
+      await stopInstall(a);
+      a = await install(names[0]!);
+      receiving = a;
+    }
+    expect((await request(receiving, "/test/seat-send", "POST", { project: key, machine: receiving === a ? id : grant.label,
+      text: "Queued plaintext must remain private.", clientMessageId: "held-outbound" })).status).toBe(200);
+    await createOn(receiving, "Task text must remain private.");
+    seedTranscript(names[receiving === a ? 0 : 1]!, "Transcript stays private.", remote, "held-agent");
+    await request(receiving, "/test/scan");
+    await request(b, "/test/capture");
+    await request(receiving, "/test/seat-delivery?mode=hold");
+    const syncing = request(a, `/api/links/peers/${id}`, "POST");
+    try {
+      let held = false;
+      for (let tries = 0; tries < 200 && !held; tries++) {
+        held = (await request(receiving, "/test/seat-delivery")).body.held === true;
+        if (!held) await Bun.sleep(10);
+      }
+      expect(held).toBe(true);
+      const changed = revoked
+        ? await request(receiving, receiving === a ? `/api/links/peers/${id}` : `/api/links/grants?id=${grant.id}`, "DELETE")
+        : await request(receiving, "/api/links/shared", "POST", { v: 1, all: false, projects: [] });
+      expect(changed.status).toBe(200);
+    } finally { await request(receiving, "/test/seat-delivery?mode=release"); }
+    const result = await syncing;
+    const pages = await captured(b);
+    if (!revoked || side === "receiver") expect(pages.length).toBeGreaterThan(0);
+    for (const page of pages) {
+      const wire = side === "receiver" ? page.response : page.request;
+      expect(wire).not.toContain("Queued plaintext must remain private.");
+      expect(wire).not.toContain("Task text must remain private.");
+      expect(wire).not.toContain(key);
+    }
+    expect(result).toMatchObject({ status: revoked ? 409 : 200 });
+    if (!revoked) await sync(a, id);
+  }, 30_000);
+}
+
+
+for (const label of ["M".repeat(100), "<>/" + "M".repeat(97)]) {
+  test(`remote author survives admission crash and recipient rotation (${label.startsWith("<") ? "marker characters" : "long label"})`, async () => {
+    const suffix = label.startsWith("<") ? "markers" : "length";
+    const names = [`author-recovery-${suffix}-a`, `author-recovery-${suffix}-b`];
+    const projectRemote = `code.example.test/acme/${"project".repeat(7)}`;
+    const project = projectIdentityFromRemote(`https://${projectRemote}`, "/")!.project;
+    const a = await install(names[0]!, { [project]: projectRemote });
+    const b = await install(names[1]!, { [project]: projectRemote });
+    // The machine's legal 100-unit label is frozen in the receiver's grant.
+    const selfFile = path.join(root, names[0]!, "links/self.json");
+    const self = JSON.parse(fs.readFileSync(selfFile, "utf8"));
+    fs.writeFileSync(selfFile, JSON.stringify({ ...self, label }));
+    const id = await link(a, b, { projects: [project] });
+    for (const base of [a, b]) await request(base, "/test/seat", "POST", { project });
+    const sent = await request(a, "/test/seat-send", "POST", { project, machine: id, text: "One release instruction.", clientMessageId: "bounded-author" });
+    expect(sent.status).toBe(200);
+    await request(b, "/test/seat-crash?point=after");
+    expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(409);
+    await stopInstall(b);
+    const restarted = await install(names[1]!, { [project]: projectRemote });
+    type Delivery = { text: string; command: { operationId: string; origin: { project?: string } } };
+    const before = (await request(restarted, "/test/seat-deliveries")).body as unknown as Delivery[];
+    expect(before).toHaveLength(1);
+    const originalOperation = before[0]!.command.operationId;
+    // Rotation changes the active recipient while the inbound row still has no outcome.
+    expect((await request(restarted, "/test/seat", "POST", { project })).status).toBe(200);
+    await sync(a, id);
+    await sync(a, id);
+    const after = (await request(restarted, "/test/seat-deliveries")).body as unknown as Delivery[];
+    expect(after).toHaveLength(1);
+    expect(after[0]!.command.operationId).toBe(originalOperation);
+    expect(after[0]!.command.origin.project).toBeDefined();
+    expect(after[0]!.command.origin.project!.length).toBeLessThanOrEqual(120);
+    expect(after[0]!.text).toContain(`project ${after[0]!.command.origin.project}.`);
+    expect(after[0]!.command.origin.project).not.toMatch(/[<>\u0000-\u001f]/);
+    expect((await request(a, `/test/seat-receipt?operationId=${sent.body.operationId}`)).body).toMatchObject({ state: "accepted" });
+  }, 30_000);
+}

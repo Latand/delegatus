@@ -60,7 +60,16 @@ process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
 let seatCrash: "before" | "after" | null = null;
 let dropSeatAnswer = false;
+let seatDeliveryMode: "hold" | null = null;
+let seatDeliveryHeld = false;
+let releaseSeatDelivery: (() => void) | null = null;
 setLinkedSeatEnqueueForTests(async message => {
+  if (seatDeliveryMode === "hold") {
+    seatDeliveryHeld = true;
+    await new Promise<void>(resolve => { releaseSeatDelivery = resolve; });
+    seatDeliveryHeld = false;
+    seatDeliveryMode = null;
+  }
   if (seatCrash === "before") process.exit(0);
   const result = await enqueueStructuredMessage(message, {
   enabled: () => true, registry: agentRegistry, client: () => ({
@@ -186,6 +195,13 @@ const server = http.createServer(async (request, response) => {
     }
     const query = new URL(request.url ?? "/", "http://localhost").searchParams;
     const body = () => JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
+    if (path === "/test/seat-delivery") {
+      const mode = query.get("mode");
+      if (mode === "release") releaseSeatDelivery?.();
+      else if (mode === "hold") seatDeliveryMode = mode;
+      else if (mode === "reset") seatDeliveryMode = null;
+      json(response, { held: seatDeliveryHeld }); return;
+    }
     if (path === "/test/seat-receipt") { json(response, seatMessageReceipt(query.get("operationId")!)); return; }
     if (path === "/test/seat-crash") { seatCrash = query.get("point") as "before" | "after"; json(response, { ok: true }); return; }
     if (path === "/test/drop-seat-answer") { dropSeatAnswer = true; json(response, { ok: true }); return; }

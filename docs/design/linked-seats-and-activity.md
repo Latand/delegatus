@@ -350,6 +350,10 @@ at `src/lib/links/client.ts:191-194`) and in B's answer (built at
    relay bubble render it unchanged. The origin is
    `{ kind: "agent", role: "orchestrator", project: "{project} on {machine}" }`
    with no `conversationId`: the sender's conversation does not exist here.
+   Before either copy is written, control characters and marker brackets are
+   removed, whitespace is collapsed, and the author is bounded to the durable
+   origin's 120 UTF-16 units. The inbound row, delivered prelude and persisted
+   origin retain the same author across a crash and recipient rotation.
 3. A drain, run after the exchange and at the start of every later exchange,
    takes each `received` row under a lease (`st: delivering`, the Viewer's
    pid and start time, as the holds of M.4 do; a lease whose process is gone
@@ -802,3 +806,27 @@ sync and refuses seat messages until the other advertises support. Rich agent
 summaries require the sending side's update; optional role and seat fields are
 safe for older receivers. Per-host activity records remain deferred as §11
 describes; this slice exposes agents of shared projects through the boards.
+
+
+## 15. Delivery-await and author recovery regressions
+
+The peer response checks the grant and fresh shared-project intersection after
+runtime delivery returns. A changed sharing boundary discards the response's
+old task, agent and shared-list pages and starts a fresh list handshake. The
+caller drains received messages before constructing any outbound page and
+checks the current link again. When the intersection becomes empty, a waiting
+task exchange no longer keeps the handshake running indefinitely.
+
+`src/lib/links/boardSync.test.ts` holds delivery in each direction while
+removing sharing or revoking the link. It captures the real peer exchange and
+requires queued plaintext, task text and agent project keys to stay off the
+wire. Separate cases use legal 100-unit machine labels, including marker
+brackets, crash after durable admission before saving the inbound outcome,
+restart the receiver, and rotate its seat. Recovery must keep exactly one
+reservation with the original operation id and matching author/prelude.
+
+The sharing and author cases failed against the earlier implementation before
+the fixes were written. These protections belong on both installs: each host
+must check its own export boundary and normalize the messages it receives.
+The wire version is unchanged; one upgraded side retains compatibility while
+the older host still needs the fixes to protect its own boundary.

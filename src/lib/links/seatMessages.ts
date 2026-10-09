@@ -9,7 +9,7 @@ import { linkedContext, type LinkedPeer } from "./linked";
 import { grantRows, peerRows } from "./protocol";
 import { readSelf } from "./self";
 import { sha, sharedProjects } from "./state";
-import { deliverLinkedSeatMessage } from "./seatMessageDelivery";
+import { deliverLinkedSeatMessage, linkedSeatMessageAuthor } from "./seatMessageDelivery";
 
 type Ack = { id: string; st: "accepted" | "refused"; code?: string };
 export type SeatMessage = { id: string; p: string; at: number; k: string; t: string };
@@ -155,7 +155,7 @@ export function acceptSeatMessages(link: LinkedPeer, part: SeatMessagePart): num
       if (tx.get(key)) return;
       tx.put({ key, dir: "in", id: message.id, link: link.install, connection: connection(link), p: malformed ? "" : message.p, at: malformed ? Date.now() : message.at,
         k: malformed ? "" : message.k, receivedAt: Date.now(), digest: sha(JSON.stringify(message)),
-        ...(code ? { st: "refused", code, ackPending: true } : { st: "received", t: message.t, prelude: `${display} on ${link.label}` }) }); moved++;
+        ...(code ? { st: "refused", code, ackPending: true } : { st: "received", t: message.t, prelude: linkedSeatMessageAuthor(`${display} on ${link.label}`) }) }); moved++;
     });
   }
   for (const ack of part.ack ?? []) {

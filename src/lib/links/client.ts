@@ -141,7 +141,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
   const stillLinked = (): Link => {
     const current = findPeer(id);
     if (!sameLink(current, peer!)) throw new LinkError("not-found");
-    if (current.state === "revoked" && peer!.state !== "revoked") throw new LinkError("revoked");
+    if (current.state === "revoked") throw new LinkError("revoked");
     return current;
   };
   const self = linkedContext().self;
@@ -167,16 +167,19 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
     let messageMoved = 0;
     for (let calls = 0; calls < MAX_SYNC_CALLS; calls++) {
       stillLinked();
-      if (calls > 0) {
-        const currentLocal = sharedProjects();
-        const currentHash = sharedDigest(currentLocal);
-        if (currentHash !== localHash) {
-          local = currentLocal;
-          localHash = currentHash;
-          send = true;
-          sent = 0;
-          lastSent.delete(sentKey);
-        }
+      const deliveryLink = linkedPeer("peer", id);
+      if (deliveryLink) await drainSeatMessages(deliveryLink);
+      // Delivery can wait for the runtime host. Build every wire part only
+      // after checking the live authorization and sharing boundary again.
+      stillLinked();
+      const currentLocal = sharedProjects();
+      const currentHash = sharedDigest(currentLocal);
+      if (currentHash !== localHash) {
+        local = currentLocal;
+        localHash = currentHash;
+        send = true;
+        sent = 0;
+        lastSent.delete(sentKey);
       }
       const batch = send ? local.slice(sent, sent + 100) : undefined;
       const remoteKeys = new Set(remote.map((project) => project.key));
@@ -192,7 +195,6 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       const pushAgents = outboundAgents && ("rows" in outboundAgents || "reset" in outboundAgents) ? outboundAgents : null;
       const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
       const messageLink = linkedPeer("peer", id);
-      if (messageLink) await drainSeatMessages(messageLink);
       const sm = seatMessagesPart(messageLink);
       const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, sm, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash, taskWireVersion: TASK_WIRE_VERSION,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
@@ -301,7 +303,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       const localKeys = new Set(local.map((project) => project.key));
       const linkedAfter = new Set(remote.map((project) => project.key).filter((key) => localKeys.has(key)));
       const linkedSame = linkedAfter.size === linked.size && [...linkedAfter].every((key) => linked.has(key));
-      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && !exchange?.pending() && !agentMore && !messageMore && !messagesPending(id) && (linkedSame || !exchange)) break;
+      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && (!linked.size || !exchange?.pending()) && !agentMore && !messageMore && !messagesPending(id) && (linkedSame || !exchange)) break;
       agentMore = false;
       if (calls === MAX_SYNC_CALLS - 1) throw new LinkError("malformed");
     }
