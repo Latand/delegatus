@@ -7,6 +7,8 @@ import sharp from "sharp";
 import type { Browser, LaunchOptions, Page } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { en } from "@/lib/i18n/en";
 import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -50,6 +52,98 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+describe("finding recurrence (#2648)", () => {
+  browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
+    const out = path.resolve(".artifacts/finding-recurrence");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=finding-recurrence`, { width, height: width === 1000 ? 700 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          for (const [id, count] of [["t-finding", 3], ["t-finding-held", 12]] as const) {
+            const status = id === "t-finding" ? "inbox" : "blocked";
+            if (width === 390) await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
+            else {
+              await page.locator("[data-kanban-board]").waitFor();
+              const tab = page.locator(`.tabs-nav [data-tab="${status}"]`);
+              if (await tab.isVisible()) await tab.click();
+            }
+            const selector = width === 390 ? `[data-phone-card="task:${id}"]` : card(id);
+            const target = page.locator(selector);
+            const line = target.locator("[data-finding-recurrence]");
+            await line.waitFor();
+            await target.scrollIntoViewIfNeeded();
+            const reading = await line.evaluate((element, lang) => {
+              const container = element.closest(".motion-line")!;
+              const box = container.getBoundingClientRect();
+              // Text-node ranges include every rendered fragment, including
+              // fragments hidden by the container's two-line clamp.
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const fragments = [...range.getClientRects()];
+              const holdReason = element.nextElementSibling;
+              const holdRange = document.createRange();
+              if (holdReason) holdRange.selectNodeContents(holdReason);
+              const holdFragments = holdReason ? [...holdRange.getClientRects()] : [];
+              const time = element.querySelector("time")!;
+              const dateTime = time.getAttribute("datetime")!;
+              const expectedDate = new Date(dateTime).toLocaleString(lang === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+              return { text: element.textContent, dateTime: element.querySelector("time")?.getAttribute("datetime"),
+                timeText: time.textContent, timeTitle: time.getAttribute("title"), expectedDate,
+                holdReason: holdReason?.textContent ?? null,
+                holdReasonVisible: holdFragments.length > 0 && holdFragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
+                title: container.getAttribute("title"),
+                horizontalClipped: container.scrollWidth > container.clientWidth + 1,
+                verticalClipped: container.scrollHeight > container.clientHeight + 1,
+                scrollHeight: container.scrollHeight, clientHeight: container.clientHeight,
+                recurrenceVisible: fragments.length > 0 && fragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
+                left: Math.min(...fragments.map(rect => rect.left)), right: Math.max(...fragments.map(rect => rect.right)) };
+            }, lang);
+            expect(reading.text).toContain(translate(lang, "kanban.finding.count", { count }));
+            expect(reading.text).toContain(translate(lang, "kanban.finding.lastSeen"));
+            const lastSeenAt = await page.evaluate(id => (window as unknown as { evidence: { storedTask(id: string): { finding: { lastSeenAt: string } } } }).evidence.storedTask(id).finding.lastSeenAt, id);
+            expect(reading.dateTime).toBe(lastSeenAt);
+            expect(reading.timeText).toBe(translate(lang, "time.agoMin", { n: 20 }));
+            expect(reading.timeTitle).toBe(reading.expectedDate);
+            expect(reading.timeTitle).not.toBe(lastSeenAt);
+            expect(reading.horizontalClipped).toBe(false);
+            expect(reading.recurrenceVisible).toBe(true);
+            if (id === "t-finding") expect(reading.verticalClipped).toBe(false);
+            else {
+              expect(reading.title).toContain(reading.text!.trim());
+              expect(reading.title).toContain(translate(lang, "kanban.hold.worker"));
+              expect(reading.holdReason).toContain(translate(lang, "kanban.hold.worker"));
+              if (width === 1440) expect(reading.holdReasonVisible).toBe(true);
+            }
+            if (lang === "en") expect(reading.text).not.toContain("last seen");
+            expect(reading.left).toBeGreaterThanOrEqual(0);
+            expect(reading.right).toBeLessThanOrEqual(width);
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, width, id, ...reading });
+            await target.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}-${id}.png`) });
+            // A first observation adds no visible line to a quiet inbox card;
+            // the held card still keeps its existing hold state.
+            await page.evaluate((id) => {
+              const evidence = (window as unknown as { evidence: { storedTask(id: string): { status: "inbox" | "blocked"; finding: { count: number } }; setTaskStatus(id: string, status: "inbox" | "blocked"): void } }).evidence;
+              const task = evidence.storedTask(id);
+              task.finding.count = 1;
+              evidence.setTaskStatus(id, task.status);
+            }, id);
+            await line.waitFor({ state: "detached" });
+            expect(await line.count()).toBe(0);
+            expect(await target.locator(".motion-line").count()).toBe(id === "t-finding" ? 0 : 1);
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/finding-recurrence", { recursive: true });
+      fs.writeFileSync("evidence/finding-recurrence/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 describe("terminal review budget continuation", () => {
   browserTest("fresh and recovered parks show the bounded grant on desktop and phone in both languages", async () => {
@@ -21632,11 +21726,11 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       for (const reading of recorded.readings) if (reading.variant === 0) before.set(reading.frame, reading);
     } catch { /* a checkout without the design lane's readings compares nothing */ }
     /* The browser runs as a server of its own so its process id is on record and the run can prove it gone. */
-    const pids: number[] = [];
+    const identities: ProcessIdentity[] = [];
     const launch = async () => {
       const browserServer = await chromium.launchServer(LAUNCH);
-      pids.push(browserServer.process().pid!);
-      fs.writeFileSync(path.join(OUT, "browser.pid"), `${pids.join("\n")}\n`);
+      identities.push(captureProcessIdentity(browserServer.process().pid!));
+      fs.writeFileSync(path.join(OUT, "browser.pid"), `${identities.map(identity => identity.pid).join("\n")}\n`);
       return { browserServer, browser: await chromium.connect(browserServer.wsEndpoint()) };
     };
     let running = await launch();
@@ -21817,12 +21911,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       await running.browser.close().catch(() => {});
       await running.browserServer.close().catch(() => {});
       server.stop();
-      const closed = pids.map((pid) => {
-        let alive = true;
-        try { process.kill(pid, 0); } catch { alive = false; }
-        if (alive) process.kill(pid, "SIGKILL");
-        return `${pid} closed`;
-      });
+      await Promise.all(identities.map(identity => stopFixtureIdentity(identity)));
+      const closed = identities.map(identity => `${identity.pid} closed`);
       fs.writeFileSync(path.join(OUT, "browser.pid"), `${closed.join("\n")}\n`);
     }
 

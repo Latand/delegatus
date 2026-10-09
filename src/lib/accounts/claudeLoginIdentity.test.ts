@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -165,7 +166,7 @@ test.skipIf(process.platform !== "linux")("on Linux a real env-shebang login cle
   const script = path.join(directory, "claude");
   fs.writeFileSync(script, "#!/usr/bin/env sh\nwhile read -r _line; do :; done\n", { mode: 0o755 });
   const identity = processIdentityPorts("linux");
-  const spawned: Array<{ pid?: number; kill(signal?: NodeJS.Signals): boolean }> = [];
+  const spawned: ChildProcess[] = [];
   const phases: string[] = [];
   try {
     for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -173,7 +174,7 @@ test.skipIf(process.platform !== "linux")("on Linux a real env-shebang login cle
       const supervisor = new ClaudeLoginSupervisor({
         ...ports(),
         ...identity,
-        kill: (pid, signal) => { signals.push(signal); try { process.kill(-pid, signal); } catch { /* already gone */ } },
+        kill: (pid, signal) => { signals.push(signal); spawned.find(child => child.pid === pid)?.kill(signal); },
         spawn: (_command, args, options) => {
           const real = spawn(script, args, options);
           spawned.push(real);
@@ -188,7 +189,7 @@ test.skipIf(process.platform !== "linux")("on Linux a real env-shebang login cle
     // Still a fence: this test process is alive and is not that login.
     expect(identity.isExpectedClaude(process.pid)).toBe(false);
   } finally {
-    for (const real of spawned) { try { real.kill("SIGKILL"); } catch { /* already gone */ } }
+    for (const real of spawned) await stopFixtureProcess(real);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -280,11 +281,11 @@ test.skipIf(process.platform !== "darwin")("on macOS a real spawned login clears
   // so the fence sees a live child exactly as the real login would be.
   fs.writeFileSync(shim, "#!/bin/sh\nwhile read -r _line; do :; done\n", { mode: 0o755 });
   const identity = processIdentityPorts();
-  const spawned: Array<{ pid?: number; kill(signal?: NodeJS.Signals): boolean }> = [];
+  const spawned: ChildProcess[] = [];
   const supervisor = new ClaudeLoginSupervisor({
     ...ports(),
     ...identity,
-    kill: (pid, signal) => { signals.push(signal); try { process.kill(-pid, signal); } catch { /* already gone */ } },
+    kill: (pid, signal) => { signals.push(signal); spawned.find(child => child.pid === pid)?.kill(signal); },
     spawn: (_command, args, options) => {
       const real = spawn(shim, args, options);
       spawned.push(real);
@@ -310,7 +311,7 @@ test.skipIf(process.platform !== "darwin")("on macOS a real spawned login clears
     await identity.waitForExit(pid, token);
     expect(identity.isExpectedClaude(pid)).toBe(false);
   } finally {
-    for (const real of spawned) { try { real.kill("SIGKILL"); } catch { /* already gone */ } }
+    for (const real of spawned) await stopFixtureProcess(real);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
