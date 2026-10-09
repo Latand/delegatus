@@ -713,3 +713,20 @@ not repeated; the real cleanup functions, package entry points and actual
 runner matrix supply this correction's bounded coverage. A read-only review
 checked signal authority, bounds, failure paths, inventory reconciliation and
 public evidence; it started no additional independent review round.
+
+## Native-main resolution fixture compatibility
+
+The native-main per-file resolution tests introduced alongside the merger's
+comparison retained the earlier one-argument gate prefix. The owned runner
+invokes gates with two prefix arguments, `/bin/bash` and `gate-slot.sh`.
+Both new fixture samplers inspected the earlier positions and returned a
+synthetic successful report without executing their fixture tests. Four
+per-file comparison cases and three incomplete-main cases failed after the
+main merge; the focused run reproduced all seven failures.
+
+The samplers now inspect and strip the current two-argument prefix, matching
+the existing real merger samplers. The comparison cases also assert the exact
+prefix. The focused run passes all seven cases, including withheld regressions,
+fresh native-main samples, bundled-only failures and incomplete baseline cases.
+Fixture subprocesses retain the enclosing test service's containment and
+spawn-time registration. The ownership layer and audit rules are unchanged.
