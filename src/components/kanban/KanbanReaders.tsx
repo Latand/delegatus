@@ -197,6 +197,8 @@ export interface ReaderView {
   /** The reader is the agent window's: the conversation's one composer is
       here, even while the seat shows the same conversation. */
   composerPrimary?: boolean;
+  /** What the composer says in place of its default: the seat's own words. */
+  composerPlaceholder?: string;
 }
 
 interface ReaderProps extends ReaderView {
@@ -238,7 +240,7 @@ export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, composerPrimary = false, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, composerPrimary = false, composerPlaceholder, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -417,6 +419,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
       isRoot={false}
       onSpawnRetry={retryLaunch}
       composerPrimary={composerPrimary}
+      composerPlaceholder={composerPlaceholder}
       chrome={{
         header,
         className: `reader conv${needs ? " needs" : ""}${isLaunchedConversation(file) ? " launched" : ""}`,

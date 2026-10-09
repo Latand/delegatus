@@ -204,7 +204,7 @@ export function OrchestratorPanel({
   onTogglePlacement?: () => void;
   /** Opens the seat's conversation in the board's agent window (#2612), from
       the head's expand button; `from` is that button. Absent draws none. */
-  onOpenWindow?: (file: FileEntry, from: HTMLElement) => void;
+  onOpenWindow?: (file: FileEntry, from: HTMLElement, placeholder: string) => void;
   /** The seat's state word and unread marker, for the header toggle's dot. */
   onSeatSignal?: (signal: SeatSignal) => void;
   /** The project's tasks as the page carries them: the titles and notes of
@@ -618,7 +618,7 @@ export function OrchestratorPanel({
               type="button"
               className="icon-btn seat-dock seat-window"
               data-seat-window=""
-              onClick={(event) => onOpenWindow(windowFile, event.currentTarget)}
+              onClick={(event) => onOpenWindow(windowFile, event.currentTarget, t("composer.placeholderOrchestrator", { project: projectName }))}
               aria-label={t("orchPanel.seatOpenWindow")}
               title={t("orchPanel.seatOpenWindow")}
             >

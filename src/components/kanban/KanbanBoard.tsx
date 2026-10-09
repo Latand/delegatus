@@ -455,8 +455,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The seat's expand button opens the seat's conversation in the agent
      window like any agent; the button takes the keyboard back when the
      window closes. Read through a ref: the opener is defined further down. */
-  const openFromSeatRef = useRef<(file: FileEntry, from: HTMLElement | null) => void>(() => {});
-  const openFromSeat = useCallback((file: FileEntry, from: HTMLElement | null) => openFromSeatRef.current(file, from), []);
+  const openFromSeatRef = useRef<(file: FileEntry, from: HTMLElement | null, placeholder?: string) => void>(() => {});
+  const openFromSeat = useCallback((file: FileEntry, from: HTMLElement | null, placeholder?: string) => openFromSeatRef.current(file, from, placeholder), []);
+  /* What the seat's composer says, kept for the same conversation's composer in the window. */
+  const [seatPlaceholder, setSeatPlaceholder] = useState<{ key: string; text: string } | null>(null);
   const seatView = useMemo(() => {
     const seat = renderSeat?.(boardId) ?? null;
     return seat ? <AgentWindowOpener.Provider value={openFromSeat}>{seat}</AgentWindowOpener.Provider> : null;
@@ -591,7 +593,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         file,
         inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
-        ...(!owner && isCurrentSeatConversation(seatRefs, file) ? { seat: true } : {}),
+        ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
         /* The window is the operator's conversation window: the agent in its
            reader takes the one composer from any other place of the same
            conversation, the seat's included. */
@@ -613,7 +615,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs, seatPlaceholder]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1944,9 +1946,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setWindow(key, options.landing ? key : undefined);
   }, [memory, onConversationOpened, disown, setWindow]);
   useLayoutEffect(() => {
-    openFromSeatRef.current = (file, from) => {
+    openFromSeatRef.current = (file, from, placeholder) => {
       /* Its conversation draws no tile, so the board may not have read it yet. */
       lastSeenFiles.current.set(conversationIdentity(file), file);
+      if (placeholder) setSeatPlaceholder({ key: conversationIdentity(file), text: placeholder });
       openReaderFor(file);
       openedFrom.current = from;
     };

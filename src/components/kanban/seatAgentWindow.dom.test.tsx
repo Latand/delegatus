@@ -275,6 +275,8 @@ test("pressing it opens the orchestrator in the agent window, listed with the ot
   expect(reader.querySelector("[data-reader-close]")).toBeTruthy();
   expect(reader.querySelector("[data-reader-menu]")).toBeTruthy();
   expect(reader.querySelector("textarea")).toBeTruthy();
+  /* It says what it says in the seat. */
+  expect(reader.querySelector("textarea")?.getAttribute("placeholder")).toBe("what should get done in Atlas?");
   expect(seatConversation(host)?.querySelector("textarea")).toBeNull();
   expect(agentWindow(host)!.querySelectorAll("textarea").length).toBe(1);
 
