@@ -9,6 +9,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import type { RuntimeHostClient } from "./client";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, type RuntimeSnapshot } from "./contracts";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapability } from "./runtimeImageStore";
@@ -4636,9 +4637,81 @@ test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut 
       expect(registry.conversationDeliverySnapshot({ conversationId: conversation.id }).heldDeliveries[delivery.deliveryId]!.command.onlyIfIdle!.writerClaim).toBe("fixture:2");
     }
     expect(recoveries).toBe(stateAtRestart === "republish" ? 0 : 1);
-    expect(republications).toBe(stateAtRestart === "missing" ? 0 : 1);
+    expect(republications).toBe(1);
     expect(state.deliveries).toBe(2);
     expect(state.commands).toBe(2);
+  } finally { journal.close(); registry.close(); }
+});
+
+test.each([
+  ["published", null],
+  ["unavailable", "no runtime session is registered after host recovery"],
+  ["stage-changed", "stage eligibility changed during host republication"],
+  ["active", "turn=running"],
+  ["attention", "attention=1"],
+  ["no-writer", "has no writer claim"],
+] as const)("a missing restart-cut projection republishes its live durable owner: %s", async (scenario, reason) => {
+  const { registry, conversation, journal, session, publish, state, client } = idleContinuationFixture();
+  const generation = conversation.generations.at(-1)!;
+  const key = { engine: conversation.engine, sessionId: generation.id };
+  const entry = registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  let missing = true;
+  let republications = 0;
+  let recoveries = 0;
+  let spawns = 0;
+  const restartedClient = { ...client, readSession: async () => missing ? null : journal.readSession({ conversationId: conversation.id }) };
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => {
+    recoveries++;
+    return recoverDeadStructuredConversation(request, {
+      ...dependencies, transport: () => "structured", park: () => null,
+      spawn: async () => { spawns++; throw new Error("a live owner must not spawn a successor"); },
+    });
+  };
+  const request = { path: generation.path, conversationId: conversation.id,
+    clientMessageId: "restart-live-owner", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" } };
+  const dependencies = {
+    enabled: () => true, registry: () => registry, client: () => restartedClient, kick: () => {},
+    idleContinuationAllowed: () => state.eligible, recover,
+    republish: async (publishedKey: typeof key) => {
+      republications++;
+      expect(publishedKey).toEqual(key);
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      if (scenario === "unavailable") return false;
+      missing = false;
+      session.writerClaim = "fixture:republished";
+      if (scenario === "stage-changed") state.eligible = false;
+      if (scenario === "active") Object.assign(session, { turn: "running", activeTurnId: "operator-turn" });
+      if (scenario === "attention") session.attentionIds = ["permission"];
+      if (scenario === "no-writer") session.writerClaim = null;
+      publish();
+      return true;
+    },
+  };
+  try {
+    // Real recovery hands this live claim back without publishing a projection.
+    expect(await recover({ path: generation.path, conversationId: conversation.id }, { registry, client: restartedClient }))
+      .toMatchObject({ conversationId: conversation.id, spawned: false });
+    expect(await restartedClient.readSession()).toBeNull();
+    recoveries = 0;
+    const result = await enqueueStructuredMessage(request, dependencies);
+    expect(republications).toBe(1);
+    expect(recoveries).toBe(scenario === "unavailable" ? 1 : 0);
+    expect(spawns).toBe(0);
+    if (reason) {
+      expect(result).toMatchObject({ ok: false, status: 409, admission: "refused", error: expect.stringContaining(reason) });
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      expect(state.commands).toBe(0);
+      expect(state.deliveries).toBe(0);
+    } else {
+      expect(result).toMatchObject({ ok: true, outcome: "delivered" });
+      expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "delivered", operationId: result!.operationId });
+      expect(state.commands).toBe(1);
+      expect(state.deliveries).toBe(1);
+      const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+      expect(delivery.command.onlyIfIdle).toEqual({ revision: journal.readSession({ conversationId: conversation.id })!.revision,
+        writerClaim: "fixture:republished" });
+    }
   } finally { journal.close(); registry.close(); }
 });
 

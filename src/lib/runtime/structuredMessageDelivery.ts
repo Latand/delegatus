@@ -1241,8 +1241,13 @@ export async function enqueueStructuredMessage(
       if (overlong) return overlong;
       try {
         assertStructuredTextEnvelope(request.text);
-        if (session) session = (await refreshRepublishedSession(session, client,
-          dependencies.republish ?? republishStructuredDeliveryHost)).session;
+        const republish = dependencies.republish ?? republishStructuredDeliveryHost;
+        if (session) session = (await refreshRepublishedSession(session, client, republish)).session;
+        else if (await republish({ engine: owner.conversation.engine, sessionId: generation.id })) {
+          // A live durable owner can survive the loss of its runtime projection;
+          // recovery hands that owner back without publishing it.
+          session = await readRuntimeSession(client, { conversationId: owner.conversation.id });
+        }
         if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host republication");
         if (!session || session.host === "dead" || session.host === "unhosted") {
           const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
