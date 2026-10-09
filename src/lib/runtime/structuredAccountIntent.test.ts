@@ -101,7 +101,7 @@ function endTurn(state: HostState): void {
 function queueOver(
   journal: RuntimeJournal,
   state: HostState,
-  options: { fail?: string; cancelled?: Set<string>; registry?: { store: AgentRegistry; id: ViewerConversationId } } = {},
+  options: { fail?: string; cancelled?: Set<string>; registry?: { store: AgentRegistry; id: ViewerConversationId }; refuseHolds?: { count: number } } = {},
 ) {
   const holds = new Map<string, { accountId: string; reason: string }>();
   /* With a registry, the hold and the claim are the registry's own, as in production. */
@@ -115,6 +115,8 @@ function queueOver(
     reconfigureCancelled: (effect) => options.cancelled?.has(effect.operationId) ?? false,
     switchHold: (conversationId) => registry ? registry.store.switchHold(registry.id) : holds.get(conversationId) ?? null,
     holdForFailedSwitch: (effect, reason) => {
+      /* The registry's lock refused the write: nothing is held. */
+      if (options.refuseHolds && options.refuseHolds.count > 0) { options.refuseHolds.count -= 1; return false; }
       if (registry) registry.store.holdForFailedSwitch(registry.id, { operationId: effect.operationId, accountId: effect.accountId!, reason });
       else holds.set(effect.conversationId, { accountId: effect.accountId!, reason });
     },
@@ -286,6 +288,40 @@ test("a failed move settles messages with its reason and requires an explicit re
   expect(writes()).toEqual(["explicit-resend"]);
   expect(moves).toEqual(["pick-b→account-b"]);
   journal.close();
+});
+
+test("a failed move whose hold the lock refused keeps its barrier, and the next pass or a restart holds and settles with its reason", async () => {
+  for (const resume of ["next-pass", "restart"] as const) {
+    const journal = journalWithSwitch(`failed-move-hold-refused-${resume}`, "idle");
+    const refuseHolds = { count: 1 };
+    const failing = queueOver(journal, hostState(false), { fail: "claude account requires authentication", refuseHolds });
+    send(journal, "held-message");
+    await failing.queue.drain();
+    await failing.queue.drain();
+
+    /* Nothing was held, so the switch is not failed yet and still stands in
+       front of the message: the source account gets no input. */
+    expect(failing.moves).toEqual(["pick-b→account-b"]);
+    expect(failing.writes()).toEqual([]);
+    expect(failing.holds.get(CONVERSATION)).toBeUndefined();
+    expect(journal.operationResult("pick-b")?.receipt.status).toBe("applying");
+    expect(journal.operationResult("held-message")?.receipt.status).toBe("queued");
+
+    setSystemTime(new Date(Date.now() + 60_000));
+    const next = resume === "next-pass" ? failing : queueOver(journal, hostState(false), { fail: "claude account requires authentication" });
+    await next.queue.drain();
+    await next.queue.drain();
+    expect(next.writes()).toEqual([]);
+    expect(next.holds.get(CONVERSATION)).toEqual({ accountId: "account-b", reason: "claude account requires authentication" });
+    expect(journal.operationResult("pick-b")?.receipt.status).toBe("failed");
+    expect(journal.operationResult("held-message")?.receipt).toMatchObject({ status: "failed", reason: "account switch failed: claude account requires authentication" });
+    /* The pass that owed the hold wrote it without applying the switch again;
+       a restarted queue knows nothing owed and meets the same failure. */
+    expect(failing.moves).toEqual(["pick-b→account-b"]);
+    if (resume === "restart") expect(next.moves).toEqual(["pick-b→account-b"]);
+    setSystemTime();
+    journal.close();
+  }
 });
 
 test("after a failed move, another pick and explicit resend delivers once", async () => {

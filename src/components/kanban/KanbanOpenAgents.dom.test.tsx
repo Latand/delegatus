@@ -8,9 +8,10 @@ import type { FileEntry } from "@/lib/types";
 
 import type { TaskMutationPorts } from "./useTaskMutations";
 
-/* The open-agents rail at the board's side, rendered by React over the real
-   board with invented conversations. Fetches answer from a stub, storage is
-   the test window's, and no route or state directory is touched. */
+/* The agent window's list of open agents and the header's pill
+   (docs/design/agent-window.md), rendered by React over the real board with
+   invented conversations. Fetches answer from a stub, storage is the test
+   window's, and no route or state directory is touched. */
 
 class TestResizeObserver {
   observe() {}
@@ -48,19 +49,29 @@ Object.assign(globalThis, {
   addEventListener() {},
   removeEventListener() {},
 });
+/* A transcript whose path is held here answers once it is released: its
+   reader stays on its first read until then. */
+const heldLogs = new Map<string, Array<() => void>>();
+const releaseLogs = (path: string) => {
+  const waiting = heldLogs.get(path) ?? [];
+  heldLogs.delete(path);
+  for (const resume of waiting) resume();
+};
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   let body: unknown = {};
   if (url.startsWith("/api/logs")) {
     const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string; path: string }> };
+    const held = reqs.find((req) => heldLogs.has(req.path));
+    if (held) await new Promise<void>((resume) => heldLogs.get(held.path)!.push(resume));
     body = { chunks: Object.fromEntries(reqs.map((req) => [req.id, { data: "", start: 0, offset: 0, size: 0 }])) };
   }
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }) as unknown as typeof fetch;
 
 /* happy-dom lays nothing out, so the board's root is given the width a
-   desktop window gives it; the rail's tier is read from that width. Every
-   element brought into view is recorded. */
+   desktop window gives it. Every element brought into view is recorded: the
+   board under the window never moves. */
 let boardWidth = 1672;
 const rect = dom.HTMLElement.prototype.getBoundingClientRect;
 dom.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
@@ -76,7 +87,6 @@ const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
 const { READER_STORAGE_PREFIX } = await import("./readerMemory");
-const { openRailTier, OPEN_RAIL_WIDTH } = await import("./kanbanLayout");
 const { cycleOpenAgent } = await import("./openAgents");
 const { setLocale } = await import("@/lib/i18n");
 
@@ -84,6 +94,7 @@ const roots: Root[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
+  for (const path of [...heldLogs.keys()]) releaseLogs(path);
   localStorage.clear();
   scrolledTo.length = 0;
   boardWidth = 1672;
@@ -155,6 +166,8 @@ function mount(options: { files?: FileEntry[]; drafts?: string[]; onDraftClose?:
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push(root);
+  /* What the Viewer asked this board to open, and which request that was. */
+  let focus: { path: string; nonce: number } | null = null;
   const render = (files: FileEntry[] = options.files ?? [implement, review, verify1, verify2, plain]) => flushSync(() => root.render(
     <KanbanBoard
       project="fixture"
@@ -174,17 +187,24 @@ function mount(options: { files?: FileEntry[]; drafts?: string[]; onDraftClose?:
       selection={new Set()}
       onOpenConversations={() => {}}
       mutationPorts={idlePorts}
+      focus={focus?.path ?? null}
+      focusNonce={focus?.nonce}
     />,
   ));
   render();
-  return { host, render };
+  const ask = (path: string) => {
+    focus = { path, nonce: (focus?.nonce ?? 0) + 1 };
+    render();
+  };
+  return { host, render, ask };
 }
 
 const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
 };
-const rail = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-open-rail]");
+const agentWindow = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-agent-window]");
+const pill = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-open-agents-pill]");
 const segments = (scope: ParentNode) => [...scope.querySelectorAll<HTMLElement>("[data-open-agent]")];
 const segmentKeys = (scope: ParentNode) => segments(scope).map((segment) => segment.dataset.openAgent);
 const readerOf = (host: HTMLElement, key: string) => [...host.querySelectorAll<HTMLElement>("[data-kanban-reader]")].find((reader) => reader.dataset.kanbanReader === key) ?? null;
@@ -195,47 +215,64 @@ const remembered = () => (JSON.parse(localStorage.getItem(`${READER_STORAGE_PREF
 const altKey = (code: "KeyJ" | "KeyK", target: EventTarget = document) => flushSync(() => {
   target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: code === "KeyJ" ? "j" : "k", code, altKey: true, bubbles: true, cancelable: true }) as unknown as Event);
 });
+/* The agent the window's reader shows, once its first read settled. */
+const shown = (host: HTMLElement) => agentWindow(host)?.querySelector<HTMLElement>(".reader-slot:not([data-incoming]) [data-kanban-reader]")?.dataset.kanbanReader ?? null;
+async function showing(host: HTMLElement, key: string) {
+  for (let waited = 0; waited < 3000 && shown(host) !== key; waited += 10) await tick(10);
+  expect(shown(host)).toBe(key);
+  return readerOf(host, key)!;
+}
 
-test("the rail lists exactly the open agents, in the order they were opened, each with its reader's own role, emblem and a name that is never an id", async () => {
+test("the window lists exactly the open agents, in the order they were opened, each with its reader's own role, emblem and a name that is never an id", async () => {
   seed([verify2, review, plain]);
   const { host } = mount();
   await tick();
-  expect(rail(host)?.dataset.openRail).toBe("full");
-  expect(segmentKeys(host)).toEqual(["conversation_verify-2", "conversation_review-1", "conversation_plain-1"]);
-  expect(rail(host)?.querySelector("[data-open-rail-count]")?.textContent).toBe("3 agents open");
-  for (const segment of segments(host)) {
+  /* Open since the last visit, behind the header's pill, which stands right after the working count. */
+  expect(agentWindow(host)).toBeNull();
+  expect(pill(host)?.querySelector(".pill-words")?.textContent).toBe("3 agents");
+  expect(pill(host)?.closest("[data-open-agents-slot]")?.previousElementSibling?.getAttribute("data-bar-group")).toBe("status");
+  click(pill(host));
+  await showing(host, "conversation_verify-2");
+  const list = agentWindow(host)!.querySelector<HTMLElement>(".aw-list")!;
+  expect(segmentKeys(list)).toEqual(["conversation_verify-2", "conversation_review-1", "conversation_plain-1"]);
+  expect(list.querySelector("[data-open-agents-count]")?.textContent).toBe("3 agents open");
+  for (const segment of segments(list)) {
     const reader = readerOf(host, segment.dataset.openAgent!);
     expect(reader).toBeTruthy();
-    /* One source: the segment wears the role the reader's ribbon wears, and the same emblem. */
+    /* One source: the row wears the role the reader's ribbon wears, and the same emblem. */
     expect(segment.dataset.role).toBe(reader!.dataset.role!);
     expect(segment.querySelector(".or-emblem svg")?.getAttribute("class")).toBe(reader!.querySelector(".role-mark-emblem svg")?.getAttribute("class") ?? "");
     expect(segment.textContent).not.toContain("conversation_");
     expect(segment.textContent).not.toContain("/fixture/");
+    /* Every row closes its agent with a × of its own. */
+    expect(segment.querySelector("[data-open-agent-close]")).toBeTruthy();
   }
-  expect(segments(host).map((segment) => segment.dataset.role)).toEqual(["verifier", "reviewer", "neutral"]);
-  expect(segments(host).map((segment) => segment.querySelector(".or-name")?.textContent)).toEqual([
+  expect(segments(list).map((segment) => segment.dataset.role)).toEqual(["verifier", "reviewer", "neutral"]);
+  expect(segments(list).map((segment) => segment.querySelector(".or-name")?.textContent)).toEqual([
     "Verify · 2",
     "Review",
     "Explorer: list every export toggle and the preset each one belongs to",
   ]);
-  expect(segments(host).map((segment) => segment.querySelector(".or-card")?.textContent ?? null)).toEqual([
+  expect(segments(list).map((segment) => segment.querySelector(".or-card")?.textContent ?? null)).toEqual([
     "Restore search results after the index rebuild",
     "Restore search results after the index rebuild",
     "Simplify the export settings",
   ]);
   /* The reader header's dot: the running verify is live, the others idle. */
-  expect(segments(host).map((segment) => segment.querySelector("[data-open-agent-dot]")?.getAttribute("data-open-agent-dot"))).toEqual(["live", "idle", "idle"]);
-  expect(jump(host, "conversation_verify-2")?.getAttribute("aria-label")).toBe("Go to Verify · 2 · Restore search results after the index rebuild: Verifier, working");
-  /* The rail stands in the board frame, beside the columns, not over them. */
-  expect(rail(host)?.parentElement?.classList.contains("board-frame")).toBe(true);
-  expect(rail(host)?.closest(".board, .card, .column")).toBeNull();
-  expect(rail(host)?.style.width).toBe(`${OPEN_RAIL_WIDTH.full}px`);
+  expect(segments(list).map((segment) => segment.querySelector("[data-open-agent-dot]")?.getAttribute("data-open-agent-dot"))).toEqual(["live", "idle", "idle"]);
+  expect(jump(list, "conversation_verify-2")?.getAttribute("aria-label")).toBe("Go to Verify · 2 · Restore search results after the index rebuild: Verifier, working");
+  expect(jump(list, "conversation_verify-2")?.getAttribute("aria-current")).toBe("true");
+  /* The list is the window's left column; the window is a dialog over the board, never in it. */
+  expect(agentWindow(host)?.querySelector("[role='dialog']")?.firstElementChild).toBe(list);
+  expect(agentWindow(host)?.closest(".board, .card, .column, .board-frame")).toBeNull();
+  expect(pill(host)?.getAttribute("aria-expanded")).toBe("true");
 });
 
-test("no rail while nothing is open, and uk strings when the Viewer speaks Ukrainian", async () => {
+test("no pill while nothing is open, its slot stands all the same, and uk strings when the Viewer speaks Ukrainian", async () => {
   const empty = mount();
   await tick();
-  expect(rail(empty.host)).toBeNull();
+  expect(pill(empty.host)).toBeNull();
+  expect(empty.host.querySelector("[data-open-agents-slot]")).toBeTruthy();
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
 
@@ -243,124 +280,91 @@ test("no rail while nothing is open, and uk strings when the Viewer speaks Ukrai
   seed([verify2, review, plain]);
   const { host } = mount();
   await tick();
-  expect(rail(host)?.querySelector("[data-open-rail-count]")?.textContent).toBe("3 агенти відкриті");
-  expect(rail(host)?.getAttribute("aria-label")).toBe("3 відкриті агенти");
+  expect(pill(host)?.querySelector(".pill-words")?.textContent).toBe("3 агенти");
+  expect(pill(host)?.getAttribute("aria-label")).toBe("Показати 3 відкритих агентів");
+  click(pill(host));
+  await showing(host, "conversation_verify-2");
+  expect(host.querySelector("[data-open-agents-count]")?.textContent).toBe("3 агенти відкриті");
+  expect(host.querySelector(".aw-list")?.getAttribute("aria-label")).toBe("3 відкриті агенти");
   expect(host.querySelector("[data-open-rail-close-all]")?.textContent).toBe("Закрити всі");
+  expect(host.querySelector('[data-agent-window-step="next"]')?.getAttribute("aria-label")).toBe("Наступний агент (Alt+J)");
+  expect(readerOf(host, "conversation_verify-2")?.querySelector("[data-reader-close]")?.getAttribute("aria-label")).toBe("Закрити вікно (Esc) — агенти лишаються відкритими");
   expect(jump(host, "conversation_review-1")?.getAttribute("aria-label")).toStartWith("Перейти до ");
 });
 
-test("an agent draft stands in the rail from the moment it opens, so the launch does not insert the strip; its × and «Close all» close it", async () => {
-  const closed: string[] = [];
+test("an agent draft stays in its card and is not an open agent until it launches", async () => {
   seed([plain]);
-  const { host } = mount({ drafts: ["draft-one"], onDraftClose: (id) => closed.push(id) });
-  await tick();
-  expect(segmentKeys(host)).toEqual(["conversation_plain-1", "draft::draft-one"]);
-  expect(rail(host)?.querySelector("[data-open-rail-count]")?.textContent).toBe("2 agents open");
-  const draft = segments(host).find((segment) => segment.dataset.openAgent === "draft::draft-one")!;
-  expect(draft.querySelector(".or-name")?.textContent).toBe("New agent");
-  expect(draft.querySelector("[data-open-agent-jump]")?.getAttribute("aria-label")).toBe("Go to New agent: Agent, not sent yet");
-  click(draft.querySelector("[data-open-agent-close]"));
-  expect(closed).toEqual(["draft-one"]);
-  click(host.querySelector("[data-open-rail-close-all]"));
-  expect(closed).toEqual(["draft-one", "draft-one"]);
-});
-
-test("a draft alone is enough for the rail", async () => {
   const { host } = mount({ drafts: ["draft-one"] });
   await tick();
-  expect(segmentKeys(host)).toEqual(["draft::draft-one"]);
+  expect(pill(host)?.querySelector(".pill-words")?.textContent).toBe("1 agent");
+  click(pill(host));
+  await showing(host, "conversation_plain-1");
+  expect(segmentKeys(host)).toEqual(["conversation_plain-1"]);
 });
 
-test("a segment moves the board to its agent's conversation and focuses it, unfolding one that was folded", async () => {
-  seed([verify2, [plain, "folded"]]);
+test("a row brings its agent into the same reader and focuses it; the board under the window does not move", async () => {
+  seed([verify2, plain]);
   const { host } = mount();
   await tick();
-  expect(readerOf(host, "conversation_plain-1")?.dataset.folded).toBe("1");
+  click(pill(host));
+  await showing(host, "conversation_verify-2");
+  const frame = host.querySelector("[data-agent-window-frame]");
   scrolledTo.length = 0;
   click(jump(host, "conversation_plain-1"));
-  await tick();
-  const reader = readerOf(host, "conversation_plain-1")!;
-  expect(reader.dataset.folded).toBe("0");
-  /* Brought into view is the reader's own place in its card. */
-  expect(scrolledTo.some((element) => element.contains(reader) && element.closest(".card")?.getAttribute("data-id") === "task:t-export")).toBe(true);
+  const reader = await showing(host, "conversation_plain-1");
+  expect(host.querySelector("[data-agent-window-frame]")).toBe(frame);
   expect(isFocused(reader)).toBe(true);
   expect(jump(host, "conversation_plain-1")?.getAttribute("aria-current")).toBe("true");
   expect(jump(host, "conversation_verify-2")?.getAttribute("aria-current")).toBeNull();
-
-  /* The next segment jumps there. */
-  scrolledTo.length = 0;
-  click(jump(host, "conversation_verify-2"));
-  await tick();
-  const verify = readerOf(host, "conversation_verify-2")!;
-  expect(scrolledTo.some((element) => element.contains(verify))).toBe(true);
-  expect(isFocused(verify)).toBe(true);
-  expect(jump(host, "conversation_verify-2")?.getAttribute("aria-current")).toBe("true");
+  /* The one it replaced waits in the park, mounted. */
+  expect(readerOf(host, "conversation_verify-2")?.closest(".reader-park")).toBeTruthy();
+  expect(scrolledTo.filter((element) => !element.closest("[data-agent-window]"))).toEqual([]);
 });
 
-test("focusing an agent from the rail widens its narrow column as Widen would, and leaves a wide or pinned one alone", async () => {
+test("opening an agent never widens a column or scrolls the board: the cards keep their geometry", async () => {
   const wide = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.column[data-wide="1"]')].map((node) => node.dataset.status);
-  seed([verify2, plain]);
   const { host } = mount();
   await tick();
-  /* The export agent's card sits in Inbox, a narrow shelf. */
+  const tracks = host.querySelector<HTMLElement>("[data-board]")?.getAttribute("style");
   expect(wide(host)).toEqual(["assigned"]);
-  click(jump(host, "conversation_plain-1"));
-  await tick();
-  expect(wide(host)).toEqual(["inbox"]);
-  expect(host.querySelector('[data-col-width="inbox"]')?.getAttribute("data-col-width-action")).toBe("narrow");
-  /* The same agent again: its column is wide already and stays so. */
-  click(jump(host, "conversation_plain-1"));
-  await tick();
-  expect(wide(host)).toEqual(["inbox"]);
+  scrolledTo.length = 0;
+  /* The export agent's card sits in Inbox, a narrow shelf. */
+  const exportCard = [...host.querySelectorAll<HTMLElement>(".card")].find((card) => card.getAttribute("data-id") === "task:t-export")!;
+  click(exportCard.querySelector(".tile"));
+  await showing(host, "conversation_plain-1");
+  expect(wide(host)).toEqual(["assigned"]);
+  expect(host.querySelector<HTMLElement>("[data-board]")?.getAttribute("style")).toBe(tracks);
+  expect(exportCard.classList.contains("has-reader")).toBe(false);
+  expect(exportCard.querySelector("[data-kanban-reader], .reader-slot, .readers")).toBeNull();
+  expect(scrolledTo).toEqual([]);
   expect(localStorage.getItem("llv:kanban-wide:v1")).toBeNull();
-
-  /* A pinned shelf keeps the wide share: the rail never unpins it. */
-  for (const root of roots.splice(0)) flushSync(() => root.unmount());
-  document.body.replaceChildren();
-  localStorage.setItem("llv:kanban-wide:v1", "blocked");
-  seed([verify2, plain]);
-  const pinned = mount();
-  await tick();
-  expect(wide(pinned.host)).toEqual(["blocked"]);
-  click(jump(pinned.host, "conversation_plain-1"));
-  await tick();
-  expect(wide(pinned.host)).toEqual(["blocked"]);
-  expect(localStorage.getItem("llv:kanban-wide:v1")).toBe("blocked");
-  expect(isFocused(readerOf(pinned.host, "conversation_plain-1"))).toBe(true);
-
-  /* Assigned is the wide column by default: focusing its agent changes nothing. */
-  localStorage.removeItem("llv:kanban-wide:v1");
-  for (const root of roots.splice(0)) flushSync(() => root.unmount());
-  document.body.replaceChildren();
-  seed([verify2, plain]);
-  const plainBoard = mount();
-  await tick();
-  click(jump(plainBoard.host, "conversation_verify-2"));
-  await tick();
-  expect(wide(plainBoard.host)).toEqual(["assigned"]);
-  expect(isFocused(readerOf(plainBoard.host, "conversation_verify-2"))).toBe(true);
 });
 
-test("opening, closing and finishing update the rail live, and its × and «Close all» close the readers", async () => {
-  const { host, render } = mount();
+test("opening, closing and finishing update the list live; the corner × closes the window, a row's × one agent, «Close all» every one", async () => {
+  const { host } = mount();
   await tick();
-  expect(rail(host)).toBeNull();
+  expect(pill(host)).toBeNull();
   /* Opened from the card's own tile. */
   const exportCard = [...host.querySelectorAll<HTMLElement>(".card")].find((card) => card.getAttribute("data-id") === "task:t-export")!;
   click(exportCard.querySelector(".tile"));
-  await tick();
+  await showing(host, "conversation_plain-1");
   expect(segmentKeys(host)).toEqual(["conversation_plain-1"]);
-  expect(rail(host)?.querySelector("[data-open-rail-count]")?.textContent).toBe("1 agent open");
-  /* Closed from the reader's own ×. */
+  expect(host.querySelector("[data-open-agents-count]")?.textContent).toBe("1 agent open");
+  /* The window's corner closes the window; the agent stays open behind the pill, which takes the keyboard. */
   click(readerOf(host, "conversation_plain-1")?.querySelector("[data-reader-close]"));
   await tick();
-  expect(rail(host)).toBeNull();
+  expect(agentWindow(host)).toBeNull();
+  expect(pill(host)?.querySelector(".pill-words")?.textContent).toBe("1 agent");
+  expect(isFocused(pill(host))).toBe(true);
+  expect(remembered()).toEqual(["conversation_plain-1"]);
 
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
   seed([verify2, review, plain]);
   const second = mount();
   await tick();
+  click(pill(second.host));
+  await showing(second.host, "conversation_verify-2");
   const dot = () => segments(second.host).find((segment) => segment.dataset.openAgent === "conversation_verify-2")?.querySelector("[data-open-agent-dot]");
   expect(dot()?.getAttribute("data-open-agent-dot")).toBe("live");
   /* The verify agent finishes its turn: its dot goes quiet on the next files. */
@@ -370,86 +374,139 @@ test("opening, closing and finishing update the rail live, and its × and «Clos
   expect(dot()?.getAttribute("data-open-agent-dot")).toBe("idle");
   expect(dot()?.className).not.toContain("live");
 
-  /* The segment's × closes that one reader, and focus stays in the list. */
+  /* A row's × closes that one agent, and focus stays in the list. */
   click(segments(second.host).find((segment) => segment.dataset.openAgent === "conversation_review-1")?.querySelector("[data-open-agent-close]"));
   await tick();
   expect(segmentKeys(second.host)).toEqual(["conversation_verify-2", "conversation_plain-1"]);
   expect(readerOf(second.host, "conversation_review-1")).toBeNull();
   expect(remembered()).toEqual(["conversation_verify-2", "conversation_plain-1"]);
   expect(document.activeElement?.getAttribute("data-open-agent-jump")).toBe("conversation_plain-1");
+  expect(shown(second.host)).toBe("conversation_verify-2");
 
   click(second.host.querySelector("[data-open-rail-close-all]"));
   await tick();
-  expect(rail(second.host)).toBeNull();
+  expect(agentWindow(second.host)).toBeNull();
+  expect(pill(second.host)).toBeNull();
   expect(second.host.querySelector("[data-kanban-reader]")).toBeNull();
   expect(remembered()).toEqual([]);
-  /* The cards stay: closing a reader never removes its card. */
+  /* The cards stay: closing an agent never removes its card. */
   expect([...second.host.querySelectorAll(".card")].map((card) => card.getAttribute("data-id"))).toEqual(expect.arrayContaining(["task:t-search", "task:t-export"]));
 });
 
-test("Alt+J and Alt+K cycle through the open agents, from inside a composer too, round the ends", async () => {
+test("a link followed again opens its agent again, though the Viewer still asks for the same conversation", async () => {
+  /* The Viewer's highlight outlives the open by HIGHLIGHT_MS, so a second
+     request for the same conversation inside it names the same path: only
+     the request itself is new. */
+  seed([plain]);
+  const { host, ask } = mount();
+  await tick();
+  ask(plain.path);
+  await showing(host, "conversation_plain-1");
+  flushSync(() => document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event));
+  await tick();
+  expect(agentWindow(host)).toBeNull();
+  ask(plain.path);
+  const reader = await showing(host, "conversation_plain-1");
+  expect(isFocused(reader)).toBe(true);
+  expect(remembered()).toEqual(["conversation_plain-1"]);
+});
+
+/* What a browser's IntersectionObserver says of a pane: off screen in the
+   park, on screen anywhere else (the window's incoming slot included, which
+   is laid out on screen and not drawn). Read again every few milliseconds,
+   so a reader moved between the park and the window is seen to move. */
+class ParkObserver {
+  private readonly seen = new Map<Element, boolean>();
+  private readonly timer = setInterval(() => this.read(), 5);
+  constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean; target: Element }>) => void) {}
+  observe(target: Element) {
+    this.seen.set(target, !target.closest(".reader-park"));
+    this.callback([{ isIntersecting: this.seen.get(target)!, target }]);
+  }
+  private read() {
+    for (const [target, was] of this.seen) {
+      const now = !target.closest(".reader-park");
+      if (now === was) continue;
+      this.seen.set(target, now);
+      this.callback([{ isIntersecting: now, target }]);
+    }
+  }
+  unobserve(target: Element) { this.seen.delete(target); }
+  disconnect() {
+    this.seen.clear();
+    clearInterval(this.timer);
+  }
+}
+
+test("closing the agent on screen keeps it there until its neighbour has read, and never shows a reader still loading", async () => {
+  /* The neighbour has never been in the window: it waited in the park, where
+     its feed does not read, no earlier read is kept for it, and its first
+     read is slow. */
+  Object.assign(globalThis, { IntersectionObserver: ParkObserver });
+  try {
+    const slow = conversation("slow-1", "Explorer: read the export presets once more");
+    seed([verify2, slow]);
+    heldLogs.set(slow.path, []);
+    const { host } = mount({ files: [implement, review, verify1, verify2, plain, slow] });
+    await tick();
+    click(pill(host));
+    await showing(host, "conversation_verify-2");
+    const feedOf = (key: string) => readerOf(host, key)?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state");
+    for (let waited = 0; waited < 3000 && feedOf("conversation_verify-2") === "loading"; waited += 10) await tick(10);
+    expect(feedOf("conversation_verify-2")).not.toBe("loading");
+    expect(feedOf("conversation_slow-1")).toBe("loading");
+    const frame = host.querySelector("[data-agent-window-frame]");
+    click(segments(host).find((segment) => segment.dataset.openAgent === "conversation_verify-2")?.querySelector("[data-open-agent-close]"));
+    /* At once the list drops the agent closed and marks the neighbour, while
+       the reader keeps the agent closed: the window never shows a loading one. */
+    expect(segmentKeys(host)).toEqual(["conversation_slow-1"]);
+    expect(jump(host, "conversation_slow-1")?.getAttribute("aria-current")).toBe("true");
+    const loadingShown = () => agentWindow(host)?.querySelector(".reader-slot:not([data-incoming]) [data-feed-state='loading']")?.closest("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
+    for (let waited = 0; waited < 300; waited += 10) {
+      expect(host.querySelector("[data-agent-window-frame]") === frame).toBe(true);
+      expect(shown(host)).toBe("conversation_verify-2");
+      expect(loadingShown()).toBeNull();
+      await tick(10);
+    }
+    releaseLogs(slow.path);
+    await showing(host, "conversation_slow-1");
+    expect(loadingShown()).toBeNull();
+    expect(host.querySelector("[data-agent-window-frame]") === frame).toBe(true);
+    expect(readerOf(host, "conversation_verify-2")).toBeNull();
+    expect(remembered()).toEqual(["conversation_slow-1"]);
+  } finally {
+    Object.assign(globalThis, { IntersectionObserver: undefined });
+  }
+});
+
+test("Alt+J and Alt+K cycle through the open agents, from inside a composer too, round the ends; with the window closed Alt+J opens it", async () => {
   seed([verify2, review, plain]);
   const { host } = mount();
   await tick();
-  const focused = () => (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? null;
   altKey("KeyJ");
-  await tick();
-  expect(focused()).toBe("conversation_verify-2");
+  await showing(host, "conversation_verify-2");
   altKey("KeyJ");
-  await tick();
-  expect(focused()).toBe("conversation_review-1");
+  await showing(host, "conversation_review-1");
   altKey("KeyK");
-  await tick();
-  expect(focused()).toBe("conversation_verify-2");
+  await showing(host, "conversation_verify-2");
   altKey("KeyK");
-  await tick();
-  expect(focused()).toBe("conversation_plain-1");
+  await showing(host, "conversation_plain-1");
   altKey("KeyJ");
-  await tick();
-  expect(focused()).toBe("conversation_verify-2");
+  const verify = await showing(host, "conversation_verify-2");
+  expect(isFocused(verify)).toBe(true);
 
-  /* From the composer of the reader the operator is typing in, to the next one. */
-  const composer = readerOf(host, "conversation_review-1")?.querySelector<HTMLTextAreaElement>("textarea");
+  /* From the composer of the agent the operator is typing in, to the next one. */
+  altKey("KeyJ");
+  const review1 = await showing(host, "conversation_review-1");
+  const composer = review1.querySelector<HTMLTextAreaElement>("textarea");
   expect(composer).toBeTruthy();
   composer!.focus();
-  expect(focused()).toBe("conversation_review-1");
   altKey("KeyJ", composer!);
-  await tick();
-  expect(focused()).toBe("conversation_plain-1");
+  await showing(host, "conversation_plain-1");
   expect(composer!.value).toBe("");
 });
 
-test("short of room the rail is the count alone, which opens the same list over the board", async () => {
-  boardWidth = 1300;
-  seed([verify2, review, plain]);
-  const { host } = mount();
-  await tick();
-  expect(rail(host)?.dataset.openRail).toBe("compact");
-  expect(rail(host)?.style.width).toBe(`${OPEN_RAIL_WIDTH.compact}px`);
-  expect(segments(rail(host)!)).toHaveLength(0);
-  const count = rail(host)!.querySelector<HTMLElement>("[data-open-rail-count]")!;
-  expect(count.textContent).toBe("3");
-  expect(count.getAttribute("aria-label")).toBe("Show the 3 open agents");
-  click(count);
-  await tick();
-  const list = host.querySelector<HTMLElement>(".popover.open-agents");
-  expect(list).toBeTruthy();
-  expect(count.getAttribute("aria-expanded")).toBe("true");
-  expect(segmentKeys(list!)).toEqual(["conversation_verify-2", "conversation_review-1", "conversation_plain-1"]);
-  expect(segments(list!).map((segment) => segment.dataset.role)).toEqual(["verifier", "reviewer", "neutral"]);
-  click(jump(list!, "conversation_review-1"));
-  await tick();
-  expect(host.querySelector(".popover.open-agents")).toBeNull();
-  expect(isFocused(readerOf(host, "conversation_review-1"))).toBe(true);
-});
-
-test("the tier keeps the names only while their strip leaves the columns their layout; the cycle wraps", () => {
-  /* 1440 × 900 and 1920 × 1080 windows leave the board 1192 and 1672 px. */
-  expect(openRailTier(1192)).toBe("full");
-  expect(openRailTier(1672)).toBe("full");
-  /* 1600 px: the names would turn a narrow board into a scrolling one. */
-  expect(openRailTier(1352)).toBe("compact");
-  expect(openRailTier(900)).toBe("compact");
+test("the cycle wraps round the ends", () => {
   expect(cycleOpenAgent([], null, 1)).toBeNull();
   expect(cycleOpenAgent(["a", "b", "c"], null, 1)).toBe("a");
   expect(cycleOpenAgent(["a", "b", "c"], null, -1)).toBe("c");
