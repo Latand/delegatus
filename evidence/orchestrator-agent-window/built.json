@@ -47,6 +47,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -120,6 +124,10 @@
           "width": 1176,
           "height": 836
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Orchestrator",
@@ -201,6 +209,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -271,6 +283,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -344,6 +360,10 @@
           "width": 984,
           "height": 884
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Orchestrator",
@@ -425,6 +445,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -489,6 +513,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -556,6 +584,10 @@
           "width": 984,
           "height": 684
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Orchestrator",
@@ -631,6 +663,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -701,6 +737,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -774,6 +814,10 @@
           "width": 1176,
           "height": 836
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Оркестратор",
@@ -855,6 +899,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -925,6 +973,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -998,6 +1050,10 @@
           "width": 984,
           "height": 884
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Оркестратор",
@@ -1079,6 +1135,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1143,6 +1203,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1210,6 +1274,10 @@
           "width": 984,
           "height": 684
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Оркестратор",
@@ -1285,6 +1353,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1355,6 +1427,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1428,6 +1504,10 @@
           "width": 1176,
           "height": 836
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Orchestrator",
@@ -1509,6 +1589,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1579,6 +1663,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1652,6 +1740,10 @@
           "width": 984,
           "height": 884
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Orchestrator",
@@ -1733,6 +1825,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1797,6 +1893,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -1864,6 +1964,10 @@
           "width": 984,
           "height": 684
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Orchestrator",
@@ -1939,6 +2043,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -2009,6 +2117,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -2082,6 +2194,10 @@
           "width": 1176,
           "height": 836
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Оркестратор",
@@ -2163,6 +2279,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -2233,6 +2353,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -2306,6 +2430,10 @@
           "width": 984,
           "height": 884
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Оркестратор",
@@ -2387,6 +2515,10 @@
         ],
         "seatComposers": 1,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -2451,6 +2583,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,
@@ -2518,6 +2654,10 @@
           "width": 984,
           "height": 684
         },
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": "conversation_orchestrator",
         "readerRole": "orchestrator",
         "readerTitle": "Оркестратор",
@@ -2593,6 +2733,10 @@
         ],
         "seatComposers": 0,
         "window": null,
+        "badges": [
+          "Builder: rework the retry banner",
+          "Builder: rework the retry banner"
+        ],
         "shown": null,
         "readerRole": null,
         "readerTitle": null,

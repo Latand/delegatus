@@ -91,6 +91,8 @@ const { READER_STORAGE_PREFIX } = await import("./readerMemory");
 const { VoiceComposerHost } = await import("@/components/voice/VoiceComposerHost");
 const { resetVoiceSlotsForTest } = await import("@/components/voice/voiceSlots");
 const { setLocale, translate } = await import("@/lib/i18n");
+const { viewBus } = await import("@/hooks/viewPresenceBus");
+const { viewerSelectedContext } = await import("@/lib/selection/viewerSelectedContext");
 
 const PROJECT = "atlas";
 const SEAT = "conversation_orch";
@@ -161,6 +163,7 @@ afterEach(() => {
   dom.sessionStorage.clear();
   globalThis.fetch = realFetch;
   resetVoiceSlotsForTest();
+  viewBus.reportCards([]);
   setLocale("en");
 });
 
@@ -328,4 +331,61 @@ test("a folded seat keeps the button in its strip and opens the orchestrator fro
   expect(button).toBeTruthy();
   click(button);
   await showing(host, SEAT);
+});
+
+test("opening the orchestrator from the seat and closing it leaves the selected context on the agent the operator had", async () => {
+  seedOpenBuilder();
+  /* The cards the board reports: the seat's conversation carries its first prompt as its title in production. */
+  viewBus.reportCards([seatFile, builder].map((file) => ({
+    path: file.path, conversationId: file.conversationId!, project: PROJECT, label: file.title,
+  })));
+  const host = await mount();
+  const selected = () => {
+    const reference = viewerSelectedContext();
+    return reference.state === "selected" ? reference.conversationId : null;
+  };
+  const badge = () => [...host.querySelectorAll<HTMLElement>("[data-selected-context]")].map((node) => node.textContent ?? "");
+
+  /* The operator is in the builder's window. */
+  click(host.querySelector("[data-open-agents-pill]"));
+  await showing(host, builder.conversationId!);
+  expect(selected()).toBe(builder.conversationId!);
+  click(agentWindow(host)!.querySelector("[data-reader-close]"));
+  await settle();
+  expect(agentWindow(host)).toBeNull();
+  expect(selected()).toBe(builder.conversationId!);
+
+  click(expandButton(host));
+  const reader = await showing(host, SEAT);
+  /* The orchestrator's composer in the window never points at the orchestrator. */
+  expect(selected()).not.toBe(SEAT);
+  expect(badge().join(" ")).not.toContain("You are the Orchestrator");
+  click(reader.querySelector("[data-reader-close]"));
+  await settle();
+  expect(agentWindow(host)).toBeNull();
+  expect(selected()).toBe(builder.conversationId!);
+  expect(badge().join(" ")).not.toContain("You are the Orchestrator");
+  expect(badge().some((text) => text.includes("Restore search results"))).toBe(true);
+
+  /* Again, and out by Escape. */
+  click(expandButton(host));
+  await showing(host, SEAT);
+  flushSync(() => {
+    dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  await settle();
+  expect(selected()).toBe(builder.conversationId!);
+});
+
+test("with nothing selected before, the orchestrator never becomes the selection of its own composer", async () => {
+  viewBus.reportCards([seatFile, builder].map((file) => ({
+    path: file.path, conversationId: file.conversationId!, project: PROJECT, label: file.title,
+  })));
+  const host = await mount();
+  click(expandButton(host));
+  const reader = await showing(host, SEAT);
+  expect(viewerSelectedContext().state).toBe("none");
+  click(reader.querySelector("[data-reader-close]"));
+  await settle();
+  expect(viewerSelectedContext().state).toBe("none");
 });

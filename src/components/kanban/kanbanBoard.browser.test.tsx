@@ -10227,6 +10227,8 @@ describe("the orchestrator's expand button opens it in the agent window, like an
       iconButtons: [...(head?.querySelectorAll<HTMLElement>(".icon-btn") ?? [])].filter((other) => other !== button).map((other) => rect(other)),
       seatComposers: drawn(seat?.querySelector("[data-orchestrator-conversation]")),
       window: rect(document.querySelector("[data-agent-window-frame]")),
+      /* The agent each composer's selected-context line names. */
+      badges: [...document.querySelectorAll<HTMLElement>("[data-selected-context]")].map((badge) => badge.textContent ?? ""),
       shown: reader?.dataset.kanbanReader ?? null,
       readerRole: reader?.dataset.role ?? null,
       readerTitle: reader?.querySelector(".ch-title")?.textContent ?? null,
@@ -10293,6 +10295,7 @@ describe("the orchestrator's expand button opens it in the agent window, like an
                 }
               }
               if (before.pill === null) fail("the build agent is not open behind the pill");
+              if (!before.badges.length) fail("no composer names the agent the operator selected before the window opens");
               if (expectedHead === "full" && before.seatComposers !== 1) fail(`the seat shows ${before.seatComposers} composers before the window opens`);
 
               await page.locator("[data-kanban-seat] [data-seat-window]").click();
@@ -10311,6 +10314,9 @@ describe("the orchestrator's expand button opens it in the agent window, like an
               if (!row?.current || row.role !== "orchestrator" || row.name !== title) fail(`the orchestrator's row reads ${JSON.stringify(row)}`);
               if (open.readerComposers !== 1) fail(`the window's reader shows ${open.readerComposers} composers`);
               if (open.seatComposers !== 0) fail(`the seat under the window still shows ${open.seatComposers} composers`);
+              /* The orchestrator's composer never points at the orchestrator, and the selection stays where it was. */
+              if (open.badges.some((text) => text.includes(title))) fail(`a composer in the window names the orchestrator: ${JSON.stringify(open.badges)}`);
+              if (JSON.stringify(open.badges) !== JSON.stringify(before.badges)) fail(`the selected context changed with the window open: ${JSON.stringify(before.badges)} → ${JSON.stringify(open.badges)}`);
               const placeholder = translate(lang, "composer.placeholderOrchestrator", { project: "atlas" });
               if (open.readerPlaceholder !== placeholder) fail(`the window's composer says «${open.readerPlaceholder}», the seat's «${placeholder}»`);
               for (const [id, box] of Object.entries(open.cards)) if (JSON.stringify(box) !== JSON.stringify(before.cards[id])) fail(`card ${id} moved under the window: ${JSON.stringify(before.cards[id])} → ${JSON.stringify(box)}`);
@@ -10325,6 +10331,7 @@ describe("the orchestrator's expand button opens it in the agent window, like an
               if (JSON.stringify(closed.seat) !== JSON.stringify(before.seat)) fail(`the seat moved: ${JSON.stringify(before.seat)} → ${JSON.stringify(closed.seat)}`);
               if (closed.head !== before.head) fail(`the seat's head came back «${closed.head}»`);
               if (closed.seatComposers !== before.seatComposers) fail(`the seat shows ${closed.seatComposers} composers after the window, ${before.seatComposers} before`);
+              if (JSON.stringify(closed.badges) !== JSON.stringify(before.badges)) fail(`the selected context changed with the window: ${JSON.stringify(before.badges)} → ${JSON.stringify(closed.badges)}`);
               if (!closed.button?.focused) fail("closing the window did not hand the keyboard back to the expand button");
               if (closed.button?.ring) fail("a mouse close drew a focus ring on the expand button");
               if (!/2/.test(closed.pill ?? "")) fail(`the pill reads «${closed.pill}», both agents stay open`);

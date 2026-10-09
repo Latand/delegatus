@@ -1930,6 +1930,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const disown = useCallback((key: string) => {
     for (const [requestId, owned] of handoffOwned.current) if (owned.key === key) handoffOwned.current.delete(requestId);
   }, []);
+  /* What the seat names, for the handlers that must not re-bind on a new answer. */
+  const seatRefsRef = useRef(seatRefs);
+  useLayoutEffect(() => { seatRefsRef.current = seatRefs; }, [seatRefs]);
   /* Every conversation opens in the agent window and joins its list at the
      end; one already open is shown where it stands in the list. The board
      under the window does not move. */
@@ -1938,7 +1941,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (!options.handoff) disown(key);
     openedFrom.current = null;
     memory.update((readers) => openReader(readers, key, file.path));
-    setFocusedReader(key);
+    /* The seat's conversation is never the context the operator selected for
+       its own composer, so opening it leaves the selection where it was. */
+    if (!isCurrentSeatConversation(seatRefsRef.current, file)) setFocusedReader(key);
     onConversationOpened?.(file.path);
     focusOnShow.current = options.focus !== false;
     /* A launch shows its agent at once, in the commit its draft leaves the
@@ -2315,13 +2320,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The conversation the operator is in: the reader holding keyboard focus,
      else the one opened last, while it stays open and expanded. */
   const [focusedReader, setFocusedReader] = useState<string | null>(null);
+  /* The readers that hold the seat's conversation: the focus sync and the selection skip them. */
+  const seatReaderKeys = useMemo(() => new Set(readerViews.filter((view) => view.seat).map((view) => view.readerKey)), [readerViews]);
+  const seatReaderKeysRef = useRef(seatReaderKeys);
+  useLayoutEffect(() => { seatReaderKeysRef.current = seatReaderKeys; }, [seatReaderKeys]);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const sync = () => {
       const active = document.activeElement as HTMLElement | null;
       const reader = typeof active?.closest === "function" ? active.closest<HTMLElement>("[data-kanban-reader]") : null;
-      if (reader && root.contains(reader)) setFocusedReader(reader.dataset.kanbanReader ?? null);
+      /* The seat's own conversation keeps the keyboard without becoming the selection. */
+      if (reader && root.contains(reader) && !seatReaderKeysRef.current.has(reader.dataset.kanbanReader ?? "")) setFocusedReader(reader.dataset.kanbanReader ?? null);
     };
     const later = () => queueMicrotask(sync);
     root.addEventListener("focusin", sync);
@@ -2335,7 +2345,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
      reader, whatever path brought it there and wherever focus stands, so a
      composer's selected-context line is the same for an agent after an open,
      a switch or a close. */
-  const inReader = windowOpen ? shown : focusedReader;
+  const inReader = windowOpen && !seatReaderKeys.has(shown ?? "") ? shown : focusedReader;
   const focusedView = inReader ? readerViews.find((view) => view.readerKey === inReader) : undefined;
 
   /* ── The agent window's list ─────────────────────────────────────────── */
