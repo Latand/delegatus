@@ -581,6 +581,18 @@ describe("short questionnaire", () => {
     expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
     expect(document.querySelector("[data-prototype-decide]")?.textContent).not.toContain("Choose one or more");
   });
+  test("the Questions section label shows over the list only beside images", async () => {
+    await mountQuestions();
+    expect(document.querySelector("[data-prototype-questions-label]")).toBeNull();
+    await mountReview((() => { const read = reviewRead(); read.rounds[0]!.questions = questions; return read; })());
+    expect(document.querySelector("[data-prototype-questions-label]")?.textContent).toBe("Questions");
+  });
+  test("a question's number sits in its own column so wrapped text keeps one left edge", async () => {
+    await mountQuestions();
+    const number = document.querySelector("[data-prototype-question] [data-prototype-question-number]")!;
+    expect(number.nextElementSibling?.tagName).toBe("P");
+    expect(number.parentElement?.className).toContain("flex");
+  });
   test("phone skip posts only skip and leaves read-only recommended answers", async () => {
     const posted = await mountQuestions(true);
     expect(document.querySelector("[data-prototype-actions]")?.contains(document.querySelector("[data-prototype-skip]"))).toBe(true);

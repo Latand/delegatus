@@ -722,7 +722,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const closed = !open;
   const questionBlock = !hasQuestions ? null : (
     <section data-prototype-questions="" aria-label={t("proto.questions")} className={`flex min-h-0 min-w-0 flex-col gap-3 ${phone ? "px-4 py-2" : `overflow-y-auto p-4 ${hasVariants ? "w-[360px] shrink-0 border-l border-border" : "flex-1"}`}`}>
-      <p className="m-0 text-label font-semibold text-secondary">{t("proto.questions")}</p>
+      {hasVariants ? <p data-prototype-questions-label="" className="m-0 text-label font-semibold text-secondary">{t("proto.questions")}</p> : null}
       {round!.questions!.map((question, at) => {
         const answer = (round!.decision?.answers ?? draft.answers).find(a => a.questionId === question.id);
         const choice = (index: number | "other", label: string, recommended = false) => {
@@ -739,7 +739,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         };
         return <fieldset key={question.id} data-prototype-question={question.id} className="m-0 min-w-0 rounded-control border border-border bg-card p-3">
           <legend className="sr-only">{question.text}</legend>
-          <p className="m-0 mb-2 text-ui font-semibold text-primary [overflow-wrap:anywhere]"><span className="mr-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span>{question.text}</p>
+          <div className="mb-2 flex items-start gap-1.5"><span data-prototype-question-number="" className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span><p className="m-0 min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{question.text}</p></div>
           {question.multiple && !closed ? <p data-prototype-hint="" className="m-0 mb-2 text-label text-muted">{t("proto.q.multiple")}</p> : null}
           <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className="flex flex-col gap-1.5">
             {question.options.map((option, index) => choice(index, option.label, option.recommended))}
