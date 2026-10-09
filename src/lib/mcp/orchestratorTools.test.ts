@@ -12,7 +12,9 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestrat
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setBridgeReports } from "@/lib/projects/settings";
 
-import { viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
+import { viewerMcpBindings, viewerMcpRecoverableTools, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
+
+import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
 
 /*
  * The two-axis orchestration surface: get / create / send / rotate. All four
@@ -98,6 +100,7 @@ function bindingsWith(control: ViewerControlDependencies) {
   return viewerMcpBindings(undefined, control, {
     registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
     callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway", role: null }),
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }], complete: true } }),
   } as never);
 }
 
@@ -507,4 +510,153 @@ test("rotate_orchestrator relays to the rotation route and reports the lineage i
   expect(posts[0]!.pathname).toBe("/api/orchestrator/rotate");
   expect(posts[0]!.body).toMatchObject({ project: "proj-a", handoffNotes: "prioritize reviews", clientRequestId: "rotate-1" });
   expect(result).toMatchObject({ rotatedFrom: { conversationId: "conversation_old" } });
+});
+
+function projectService(control: ViewerControlDependencies, projects = [
+  { project: "project-a", displayName: "Example project" },
+]) {
+  const domain = {
+    registrySnapshot: () => ({ conversations: { conversation_caller: { id: "conversation_caller", projectOwnership: { project: "caller-project" }, generations: [], continuityPaths: [] } }, conversationAliases: {} }),
+    callerAttribution: () => ({ kind: "agent", role: "orchestrator", conversationId: "conversation_caller" }),
+    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
+    authorizedSeats: () => [{ project: "caller-project", conversationId: "conversation_caller", path: null }],
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: projects.map(project => ({ ...project, smt: 1, conversations: 1 })), complete: true } }),
+  } as unknown as ViewerMcpDomainDependencies;
+  const receipts = new MemoryMcpReceiptStore();
+  return { receipts, service: createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) }) };
+}
+
+test("a seat caller sends to the seat named by the project's display name", async () => {
+  seatActive("project-a", SEATED_ID, null);
+  const { posts, control } = controlStub();
+  const { service } = projectService(control);
+  const result = await service.callTool("send_message_to_orchestrator", { clientRequestId: "display-send", project: "Example project", text: "status?" });
+  expect(result).toMatchObject({ ok: true, project: "project-a", conversationId: SEATED_ID, created: false });
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.body).toMatchObject({ project: "project-a", conversationId: SEATED_ID });
+  expect(orchestratorSeatFor("Example project").active).toBeNull();
+});
+
+
+test("unknown orchestrator project is refused before claiming or dispatching", async () => {
+  const { posts, control } = controlStub();
+  const { service, receipts } = projectService(control);
+  const result = await service.callTool("send_message_to_orchestrator", { clientRequestId: "unknown-send", project: "Missing project", text: "status?" });
+  expect(result).toMatchObject({ ok: false, code: "unknown_project", details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+  expect(result.error).toContain('unknown project "Missing project"');
+  expect(result.error).toContain("project key");
+  expect(posts).toEqual([]);
+  expect(receipts.lookup("send_message_to_orchestrator:unknown-send")).toBeNull();
+  expect(orchestratorSeatFor("Missing project").pending).toBeNull();
+});
+
+test("ambiguous orchestrator display name names candidates and claims nothing", async () => {
+  const { posts, control } = controlStub();
+  const { service, receipts } = projectService(control, [
+    { project: "project-a", displayName: "Example project" },
+    { project: "project-b", displayName: "Example project" },
+  ]);
+  const result = await service.callTool("send_message_to_orchestrator", { clientRequestId: "ambiguous-send", project: "Example project", text: "status?" });
+  expect(result).toMatchObject({ ok: false, code: "ambiguous_project", details: { outcome: "not-executed", candidates: ["project-a", "project-b"] } });
+  expect(result.error).toContain("project-a, project-b");
+  expect(posts).toEqual([]);
+  expect(receipts.lookup("send_message_to_orchestrator:ambiguous-send")).toBeNull();
+});
+
+test("get_orchestrator resolves a display name and explicitly refuses an unknown project", async () => {
+  seatActive("project-a", SEATED_ID, null);
+  const { posts, control } = controlStub();
+  const { service } = projectService(control);
+  expect(await service.callTool("get_orchestrator", { project: "Example project" })).toMatchObject({ ok: true, project: "project-a", designated: true, conversationId: SEATED_ID });
+  const unknown = await service.callTool("get_orchestrator", { project: "Missing project" });
+  expect(unknown).toMatchObject({ ok: false, code: "unknown_project" });
+  expect(unknown).not.toHaveProperty("designated");
+  expect(unknown).not.toHaveProperty("seat");
+  expect(posts).toEqual([]);
+});
+
+test("server 403 on seat creation retains its cause and closes the send as not executed", async () => {
+  const posts: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    posts.push(new URL(request.url).pathname);
+    return Response.json({ error: "seat designation requires operator authority" }, { status: 403 });
+  } });
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  try {
+    const { service } = projectService(productionViewerControlDependencies());
+    const args = { clientRequestId: "refused-create", project: "Example project", text: "status?" };
+    const result = await service.callTool("send_message_to_orchestrator", args);
+    expect(result).toMatchObject({ ok: false, error: "seat designation requires operator authority", details: { status: 403, outcome: "not-executed", nextAction: "new-request-permitted" } });
+    expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ...result, replayed: true });
+    expect(posts).toEqual(["/api/orchestrator/seat"]);
+    expect(orchestratorSeatFor("Example project").active).toBeNull();
+  } finally {
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+    await server.stop(true);
+  }
+});
+
+
+test("all orchestrator project inputs share resolution and refuse unknown or ambiguous names before posting", async () => {
+  const { posts, control } = controlStub();
+  const { service, receipts } = projectService(control);
+  for (const tool of ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "seat_tick_settings"] as const) {
+    const known = await service.callTool(tool, { clientRequestId: `known-${tool}`, project: "Example project", text: "check progress" });
+    expect(known.ok).toBe(true);
+    if (tool === "seat_tick_settings") expect(known).toMatchObject({ project: "project-a" });
+    else expect(posts.at(-1)!.body.project).toBe("project-a");
+    const count = posts.length;
+    expect(await service.callTool(tool, { clientRequestId: `unknown-${tool}`, project: "Missing project", text: "check progress" })).toMatchObject({ ok: false, code: "unknown_project", details: { outcome: "not-executed" } });
+    const ambiguousFixture = projectService(control, [
+      { project: "project-a", displayName: "Example project" },
+      { project: "project-b", displayName: "Example project" },
+    ]);
+    expect(await ambiguousFixture.service.callTool(tool, { clientRequestId: `ambiguous-${tool}`, project: "Example project", text: "check progress" })).toMatchObject({ ok: false, code: "ambiguous_project" });
+    expect(posts).toHaveLength(count);
+    expect(receipts.lookup(`${tool}:unknown-${tool}`)).toBeNull();
+    expect(ambiguousFixture.receipts.lookup(`${tool}:ambiguous-${tool}`)).toBeNull();
+  }
+});
+
+test("get_orchestrator on an unknown project returns a refusal with no designation fields", async () => {
+  const { control } = controlStub();
+  const { service } = projectService(control);
+  const result = await service.callTool("get_orchestrator", { project: "Missing project" });
+  expect(result).toMatchObject({ ok: false, code: "unknown_project", details: { outcome: "not-executed" } });
+  expect(result).not.toHaveProperty("designated");
+  expect(result).not.toHaveProperty("seat");
+});
+
+test("display names shared by aliases of one key resolve to one seat", async () => {
+  persistProjectAliases([{ source: "older-key", target: "project-a", displayName: "Example project" }]);
+  seatActive("project-a", SEATED_ID, null);
+  const { control } = controlStub();
+  const { service } = projectService(control, [
+    { project: "older-key", displayName: "Example project" },
+    { project: "project-a", displayName: "Example project" },
+  ]);
+  expect(await service.callTool("get_orchestrator", { project: "Example project" })).toMatchObject({ ok: true, project: "project-a", designated: true });
+});
+
+
+test("orchestrator creation, rotation and parallel asks preserve definite server refusals", async () => {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return Response.json({ error: "orchestrator request is invalid", code: "invalid_orchestrator_request" }, { status: 422 });
+  } });
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  try {
+    const { service } = projectService(productionViewerControlDependencies());
+    for (const tool of ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"] as const) {
+      expect(await service.callTool(tool, { clientRequestId: `refused-${tool}`, project: "Example project", text: "status?" })).toMatchObject({
+        ok: false, error: "orchestrator request is invalid", details: { status: 422, code: "invalid_orchestrator_request", outcome: "not-executed", nextAction: "new-request-permitted" },
+      });
+    }
+  } finally {
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+    await server.stop(true);
+  }
 });

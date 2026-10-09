@@ -2587,7 +2587,11 @@ export function createMcpToolService(
         const authorize = bindings[typedTool].authorizeReceipt;
         if (authorize) await authorize(effectiveArgs);
       } catch (error) {
-        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
+        return finish(failure(typedTool, requestId,
+          error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+          error instanceof Error ? error.message : String(error),
+          error instanceof McpToolRefusal && error.details.retryable === true, false,
+          error instanceof McpToolRefusal ? error.details : undefined), "failure");
       }
       let scope: string | null;
       try {
@@ -3059,10 +3063,11 @@ export function createMcpToolService(
           const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
-          /* #2518: issue_report's refusals and the cross-project refusal name
-             their code too, and say whether the same call can succeed later. */
+          /* Named issue, cross-project and orchestrator refusals preserve the
+             server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (typedTool === "issue_report" || error.details.code === "cross_project_refused")
+            && (typedTool === "issue_report" || error.details.code === "cross_project_refused"
+              || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool))
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
