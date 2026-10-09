@@ -408,11 +408,52 @@ export function parseWorktreeGitdir(cwd: string, gitFileText: string): { repo: s
   return { repo: joinPathSegments(parts.slice(0, index - 1)), worktree };
 }
 
-/* A cwd's worktree resolution is one lstat + tiny read, but it runs on every
-   meta recompute of a live file — cache per cwd, with a short TTL so a
-   checkout that just became (or stopped being) a worktree is noticed. */
-const worktreeGitCache = globalCache<[number, { repo: string; worktree: string } | null]>("worktree-git");
-const WORKTREE_TTL_MS = 60_000;
+/** A separate Git directory has no path back to its checkout. Match its
+    common-directory metadata to a known main checkout's .git pointer instead
+    of guessing from a sibling name or equating repositories by remote. */
+function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cwd): WorktreeInfo | null {
+  const conventional = parseWorktreeGitdir(cwd, gitFileText);
+  if (conventional) return conventional;
+  const target = /^gitdir:\s*(.+?)\s*$/m.exec(gitFileText)?.[1];
+  if (!target) return null;
+  try {
+    const directory = fs.realpathSync.native(path.resolve(accessibleCwd, target));
+    const commonText = fs.readFileSync(path.join(directory, "commondir"), "utf8").trim();
+    if (!commonText) return null; // A main checkout with a separate .git pointer.
+    const common = fs.realpathSync.native(path.resolve(directory, commonText));
+    const relative = path.relative(common, directory).split(path.sep);
+    if (relative.length !== 2 || relative[0] !== "worktrees" || !relative[1]) return null;
+    const backlink = fs.readFileSync(path.join(directory, "gitdir"), "utf8").trim();
+    if (!backlink || fs.realpathSync.native(path.resolve(directory, backlink)) !== fs.realpathSync.native(path.join(accessibleCwd, ".git"))) return null;
+
+    const roots = new Set<string>();
+    for (const [, , info] of projectInfoCwdCache.values()) if (info?.repo) roots.add(info.repo);
+    for (const info of refreshWorktreeMap().values()) roots.add(info.repo);
+    const catalog = recordValue(readStateJson("project-catalog.json"));
+    for (const file of Object.values(recordValue(catalog?.files) ?? {})) {
+      const root = stringValue(recordValue(file)?.projectRoot);
+      if (root) roots.add(root);
+    }
+    const curation = recordValue(readStateJson("project-curation.json"));
+    for (const entry of recordsValue(curation?.manualProjects)) {
+      const root = stringValue(entry.root);
+      if (root) roots.add(root);
+    }
+    const matches = new Set<string>();
+    for (const root of roots) {
+      try {
+        const repo = fs.realpathSync.native(root);
+        const marker = path.join(repo, ".git");
+        const stat = fs.lstatSync(marker);
+        const pointer = stat.isFile() ? /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(marker, "utf8"))?.[1] : undefined;
+        const gitDirectory = stat.isDirectory() ? marker : pointer ? path.resolve(repo, pointer) : null;
+        if (gitDirectory && fs.realpathSync.native(gitDirectory) === common && projectIdentityFromRepositoryRoot(repo)) matches.add(repo);
+      } catch { /* A stale known root provides no ownership evidence. */ }
+    }
+    return matches.size === 1 ? { repo: [...matches][0]!, worktree: relative[1] } : null;
+  } catch { return null; }
+}
+
 type ProjectInfo = {
   project: string;
   displayName: string;
@@ -544,9 +585,13 @@ function rememberWorktree(cwd: string, info: WorktreeInfo): void {
     that ran in a subdirectory of the checkout resolves through the checkout's
     own record: the worktree sweep records the checkout root before it removes
     it (#2202), not every directory a session happened to start in. */
-function worktreeFromMemory(cwd: string): WorktreeInfo | null {
+function worktreeFromMemory(cwd: string, liveRepositoryRoot: string | null): WorktreeInfo | null {
   const lookup = (map: Map<string, WorktreeInfo>) => {
     for (let current = cwd, parent = path.dirname(cwd); ; current = parent, parent = path.dirname(parent)) {
+      // A live repository owns itself and its descendants. A saved checkout
+      // reached before that boundary still owns its path after deletion,
+      // even when an unrelated repository encloses the checkout's parent.
+      if (current === liveRepositoryRoot) return null;
       const found = map.get(current);
       if (found) return found;
       if (parent === current) return null;
@@ -596,7 +641,7 @@ export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { re
   let info: { repo: string; worktree: string } | null = null;
   try {
     const gitPath = path.join(accessibleCwd, ".git");
-    if (fs.lstatSync(gitPath).isFile()) info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
+    if (fs.lstatSync(gitPath).isFile()) info = liveWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"), accessibleCwd);
   } catch {
     return null;
   }
@@ -612,26 +657,60 @@ export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { re
   return info;
 }
 
-/** Linked git worktrees created anywhere (`git worktree add ../foo`), not
-    only under `.claude/worktrees/`: such a checkout has a `.git` FILE whose
-    gitdir points into the main repo — the session belongs to that project.
-    A live resolution is also written to the persistent worktree map so the
-    grouping survives the checkout later being deleted. */
-function worktreeFromGitFile(cwd: string): { repo: string; worktree: string } | null {
-  const cached = worktreeGitCache.get(cwd);
-  if (cached && cached[0] > Date.now()) return cached[1];
-  let info: { repo: string; worktree: string } | null = null;
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.lstatSync(gitPath).isFile()) {
-      info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
+/** Observe the checkout root even when the transcript starts in a descendant.
+    A negative observation is never cached: a folder can become a worktree
+    between catalog passes without changing its transcript bytes. */
+export function observeWorktreeResolution(cwd: string): WorktreeInfo | null {
+  for (let current = path.resolve(cwd); ; current = path.dirname(current)) {
+    try {
+      const marker = path.join(current, ".git");
+      const stat = fs.lstatSync(marker);
+      if (stat.isDirectory()) return null; // An independent nested repository.
+      if (stat.isFile()) {
+        const info = liveWorktreeGitdir(current, fs.readFileSync(marker, "utf8"));
+        if (!info) return null;
+        rememberWorktree(current, info);
+        /* A symlinked checkout must survive deletion under either spelling. */
+        const physical = fs.realpathSync.native(current);
+        rememberWorktree(physical, info);
+        persistWorktreeMap();
+        return info;
+      }
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     }
-  } catch {
-    /* no .git or cwd gone — a plain (or vanished) project dir */
+    if (path.dirname(current) === current) return null;
   }
-  worktreeGitCache.set(cwd, [Date.now() + WORKTREE_TTL_MS, info]);
-  if (info) rememberWorktree(cwd, info);
-  return info;
+}
+
+function worktreeFromGitFile(cwd: string): WorktreeInfo | null {
+  return observeWorktreeResolution(cwd);
+}
+
+/** Explicit recovery writes the same map as live observation and the sweep.
+    Refuse a competing mapping under the writer lock; never overwrite it. */
+export function recordRecoveredWorktrees(entries: Array<{ cwd: string; repo: string; worktree: string }>): void {
+  const dir = stateDir();
+  const file = path.join(dir, WORKTREE_MAP_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  withFileTransactionSync(file, "worktree-map.json is busy", () => {
+    /* Explicit recovery refuses corrupt state rather than replacing it. */
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)
+        || Object.values(raw).some(value => !value || typeof value !== "object"
+          || typeof (value as WorktreeInfo).repo !== "string" || typeof (value as WorktreeInfo).worktree !== "string")) throw new Error("Worktree map is unreadable");
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const merged = readWorktreeMapFile(file);
+    for (const { cwd, repo, worktree } of entries) {
+      const held = merged.get(cwd);
+      if (held && (held.repo !== repo || held.worktree !== worktree)) throw new Error("Worktree recovery conflicts with a recorded mapping");
+      merged.set(cwd, { repo, worktree });
+    }
+    writeJsonDurably(file, Object.fromEntries(merged), { space: 0 });
+  });
+  refreshWorktreeMap();
+  projectInfoCwdCache.clear();
 }
 
 function hasGitMarker(cwd: string): boolean {
@@ -791,9 +870,15 @@ function projectInfoFromHandoffDigest(cwd: string): ProjectInfo | null {
     human label from that repository's canonical remote. */
 export function projectInfoFromCwd(cwd: string, requestedState?: string): ProjectInfo | null {
   if (!cwd.trim()) return null;
+  /* Observation records facts before any early return. Grouping still uses
+     the canonical pure recognizers first, followed by the live pointer. */
+  const liveWorktree = worktreeFromGitFile(cwd);
+  const liveRepositoryRoot = liveWorktree?.repo || repositoryRootForPath(cwd);
   const resolutionState = requestedState ?? projectResolutionStateKey();
   const cached = projectInfoCwdCache.get(cwd);
-  if (cached && cached[0] > Date.now() && cached[1] === resolutionState) return cached[2];
+  if (cached && cached[0] > Date.now() && cached[1] === resolutionState
+    && (!liveRepositoryRoot || cached[2]?.repo === liveRepositoryRoot)
+    && (cached[2]?.worktree || !liveWorktree)) return cached[2];
   const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, scratchpad]);
@@ -808,13 +893,13 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   let worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
-    (codexWorktree ? worktreeFromGitFile(cwd) ?? codexWorktree : worktreeFromGitFile(cwd));
+    (codexWorktree ? liveWorktree ?? codexWorktree : liveWorktree);
   if (!worktree && !hasGitMarker(cwd)) {
     /* An arbitrary-path worktree that has since been deleted: no live
        recognizer matched and its `.git` is gone, but a resolution we recorded
        while it was alive still names the parent repo. */
-    worktree = worktreeFromMemory(cwd);
-    if (!worktree) {
+    worktree = worktreeFromMemory(cwd, liveRepositoryRoot);
+    if (!worktree && !liveRepositoryRoot) {
       const persisted = persistedProjects(resolutionState).byCwd.get(cwd);
       if (persisted) {
         const resolved = aliasedProjectInfo(persisted.project, persisted.worktree, persisted.repo);
@@ -832,7 +917,7 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
       ? { project: identity.project, displayName: identity.displayName, ...(worktree?.worktree ? { worktree: worktree.worktree } : {}) }
       : unresolvedProjectInfo(worktree?.worktree);
   };
-  const root = worktree?.repo || repositoryRootForPath(cwd);
+  const root = worktree?.repo || liveRepositoryRoot;
   if (!root) {
     const resolvedInfo = codexWorktree?.projectHint
       ? aliasedProjectInfo(codexWorktree.projectHint, worktree?.worktree)
@@ -876,13 +961,14 @@ export function projectRootForCwd(cwd: string): string | undefined {
      directory exists and vanish with it, reintroducing across `projectRoot`
      the very before/after split the recognizer removes from `project`. */
   if (projectInfoFromOpenclawWorkspace(cwd)) return undefined;
+  const liveRepositoryRoot = repositoryRootForPath(cwd);
   const worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
     (worktreeFromCodexPath(cwd) ? worktreeFromGitFile(cwd) ?? worktreeFromCodexPath(cwd) : null) ??
     worktreeFromGitFile(cwd) ??
-    worktreeFromMemory(cwd);
-  return worktree?.repo || repositoryRootForPath(cwd) || undefined;
+    worktreeFromMemory(cwd, liveRepositoryRoot);
+  return worktree?.repo || liveRepositoryRoot || undefined;
 }
 
 function worktreeFromSlug(slug: string): { project: string; worktree: string; repo?: string; parentSlug?: string } | null {
