@@ -610,7 +610,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/telegram/reportRunner.test.ts` | A substituted launch port creates synthetic reports. |
 
 Referenced production and operational companions are explicitly excluded from
-the 256-file test/helper census. They remain reconciled by the independent
+the test/helper census. They remain reconciled by the independent
 reference scan. Their execution by a test is contained by the same service;
 this disposition does not change their production process contract.
 
@@ -648,6 +648,7 @@ this disposition does not change their production process contract.
 | `src/lib/runtime/cpuPlacement.ts` | Product CPU-placement port; synchronous systemd queries have five-second timeouts and test executions stay in the owning service; live agent placement is outside fixture cleanup |
 | `src/lib/processIdentity.ts` | Product boot identity probes; bounded synchronous sysctl on macOS, contained test calls |
 | `src/lib/resources.ts` | Product resource commands exercised by tests; actual primitive calls contained by preload/service |
+| `src/lib/scanner/filesResponseWorker.ts` | Production projection worker pool; namespace tests retain its original child handles and await exit, while the owning runner contains inherited-pipe descendants |
 | `src/lib/runtime/claudeStreamBrokerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
 | `src/lib/runtime/codexAppServerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
 | `src/lib/runtime/copilotAcpHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
