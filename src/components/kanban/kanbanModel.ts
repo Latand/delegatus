@@ -1,3 +1,4 @@
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
@@ -673,7 +674,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const workingSinceMs = working > 0 || inFlight.length > 0
       ? Math.max(0, ...inFlight, ...members.filter((member) => member.working).map((member) => memberStartMs(member.file)))
       : null;
-    const needsYou = reasons.length > 0 || !!task?.prototypeReview?.waitingReviewId;
+    const needsYou = reasons.length > 0 || prototypeWaitsOnOperator(task?.prototypeReview);
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     /* A card holding only an agent draft is where its launch will land: the task

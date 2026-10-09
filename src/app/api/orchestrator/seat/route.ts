@@ -171,20 +171,20 @@ function withDeputyRefs(all: SeatConversations | null, file: { deputies: readonl
 
 export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
-  if (rejection) return rejection;
+  if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   /* Designation is operator-only for the same reason the legacy record's is:
      every manager gate keys off "is this a designated conversation", so a
      worker able to seat itself would inherit the manager surface in one move.
      Checked before the body is read; a refusal changes nothing. */
   const operator = requireOperatorAuthority(req);
   if (!operator.ok) {
-    return NextResponse.json({ error: operator.error }, { status: operator.status });
+    return NextResponse.json({ error: operator.error, admission: "refused" }, { status: operator.status });
   }
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
   } catch {
-    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "invalid JSON", admission: "refused" }, { status: 400 });
   }
   const result = await executeOrchestratorSeatRequest(body);
   return NextResponse.json(result.body, { status: result.status });

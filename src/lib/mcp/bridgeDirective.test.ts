@@ -425,6 +425,13 @@ function seatedBindings() {
     },
   };
   return viewerMcpBindings(undefined, control, {
+    registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
+    completedFileScan: async () => ({
+      generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0,
+      snapshot: { files: [], complete: true, projectCatalog: [
+        { project: "proj-c", displayName: "Example project", smt: 1, conversations: 0 },
+      ] },
+    }),
     authorizedSeats: () => [
       { conversationId: "conversation_a", path: "/tmp/a.jsonl", project: "proj-a" },
       { conversationId: "conversation_b", path: "/tmp/b.jsonl", project: "proj-b" },
@@ -480,7 +487,7 @@ test("FIX 2: an unresolvable caller project fails closed DIAGNOSTICALLY — neve
   expect(posted).toEqual([]);
 });
 
-test("a project with no VALIDATED seat refuses rather than falling back to another project's orchestrator", async () => {
+test("a known project with no validated seat refuses before any delivery", async () => {
   sandbox();
   const tools = seatedBindings();
   await expect(tools.bridge_directive({
@@ -488,8 +495,8 @@ test("a project with no VALIDATED seat refuses rather than falling back to anoth
     rootTurnId: "turn_x",
     utterance: 0,
     instruction: "status?",
-    project: "proj-unknown",
-  })).rejects.toThrow();
+    project: "proj-c",
+  })).rejects.toThrow("no validated orchestrator is designated for proj-c");
   expect(posted).toEqual([]);
 });
 

@@ -469,3 +469,13 @@ test("a card that waits only on its prototype review is pinned, counted and says
   expect(card("chosen").waitsOnPrototype).toBe(false);
   expect(card("quiet").waitsOnPrototype).toBe(false);
 });
+
+
+test("a covered prototype is unpinned and uncounted on the phone without recording a choice", () => {
+  const review = { latestReviewId: "round-a", waitingReviewId: "round-a", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z", waitingDismissal: { at: "2026-10-02T00:00:00Z", by: { kind: "operator" as const } } };
+  const model = desktop([task("prototype", "assigned", [], { prototypeReview: review })], []);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  expect(phone.columns.assigned.needsYou).toBe(0);
+  expect(phone.columns.assigned.pinned).toHaveLength(0);
+  expect(phone.columns.assigned.cards[0]!.waitsOnPrototype).toBe(false);
+});

@@ -62,6 +62,8 @@ test("measure every tool through the MCP service and budget common board answers
   }));
   let settings = { ...defaultSeatTickSettings("size-board"), monitorPrompt: "Monitor open work. ".repeat(200) };
   const domain = {
+    registrySnapshot: () => ({ conversations: {} }),
+    completedFileScan: async () => ({ snapshot: { files, projectCatalog: [{ project: "size-board", displayName: "Example board", smt: 1, conversations: files.length }], complete: true } }),
     taskSelectionSource, pipelineSelectionSource, flowSelectionSource,
     loadTasks, listTaskRecords: loadTasksForList, getPipelines: () => ({ pipelines }), listPipelineRecords: () => pipelines,
     getFlowsWithPresets: () => ({ flows: loadFlows(), presets: [] }),

@@ -1529,6 +1529,7 @@ function eventsSince(
   project: string,
   cursor: number | null,
   openPipelineIds: ReadonlySet<string>,
+  pipelines: readonly Pipeline[],
   sources: SeatTickSources,
 ): { events: SeatTickEventInput[]; cursor: number } {
   const journal = sources.lifecycleJournal();
@@ -1545,21 +1546,28 @@ function eventsSince(
      is the seat's, and it moves only when a wake lands. */
   if (cursor === null) return { events: [], cursor: head };
   const page = pageFromEvents(journal, { project, afterSeq: cursor, limit: EVENT_PAGE });
+  const merged = new Map(pipelines.filter(lane => lane.merge?.state === "merged").map(lane => [lane.id, lane]));
   return {
-    events: page.events.map((event) => ({
-      seq: event.seq,
-      at: event.at,
-      type: event.type,
-      summary: event.summary,
-      pipelineId: event.pipelineId,
-      /* An open lane is always in the hot store; the archive only ever takes
-         SETTLED records. So a pipeline id the store no longer lists names a
-         lane that ended long enough ago to have been archived, and reading it
-         as terminal is the same answer arrived at from the other side. An event
-         that names no pipeline is never terminal here — nothing about a deploy
-         outcome or a held delivery has finished (#1285). */
-      pipelineTerminal: event.pipelineId !== null && !openPipelineIds.has(event.pipelineId),
-    })),
+    events: page.events.map((event) => {
+      const lane = event.pipelineId ? merged.get(event.pipelineId) : undefined;
+      return {
+        seq: event.seq,
+        at: event.at,
+        type: event.type,
+        // Enrich older journal summaries from the durable lane while it is hot.
+        summary: event.type === "pipeline_merged" && lane
+          ? `pull request #${lane.merge!.prNumber} merged, head ${lane.merge!.mergedHead ?? "unavailable"} — ${redactBounded(lane.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT)}`
+          : event.summary,
+        pipelineId: event.pipelineId,
+        /* An open lane is always in the hot store; the archive only ever takes
+           SETTLED records. So a pipeline id the store no longer lists names a
+           lane that ended long enough ago to have been archived, and reading it
+           as terminal is the same answer arrived at from the other side. An event
+           that names no pipeline is never terminal here — nothing about a deploy
+           outcome or a held delivery has finished (#1285). */
+        pipelineTerminal: event.pipelineId !== null && !openPipelineIds.has(event.pipelineId),
+      };
+    }),
     cursor,
   };
 }
@@ -2379,7 +2387,7 @@ export async function gatherSeatTickInput(
   } catch (error) {
     console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
   }
-  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, sources);
+  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* The children source's run of failures (#1465), kept exactly as the
      pull-request source's: advanced by a check that could not account for

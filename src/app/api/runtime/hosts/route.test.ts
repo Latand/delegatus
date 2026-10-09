@@ -10,8 +10,10 @@ import { NextRequest } from "next/server";
 import * as registryModule from "@/lib/agent/registry";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
-import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
+import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { noteSessionTargets, resetResourcesForTests, type StructuredHostKillRef } from "@/lib/resources";
+
+import { ownFixtureTree, stopFixtureTree, signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 import { POST } from "./route";
 
@@ -23,10 +25,10 @@ import { POST } from "./route";
  * nothing here opens the registry or the runtime either.
  */
 const fixtures: ChildProcess[] = [];
-const ownedPids = new Set<number>();
+const ownedIdentities: ProcessIdentity[] = [];
 
 function spawnFixtureTree(): { pid: number; startIdentity: string } {
-  const child = spawn("/bin/sh", ["-c", "sleep 30 & sleep 30 & wait"], { detached: true, stdio: "ignore" });
+  const child = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30 & sleep 30 & wait"], { detached: true, stdio: "ignore" }));
   fixtures.push(child);
   const pid = child.pid;
   if (pid === undefined) throw new Error("fixture tree did not start");
@@ -70,18 +72,9 @@ function post(body: unknown, headers: Record<string, string> = {}): NextRequest 
   });
 }
 
-afterEach(() => {
-  for (const pid of ownedPids) {
-    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
-  }
-  ownedPids.clear();
-  for (const child of fixtures.splice(0)) {
-    try {
-      if (child.pid) process.kill(-child.pid, "SIGKILL");
-    } catch {
-      /* already gone: the test under it did its job */
-    }
-  }
+afterEach(async () => {
+  for (const identity of ownedIdentities.splice(0)) signalFixtureIdentity(identity, "SIGKILL");
+  for (const child of fixtures.splice(0)) await stopFixtureTree(child);
   resetResourcesForTests();
 });
 
@@ -96,17 +89,16 @@ test("retrying a partial kill uses durable survivors and retires only after the 
     "console.log(child.pid);",
     "setInterval(() => {}, 1000);",
   ].join(" ");
-  const root = spawn(process.execPath, ["-e", parentScript], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+  const root = ownFixtureTree(spawn(process.execPath, ["-e", parentScript], { detached: true, stdio: ["ignore", "pipe", "ignore"] }));
   fixtures.push(root);
   await new Promise<void>((resolve, reject) => {
     root.once("error", reject);
     root.stdout!.once("data", chunk => { childPid = Number(String(chunk).trim()); resolve(); });
   });
   if (!root.pid || !Number.isSafeInteger(childPid) || childPid <= 1) throw new Error("fixture tree did not start");
-  ownedPids.add(root.pid);
-  ownedPids.add(childPid);
   const rootIdentity = captureProcessIdentity(root.pid);
   const childIdentity = captureProcessIdentity(childPid);
+  ownedIdentities.push(rootIdentity, childIdentity);
   if (!rootIdentity || !childIdentity) throw new Error("fixture identities could not be captured");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-resource-retry-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
