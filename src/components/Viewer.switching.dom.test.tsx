@@ -444,7 +444,8 @@ const focusedOn = (host: HTMLElement, path: string) => {
   const reader = readerOf(host, path);
   return Boolean(reader && document.activeElement && reader.contains(document.activeElement as unknown as Node));
 };
-const cardOf = (host: HTMLElement, path: string) => readerOf(host, path)?.closest<HTMLElement>("[data-kanban-card]") ?? null;
+/* The card that holds the conversation's tile; its reader stands in the agent window, never in the card. */
+const cardOf = (host: HTMLElement, path: string) => host.querySelector(`[data-member="${path}"]`)?.closest<HTMLElement>("[data-kanban-card]") ?? null;
 function rememberReaders(project: string, entries: ReadonlyArray<{ path: string; conversationId?: string | null }>): void {
   dom.localStorage.setItem(`llv:kanban-readers:v1:${project}`, JSON.stringify(entries.map((entry) => ({ key: entry.conversationId ?? entry.path, path: entry.path, folded: false }))));
 }

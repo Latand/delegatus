@@ -1001,8 +1001,9 @@ test("seat conversations draw no band: a seat-only task is the seat panel's, and
   expect(board.totals.tasks).toBe(4);
   expect(board.columns.assigned.cards.length).toBe(2);
   expect(board.columns.done.cards.length).toBe(1);
-  /* The live seat's working conversation is no share of any counter. */
-  expect(board.totals.working).toBe(1);
+  /* The live seat is an agent working: the header counts it, as the sidebar
+     row does, and no column does, because it has no card. */
+  expect(board.totals.working).toBe(2);
   expect(board.columns.assigned.working).toBe(1);
   expect(KANBAN_STATUSES.flatMap((status) => board.columns[status].cards).some((card) => card.members.some((member) => member.file.path === files[3]!.path))).toBe(false);
   /* The mixed band keeps its card and its product conversation, without the seat tile. */
@@ -1205,8 +1206,11 @@ test("holds and provisioning use one motion in cards, headers and the Overview f
   lane.state = "provisioning";
   const board = model(tasks, [], { pipelines: [lane] });
   expect(board.columns.blocked.needsYou).toBe(1);
-  expect(board.columns.assigned.working).toBe(1);
-  expect(board.totals.working).toBe(1);
+  /* A provisioning lane has no agent yet: its card moves as working, and the
+     agent counts wait for the conversation it starts. */
+  expect(board.columns.assigned.cards[0]!.motion.key).toBe("working");
+  expect(board.columns.assigned.working).toBe(0);
+  expect(board.totals.working).toBe(0);
   const live = [...board.columns.assigned.cards, ...board.columns.blocked.cards].filter(cardHasLiveWork);
   expect(live.map(card => card.task!.id).sort()).toEqual(["t901", "t902"]);
   expect(board.columns.blocked.cards.find(card => card.task!.id === "t903")?.motion.key).toBe("waiting");
@@ -1262,7 +1266,7 @@ test("step pipeline references derive motion and group the remaining reasons", (
 });
 
 
-test("zero-member in-flight and step work agree in header, column and Overview totals", () => {
+test("zero-member in-flight and step work move as working and agree in header, column and Overview totals", () => {
   const t = task("t904", "assigned", [], { steps: [{ id: "live", text: "Run the cause", state: "open", ref: "step-work" }] });
   const stepLane = buildingLane("step-work", t.id, { startedAt: iso(NOW - 60) });
   const inFlight = task("t905", "assigned");
@@ -1271,8 +1275,9 @@ test("zero-member in-flight and step work agree in header, column and Overview t
     const board = model([entry], [], { pipelines: [lane], cardFilter: cardHasLiveWork });
     expect(board.columns.assigned.cards[0]!.members).toHaveLength(0);
     expect(board.columns.assigned.cards[0]!.motion.key).toBe("working");
-    expect(board.totals.working).toBe(1);
-    expect(board.columns.assigned.working).toBe(1);
+    /* No transcript is loaded, so no agent is counted working anywhere. */
+    expect(board.totals.working).toBe(0);
+    expect(board.columns.assigned.working).toBe(0);
     expect(board.columns.assigned.shown).toHaveLength(1);
   }
 });
@@ -1289,11 +1294,10 @@ test("a step operator hold keeps its note, age, needs-you total and first positi
 });
 
 
-test("hidden provisioning work remains in the header but outside the visible columns", () => {
-  const hidden = task("t908", "assigned", [], { groupHidden: { at: iso(NOW), by: "operator", admitted: [] } });
-  const lane = buildingLane("hidden-provisioning", hidden.id, { startedAt: iso(NOW - 60) });
-  lane.state = "provisioning";
-  const board = model([hidden], [], { pipelines: [lane] });
+test("a hidden group's working agent remains in the header but outside the visible columns", () => {
+  const agent = file(908, { activity: "live", proc: "running", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null } });
+  const hidden = task("t908", "assigned", [agent.path], { groupHidden: { at: iso(NOW), by: "operator", admitted: [agent.conversationId!] } });
+  const board = model([hidden], [agent]);
   expect(board.hiddenGroups).toHaveLength(1);
   expect(board.hiddenGroups[0]!.motion.key).toBe("working");
   expect(board.totals.working).toBe(1);
@@ -1334,8 +1338,9 @@ test("terminal steps do not manufacture work while passed stages await publicati
     expect(card.members).toHaveLength(0);
     expect(card.pipelines[0]!.chips.map(chip => chip.state)).toEqual(["passed", "pending"]);
     expect(card.motion.key).toBe(state === "open" ? "working" : "done");
-    expect(board.totals.working).toBe(state === "open" ? 1 : 0);
-    expect(board.columns.done.working).toBe(state === "open" ? 1 : 0);
+    /* A passed stage awaiting publication runs no agent turn. */
+    expect(board.totals.working).toBe(0);
+    expect(board.columns.done.working).toBe(0);
     expect(board.columns.done.shown).toHaveLength(state === "open" ? 1 : 0);
     expect(card.stepSummary).toMatchObject({ open: state === "open" ? 1 : 0, working: state === "open" ? 1 : 0 });
   }
