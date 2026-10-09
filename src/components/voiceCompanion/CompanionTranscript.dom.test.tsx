@@ -154,3 +154,41 @@ test("the sample replies state the project restriction directly", () => {
     for (const reply of replies) expect(reply, `${locale}: ${reply}`).not.toMatch(/,\s+(?:not|не)\s/u);
   }
 });
+
+test("every report a request brought back stays in the view, in order, with its status and time, and its text is selectable", async () => {
+  const { view, record } = await open();
+  const answers = [...view.querySelectorAll<HTMLElement>("[data-transcript-answer]")];
+  const reports = record.entries.filter((entry) => entry.kind === "report");
+  expect(reports.length).toBeGreaterThanOrEqual(2);
+  expect(answers.map((answer) => answer.querySelector(".vc-answer")!.textContent)).toEqual(reports.map((entry) => String(entry.data.text)));
+  expect(answers.map((answer) => answer.dataset.reportStatus)).toEqual(["progress", "result"]);
+  expect(answers[0]!.textContent).toContain("Progress");
+  expect(answers[1]!.textContent).toContain("Result");
+
+  /* Reports that arrive later append to the ones already shown, whatever their status. */
+  const callId = reports[0]!.data.delivery as { callId: string };
+  const later = [
+    { id: "report-question", kind: "report" as const, atMs: 160_000, order: 900, data: { status: "question", text: "Which export format first?", delivery: callId } },
+    { id: "report-blocked", kind: "report" as const, atMs: 170_000, order: 901, data: { status: "blocked", text: "Waiting for the audit.", delivery: callId } },
+  ];
+  const root = mounted!.root;
+  await act(async () => root.render(<CompanionTranscript record={{ entries: [...record.entries, ...later], truncated: false }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+  await act(async () => settle());
+  const all = [...mounted!.host.querySelectorAll<HTMLElement>("[data-transcript-answer]")];
+  expect(all.map((answer) => answer.querySelector(".vc-answer")!.textContent)).toEqual([...reports, ...later].map((entry) => String(entry.data.text)));
+  expect(all.map((answer) => answer.querySelector(".vc-tr-time")!.textContent)).toEqual(["2:06", "2:31", "2:40", "2:50"]);
+});
+
+test("a record that reached its size limit says some content was not retained, in both languages, with no claim about which part", async () => {
+  const { transcriptLabels } = await import("./CompanionTranscript");
+  for (const locale of ["en", "uk"] as const) expect(transcriptLabels(locale).truncated, locale).not.toMatch(/earliest|first part|beginning|найраніш|початок|початк/iu);
+  expect(transcriptLabels("en").truncated).toContain("Part of the conversation is not kept");
+  expect(transcriptLabels("uk").truncated).toContain("Частина розмови не збереглася");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  await act(async () => root.render(<CompanionTranscript record={{ ...sampleTranscript("en"), truncated: true }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+  await act(async () => settle());
+  expect(host.querySelector("[data-transcript-body]")!.textContent).toContain(transcriptLabels("en").truncated);
+});

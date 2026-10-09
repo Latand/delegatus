@@ -4,13 +4,13 @@
     "viewport": 1280,
     "overflow": false,
     "linked": true,
-    "controls": 15
+    "controls": 17
   },
   "phone": {
     "width": 390,
     "viewport": 390,
     "overflow": false,
     "linked": true,
-    "controls": 15
+    "controls": 17
   }
 }

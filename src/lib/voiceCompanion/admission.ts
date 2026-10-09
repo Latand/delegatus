@@ -185,7 +185,7 @@ export class CompanionAdmission {
    * is admitted and sent before this returns; a retry of the same call finds
    * its first outcome and never sends again. `confirmation` is the model's own
    * reason for asking first: nothing here reads the request to decide that. */
-  async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string } = {}): Promise<DelegationOutcome> {
+  async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string; renewed?: boolean } = {}): Promise<DelegationOutcome> {
     const clean = this.cleaner();
     const logicalInstruction = clean(instruction).trim();
     const duplicate = Object.values(this.session(id).proposals).find(row => sameRequest(row, clean(sourceItemId), logicalInstruction, options.sourceTurn));
@@ -226,7 +226,7 @@ export class CompanionAdmission {
     return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
   }
   /** `sourceTurn` binds this model request to the operator's Live turn. */
-  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean } = {}): Proposal | null {
+  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean; renewed?: boolean } = {}): Proposal | null {
     const { sourceTurn } = options;
     const [callId, sourceItemId, instruction, asked] = [rawCallId, rawSourceItemId, rawInstruction, options.confirmation?.trim().slice(0, 240) ?? ""].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
@@ -238,7 +238,7 @@ export class CompanionAdmission {
       if (!session || session.closed) { refusal = "session_closed"; return null; }
       const logicalDuplicate = Object.values(session.proposals).find(row => sameRequest(row, sourceItemId, instruction, sourceTurn));
       if (logicalDuplicate) { reusedLogicalRequest = true; return logicalDuplicate.proposal; }
-      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn, earlierRequests(session))
+      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn, earlierRequests(session), options.renewed)
         : (() => { const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs }); return gate.admit ? null : gate.reason; })();
       if (reason) { refusal = reason; return null; }
       const recipient = this.paths.recipient(session.project);
@@ -247,7 +247,7 @@ export class CompanionAdmission {
       const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
         ...(session.authority ? { authority: session.authority } : {}), ...(asked ? { confirmation: { reason: asked } } : {}) };
       const row: StoredProposal = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000,
-        state: options.autosend && !asked ? "admitted" : "pending", reports: [], ...(sourceTurn !== undefined ? { sourceTurn } : {}) };
+        state: options.autosend && !asked ? "admitted" : "pending", reports: [], ...(sourceTurn !== undefined ? { sourceTurn } : {}), ...(options.renewed ? { renewed: true } : {}) };
       if (options.autosend && !asked) {
         // Commit the proposal, admission decision and retry identity together.
         row.via = "auto";
@@ -284,7 +284,7 @@ export class CompanionAdmission {
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
       if (command.decision === "cancel") { row.state = "cancelled"; row.cancelCode = refused.code = "operator_cancelled"; return null; }
-      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId)) === null
+      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId), row.renewed) === null
         : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit;
       if (session.authority === "live-model" && command.via === "speech" && row.sourceTurn !== undefined
         && (("sourceTurn" in command ? command.sourceTurn : undefined) ?? session.inputs.at(-1)?.turn ?? row.sourceTurn) <= row.sourceTurn) { refused.code = "not_confirmed"; return null; }

@@ -892,8 +892,9 @@ test("one completed request reaches the orchestrator once whatever Live delegati
   for (const parallel of [false, true]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
+    let askedAgain: string | null = null;
     f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Sent.")])
-      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", { instruction: "Review the plan", asked_again: askedAgain })]);
     const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("first", 500));
     if (!parallel) await f.service.drain(s.sessionId);
@@ -911,6 +912,7 @@ test("one completed request reaches the orchestrator once whatever Live delegati
     expect(await again.delegate(s.sessionId, "call-after-restart", "delegation-after-restart", "Review the plan", { sourceTurn: rows[0].sourceTurn })).toEqual({ state: "sent", status: "queued" });
     expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.delivery?.clientMessageId)).toEqual([key]);
     // The operator saying it again in a completed turn of their own is a new request; the model alone repeating one is not.
+    askedAgain = "Asks to send the review request again.";
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 3_000), delegationCreated("new-turn", 3_500));
     await f.service.drain(s.sessionId);
     expect([parallel, f.sends()]).toEqual([parallel, 2]);
@@ -947,18 +949,21 @@ test("a request already acted on never authorizes a later turn through the lookb
   }
 });
 
-test("an operator who asks again in a new turn sends again, also after cancelling, in English and Russian; model repeats still add nothing", async () => {
+test("the model's judgment renews a request: natural wordings in three languages send once more, also after cancelling; a repeat the model does not mark, thanks and board questions add none", async () => {
   const cases = [
-    { locale: "en" as const, instruction: "Review the plan", first: "Ask the orchestrator to review the plan.", again: "Ask the orchestrator to review the plan again.", thanks: "Thanks." },
-    { locale: "uk" as const, instruction: "Проверить план", first: "Попроси оркестратора проверить план.", again: "Ещё раз отправь ему, пожалуйста, чтобы проверил план.", thanks: "Спасибо." },
+    { locale: "en" as const, instruction: "Review the plan", first: "Ask the orchestrator to review the plan.",
+      again: ["Yes, send it again.", "I want you to send it again.", "Please, one more time."], quiet: ["Thanks.", "Tell me how the review went.", "Get the current task status."] },
+    { locale: "uk" as const, instruction: "Проверить план", first: "Попроси оркестратора проверить план.",
+      again: ["Отсылай.", "Не, всё-таки отошли, да, отошли.", "Ще раз, будь ласка."], quiet: ["Спасибо.", "Расскажи, как прошла проверка."] },
   ];
   for (const c of cases) for (const cancelled of [false, true]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
     let call = 0;
+    let askedAgain: string | null = null;
     f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
       : backendResponse(`resp_${index}`, [functionCall(`call-${index}-${call++}`, "request_orchestrator_delegation", cancelled && call === 1
-        ? { instruction: c.instruction, confirmation_reason: "Confirm?" } : { instruction: c.instruction })]);
+        ? { instruction: c.instruction, confirmation_reason: "Confirm?", asked_again: null } : { instruction: c.instruction, asked_again: askedAgain })]);
     const s = await f.service.start({ project: "fixture", locale: c.locale, sdp: "v=0" });
     f.provider.replay(s.providerId, said(c.first, 0), delegationCreated("first", 500));
     await f.service.drain(s.sessionId);
@@ -968,14 +973,25 @@ test("an operator who asks again in a new turn sends again, also after cancellin
       await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, via: "tap", decision: "cancel" });
       expect(f.sends()).toBe(0);
     } else expect(f.sends()).toBe(1);
-    // A backchannel and the model repeating itself add nothing.
-    f.provider.replay(s.providerId, said("Done.", 1_000, "output"), said(c.thanks, 3_000), delegationCreated("repeat", 3_600));
-    await f.service.drain(s.sessionId);
-    expect([c.locale, cancelled, f.sends()]).toEqual([c.locale, cancelled, cancelled ? 0 : 1]);
-    // The operator asks again in a completed turn of their own: a new request, sent.
-    f.provider.replay(s.providerId, said("Done.", 4_000, "output"), said(c.again, 6_000), delegationCreated("again", 6_600));
-    await f.service.drain(s.sessionId);
-    expect([c.locale, cancelled, f.sends()]).toEqual([c.locale, cancelled, cancelled ? 1 : 2]);
+    let at = 1_000;
+    const baseline = cancelled ? 0 : 1;
+    // The model raises the same words again without marking them as the operator's: thanks or a question about the board.
+    for (const quiet of c.quiet) {
+      f.provider.replay(s.providerId, said("Done.", at, "output"), said(quiet, at + 2_000), delegationCreated(`repeat-${at}`, at + 2_600));
+      await f.service.drain(s.sessionId);
+      expect([c.locale, cancelled, quiet, f.sends()]).toEqual([c.locale, cancelled, quiet, baseline]);
+      at += 5_000;
+    }
+    // The model judges that the operator asked again: each wording sends once more.
+    let expected = baseline;
+    for (const again of c.again) {
+      askedAgain = `Asks again: ${again}`;
+      f.provider.replay(s.providerId, said("Done.", at, "output"), said(again, at + 2_000), delegationCreated(`again-${at}`, at + 2_600));
+      await f.service.drain(s.sessionId);
+      expected += 1;
+      expect([c.locale, cancelled, again, f.sends()]).toEqual([c.locale, cancelled, again, expected]);
+      at += 5_000;
+    }
     await f.service.close(s.sessionId);
   }
 });

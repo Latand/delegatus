@@ -20603,6 +20603,7 @@ describe("floating voice companion", () => {
               inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
               scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
               laneHidden: !lane || getComputedStyle(lane).visibility === "hidden",
+              reports: [...view.querySelectorAll<HTMLElement>("[data-transcript-answer] .vc-answer")].map((node) => node.textContent ?? ""),
               lines: toggles.length, expanded: toggles.filter((toggle) => toggle.getAttribute("aria-expanded") === "true").length,
               detailsOnPage: view.querySelectorAll("[data-transcript-detail], pre").length,
               messages: messages.length, copyControls: messages.filter((message) => message.querySelector("button")).length,
@@ -20615,6 +20616,8 @@ describe("floating voice companion", () => {
           expect(reading.atEnd, `${label}: opens at the newest line`).toBe(true);
           expect(reading.lines, `${label}: both read calls and the request are listed`).toBe(3);
           expect([reading.expanded, reading.detailsOnPage], `${label}: every call is collapsed by default`).toEqual([0, 0]);
+          expect(reading.reports.length, `${label}: the progress report and the final answer both stay`).toBe(2);
+          expect(new Set(reading.reports).size, `${label}: each report keeps its own text`).toBe(2);
           expect(reading.copyControls, `${label}: every message has its own copy control`).toBe(reading.messages);
           expect(Math.max(...reading.lineHeights), `${label}: a collapsed call is one line`).toBeLessThan(48);
           /* One read call opens to its arguments and result; the request opens to its instruction and delivery steps. */

@@ -8,7 +8,7 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompan
  * for the transcript view's rendered evidence and tests. It ends where the
  * `delegation` scenario ends, so the lane on screen and the record agree:
  * short and long utterances, replies, a read call that worked and one that was
- * refused, and a request sent to the orchestrator with its answer. The session
+ * refused, and a request sent to the orchestrator with a progress report and its final answer. The session
  * is still open (no end entry). Shapes follow `liveSession.ts` and
  * `admission.ts`: speech with its provider timings, tools with cleaned pretty
  * JSON, the request with its delivery states, the hand-offs to the voice.
@@ -24,6 +24,7 @@ const TEXT = {
     refused: "I can't open that one because it belongs to another project. I can read the tasks of the project on screen.",
     long: "Right, so here's what I keep thinking about. The export settings have grown to fourteen switches, and nobody uses most of them. Last week I watched someone scroll past all of them twice before finding the archive option, and that was me. I want three presets for the common cases and one place for the rest, without breaking anything people saved before.",
     longReply: "That's the right instinct. Three presets for the common cases, the rare switches behind one advanced sheet, and the old saved keys still readable, so nothing anyone saved last month changes under them.",
+    progress: "Reading the export plan. The three presets hold so far; checking the saved exports next.",
     tasks: [
       ["Fold the export toggles into presets", "in progress"],
       ["Search lane: merge after review", "in progress"],
@@ -40,6 +41,7 @@ const TEXT = {
     refused: "Цю я не відкрию, бо вона з іншого проєкту. Задачі проєкту на екрані можу прочитати.",
     long: "Так, слухай, ось про що я весь час думаю. Налаштування експорту розрослися до чотирнадцяти перемикачів, і більшістю ніхто не користується. Минулого тижня я бачив, як людина двічі прогорнула їх усі, поки знайшла архівний варіант, і цією людиною був я. Хочу три пресети для типових випадків і одне місце для решти, і щоб нічого, збереженого раніше, не зламалося.",
     longReply: "Правильний хід. Три пресети для типових випадків, рідкісні перемикачі за одним розширеним аркушем, а старі збережені ключі лишаються читабельними, тож нічого, збереженого минулого місяця, під людьми не зміниться.",
+    progress: "Читаю план експорту. Три пресети поки тримаються; далі перевіряю збережені експорти.",
     tasks: [
       ["Згорнути перемикачі експорту в пресети", "у роботі"],
       ["Смуга пошуку: злиття після рев’ю", "у роботі"],
@@ -112,6 +114,10 @@ export function sampleTranscript(locale: Locale, project = "atlas"): SessionTran
   } });
   add({ id: "handoff-send", kind: "handoff", atMs: 105_000, data: { delegationId: "dlg_send", text: "Sent to the orchestrator." } });
   speech("item_co_sent", "companion", t.sent, 105_600, 108_100);
+  add({ id: `report-${DEMO_IDS.reportId}-progress`, kind: "report", atMs: 126_400, data: {
+    status: "progress", text: s.progress,
+    delivery: { proposalId: DEMO_IDS.proposalId, callId: DEMO_IDS.callId, clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, recipient },
+  } });
   add({ id: `report-${DEMO_IDS.reportId}`, kind: "report", atMs: 151_200, data: {
     status: "result", text: t.answer,
     delivery: { proposalId: DEMO_IDS.proposalId, callId: DEMO_IDS.callId, clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, recipient },

@@ -423,6 +423,17 @@ request, correction and question to the backing agent
 (`voice-companion-research.md`, §1). The record of this session shows the
 companion's model raising a send only when the operator asked for one.
 
+A request the operator asks for once more is the model's judgment as well. The
+same words as a request raised in an earlier turn are a repeat and send
+nothing (`already_requested`). `request_orchestrator_delegation` takes a
+nullable `asked_again`: the model sets it, with one sentence, only when the
+operator's latest turn explicitly asks to send a request raised earlier in the
+call once more, whether it was sent or cancelled. Admission stores that
+judgment on the request (`renewed`) and counts the request as new; it reads no
+operator wording for it, and no list of phrasings exists to grow. Retries of
+one call and of one source turn stay one request through `callId` and
+`sameRequest`.
+
 ### Failing-first tests
 
 Through the local fake provider and `CompanionLiveSessions`
@@ -768,7 +779,7 @@ entries. Local paths and credentials are cleaned before storage and serving.
 Growing segments update in memory. Settled entries are written to the private
 session JSONL; late finals or masking corrections replace their settled entry.
 The record is independent of the replay ring, UI history and backend context.
-At the 4 MB limit, `truncated` becomes true and the end entry is retained.
+At the 4 MB limit, `truncated` becomes true, entries that arrive after it are not retained (the beginning stays) and the end entry is kept. The view's caption says only that part of the conversation is not kept.
 The next mint prunes closed files after 30 days from closure and keeps at most
 50 closed records. The transcript view and the connection cues are built in the
 subsequent stage, with rendered evidence from the kanban driver's

@@ -282,8 +282,9 @@ for (const engine of ["claude", "codex"] as const) test(`a spoken request and th
   storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
   let call = 0;
+  let askedAgain: string | null = null;
   provider.responder = (req, index) => req.input.some((item) => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
-    : backendResponse(`resp_${index}`, [functionCall(`call-${call++}`, "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+    : backendResponse(`resp_${index}`, [functionCall(`call-${call++}`, "request_orchestrator_delegation", { instruction: "Review the plan", asked_again: askedAgain })]);
   const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths),
     new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
     { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
@@ -296,7 +297,8 @@ for (const engine of ["claude", "codex"] as const) test(`a spoken request and th
   provider.replay(session.providerId, said("Done.", 1_000, "output"), said("Thanks.", 3_000), delegationCreated("repeat", 3_600));
   await service.drain(session.sessionId);
   expect(delivered).toHaveLength(1);
-  provider.replay(session.providerId, said("Done.", 4_000, "output"), said("Ask the orchestrator to review the plan again.", 6_000), delegationCreated("again", 6_600));
+  askedAgain = "Asks to send the review request again.";
+  provider.replay(session.providerId, said("Done.", 4_000, "output"), said("Yes, send it again.", 6_000), delegationCreated("again", 6_600));
   await service.drain(session.sessionId);
   expect(delivered).toHaveLength(2);
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((held) => held.command.origin))

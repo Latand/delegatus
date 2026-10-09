@@ -137,7 +137,8 @@ test("the model resolves a pending voice confirmation without a server-side cons
 test("asking first is the model's judgment in the schema: an optional reason, and no list of words anywhere in the registry", () => {
   const tool = COMPANION_TOOLS.find(row => row.name === "request_orchestrator_delegation")!;
   expect(tool.parameters.properties.confirmation_reason).toMatchObject({ type: ["string", "null"] });
-  expect(tool.parameters.required).toEqual(["instruction", "confirmation_reason"]);
+  expect(tool.parameters.required).toEqual(["instruction", "confirmation_reason", "asked_again"]);
+  expect(tool.parameters.properties.asked_again).toMatchObject({ type: ["string", "null"] });
   expect(tool.description).toContain("delivered at once");
   expect(tool.description).toContain("your own judgment");
   expect(COMPANION_TOOLS.find(row => row.name === "resolve_orchestrator_confirmation")!.parameters.properties.decision).toMatchObject({ enum: ["send", "cancel"] });

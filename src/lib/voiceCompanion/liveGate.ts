@@ -3,38 +3,22 @@ import { gateSentences, retractsRequest, type OperatorInput } from "./gate";
 /** Withdrawal applies only to a confirmation already waiting. */
 const REFUSED = /\b(?:don['’]?t|do not|never)\s+(?:send|delegate|ask|tell)\b|(?:не\s+(?:надсилай|відправляй|делегуй|прос[иі]|передавай))/iu;
 const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join(" ");
-/* A sentence that opens with a request to pass something on, in the three languages the operator speaks. */
-const FILLER = String.raw`(?:(?:hey|ok|okay|so|now|then|and|please|again|once more|delegatus|слухай|слушай|ок|окей|ну|так|давай|ще раз|еще раз|ещё раз|будь ласка|пожалуйста|делегатусе?)[,\s]+)*`;
-const POLITE = String.raw`(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|(?:можеш|можете|можешь)\s+(?:(?:будь\s+ласка|пожалуйста),?\s+)?)?`;
-const VERB = String.raw`(?:ask|tell|send|resend|forward|pass|delegate|give|hand|message|let|have|get|(?:попроси|спитай|запитай|спроси|скаж|передай|передат|надішли|надіслат|відправ|отправ|отошл|пошл|пришл|доручи|перешли|переслат|напиш)\p{L}*)(?![\p{L}'])`;
-const RENEWAL = new RegExp(`^${FILLER}${POLITE}${VERB}`, "u");
-
 /** Instruction text as one request reads, whatever its spacing, case or closing stop. */
 export const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "").toLowerCase();
 /** A request the session already holds, whatever became of it: the turn it was raised in and its words. */
 export interface EarlierRequest { turn?: number; instruction: string }
 
 /**
- * Whether the operator's completed turn itself asks to pass something on: one of its sentences opens with the
- * request. Thanks, a greeting, a remark or a question about the board never does, and speech that takes it back
- * or quotes it does not either.
- */
-export function operatorRenewsRequest(turnRows: readonly OperatorInput[]): boolean {
-  if (!turnRows.length || turnRows.some(row => !row.final)) return false;
-  const text = words(turnRows);
-  return !/["“”„«»]/u.test(text) && !REFUSED.test(text) && !retractsRequest(text) && gateSentences(text).some(sentence => RENEWAL.test(sentence));
-}
-
-/**
  * Live's backend judges the request's meaning; admission enforces structure. The same words as a request the
- * session already holds are a repeat the model raised (the same operator turn is one request, see `sameRequest`)
- * unless the operator's own completed turn asks again, which makes a new request, also after the first was cancelled.
+ * session already holds, raised in an earlier turn, are a repeat of it (the same operator turn is one request, see
+ * `sameRequest`). Whether the operator asked again is the backend model's judgment, passed as `renewed`: such a
+ * request is new, also after the first was cancelled. Nothing here reads the operator's words for it.
  */
-export function liveProposalRefusal(instruction: string, inputs: readonly OperatorInput[], sourceTurn?: number, earlier: readonly EarlierRequest[] = []): "invalid_instruction" | "already_requested" | null {
+export function liveProposalRefusal(instruction: string, inputs: readonly OperatorInput[], sourceTurn?: number, earlier: readonly EarlierRequest[] = [], renewed = false): "invalid_instruction" | "already_requested" | null {
   if (!instruction.trim() || instruction.length > 2_000) return "invalid_instruction";
   const turn = sourceTurn ?? inputs.at(-1)?.turn;
   const repeated = turn !== undefined && earlier.some(row => row.turn !== undefined && row.turn < turn && requestText(row.instruction) === requestText(instruction));
-  return repeated && !operatorRenewsRequest(inputs.filter(row => row.turn === turn)) ? "already_requested" : null;
+  return repeated && !renewed ? "already_requested" : null;
 }
 export function waitingConfirmationWithdrawn(inputs: readonly OperatorInput[], sourceTurn?: number): boolean {
   const later = sourceTurn === undefined ? inputs.slice(-1) : inputs.filter(row => (row.turn ?? -1) > sourceTurn);

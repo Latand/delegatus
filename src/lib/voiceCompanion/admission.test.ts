@@ -380,5 +380,8 @@ test("the session transcript stops at 4 MB with an explicit truncation marker an
   const record = admission.transcriptRecord(session.id);
   expect(record.truncated).toBe(true);
   expect(record.entries.at(-1)?.kind).toBe("session_end");
+  // The record keeps its beginning and refuses what arrives after the limit; the view's caption names no part.
+  const ids = record.entries.map(entry => entry.id);
+  expect([ids.includes("tool-0"), ids.includes("tool-599")]).toEqual([true, false]);
   expect(fs.statSync(path.join(root, "state", "voice-companion", "transcripts", `${session.id}.jsonl`)).size).toBeLessThanOrEqual(4 * 1024 * 1024);
 });

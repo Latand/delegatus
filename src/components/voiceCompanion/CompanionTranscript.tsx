@@ -18,8 +18,8 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompan
  */
 
 const LABELS = {
-  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "The earliest part is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details" },
-  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Найраніша частина не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці" },
+  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" } },
+  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" } },
 } as const;
 export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk" : "en"];
 
@@ -36,13 +36,13 @@ type Row =
   | { kind: "speech"; key: string; atMs: number; speaker: "operator" | "companion"; text: string }
   | { kind: "call"; key: string; atMs: number; name: string; status: Status; args: string; result: string | null; reason: string | null; handoffs: string[] }
   | { kind: "request"; key: string; atMs: number; instruction: string; stage: string; reason: string | null; engine: "claude" | "codex" | null;
-      states: Array<{ atMs: number; status: string }>; args: string | null; result: string | null; answer: { atMs: number; text: string } | null };
+      states: Array<{ atMs: number; status: string }>; args: string | null; result: string | null; answers: Array<{ key: string; atMs: number; text: string; status: string | null }> };
 
 const str = (value: unknown) => (typeof value === "string" ? value : null);
 const STAGE: Record<string, string> = { proposed: "proposed", sending: "sending", awaiting_confirmation: "awaiting-confirmation", queued: "queued", delivered: "delivered", unknown: "unknown", failed: "failed", refused: "refused", cancelled: "cancelled", sent: "delivered" };
 
 /** The record as rows: speech, each call with what was passed to the voice after it, and each request with
-    its own call, its delivery and its answer together. A call no request row holds (the spoken answer to a
+    its own call, its delivery and every report it brought back, in order, together. A call no request row holds (the spoken answer to a
     confirmation, a repeated request) is a row of its own. Live's own hand-off markers carry nothing to read and are left out. */
 export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
   const sorted = [...entries].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -70,13 +70,13 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
       const row: Extract<Row, { kind: "request" }> = {
         kind: "request", key: entry.id, atMs: entry.atMs, instruction: str(data.instruction) ?? "", stage: STAGE[str(data.status) ?? ""] ?? "proposed", reason: str(data.reason),
         engine: recipient?.engine ?? null, states: Array.isArray(data.states) ? (data.states as Array<{ atMs: number; status: string }>) : [],
-        args: tool ? str(tool.data.arguments) : null, result: tool ? str(tool.data.result) : null, answer: null,
+        args: tool ? str(tool.data.arguments) : null, result: tool ? str(tool.data.result) : null, answers: [],
       };
       rows.push(row);
       requests.set(callId, row);
     } else if (entry.kind === "report") {
       const request = requests.get(str((data.delivery as { callId?: string } | undefined)?.callId) ?? "");
-      if (request) request.answer = { atMs: entry.atMs, text: str(data.text) ?? "" };
+      if (request) request.answers.push({ key: entry.id, atMs: entry.atMs, text: str(data.text) ?? "", status: str(data.status) });
     } else if (entry.kind === "handoff") {
       calls.get(str(data.delegationId) ?? "")?.handoffs.push(str(data.text) ?? "");
     }
@@ -168,16 +168,16 @@ export function CompanionTranscript({ record, left, top, width, height, onClose 
           {row.args ? <><span className="vc-tr-label">{L.args}</span><pre className="vc-tr-pre">{row.args}</pre></> : null}
           {row.args && row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre">{row.result}</pre></> : null}
         </Disclosure>
-        {row.answer ? (
-          <div className="vc-call vc-deleg vc-reply" data-stage="answered" data-transcript-answer>
+        {row.answers.map((answer) => (
+          <div key={answer.key} className="vc-call vc-deleg vc-reply" data-stage="answered" data-report-status={answer.status ?? undefined} data-transcript-answer>
             <div className="vc-deleg-head">
               <span className="vc-call-icon" aria-hidden><Check size={14} /></span>
-              <span className="vc-deleg-title">{t("voiceCompanion.stage.answered")}</span>
-              <span className="vc-tr-time vc-tr-push">{clock(row.answer.atMs)}</span>
+              <span className="vc-deleg-title">{t("voiceCompanion.stage.answered")}{answer.status && answer.status in L.reports ? ` · ${L.reports[answer.status as keyof typeof L.reports]}` : ""}</span>
+              <span className="vc-tr-time vc-tr-push">{clock(answer.atMs)}</span>
             </div>
-            <p className="vc-answer">{row.answer.text}</p>
+            <p className="vc-answer">{answer.text}</p>
           </div>
-        ) : null}
+        ))}
       </>
     );
   };

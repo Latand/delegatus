@@ -33,6 +33,8 @@ export interface StoredProposal {
   status?: "delivered" | "queued" | "unknown" | "failed";
   /** The operator's Live turn when the proposal was raised. */
   sourceTurn?: number;
+  /** The model judged that the operator asked again for a request raised earlier in the call. */
+  renewed?: boolean;
   /** Why a waiting confirmation ended with nothing sent. */
   cancelCode?: DelegationCode;
   failureCode?: string;
@@ -106,6 +108,7 @@ function sessionValid(key: string, session: unknown): boolean {
       || !recipientValid(held.proposal.recipient) || canonicalProject((held.proposal.recipient as { project: string }).project) !== canonicalProject(session.project as string)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
       || !Array.isArray(held.reports) || !held.reports.every(identifier)
+      || (held.renewed !== undefined && typeof held.renewed !== "boolean")
       || (held.sourceTurn !== undefined && (!Number.isSafeInteger(held.sourceTurn) || (held.sourceTurn as number) < 0))) return false;
     if (held.state !== "admitted") return held.delivery === undefined && held.text === undefined && held.status === undefined;
     return record(held.delivery) && held.delivery.proposalId === id && held.delivery.callId === held.proposal.callId
