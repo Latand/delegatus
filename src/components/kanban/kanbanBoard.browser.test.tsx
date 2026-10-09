@@ -21063,6 +21063,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     shows?: string;
     /** A row's crown control, reached by the pointer or by the keyboard. */
     crown?: "hover" | "focus";
+    /** Accounts per engine the fixture was given: the footer's lines are counted against it. */
+    accounts?: number;
   }
   const langsOf = (state: State): readonly ("en" | "uk")[] => state.lang === "both" ? ["uk", "en"] : [state.lang ?? "en"];
   const ACCOUNT = '[data-engine-limits="claude"] button[aria-haspopup="dialog"]';
@@ -21083,6 +21085,10 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     { name: "copilot", query: "rail=few&railstate=copilot", everywhere: false, lang: "both" },
     { name: "copilot-accounts", query: "rail=few&railstate=copilot", click: '[data-engine-limits="copilot"] button', first: true, everywhere: false, lang: "uk" },
     { name: "stale", query: "rail=few&railstate=stale", everywhere: false, lang: "both" },
+    /* The compact footer names every account of each engine, one line each: one, three and eight accounts per engine, and a click on a non-active line. */
+    ...([1, 3, 8] as const).map((count): State => ({ name: `accounts-${count}`, query: `rail=few&railaccounts=${count}`, everywhere: false, lang: "both", dark: true, shows: "[data-footer-account]", accounts: count })),
+    { name: "accounts-3-focus", query: "rail=few&railaccounts=3", click: '[data-engine-limits="codex"] [data-footer-account-active="false"] button', first: true, everywhere: false, lang: "both", dark: true, shows: '[data-engine-limits="codex"] [class*="ring-accent/50"]', accounts: 3 },
+    { name: "accounts-3-detail", query: "rail=few&railaccounts=3", detail: true, everywhere: false, lang: "en", shows: "[data-rail-footer] [data-meter-window]", accounts: 3 },
     { name: "detail", query: "rail=few", detail: true, everywhere: false, lang: "both", shows: "[data-rail-footer] [data-meter-window]" },
     { name: "detail-copilot", query: "rail=few&railstate=copilot", detail: true, everywhere: false, lang: "uk", shows: '[data-engine-limits="copilot"] [data-meter-window]' },
     { name: "detail-stale", query: "rail=few&railstate=stale", detail: true, everywhere: false, lang: "uk" },
@@ -21125,6 +21131,10 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     notes: string[];
     /** The account named on each engine line, and whether the line cuts it. */
     accounts: { name: string; cut: boolean }[];
+    /** Every account line of the limits footer, in the order drawn: the engine, whether it is the active account, its reading and the share its bar draws. */
+    lines: { engine: string; id: string; name: string; active: boolean; value: string; bar: number | null; dimmed: boolean }[];
+    /** Whether the page itself scrolls, and whether the footer is taller than the sidebar's list. */
+    fit: { pageScrolls: boolean; footerBottom: number; windowHeight: number };
     /** A footer line: the share its bar draws, and the reading beside the bar. */
     meters: { label: string; value: string; bar: number | null }[];
     /** The archive: where its label starts, whether it is unfolded, and the archived rows inside the list's box. */
@@ -21181,6 +21191,20 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       notes: [...rail.querySelectorAll<HTMLElement>("[data-rail-footer] [data-meter-note]")].map((note) => (note.textContent ?? "").trim()),
       reasons: [...rail.querySelectorAll<HTMLElement>("[data-limits-reason]")].map((reason) => ({ text: (reason.textContent ?? "").trim(), cut: reason.scrollWidth > reason.clientWidth + 1, inTooltip: (reason.title || reason.closest("[data-engine-limits]")?.querySelector("button")?.title || "").includes((reason.textContent ?? "").trim()) })),
       accounts: [...rail.querySelectorAll<HTMLElement>("[data-meter-line] [data-meter-name]")].map((name) => ({ name: name.textContent ?? "", cut: name.scrollWidth > name.clientWidth + 1 })),
+      lines: [...rail.querySelectorAll<HTMLElement>("[data-footer-account]")].map((line) => {
+        const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+        const fill = track?.firstElementChild as HTMLElement | null;
+        return {
+          engine: line.closest<HTMLElement>("[data-engine-limits]")?.dataset.engineLimits ?? "",
+          id: line.dataset.footerAccount ?? "",
+          name: line.querySelector("[data-meter-name]")?.textContent ?? "",
+          active: line.dataset.footerAccountActive === "true",
+          value: (line.querySelector("[data-meter-value]") ?? line.querySelector("[data-limits-reason]"))?.textContent?.trim() ?? "",
+          bar: track && fill ? Math.round((1000 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width) / 10 : null,
+          dimmed: line.className.includes("opacity-60"),
+        };
+      }),
+      fit: { pageScrolls: document.documentElement.scrollHeight > innerHeight + 1, footerBottom: Math.round(footer?.getBoundingClientRect().bottom ?? 0), windowHeight: innerHeight },
       meters: [...rail.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
         const track = line.querySelector<HTMLElement>("[data-meter-bar]");
         const fill = track?.firstElementChild as HTMLElement | null;
@@ -21392,6 +21416,27 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
           /* The list has the height the old footer took, and shows no fewer rows than the replaced sidebar did. */
           if (reading.today && !state.folded && reading.rail.listHeight <= reading.today.listHeight) fail(`the list is ${reading.rail.listHeight} px, ${reading.today.listHeight} px in the replaced sidebar`);
           if (reading.today && reading.rail.rowsInView < reading.today.rowsInView) fail(`${reading.rail.rowsInView} rows in view, ${reading.today.rowsInView} in the replaced sidebar`);
+          if (state.accounts) {
+            /* One line per account of each engine, Claude first, the active account marked once per engine; "All windows" keeps one account per engine. */
+            const expected = state.detail ? 1 : state.accounts;
+            for (const engine of ["claude", "codex"]) {
+              const lines = reading.lines.filter((line) => line.engine === engine);
+              if (lines.length !== expected) fail(`${engine} draws ${lines.length} account line(s) for ${state.accounts} account(s)`);
+              if (lines.filter((line) => line.active).length !== 1) fail(`${engine} marks ${lines.filter((line) => line.active).length} lines as the active account`);
+              if (lines[0] && !lines[0].active) fail(`${engine} does not start with its active account`);
+            }
+            if (reading.lines.length && reading.lines[0]!.engine !== "claude") fail("the first account line is not Claude's");
+            /* A line with no reading says so and draws no bar; a line with one draws the bar of the share it names (the shared check above). */
+            if (!state.detail && state.accounts > 2) {
+              const empty = reading.lines.filter((line) => line.bar === null);
+              if (empty.length !== 2) fail(`${empty.length} lines without a reading, 2 expected`);
+              if (reading.lines.filter((line) => line.dimmed).length < 2) fail("the aged readings are not dimmed");
+            }
+            /* The footer stays inside the window: the page does not scroll, and the project list keeps room. */
+            if (reading.fit.pageScrolls) fail("the page scrolls");
+            if (reading.fit.footerBottom > reading.fit.windowHeight + 1) fail(`the footer ends at ${reading.fit.footerBottom} px in a window of ${reading.fit.windowHeight} px`);
+            if (reading.rail.listHeight < 120) fail(`the project list is ${reading.rail.listHeight} px high`);
+          }
           if (state.crown) {
             /* The control stands in the age's place: while it shows, the age of its row does not, and no mark is under it. */
             const crown = reading.crown;
@@ -21448,6 +21493,18 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       fs.writeFileSync(path.join(OUT, "browser.pid"), `${closed.join("\n")}\n`);
     }
 
+    /* The footer's account lines, as drawn: one record per frame, kept whether the run was narrowed or not. */
+    const accountFrames = readings.filter((reading) => reading.state.startsWith("accounts-"));
+    if (accountFrames.length) {
+      fs.mkdirSync(path.resolve("evidence/sidebar-footer-accounts"), { recursive: true });
+      fs.writeFileSync(path.resolve("evidence/sidebar-footer-accounts/readings.json"), `${JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        block: "the compact footer: one line per account of each engine",
+        values: "invented",
+        readings: accountFrames.map(({ frame, state, scheme, lang, lines, rail, fit, panel }) => ({ frame, state, scheme, lang, rail, fit, panel, lines })),
+        failures: failures.filter((failure) => failure.includes("-accounts-")),
+      }, null, 2)}\n`);
+    }
     if (!ONLY) {
       /* The left part of a frame at full size, or the whole frame scaled; a frame of the replaced sidebar loses the design lane's strip. */
       const picture = async (file: string, strip: number, width: number | null, scale: number) => {

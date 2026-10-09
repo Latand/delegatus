@@ -1547,6 +1547,21 @@ const accountsBody = {
     mutationLocked: false, migration: null, autoBalance: null,
   },
 };
+/* `?railaccounts=N` (the compact footer, one line per account): each engine knows N accounts, the active one
+   first. From the third on the readings are the states a line has to draw: an aged reading, and no reading at all. */
+const RAIL_ACCOUNTS = Number(new URLSearchParams(location.search).get("railaccounts")) || 0;
+if (RAIL_ACCOUNTS) {
+  const plans = ["Max", "Pro", "Pro", "Max", "Plus", "Pro", "Max", "Pro"];
+  const used = [72, 18, 41, 100, 55, 8, 64, 30];
+  const roster = (letters: string): (typeof accountsBody)["claude"]["accounts"] => Array.from({ length: RAIL_ACCOUNTS }, (_, index) => {
+    const row = accountRow(index === 0 ? "default" : `account-${index}`, `Account ${letters[index]}`, plans[index]!, used[index]!, 90 + 25 * index);
+    if (index === 1 && RAIL_ACCOUNTS > 2) return { ...row, limits: { ...row.limits, state: "stale", checkedAt: iso(40 * MIN) } };
+    if (index === 2 && RAIL_ACCOUNTS > 2) return { ...row, limits: null as never };
+    return row;
+  });
+  accountsBody.claude.accounts = roster("ACEGIJKM");
+  accountsBody.codex.accounts = roster("BDFHLNPQ");
+}
 /* Claude work in this project may use accounts A, C and E; Codex is unbound. */
 const CLAUDE_ALLOWED = ["default", "account-c", "account-e"];
 const bindingsBody = {
