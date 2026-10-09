@@ -3,6 +3,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
+import { procBackend } from "@/lib/proc";
+import type { RuntimeJournalStartupProgress } from "./journal";
+
 import type {
   RuntimeHostGenerationIdentity,
   RuntimeSocketResponse,
@@ -25,7 +28,9 @@ interface PendingRuntimeHostStartupPhaseEvidence extends Omit<ViewerRuntimeHostS
   hostEpoch: number | null;
 }
 
-interface RuntimeHostStartupRecord {
+export interface RuntimeHostStartupRecord {
+  journal?: RuntimeJournalStartupProgress & { updatedAt: string };
+  stableEntry?: "listening";
   version: 1;
   generation: RuntimeHostGenerationIdentity;
   pid: number;
@@ -145,6 +150,21 @@ export class RuntimeHostStartupStore {
       startIdentity: record.startIdentity,
       hostEpoch: record.hostEpoch,
     });
+    durableWrite(this.filename, record);
+  }
+
+  stableEntryListening(): void {
+    const record = recordFromDisk(this.filename);
+    record.stableEntry = "listening";
+    durableWrite(this.filename, record);
+  }
+
+  progress(progress: RuntimeJournalStartupProgress): void {
+    const record = recordFromDisk(this.filename);
+    if (record.journal?.subphase !== progress.subphase) {
+      console.error(`[runtime host] journal ${progress.subphase}: ${progress.done}/${progress.total}, committed batches ${progress.committedBatches}`);
+    }
+    record.journal = { ...progress, updatedAt: this.identity?.now() ?? new Date().toISOString() };
     durableWrite(this.filename, record);
   }
 
@@ -304,4 +324,44 @@ export function probeRuntimeHostSuccessor(
       }
     });
   });
+}
+
+/** Consult only after a runtime socket probe failed: recorded ready is then
+ * unhealthy. A missing process identity cannot establish a booting owner. */
+export function runtimeHostStartupState(
+  record: RuntimeHostStartupRecord | null,
+  liveness: "alive" | "dead" | "unverified",
+): "booting" | "unhealthy" | "unknown" {
+  if (!record) return "unhealthy";
+  if (liveness === "unverified") return "unknown";
+  return liveness === "alive"
+    && record.phases.some((phase) => phase.phase === "fence-acquired")
+    && !record.phases.some((phase) => phase.phase === "ready")
+    ? "booting" : "unhealthy";
+}
+
+export function readRuntimeHostStartupState(directory: string, target?: string): {
+  state: "booting" | "unhealthy" | "unknown";
+  journal?: RuntimeHostStartupRecord["journal"];
+} {
+  const records: { record: RuntimeHostStartupRecord; liveness: "alive" | "dead" | "unverified" }[] = [];
+  try {
+    const files = target ? [target] : fs.readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => path.join(directory, name));
+    for (const filename of files) {
+      try {
+        const record = recordFromDisk(filename);
+        const identity = procBackend.processIdentity(record.pid);
+        const liveness = identity === null ? (procBackend.pidAlive(record.pid) ? "unverified" : "dead")
+          : identity === record.startIdentity ? "alive" : "dead";
+        records.push({ record, liveness });
+      } catch { /* An unreadable record never proves a live booting owner. */ }
+    }
+  } catch { return { state: "unhealthy" }; }
+  records.sort((a, b) => {
+    const owner = (item: typeof a) => item.liveness === "alive" && item.record.phases.some((phase) => phase.phase === "fence-acquired");
+    return Number(owner(b)) - Number(owner(a))
+      || String(b.record.phases[0]?.recordedAt).localeCompare(String(a.record.phases[0]?.recordedAt));
+  });
+  const selected = records[0];
+  return { state: runtimeHostStartupState(selected?.record ?? null, selected?.liveness ?? "dead"), ...(selected?.record.journal ? { journal: selected.record.journal } : {}) };
 }

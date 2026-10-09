@@ -754,8 +754,8 @@ export async function sweepBudgetFollowUps(ports: AutoMergePorts): Promise<void>
       && /follow[- ]up/i.test(candidate.task) && candidate.spec?.includes(pipeline.id));
     let delivery = pipeline;
     if (!existing) {
-      // Confirm a known outside merge here too: closed and hidden lanes never
-      // enter auto-merge's queue, and disabling the setting loses no evidence.
+      // Confirm known outside merges at filing even if the merge sweep skips
+      // the lane or merging has been turned off.
       const pr = pipeline.merge ? { repository: pipeline.merge.repository, number: pipeline.merge.prNumber } : ports.pullRequestOf?.(pipeline);
       const knownMerged = pipeline.merge?.state === "merged" || Boolean(pr && ports.cachedState?.(pr.repository, pr.number) === "merged");
       const requiresMergedHead = knownMerged || Boolean(pr && pipeline.state === "completed" && ports.setting(pipeline.project).enabled);
