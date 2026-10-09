@@ -1774,6 +1774,37 @@ describe("delivered agenda versions", () => {
 });
 
 
+/* A board that waits only on the operator must go quiet. Since #2346 (#2632)
+   re-offers open lanes on every interval, the stall token on a parked lane's
+   item is the one thing that keeps it out of that periodic reminder; #2486's
+   versioned agenda keeps a PR waiting for a merge word out of it once shown.
+   This replays 24 hourly checks over a board that never moves, each wake
+   committed as landed, and records what the seat would have been told. */
+describe("a board that waits only on the operator", () => {
+  function replayDay(board: Partial<SeatTickCheckInput>): string[][] {
+    let state = emptySeatTickState();
+    const wakes: string[][] = [];
+    for (let hour = 0; hour < 24; hour++) {
+      const now = NOW + hour * 61 * MINUTE;
+      const decision = seatTickDecision(input({ ...board, now, state, changeFingerprint: "unchanged" }));
+      if (decision.verdict.kind === "wake") {
+        wakes.push(reasonsOf(decision.verdict));
+        state = seatTickWakeCommit(decision.state, plan(decision.verdict, "unchanged", 0), now);
+      } else state = decision.state;
+    }
+    return wakes;
+  }
+
+  test("a lane parked on an operator decision wakes the seat for its interval, then once as stalled, then stays quiet", () => {
+    const parked = lane({ state: "inert", title: "park the design decision" });
+    expect(replayDay({ pipelines: [parked] })).toEqual([["interval"], ["stalled"]]);
+  });
+
+  test("a pull request waiting for the operator's merge word wakes the seat once", () => {
+    expect(replayDay({ pullRequests: [pullRequest()] })).toEqual([["unmerged-pr"]]);
+  });
+});
+
 test("a shown PR stays silent after its lane announcement is discharged", () => {
   const first = seatTickDecision(input({ pullRequests: [pullRequest()], ownLanes: [ownLane({ settled: "completed" })] }));
   const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
