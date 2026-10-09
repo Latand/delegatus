@@ -295,7 +295,7 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 260 files: 172 with asynchronous primitives and
+The reconciled census contains 263 files: 175 with asynchronous primitives and
 88 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
@@ -379,6 +379,8 @@ repeated for this inventory correction.
 | `src/lib/agent/registry.sqlite.test.ts` | 475, 951, 961, 999, 1009, 1046, 1119, 1134, 1169, 1199, 1222, 1243, 1625, 1709, 1906, 1921 | owned |
 | `src/lib/agent/registry.sqliteOnly.test.ts` | 305 | owned |
 | `src/lib/agent/registry.test.ts` | 1774 | owned |
+| `src/lib/agent/registry.writerWait.test.ts` | 96, 204 | owned; preload records both original Bun handles before return; lock holders release after 900/400 milliseconds and finally awaits their exits; the private runner service contains interrupted children |
+| `src/lib/agent/registryLockHolderFixture.ts` | 61 | contained helper; the test preload records the original Bun handle before return, close sends exit and awaits that handle, and the private runner service bounds readiness, cycling and shutdown when a caller is interrupted |
 | `src/lib/agent/spawnPolicy.test.ts` | 60, 92 | owned |
 | `src/lib/board/store.sqlite.test.ts` | 76 | owned |
 | `src/lib/board/store.test.ts` | 77, 135, 221 | owned |
@@ -452,6 +454,7 @@ repeated for this inventory correction.
 | `src/lib/runtime/structuredDeliveryRebind.test.ts` | 189, 648 | owned |
 | `src/lib/runtime/structuredHostControl.test.ts` | 80, 90 | owned |
 | `src/lib/runtime/structuredHostRetirement.test.ts` | 231 | owned |
+| `src/lib/runtime/structuredMessageDelivery.sqlite.test.ts` | 148 | owned; preload records the original Bun lock-holder handle before return, its 500-millisecond release and exit are awaited in finally, and helper-based cases await holder.close before deleting their private databases; the runner service contains interrupted children |
 | `src/lib/runtime/structuredMessageDelivery.test.ts` | 562 | owned |
 | `src/lib/runtime/structuredSpawn.integration.test.ts` | 4685, 4778, 4903, 5148 | owned |
 | `src/lib/scanner/discover.test.ts` | 40 | owned |
@@ -743,3 +746,12 @@ The subsequent release-build heap merge adds synchronous probes in
 `next.config.test.ts`. Their original results are consumed before fixture
 cleanup, and the enclosing service contains interrupted descendants. The
 census includes this additional current-main file without changing audit rules.
+
+The subsequent delivery-progress merge adds three launch files:
+`registry.writerWait.test.ts`, `registryLockHolderFixture.ts` and
+`structuredMessageDelivery.sqlite.test.ts`. The two suites retain their original
+Bun handles and await exits in finally; shared lock-holder callers await close
+before deleting their private databases. Spawn registration and the private
+runner service already cover these launches, including interrupted readiness,
+cycling and shutdown. Their census rows preserve the strict missing-row and
+historical-PID rejection controls.
