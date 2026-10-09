@@ -585,9 +585,13 @@ function rememberWorktree(cwd: string, info: WorktreeInfo): void {
     that ran in a subdirectory of the checkout resolves through the checkout's
     own record: the worktree sweep records the checkout root before it removes
     it (#2202), not every directory a session happened to start in. */
-function worktreeFromMemory(cwd: string): WorktreeInfo | null {
+function worktreeFromMemory(cwd: string, liveRepositoryRoot: string | null): WorktreeInfo | null {
   const lookup = (map: Map<string, WorktreeInfo>) => {
     for (let current = cwd, parent = path.dirname(cwd); ; current = parent, parent = path.dirname(parent)) {
+      // A live repository owns itself and its descendants. A saved checkout
+      // reached before that boundary still owns its path after deletion,
+      // even when an unrelated repository encloses the checkout's parent.
+      if (current === liveRepositoryRoot) return null;
       const found = map.get(current);
       if (found) return found;
       if (parent === current) return null;
@@ -890,12 +894,12 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
     (codexWorktree ? liveWorktree ?? codexWorktree : liveWorktree);
-  if (!worktree && !liveRepositoryRoot && !hasGitMarker(cwd)) {
+  if (!worktree && !hasGitMarker(cwd)) {
     /* An arbitrary-path worktree that has since been deleted: no live
        recognizer matched and its `.git` is gone, but a resolution we recorded
        while it was alive still names the parent repo. */
-    worktree = worktreeFromMemory(cwd);
-    if (!worktree) {
+    worktree = worktreeFromMemory(cwd, liveRepositoryRoot);
+    if (!worktree && !liveRepositoryRoot) {
       const persisted = persistedProjects(resolutionState).byCwd.get(cwd);
       if (persisted) {
         const resolved = aliasedProjectInfo(persisted.project, persisted.worktree, persisted.repo);
@@ -957,13 +961,14 @@ export function projectRootForCwd(cwd: string): string | undefined {
      directory exists and vanish with it, reintroducing across `projectRoot`
      the very before/after split the recognizer removes from `project`. */
   if (projectInfoFromOpenclawWorkspace(cwd)) return undefined;
+  const liveRepositoryRoot = repositoryRootForPath(cwd);
   const worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
     (worktreeFromCodexPath(cwd) ? worktreeFromGitFile(cwd) ?? worktreeFromCodexPath(cwd) : null) ??
     worktreeFromGitFile(cwd) ??
-    worktreeFromMemory(cwd);
-  return worktree?.repo || repositoryRootForPath(cwd) || undefined;
+    worktreeFromMemory(cwd, liveRepositoryRoot);
+  return worktree?.repo || liveRepositoryRoot || undefined;
 }
 
 function worktreeFromSlug(slug: string): { project: string; worktree: string; repo?: string; parentSlug?: string } | null {
