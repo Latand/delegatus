@@ -131,6 +131,9 @@ interface Props {
   dragHandle?: React.HTMLAttributes<HTMLElement>;
   /** Hides the tmux composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
+  /** A conversation the operator reads and nobody here acts on (a relay
+      chat's, which only the relay writes): no control strip and no composer. */
+  readOnly?: boolean;
   /** Slim context bar pinned under the header (e.g. «Round 2 · ✖ REQUEST_CHANGES»). */
   banner?: React.ReactNode;
   /** Owner-provided controls that belong beside the pane's native header actions. */
@@ -206,8 +209,9 @@ export function BranchPane(props: Props) {
   );
 }
 
-function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, composerPrimary, composerPlaceholder, chromeInMenu }: Props) {
+function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: hideComposer, readOnly = false, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, composerPrimary, composerPlaceholder, chromeInMenu }: Props) {
   const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
+  const noComposer = hideComposer || readOnly;
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const paneRef = useRef<HTMLElement | null>(null);
@@ -520,9 +524,9 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer, 
             no control applies. Dormant far-zoom board nodes suppress it entirely
             (the dormant-node contract): the strip returns on activation, and
             active review panes keep it regardless of `noComposer`. */}
-        {dormant || isMobile || neverStarted ? null : <AgentControlStrip file={file} />}
+        {dormant || isMobile || neverStarted || readOnly ? null : <AgentControlStrip file={file} />}
         {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
-        {composerMount && !superseded && !neverStarted ? <div ref={composerMount} className="contents" /> : null}
+        {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
         {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} />}
       </section>
     </div>
