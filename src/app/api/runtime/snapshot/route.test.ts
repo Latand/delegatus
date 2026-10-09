@@ -174,7 +174,7 @@ async function routeCase(phase: string, live: boolean, refusal?: string) {
   fs.writeFileSync(path.join(startup, "host.json"), JSON.stringify({ version: 1, generation: { image: "fixture", revision: "a".repeat(40), container: "fixture" }, pid: live ? process.pid : 2147483647, startIdentity: live ? procBackend.processIdentity(process.pid) : "gone", hostEpoch: null, phases: [{ phase, recordedAt: "2026-01-01T00:00:00.000Z" }], journal: { subphase: "hash-chain", done: 4096, total: 300000, committedBatches: 0 } }));
   try {
     const code = `import {GET} from ${JSON.stringify(path.join(import.meta.dir, "route.ts"))};const response=await GET(new Request('http://localhost/api/runtime/snapshot'));console.log(JSON.stringify({status:response.status,body:await response.json()}));`;
-    const child = Bun.spawn([process.execPath, "-e", code], { env: { PATH: process.env.PATH, HOME: directory, XDG_CONFIG_HOME: directory, LLV_STATE_DIR: directory, LLV_RUNTIME_HOST_SOCKET: socket }, stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([process.execPath, "-e", code], { env: { PATH: process.env.PATH, HOME: directory, TMPDIR: directory, XDG_CONFIG_HOME: directory, LLV_STATE_DIR: directory, LLV_RUNTIME_HOST_SOCKET: socket, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe" });
     const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     if (exit !== 0) throw new Error(error);
     return JSON.parse(output.trim());

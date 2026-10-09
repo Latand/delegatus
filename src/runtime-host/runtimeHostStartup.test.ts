@@ -170,6 +170,7 @@ test("issue 1268: a staged real runtime host proves hand-over readiness from iso
     LLV_RUNTIME_HOST_IMAGE: stagedGeneration.image,
     LLV_RUNTIME_HOST_REVISION: stagedGeneration.revision,
     LLV_RUNTIME_HOST_CONTAINER: stagedGeneration.container,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_VIEWER_DEPLOYMENTS: "0",
   };
   const child = spawn(process.execPath, ["run", "src/runtime-host/main.ts"], {
