@@ -29,6 +29,7 @@ was declared.
 | --- | --- | --- | --- | --- |
 | Unmodified `4fb16340`, 4096 MiB | OOM after webpack success | 212.90 s | at least 4.16 GiB | 4.45 GiB |
 | Fixed `df3fbf2b` source export, production config and 6144 MiB | Complete Next and MCP build | 156.83 s | 2.20 GiB | 4.40 GiB |
+| Final source cold release build, 6144 MiB | Complete Next and MCP build | 227.87 s | 2.15 GiB | 4.38 GiB |
 | Production-only cold `tsc`, 4096 MiB | Pass | 62.24 s | 2.05 GiB | 2.05 GiB |
 
 The failed TypeScript process's last collections were at 4034.6 and
@@ -39,6 +40,8 @@ through `process.resourceUsage().maxRSS`; `/usr/bin/time -v` measured wall
 time and the largest process RSS. A Node preload recorded each child's heap
 limit, confirming a 6192 MiB total V8 heap limit for the 6144 MiB old-space
 setting. The successful TypeScript child recorded 2.05 GiB heap usage at exit.
+GC tracing in the final cold build recorded 2053 MiB of heap use. Wall times
+include machine admission and are affected by concurrent work.
 
 Production scoping reduces TypeScript peak RSS by at least 47%. Its complete
 RSS fits within 2.20 GiB, leaving over 3.8 GiB between that upper bound on
