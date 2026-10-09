@@ -4,6 +4,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { NextRequest } from "next/server";
+import { POST as ghostPOST } from "@/app/api/orchestrator/ghost/route";
+import { POST as rotatePOST } from "@/app/api/orchestrator/rotate/route";
+import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
 import { POST as seatPOST } from "@/app/api/orchestrator/seat/route";
 
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -13,6 +17,8 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrches
 import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setBridgeReports } from "@/lib/projects/settings";
+import { readDeputies } from "@/lib/orchestrator/deputies";
+import { setDeputyRootResolverForTests } from "@/lib/orchestrator/deputyAsker";
 
 import { viewerMcpBindings, viewerMcpRecoverableTools, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 
@@ -665,6 +671,61 @@ test("orchestrator creation, rotation and parallel asks preserve definite server
     await server.stop(true);
   }
 });
+
+for (const probe of [
+  { tool: "ask_orchestrator_in_parallel", gateway: false, status: 403, code: "asker_refused", cause: "only the operator or the voice gateway" },
+  { tool: "ask_orchestrator_in_parallel", gateway: true, status: 404, code: "seat_not_found", cause: "no orchestrator seat is active" },
+  { tool: "create_orchestrator", gateway: false, operator: true, status: 400, code: "orchestrator_refused", cause: "conversationId is invalid", conversationId: "invalid" },
+  { tool: "rotate_orchestrator", gateway: false, status: 409, code: "no_incumbent", cause: "no orchestrator is designated" },
+] as const) {
+  test(`real ${probe.tool} ${probe.status} refusal is not executed with its original cause`, async () => {
+    asCapabilityCaller();
+    if ("operator" in probe) delete process.env.LLV_SPAWN_CAPABILITY;
+    setDeputyRootResolverForTests(() => probe.gateway ? "conversation_worker" : "conversation_root");
+    let posts = 0;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      posts++;
+      const handler = new URL(request.url).pathname.endsWith("/ghost") ? ghostPOST
+        : new URL(request.url).pathname.endsWith("/rotate") ? rotatePOST : seatPOST;
+      return handler(new NextRequest(request));
+    } });
+    const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+    process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+    try {
+      const { service } = projectService(productionViewerControlDependencies());
+      const args = { clientRequestId: `real-refused-${probe.status}`, project: "Example project", text: "status?", ...("conversationId" in probe ? { conversationId: probe.conversationId } : {}) };
+      const result = await service.callTool(probe.tool, args);
+      expect(result).toMatchObject({
+        ok: false, code: probe.code, error: expect.stringContaining(probe.cause), retryable: false,
+        details: { status: probe.status, admission: "refused", outcome: "not-executed", nextAction: "new-request-permitted" },
+      });
+      expect(posts).toBe(1);
+      expect(orchestratorSeatFor("project-a")).toEqual({ active: null, pending: null, history: [] });
+      expect(readDeputies()).toEqual([]);
+    } finally {
+      if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+      else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+      await server.stop(true);
+      setDeputyRootResolverForTests(null);
+      restoreCapabilityCaller();
+    }
+  });
+}
+
+for (const [name, handler] of [["seat", seatPOST], ["rotate", rotatePOST], ["ghost", ghostPOST], ["message", messagePOST]] as const) {
+  for (const malformed of [false, true]) {
+    test(`real ${name} route marks ${malformed ? "invalid JSON" : "cross-origin"} before admission`, async () => {
+      const response = await handler(new NextRequest(`http://127.0.0.1/api/orchestrator/${name}`, {
+        method: "POST", headers: { host: "127.0.0.1", ...(malformed ? {} : { origin: "https://example.com" }) },
+        body: "{",
+      }));
+      expect(response.status).toBe(malformed ? 400 : 403);
+      expect(await response.json()).toMatchObject({ admission: "refused", error: malformed ? "invalid JSON" : "forbidden: cross-origin request" });
+      expect(orchestratorSeatFor("project-a")).toMatchObject({ active: null, pending: null });
+      expect(readDeputies()).toEqual([]);
+    });
+  }
+}
 
 for (const tool of ["create_orchestrator", "send_message_to_orchestrator"] as const) {
   test(`${tool} never permits a new request after an admitted spawn loses activation`, async () => {
