@@ -813,7 +813,7 @@ function finishedLane(over: Record<string, unknown> = {}): Record<string, unknow
   });
 }
 
-test("a merge wakes the idle seat after the lane completion was announced while checks waited", async () => {
+test.each([CONVERSATION, ["conversation", "5b7729fbc9e0f4c2"].join("_")])("a merge wakes the idle seat after completion was announced, designated seat %s", async (designatedSeat) => {
   const completed = finishedLane({ srcConversationId: CONVERSATION });
   const before = await gather({ pipelines: [completed], openPullRequests: [openPullRequest()] },
     withCursor(0, { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() }));
@@ -833,7 +833,7 @@ test("a merge wakes the idle seat after the lane completion was announced while 
     event(1, { pipelineId: "pipeline_z9", type: "pipeline_merged", at: new Date(mergedAt).toISOString(), summary: "pull request #17 merged by Delegatus" }),
     event(2, { pipelineId: "pipeline_z9", type: "task_finished", at: new Date(mergedAt).toISOString() }),
   ];
-  const after = await gather({ pipelines: [merged], events, now: mergedAt }, idle.state);
+  const after = await gather({ pipelines: [merged], events, now: mergedAt, seatConversationId: designatedSeat }, idle.state);
   const decision = seatTickDecision(after);
   expect(decision.verdict.kind).toBe("wake");
   if (decision.verdict.kind !== "wake") return;
@@ -845,7 +845,15 @@ test("a merge wakes the idle seat after the lane completion was announced while 
   const landed = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, {
     fingerprint: after.changeFingerprint, eventsThrough: 2,
   })!, mergedAt);
-  expect(seatTickDecision(await gather({ pipelines: [merged], events, now: mergedAt + 61 * 60_000 }, landed)).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(await gather({ pipelines: [merged], events, now: mergedAt + 61 * 60_000, seatConversationId: designatedSeat }, landed)).verdict.kind).toBe("quiet");
+});
+
+test("a merge from another project never wakes this project's seat", async () => {
+  const input = await gather({ pipelines: [finishedLane({ project: "another-project" })],
+    events: [event(1, { pipelineId: "pipeline_z9", project: "another-project", type: "pipeline_merged" })] },
+  withCursor(0, { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() }));
+  expect(input.events).toEqual([]);
+  expect(seatTickDecision(input).verdict.kind).toBe("quiet");
 });
 
 test("an event is marked history exactly when its own lane is no longer open", async () => {
