@@ -23,12 +23,12 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
-  if (rejection) return rejection;
+  if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
   } catch {
-    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "invalid JSON", admission: "refused" }, { status: 400 });
   }
   /* No throw leaves this route as a bodyless 500 (#1757). The rotation itself
      records the reason on its own intent and answers it; this is the outer
@@ -38,7 +38,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
   /* A seat's deputy never changes the seat's identity (docs/design/ghost-seat.md
      §4 rule 4), whether it calls the tool or this route directly. */
   if (productionDeputyPrincipal(callerConversationId(req))) {
-    return NextResponse.json({ error: "a parallel self of the orchestrator does not rotate the seat", code: "deputy_cannot_rotate" }, { status: 403 });
+    return NextResponse.json({ error: "a parallel self of the orchestrator does not rotate the seat", code: "deputy_cannot_rotate", admission: "refused" }, { status: 403 });
   }
   try {
     const result = await handleOrchestratorRotationRequest(req, body);

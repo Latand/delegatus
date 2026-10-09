@@ -62,13 +62,13 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function actor(project?: string, role = "builder") {
-  const spawn = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex") {
+  const spawn = registry.beginSpawnRequest({ engine, cwd: root, explicitProject: project,
     launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" } });
   if (spawn.kind !== "created") throw new Error("fixture spawn was not created");
   const receipt = spawn.receipt;
   registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId: receipt.conversationId.slice("conversation_".length) },
+    key: { engine, sessionId: receipt.conversationId.slice("conversation_".length) },
     artifactPath: path.join(root, `${receipt.conversationId}.jsonl`), cwd: root, accountId: null,
     status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
   });
@@ -97,6 +97,12 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
   else delete process.env.LLV_SPAWN_CAPABILITY;
   const domain: Partial<ViewerMcpDomainDependencies> = {
     registrySnapshot: () => registry.readOnlySnapshot(),
+    completedFileScan: async () => ({ generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0, snapshot: {
+      files: [], complete: true, projectCatalog: [
+        { project: "project-a", displayName: "Example sender", smt: 1, conversations: 1 },
+        { project: "project-b", displayName: "Example recipient", smt: 1, conversations: 0 },
+      ],
+    } }),
     attentionAuthority: () => sender ? { kind: "worker", conversationId: sender.id, role: null } : { kind: "unidentified" },
     recoveryPredecessors: () => [],
     callerAttribution: () => sender
@@ -231,6 +237,81 @@ test("the operator browser still sends its own words", async () => {
   expect(delivered[0]).toMatchObject({ text: "Please investigate this issue.", origin: { kind: "operator" } });
 });
 
+for (const engine of ["claude", "codex"] as const) test(`voice confirmation reaches ${engine} through the real relay once across a lost receipt and restart`, async () => {
+  const recipient = actor("voice-project", "orchestrator", engine);
+  realAdmission();
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { companionDeliveryPaths } = await import("@/lib/voiceCompanion/deliveryPaths");
+  let loseReply = true;
+  const paths = {
+    recipient: companionDeliveryPaths.recipient,
+    receipt: companionDeliveryPaths.receipt,
+    send: async (binding: Parameters<typeof companionDeliveryPaths.send>[0]) => {
+      const result = await companionDeliveryPaths.send(binding);
+      if (loseReply) { loseReply = false; throw new Error("fixture lost response"); }
+      return result;
+    },
+    reports: () => [],
+  };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths);
+  const session = admission.create({ project: "voice-project", locale: "en", authority: "live-model" });
+  const proposal = admission.propose(session.id, "call", "source", "Review the plan")!;
+  const confirm = { type: "confirmation" as const, proposalId: proposal.proposalId, decision: "send" as const, via: "tap" as const };
+  await admission.confirm(session.id, confirm);
+  expect(delivered).toHaveLength(1);
+  expect(admission.session(session.id).proposals[proposal.proposalId].status).toBe("unknown");
+  const reopened = new CompanionAdmission(new CompanionStorage(), paths);
+  await Promise.all([reopened.confirm(session.id, confirm), reopened.confirm(session.id, confirm)]);
+  expect(delivered).toHaveLength(1);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)[0].command.origin).toEqual({ kind: "operator", channel: "voice-delegatus" });
+  expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("queued");
+  const held = Object.values(registry.readOnlySnapshot().heldDeliveries)[0];
+  registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  await reopened.pollReceipts(session.id);
+  expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("delivered");
+  expect(delivered).toHaveLength(1);
+  expect((await orchestratorPOST(request(undefined, { project: "voice-project", conversationId: recipient.id, clientMessageId: "forged", text: "forged",
+    voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
+});
+
+for (const engine of ["claude", "codex"] as const) test(`a spoken request and the same request asked again each reach ${engine} through the real relay, and a model repeat adds none`, async () => {
+  actor("voice-again", "orchestrator", engine);
+  realAdmission();
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { CompanionLiveSessions } = await import("@/lib/voiceCompanion/liveSession");
+  const { CompanionBoardReads } = await import("@/lib/voiceCompanion/boardReads");
+  const { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } = await import("@/lib/voiceCompanion/fakeProvider");
+  const { companionDeliveryPaths } = await import("@/lib/voiceCompanion/deliveryPaths");
+  const storage = new CompanionStorage();
+  storage.updateSettings({ enabled: true });
+  const provider = new FakeLiveProvider();
+  let call = 0;
+  let askedAgain: string | null = null;
+  provider.responder = (req, index) => req.input.some((item) => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
+    : backendResponse(`resp_${index}`, [functionCall(`call-${call++}`, "request_orchestrator_delegation", { instruction: "Review the plan", asked_again: askedAgain })]);
+  const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths),
+    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
+    { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+  const said = (delta: string, at: number, speaker: "input" | "output" = "input") =>
+    ({ type: `session.${speaker}_transcript.delta`, event_id: `${speaker}-${at}`, delta, start_ms: at, end_ms: at + 400 });
+  const session = await service.start({ project: "voice-again", locale: "en", sdp: "v=0" });
+  provider.replay(session.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("first", 500));
+  await service.drain(session.sessionId);
+  expect(delivered).toHaveLength(1);
+  provider.replay(session.providerId, said("Done.", 1_000, "output"), said("Thanks.", 3_000), delegationCreated("repeat", 3_600));
+  await service.drain(session.sessionId);
+  expect(delivered).toHaveLength(1);
+  askedAgain = "Asks to send the review request again.";
+  provider.replay(session.providerId, said("Done.", 4_000, "output"), said("Yes, send it again.", 6_000), delegationCreated("again", 6_600));
+  await service.drain(session.sessionId);
+  expect(delivered).toHaveLength(2);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((held) => held.command.origin))
+    .toEqual([{ kind: "operator", channel: "voice-delegatus" }, { kind: "operator", channel: "voice-delegatus" }]);
+  await service.close(session.sessionId);
+});
+
 /** Keep the HTTP handler and durable reservation real; only the runtime peer
  * is private. A busy peer leaves the admitted command on the delivery queue. */
 function realAdmission() {
@@ -238,8 +319,8 @@ function realAdmission() {
     readSession: async ({ conversationId }: { conversationId: string }) => {
       const conversation = registry.conversation(conversationId as `conversation_${string}`)!;
       const generation = conversation.generations.at(-1)!;
-      return { conversationId, sessionKey: { engine: "codex", sessionId: generation.id },
-        hostKind: "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
+      return { conversationId, sessionKey: { engine: conversation.engine, sessionId: generation.id },
+        hostKind: conversation.engine === "claude" ? "claude-broker" : "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
         artifactPath: generation.path, cwd: root, activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [],
         capabilities: { steer: true, structuredAttention: true } };
     },

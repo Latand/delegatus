@@ -1,7 +1,7 @@
 /**
  * A task on the wire of `boards/sync` (docs/design/linked-installs.md M.5).
  * Only the merged groups cross; assignments, holds, sources, attachments,
- * deadlines and group hides never do. Project sharing consents to task text;
+ * deadlines, group hides, finding keys and occurrence metadata never do. Project sharing consents to task text;
  * board membership crosses on arrival. Every field has a bound, checked by the sender before
  * it encodes a row and by the receiver like a local write.
  */
@@ -30,7 +30,8 @@ export type WireRow = WireTask | WireGone | WireStub;
 export const TASK_BOARD_WIRE_VERSION = 3;
 /** v5 adds public prototype metadata; capability upgrade replays both sides. */
 export const TASK_PROTOTYPE_WIRE_VERSION = 5;
-export const TASK_WIRE_VERSION = TASK_PROTOTYPE_WIRE_VERSION;
+export const TASK_QUESTIONS_WIRE_VERSION = 6;
+export const TASK_WIRE_VERSION = TASK_QUESTIONS_WIRE_VERSION;
 
 export const isWireGone = (row: WireRow): row is WireGone => "gone" in row;
 export const isWireStub = (row: WireRow): row is WireStub => "withheld" in row;
@@ -46,9 +47,12 @@ export class MalformedRow extends Error { constructor(readonly field: string) { 
 
 /** The row as it leaves this machine, or a withheld stub when a stored field
     breaks a bound (a repository written before the bound existed). */
-export function encodeTask(task: BoardTask, self: { id: string; prefix: string }, options: { includeBoard?: boolean; includePrototypeReview?: boolean } = {}): { row: WireTask | WireStub; bytes: number } {
+export function encodeTask(task: BoardTask, self: { id: string; prefix: string }, options: { includeBoard?: boolean; includePrototypeReview?: boolean; peerTaskWireVersion?: number } = {}): { row: WireTask | WireStub; bytes: number } {
   const s = Object.fromEntries(TASK_SYNC_GROUPS.map((group) => [group, effectiveStamp(task, group, self.prefix)])) as Record<TaskSyncGroup, string>;
-  const replica = options.includePrototypeReview !== false ? prototypeReviewReplica(task) : undefined;
+  const candidate = options.includePrototypeReview !== false ? prototypeReviewReplica(task) : undefined;
+  const hasQuestions = candidate?.summary.asks === "questions" || candidate?.summary.decision?.answered
+    || candidate?.rounds.some(round => round.questions?.length);
+  const replica = (options.peerTaskWireVersion ?? TASK_WIRE_VERSION) < TASK_QUESTIONS_WIRE_VERSION && hasQuestions ? undefined : candidate;
   const row: WireTask = {
     id: task.id, project: task.project, text: task.text,
     ...(options.includeBoard !== false && task.board !== undefined ? { board: task.board } : {}),

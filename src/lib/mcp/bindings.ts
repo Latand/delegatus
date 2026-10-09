@@ -1,6 +1,8 @@
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
 import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+import { readBridgeReportLog } from "@/lib/bridge/store";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
+import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
 import { maintainerCallerOf, maintainerTaskWriteRefusal, maintenanceChange, retiredSeatTask, type MaintainerCaller } from "@/lib/boardMaintenance/guard";
 import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMaintenance/store";
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
@@ -105,7 +107,7 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import {
@@ -128,7 +130,7 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -213,6 +215,7 @@ import {
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpDispatchVerdictError,
+  McpDispatchSettledRefusalError,
   McpToolRefusal,
   McpUnadmittedRefusal,
   type McpRecoverableTool,
@@ -222,6 +225,7 @@ import {
   type McpRequestCaller,
   type McpToolArgs,
   type McpToolBindings,
+  type McpToolBinding,
   type McpToolCallContext,
   type McpToolName,
   type McpToolPayload,
@@ -255,7 +259,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
@@ -782,6 +786,7 @@ export interface ViewerMcpDomainDependencies {
       (docs/design/needs-attention.md §5). Optional: production wires the
       registry, the task store and the pipeline engine. */
   dismissalPorts?: DismissalPorts;
+  attentionReportProject?(seq: number): string | null;
   /** Whether a phone the operator is looking at is open, for a request with no
       desktop to move (docs/design/needs-attention.md §6). Optional: production
       reads presence. */
@@ -1300,7 +1305,7 @@ function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string
   if (!model) return;
   if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
-  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
+  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
   let engine: "claude" | "codex" | "copilot" | null = null;
   if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
@@ -1452,7 +1457,7 @@ export function requestAttentionOperationKey(clientRequestId: string): string {
 function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "registrySnapshot">): void {
   const roleId = text(args.role);
   const role = roleId
-    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, engine: args.engine, model: args.model, effort: args.effort })
+    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort })
     : null;
   /* An unresolvable role is the route's to refuse, with its own words. */
   if (role && !role.ok) return;
@@ -1474,7 +1479,38 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
   if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from a large model (Claude Opus or Fable, or a large Codex model), or the role's own row" }] });
 }
 
+/** Check the deployer's caller before a fresh request claims a key,
+    and again at dispatch so a seat change cannot authorize a fresh launch. */
+function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dependencies?: ViewerMcpDomainDependencies): void {
+  if (text(args.role) !== "deployer") return;
+  let allowed = false;
+  try {
+    const caller = dependencies ? attributionOf(dependencies) : null;
+    if (dependencies && caller?.conversationId && !caller.via) {
+      allowed = caller.kind === "gateway" || (caller.kind === "manager"
+        && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
+    }
+  } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
+  if (!allowed) {
+    throw new McpToolRefusal("only the target project's designated orchestrator seat or the operator's own session may launch a deployer", {
+      code: "deployer_spawn_caller_unauthorized", status: 403,
+    });
+  }
+}
+
+function requireMcpDeployerConfirmation(args: McpToolArgs): void {
+  if (text(args.role) !== "deployer") return;
+  const role = resolveSpawnRole({
+    role: "deployer", roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams,
+    confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort,
+  });
+  if (!role.ok) throw new McpToolRefusal(role.error, { status: 400 });
+}
+
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
+  requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
   if (dependencies) {
     try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
@@ -1670,7 +1706,11 @@ async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
       { code: "OPERATION_UNKNOWN" },
     );
   }
-  return { ...receipt };
+  /* Why it is still waiting, or why it settled, as the delivery queue
+     recorded it: wait reason, attempt, last progress, deadline and next wake.
+     An explanation beside the verdict; a store that cannot be read omits it. */
+  const progress = readDeliveryProgress([operationId]).get(operationId);
+  return { ...receipt, ...(progress ? { progress } : {}) };
 }
 
 /**
@@ -1930,16 +1970,24 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
+  let prior: BoardTask | undefined;
+  let matchedFields: string[] | undefined;
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    if (outcome.ok && outcome.matched) {
+      prior = state.tasks.find(task => task.id === outcome.task.id);
+      assertMaintenanceWrite(maintainer, { note: input.note ?? null }, prior);
+      matchedFields = changedFieldNames(fieldValues(prior), outcome.task);
+    }
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
     };
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
-  if (!result.replay) logMaintenanceWrite(maintainer, "create_task", undefined, result.task, Object.keys(result.task));
-  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
+  const fields = result.replay ? [] : matchedFields ?? Object.keys(result.task);
+  if (!result.replay) logMaintenanceWrite(maintainer, result.matched ? "update_task" : "create_task", prior, result.task, fields);
+  return { ...taskAcknowledgement(result.task, args, fields), replay: result.replay, ...(result.matched !== undefined ? { matched: result.matched } : {}), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
 /**
@@ -3062,6 +3110,13 @@ function conversationMessagesSince(value: unknown): string | undefined {
   return value;
 }
 
+/** Narrow read path for the voice companion. No MCP inventory or caller
+ * supplied path, role, cursor or expansion flags cross this boundary. */
+export async function voiceConversationTail(conversationId: string, dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> = productionDomainDependencies): Promise<Array<{ role: string; text: string }>> {
+  const result = await conversationMessages({ conversationId, kinds: ["message"], roles: ["user", "assistant"], limit: 4, maxChars: 320 }, dependencies);
+  return (result.records ?? []) as Array<{ role: string; text: string }>;
+}
+
 async function conversationMessages(
   args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext">,
@@ -3931,6 +3986,103 @@ function reportFields(project: string, dependencies: ViewerMcpDomainDependencies
   };
 }
 
+/** Only affirmative admission refusals prove that a request admitted no work.
+    A bare 4xx can follow an accepted spawn whose activation was superseded. */
+function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedError | null {
+  if (!(error instanceof McpDispatchVerdictError)) return null;
+  const details = error.details;
+  if (typeof details.operationId === "string" || typeof details.launchId === "string" || details.actuation === "started") return null;
+  if (details.admission !== "refused") return null;
+  return new McpDispatchNotExecutedError(error.message, details);
+}
+
+/** Resolve tool input before any seat lookup, request claim or control write. */
+async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+  const aliases = projectAliasSnapshot({ strict: true });
+  const keys = new Set<string>();
+  const names = new Map<string, Set<string>>();
+  const add = (key: string, name?: string) => {
+    const canonical = canonicalOrchestratorProject(key);
+    keys.add(canonical);
+    const display = projectDisplayName(canonical, name ?? aliases.displayNames[canonical]);
+    const candidates = names.get(display) ?? new Set<string>();
+    candidates.add(canonical);
+    names.set(display, candidates);
+  };
+  for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
+  for (const key of Object.values(aliases.aliases)) add(key);
+  for (const key of Object.keys(readOrchestratorSeatFileOrNull()?.seats ?? {})) add(key);
+  for (const seat of dependencies.authorizedSeats?.() ?? []) if (seat.project) add(seat.project);
+  const callerProject = dependencies.callerProject?.();
+  if (callerProject) add(callerProject);
+  const canonical = canonicalOrchestratorProject(named);
+  if (keys.has(canonical)) return canonical;
+  for (const conversation of Object.values(dependencies.registrySnapshot().conversations)) {
+    const project = conversationProject(conversation);
+    if (project) add(project);
+  }
+  if (keys.has(canonical)) return canonical;
+  const scan = await dependencies.completedFileScan();
+  for (const entry of scan.snapshot.projectCatalog) add(entry.project, entry.displayName);
+  for (const entry of scan.snapshot.files) add(entry.project, entry.projectName);
+  if (keys.has(canonical)) return canonical;
+  const candidates = [...(names.get(named.trim()) ?? [])].sort();
+  const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
+  if (candidates.length > 1) {
+    throw new McpToolRefusal(`ambiguous project "${named}": ${candidates.join(", ")}; pass one of these project keys`, {
+      ...details, code: "ambiguous_project", candidates,
+    });
+  }
+  if (candidates.length === 1) return candidates[0]!;
+  throw new McpToolRefusal(`unknown project "${named}"; pass a known project key or an unambiguous display name from board_snapshot`, {
+    ...details, code: "unknown_project",
+  });
+}
+
+/** Fresh admission resolves the name before claiming; replay retains the recorded result. */
+function orchestratorProjectBinding(
+  dependencies: ViewerMcpDomainDependencies,
+  run: (resolved: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>,
+  optionalProject = false,
+): McpToolBinding {
+  const resolved = new WeakMap<McpToolArgs, McpToolArgs>();
+  const resolve = async (args: McpToolArgs) => {
+    if (optionalProject && !text(args.project)) return args;
+    return { ...args, project: await resolveOrchestratorToolProject(required(args, "project"), dependencies) };
+  };
+  return Object.assign(
+    async (args: McpToolArgs, context?: McpToolCallContext) => {
+      try {
+        return await run(resolved.get(args) ?? await resolve(args), context);
+      } catch (error) {
+        const refusal = orchestratorDispatchRefusal(error);
+        if (refusal) throw new McpToolRefusal(refusal.message, {
+          ...refusal.details,
+          code: text(refusal.details.code) || "orchestrator_refused",
+          retryable: false,
+          outcome: "not-executed",
+          evidence: "dispatch-refused",
+          nextAction: "new-request-permitted",
+        });
+        // These tools do not have send's recovery binding. Preserve an
+        // inconclusive dispatch as unknown instead of a retryable plain error.
+        if (error instanceof McpDispatchVerdictError || error instanceof McpDispatchUncertainError) {
+          throw new McpToolRefusal(error.message, {
+            ...error.details,
+            code: text(error.details.code) || "outcome_unknown",
+            retryable: false,
+            outcome: "unknown",
+            evidence: "dispatch-verdict",
+            nextAction: "original-key-lookup",
+          });
+        }
+        throw error;
+      }
+    },
+    { prepareAdmission: async (args: McpToolArgs) => { resolved.set(args, await resolve(args)); } },
+  );
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -4016,7 +4168,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     }
   }
   const facts = readOrchestratorTranscriptFacts(transcriptPath, session);
-  const windowPolicy = contextWindowPolicyFor(engine, model);
+  const windowPolicy = contextWindowPolicyFor(engine, model, facts);
   const context = contextReading({ policy: windowPolicy, facts });
 
   let liveness: { lifecycle: string; hostState: string; silentForMs: number | null } | null = null;
@@ -4125,7 +4277,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
  * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
  * and nothing else. A verbose read carries the note once.
  */
-function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const attribution = attributionOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const callerSeat = attribution.conversationId
@@ -4137,7 +4289,8 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (!requested) {
     throw new Error("project is required: this session's own project could not be resolved, so name the project whose tick to read or change");
   }
-  const project = canonicalOrchestratorProject(requested);
+  // Explicit input was resolved by the binding before its receipt was claimed.
+  const project = text(args.project) || await resolveOrchestratorToolProject(requested, dependencies);
 
   const readSettings = dependencies.readTickSettings ?? readSeatTickSettings;
   const writeSettings = dependencies.writeTickSettings ?? writeSeatTickSettings;
@@ -4751,7 +4904,7 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
 async function createOrchestrator(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   if (!text(args.conversationId)) validateExplicitMcpLaunchModel(args, "orchestrator");
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const result = await control.post("/api/orchestrator/seat", {
+  const result = await dispatchControl(control)("/api/orchestrator/seat", {
     project,
     mandate: text(args.mandate) || ORCHESTRATOR_SYSTEM_PROMPT,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
@@ -4777,7 +4930,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
 /** Resolve once at claim time and dispatch through the shared send receipt path.
     An existing claim always recovers its recorded recipient, including after
     the project's seat rotates. Creating a missing seat is a separate effect;
-    any failure after that dispatch stays uncertain. */
+    a definite message refusal records that creation alongside the refusal. */
 async function sendMessageToOrchestrator(
   args: McpToolArgs,
   control: ViewerControlDependencies,
@@ -4785,7 +4938,7 @@ async function sendMessageToOrchestrator(
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = canonicalOrchestratorProject(required(args, "project"));
+  const project = context?.binding?.target.project ?? await resolveOrchestratorToolProject(required(args, "project"), dependencies);
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
@@ -4811,7 +4964,11 @@ async function sendMessageToOrchestrator(
         await context.bindCreatedTarget(recipient);
       }
     } catch (error) {
-      if (error instanceof McpDispatchNotExecutedError && !created) throw error;
+      if (!created) {
+        const refusal = orchestratorDispatchRefusal(error);
+        if (refusal) throw refusal;
+        if (error instanceof McpDispatchNotExecutedError || error instanceof McpDispatchVerdictError) throw error;
+      }
       throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -4831,8 +4988,13 @@ async function sendMessageToOrchestrator(
       } : {}),
     });
   } catch (error) {
-    // A refused second POST cannot prove the preceding creation had no effect.
+    const refusal = error instanceof McpDispatchNotExecutedError ? error : orchestratorDispatchRefusal(error);
+    if (created && refusal && typeof refusal.details.status === "number") throw new McpDispatchSettledRefusalError(refusal.message, {
+      ...refusal.details, project, created: true, conversationId: recipient,
+      messageOutcome: "not-executed",
+    });
     if (created) throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
+    if (refusal) throw refusal;
     throw error;
   }
 }
@@ -4868,7 +5030,7 @@ async function rotateOrchestrator(
   /* Omitting mandate preserves the incumbent's core and handoff history;
      sending one explicitly replaces the core. */
   const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
-  const result = await control.post("/api/orchestrator/rotate", {
+  const result = await dispatchControl(control)("/api/orchestrator/rotate", {
     project,
     clientRequestId: spawnAttemptId(requestId(args)),
     ...fields,
@@ -4895,7 +5057,7 @@ async function rotateOrchestrator(
     every other agent. */
 async function askOrchestratorInParallelTool(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const result = await control.post("/api/orchestrator/ghost", {
+  const result = await dispatchControl(control)("/api/orchestrator/ghost", {
     project,
     text: required(args, "text"),
     clientRequestId: `mcp_${requestId(args)}`,
@@ -5629,7 +5791,7 @@ function latestPendingLaunchReceiptForConversation(
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
 }
 
-function projectForArchiveTarget(
+function projectForConversationTarget(
   conversation: RegistrySnapshot["conversations"][string] | null,
   receipt: RegistrySnapshot["receipts"][string] | null,
   fallbackProject: string | null = null,
@@ -5695,7 +5857,7 @@ function resolveArchiveTargetFromRegistry(
     ...generationPaths,
     ...(placeholderPath ? [placeholderPath] : []),
   ])];
-  const project = projectForArchiveTarget(conversation, receipt);
+  const project = projectForConversationTarget(conversation, receipt);
   if (!project) return null;
   return { conversationId: conversationId ?? null, transcriptPath, transcriptPaths, project };
 }
@@ -6396,6 +6558,7 @@ async function dismissThroughService(
   undo: boolean,
   operationKey: string,
   dependencies: ViewerMcpDomainDependencies,
+  reason?: string,
 ) {
   const authority = dependencies.attentionAuthority();
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
@@ -6403,10 +6566,39 @@ async function dismissThroughService(
   if (!admission.allowed) {
     throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
   }
-  const focus = focusTargetFromArgs(target.kind === "conversation"
-    ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) }
-    : target, dependencies);
-  const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
+  if (target.kind === "conversation" && target.conversationId) {
+    const known = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot()).conversation(target.conversationId as `conversation_${string}`);
+    if (known) {
+      const path = known.generations.at(-1)?.path;
+      if (!path) throw new McpToolRefusal("conversation has no transcript", { code: "CONVERSATION_NOT_FOUND" });
+      target = { ...target, path };
+    }
+  }
+  let focus: FocusTarget | null = null;
+  let rawProject: string;
+  if (target.kind === "report") {
+    const project = dependencies.attentionReportProject ? dependencies.attentionReportProject(target.seq) : readBridgeReportLog().reports.find(r => r.seq === target.seq)?.project;
+    if (!project) throw new McpToolRefusal("report not found", { code: "REPORT_NOT_FOUND" });
+    rawProject = project;
+  } else if (target.kind === "prototype") {
+    const task = dependencies.loadTasks().find(t => t.id === target.taskId);
+    if (!task) throw new McpToolRefusal("prototype task not found", { code: "TASK_NOT_FOUND" });
+    rawProject = task.project;
+  } else if (target.kind === "conversation" && target.path?.startsWith("spawn:")) {
+    const snapshot = dependencies.registrySnapshot();
+    const receipt = snapshot.receipts?.[target.path.slice(6)];
+    if (!receipt) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND" });
+    const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(receipt.conversationId);
+    const project = projectForConversationTarget(conversation, receipt);
+    if (!project) throw new McpToolRefusal("launch project unavailable", { code: "CONVERSATION_NOT_FOUND" });
+    rawProject = project;
+    focus = { kind: "conversation", path: target.path };
+  } else {
+    focus = focusTargetFromArgs(target.kind === "conversation"
+      ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) } : target, dependencies);
+    rawProject = await focusTargetProject(focus, "", dependencies);
+  }
+  const project = canonicalOrchestratorProject(rawProject);
   const verdict = permitAttentionDismissal(authority, seats, project);
   if (!verdict.allowed) {
     throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
@@ -6422,9 +6614,9 @@ async function dismissThroughService(
     return await dismissAttentionService(
       /* A conversation named by id resolves to its current transcript, which
          is how the service keys it when the registry does not. */
-      target.kind === "conversation" && focus.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
+      target.kind === "conversation" && focus?.kind === "conversation" ? { ...target, path: target.path ?? focus.path } : target,
       by,
-      { undo, operationKey, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
+      { undo, operationKey, project, reason, ...(dependencies.dismissalPorts ? { ports: dependencies.dismissalPorts } : {}) },
     );
   } catch (error) {
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status });
@@ -6432,7 +6624,23 @@ async function dismissThroughService(
   }
 }
 
-async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+  if (args.target === undefined) {
+    if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });
+    const authority = dependencies.attentionAuthority();
+    const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+    const caller = maintenanceCaller(dependencies);
+    const maintainer = caller ? { ...caller, project: caller.project ? canonicalOrchestratorProject(caller.project) : null } : null;
+    const normalizedSeats = seats.map(seat => ({ ...seat, project: seat.project ? canonicalOrchestratorProject(seat.project) : null }));
+    const admission = permitNeedsYouRead(authority, normalizedSeats, maintainer, null);
+    if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "NEEDS_YOU_READ_NOT_PERMITTED" });
+    const ownProject = authority.kind !== "unidentified" ? normalizedSeats.find(s => s.conversationId === authority.conversationId)?.project ?? maintainer?.project : null;
+    const project = canonicalOrchestratorProject(text(args.project) || ownProject || "");
+    if (!project) throw new McpToolRefusal("name a project for the read", { code: "PROJECT_REQUIRED" });
+    const verdict = permitNeedsYouRead(authority, normalizedSeats, maintainer, project);
+    if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "NEEDS_YOU_READ_NOT_PERMITTED" });
+    return redactPayload(await viewerControlForCall(control, context).post("/api/attention/needs-you", { project, kinds: args.kinds, full: args.full, cursor: args.cursor }, callerCapabilityHeaders()));
+  }
   let target: DismissalTarget;
   try {
     target = parseDismissalTarget(args.target, { allowSubjects: false });
@@ -6440,7 +6648,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
     throw error;
   }
-  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
+  const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined);
   return {
     dismissed: outcome.dismissed,
     alreadyClear: outcome.alreadyClear,
@@ -6448,6 +6656,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     at: outcome.at,
     by: outcome.by,
     undo: outcome.undo,
+    ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
   };
 }
 
@@ -6639,9 +6848,9 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
-function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = canonicalOrchestratorProject(required(args, "project"));
+  const named = required(args, "project");
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
@@ -6654,10 +6863,11 @@ function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
+  const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
-    target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    target: { project, identity: project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
     sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
@@ -6725,6 +6935,9 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
+  // An unidentified caller cannot own a receipt. Keep the deployer's refusal
+  // before lookup; identified owners are checked again only for fresh work.
+  if (caller.kind === "unidentified") requireMcpDeployerCaller(args, project, dependencies);
   refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
@@ -6980,10 +7193,15 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      authorizeClaim: (args, binding) => {
+        requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
+        requireMcpDeployerConfirmation(args);
+      },
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
+      bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
@@ -7065,23 +7283,20 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
-    dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
+    dismiss_attention: (args, context) => dismissAttentionTool(args, domainDependencies, controlDependencies, context),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
-    bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
-    get_orchestrator: (args) => getOrchestrator(args, domainDependencies),
-    /* `async` rather than `Promise.resolve(...)`: this binding refuses by
-       throwing, and a synchronous throw out of a binding call is not the
-       rejected promise every caller here handles. */
-    seat_tick_settings: async (args) => seatTickSettingsTool(args, domainDependencies),
-    /* Same reason as above: this binding refuses by throwing. */
+    bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
+    get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
+    seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
+    /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     role_presets: async (args) => rolePresetsTool(args, domainDependencies),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
-    create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
+    create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context))),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
-    ask_orchestrator_in_parallel: (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context)),
-    rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    ask_orchestrator_in_parallel: orchestratorProjectBinding(domainDependencies, (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context))),
+    rotate_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies)),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),

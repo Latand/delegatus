@@ -268,6 +268,7 @@ export interface BridgeReportLogV1 {
 }
 
 export interface BridgeResolvedAskV1 {
+  note?: string;
   /** The decision request's seq. */
   seq: number;
   /** Server clock, ISO. */

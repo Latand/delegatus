@@ -358,7 +358,7 @@ test("spawn_agent derives required role params from the prompt and preserves sup
         initialMessage: "pending",
       };
     },
-  }).spawn_agent;
+  }, { callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_operator", role: null }) } as never).spawn_agent;
   const sha = "a".repeat(40);
 
   await spawn({
@@ -415,6 +415,7 @@ test("spawn_agent derives required role params from the prompt and preserves sup
     cwd: "/repo",
     ["prompt"]: `Prepare deployment for ${sha}.`,
     role: "deployer",
+    confirm: "deploy",
   });
 
   expect(bodies.map((body) => body.roleParams)).toEqual([
@@ -637,7 +638,7 @@ test("spawn_agent reports every underivable required role param with its shape i
       posts += 1;
       return {};
     },
-  }).spawn_agent;
+  }, { callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_operator", role: null }) } as never).spawn_agent;
   const cases = [
     { role: "reviewer", prompt: "Review the current work.", param: "diffSource" },
     { role: "verifier", prompt: "", param: "claims" },
@@ -3165,6 +3166,8 @@ function tickSettingsBindings(options: {
 } = {}) {
   const store = options.store ?? new Map<string, unknown>();
   const bindings = viewerMcpBindings(undefined, undefined, {
+    registrySnapshot: () => ({ conversations: {} }),
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "another-project", displayName: "Another project", smt: 1, conversations: 1 }], complete: true } }),
     callerAttribution: () => ({ kind: options.kind ?? "manager", conversationId: TICK_SEAT, role: "orchestrator" }),
     authorizedSeats: () => (options.callerProject === null
       ? []

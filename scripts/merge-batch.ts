@@ -408,7 +408,7 @@ export class MergeBatch {
   /** Heavy commands run one at a time: concurrent installs, type checks and
    * test files twice exhausted a merger's memory cap. */
   private gateRun(cwd: string, args: string[], env: NodeJS.ProcessEnv): Promise<CommandResult> {
-    const result = this.queue.then(() => this.run(cwd, [GATE_SLOT, ...args], env));
+    const result = this.queue.then(() => this.run(cwd, ["/bin/bash", GATE_SLOT, ...args], env));
     this.queue = result.catch(() => undefined);
     return result;
   }
@@ -612,8 +612,8 @@ export class MergeBatch {
       const reportFile = join(stateDir, "tests.xml");
       if (gate.report) args = [...args, "--reporter=junit", "--reporter-outfile", reportFile];
       if (gate.filter) args = [...args, ...gate.filter];
-      const env = gate.id === "tests" ? testEnvironment(stateDir) : process.env;
-      const result = await this.gateRun(cwd, args, { ...env, LLV_STATE_DIR: stateDir });
+      const env = gate.id === "tests" ? testEnvironment(stateDir) : isolatedEnvironment(stateDir, process.env);
+      const result = await this.gateRun(cwd, args, env);
       return gate.report ? { ...result, report: existsSync(reportFile) ? readFileSync(reportFile, "utf8") : result.report } : result;
     } finally {
       for (const [path, contents] of backups) {
@@ -942,8 +942,7 @@ export class MergeBatch {
       const catalog = join(trustedWork, "scripts/privacy-known-value-fingerprints.json");
       return await this.gateRun(trustedWork, ["bun", "scripts/privacy-publication-gate.ts",
         "--repository", candidate, "--base", base, ...args], {
-        ...process.env,
-        LLV_STATE_DIR: stateDir,
+        ...isolatedEnvironment(stateDir, process.env),
         LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
       });
     } finally {

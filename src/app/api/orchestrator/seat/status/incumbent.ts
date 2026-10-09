@@ -156,7 +156,7 @@ export async function readOrchestratorIncumbent(
   const model = generation?.launchProfile?.model ?? null;
   const counts = transcriptPath && engine ? dependencies.sessionCounts(transcriptPath, engine) : null;
   const facts = readOrchestratorTranscriptFacts(transcriptPath, counts);
-  const policy = contextWindowPolicyFor(engine, model);
+  const policy = contextWindowPolicyFor(engine, model, facts);
   const context = contextReading({ policy, facts });
 
   let liveness: OrchestratorIncumbentLiveness | null = null;

@@ -7,8 +7,26 @@ import { runtimeHostClient } from "@/lib/runtime/client";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { PrototypeError, PROTOTYPE_LIMITS } from "./input";
 import { decisionLock, findPrototypeRound, mutatePrototypeRound } from "./store";
-import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState } from "./types";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
+import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+
+/** The persisted delivery text: retries use these exact bytes. */
+export function prototypeDecisionText(task: { id: string; text: string }, round: PrototypeReviewRound,
+  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped">): string {
+  const header = `Prototype review decision\nTask: ${task.id} — ${task.text.split("\n")[0]}`;
+  const chosen = round.variants.filter(v => decision.chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ");
+  const footer = `\n\nComment:\n${decision.comment}\n\nEnd of prototype review decision.`;
+  if (!round.questions?.length) return `${header}\nChosen: ${chosen}${footer}`;
+  const answers = round.questions.map((q, i) => {
+    const answer = decision.answers!.find(a => a.questionId === q.id)!;
+    const selected = answer.options.map(index => `   ${String.fromCharCode(97 + index)}) ${q.options[index]!.label}${q.options[index]!.recommended ? " (recommended)" : ""}`);
+    if (answer.other) selected.push("   Other: see the comment");
+    return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n${selected.join("\n")}`;
+  }).join("\n");
+  return `${header}\nRound: ${round.title}\n\nAnswers:${decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
+}
 
 export interface PrototypeDeliveryResult { state: PrototypeDeliveryState; operationId?: string }
 /** Seam at the existing send/receipt boundary, never at a text-only fake queue. */
@@ -88,17 +106,27 @@ export async function decidePrototype(request: NextRequest,taskId: string,input:
   await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
     let decision = mutatePrototypeRound(taskId,reviewId,(round,task) => {
       if (!("retry" in input)) {
-        if (!Array.isArray(input.chosen) || !input.chosen.length || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
+        if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
           || input.chosen.some(n => !round.variants.some(v => v.number === n))) throw new PrototypeError("choose one or more declared variants");
         if (typeof input.comment !== "string" || input.comment.length > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
+        const questionnaire = Boolean(round.questions?.length);
+        if (input.skip !== undefined && input.skip !== true) throw new PrototypeError("invalid skip");
+        if (questionnaire ? (input.skip === true ? input.answers !== undefined : input.answers === undefined)
+          : input.skip !== undefined || input.answers !== undefined) throw new PrototypeError("provide answers or skip for a questionnaire only");
+        let answers: PrototypeDecision["answers"];
+        try { if (questionnaire) answers = input.skip ? recommendedAnswers(round.questions!) : normalizePrototypeAnswers(round.questions!, input.answers, input.comment); }
+        catch (error) { throw new PrototypeError((error as Error).message); }
+        const skipped = input.skip ? true : undefined;
         if (round.decision) {
-          if (round.decision.comment !== input.comment || JSON.stringify(round.decision.chosen) !== JSON.stringify([...input.chosen].sort((a,b) => a-b))) throw new PrototypeError("this round already has a decision",409);
+          if (round.decision.comment !== input.comment || JSON.stringify(round.decision.chosen) !== JSON.stringify([...input.chosen].sort((a,b) => a-b))
+            || JSON.stringify(round.decision.answers) !== JSON.stringify(answers) || round.decision.skipped !== skipped) throw new PrototypeError("this round already has a decision",409);
           return round.decision;
         }
         const chosen = [...input.chosen].sort((a,b) => a-b);
         const recipient = world.orchestrator(task.project);
-        const text = `Prototype review decision\nTask: ${task.id} — ${task.text.split("\n")[0]}\nChosen: ${round.variants.filter(v => chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ")}\n\nComment:\n${input.comment}\n\nEnd of prototype review decision.`;
-        round.decision = { chosen, comment: input.comment, at: new Date().toISOString(), delivery: {
+        const text = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped });
+        if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
+        round.decision = { chosen, ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(), delivery: {
           state: recipient ? "pending" : "no-orchestrator", conversationId: recipient, clientMessageId: `prototype-decision:${reviewId}`, text } };
       }
       if (!round.decision) throw new PrototypeError("save a decision before retrying");

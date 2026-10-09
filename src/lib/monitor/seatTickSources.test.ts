@@ -226,12 +226,13 @@ function sources(over: {
   /** The liveness plane's verdict for a child, by id (#1465). */
   childRows?: Record<string, AgentLivenessRecord>;
   seatConversationId?: string;
+  seatEpoch?: number;
   retirementJournal?: SeatTickSources["retirementJournal"];
   now?: number;
 }): SeatTickSources {
   return {
     seatFor: () => ({
-      active: over.noSeat ? null : { conversationId: over.seatConversationId ?? CONVERSATION, seatEpoch: 7, path: null } as never,
+      active: over.noSeat ? null : { conversationId: over.seatConversationId ?? CONVERSATION, seatEpoch: over.seatEpoch ?? 7, path: null } as never,
       pending: null,
       history: [],
     }),
@@ -812,6 +813,51 @@ function finishedLane(over: Record<string, unknown> = {}): Record<string, unknow
     ...over,
   });
 }
+
+test.each([CONVERSATION, ["conversation", "5b7729fbc9e0f4c2"].join("_")])("a merge wakes the idle seat after completion was announced, designated seat %s", async (designatedSeat) => {
+  const seatEpoch = designatedSeat === CONVERSATION ? 7 : 8;
+  const completed = finishedLane({ srcConversationId: CONVERSATION });
+  const before = await gather({ pipelines: [completed], openPullRequests: [openPullRequest()] },
+    withCursor(0, { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() }));
+  const completion = seatTickDecision(before);
+  expect(completion.verdict.kind).toBe("wake");
+  const announced = seatTickWakeCommit(completion.state, seatTickWakeCommitPlan(completion.verdict, {
+    fingerprint: before.changeFingerprint, eventsThrough: 0,
+  })!, NOW);
+  expect(announced.announcedLanes).toContain("pipeline_z9:completed");
+  const idle = seatTickDecision(await gather({ pipelines: [completed] }, announced));
+  expect(idle.verdict.kind).toBe("quiet");
+
+  const mergedAt = NOW + 61 * 60_000;
+  const head = "a".repeat(40);
+  const merged = { ...completed, merge: { state: "merged", prNumber: 17, mergedHead: head } };
+  const events = [
+    event(1, { pipelineId: "pipeline_z9", type: "pipeline_merged", at: new Date(mergedAt).toISOString(), summary: "pull request #17 merged by Delegatus" }),
+    event(2, { pipelineId: "pipeline_z9", type: "task_finished", at: new Date(mergedAt).toISOString() }),
+  ];
+  const after = await gather({ pipelines: [merged], events, now: mergedAt, seatConversationId: designatedSeat, seatEpoch }, idle.state);
+  const decision = seatTickDecision(after);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") return;
+  expect(decision.verdict.items).toHaveLength(1);
+  expect(decision.verdict.items[0]).toMatchObject({ kind: "event", id: "pipeline_z9" });
+  expect(decision.verdict.items[0]!.label).toContain("publish the merge queue");
+  expect(decision.verdict.items[0]!.label).toContain("#17");
+  expect(decision.verdict.items[0]!.label).toContain(head);
+  const landed = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: after.changeFingerprint, eventsThrough: 2,
+  })!, mergedAt);
+  const next = seatTickDecision(await gather({ pipelines: [merged], events, now: mergedAt + 61 * 60_000, seatConversationId: designatedSeat, seatEpoch }, landed));
+  expect(next.verdict.kind).toBe("quiet");
+});
+
+test("a merge from another project never wakes this project's seat", async () => {
+  const input = await gather({ pipelines: [finishedLane({ project: "another-project" })],
+    events: [event(1, { pipelineId: "pipeline_z9", project: "another-project", type: "pipeline_merged" })] },
+  withCursor(0, { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() }));
+  expect(input.events).toEqual([]);
+  expect(seatTickDecision(input).verdict.kind).toBe("quiet");
+});
 
 test("an event is marked history exactly when its own lane is no longer open", async () => {
   const input = await gather({
@@ -2337,4 +2383,75 @@ test("maintenance gather offers only unannounced ended project runs and moves th
   expect(gathered.settledMaintenance?.map(r => r.runId)).toEqual([result.run.runId]);
   const acknowledged = await gatherProduction(PROJECT, { ...state, announcedMaintenance: [result.run.runId] }, DEFAULT_SEAT_TICK_POLICY, feed);
   expect(acknowledged.settledMaintenance).toEqual([]); expect(acknowledged.changeFingerprint).not.toBe(gathered.changeFingerprint);
+});
+
+/* docs/design/delivery-progress-and-drain.md, P23 (C2): a withdrawal decides
+   inside the write it waited for. Another process holds the SQLite writer;
+   once it lets go, the switch is cancelled and an attempt claims the row in
+   the same tick, before the withdrawal's next probe. */
+async function withdrawalRace(name: string, withdraw: (registry: InstanceType<typeof AgentRegistry>, held: { id: string; operationId: string; key: string }) => Promise<string>) {
+  const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
+  const sqlitePath = path.join(dir, "agent-registry.sqlite");
+  const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: sqlitePath });
+  const conversation = registry.ensureConversation("codex", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
+  registry.setConversationMigration(conversation.id, {
+    intentId: `${name}-intent`, phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
+  });
+  const key = `${name}-key`;
+  const held = registry.holdDelivery(conversation.id, "wake the seat", key);
+  expect(held.state).toBe("held");
+  setAgentRegistryForTests(registry);
+  const { Database } = await import("bun:sqlite");
+  const holder = new Database(sqlitePath);
+  holder.exec("PRAGMA busy_timeout = 5000");
+  holder.exec("BEGIN IMMEDIATE");
+  try {
+    const withdrawing = withdraw(registry, { id: held.id, operationId: held.command.operationId, key });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    holder.exec("ROLLBACK");
+    registry.setConversationMigration(conversation.id, null);
+    const assigned = registry.requeueHeldDelivery(held.id);
+    expect(assigned.state).toBe("assigned");
+    expect(registry.beginDeliveryAttempt(held.id, assigned.generationId!)?.state).toBe("delivery-uncertain");
+    const answer = await withdrawing;
+    return { answer, row: registry.readOnlySnapshot().heldDeliveries[held.id] };
+  } finally {
+    holder.close();
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+}
+
+test("a held-wake withdrawal that waited for the writer leaves a row an attempt claimed meanwhile, and answers unknown (P23)", async () => {
+  const { defaultSeatTickSources } = await import("./seatTickSources");
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = "";
+  try {
+    const { answer, row } = await withdrawalRace("seat-withdraw-race", (_registry, held) =>
+      defaultSeatTickSources().withdrawWake({ ...WAKE, clientMessageId: held.key, operationId: null }, "the seat rotated"));
+    expect(answer).toBe("unknown");
+    expect(row).toMatchObject({ state: "delivery-uncertain", text: "wake the seat" });
+  } finally {
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
+test("a held-wake withdrawal that finds its row still held after the wait ends it", async () => {
+  const { defaultSeatTickSources } = await import("./seatTickSources");
+  const dir = fs.mkdtempSync(path.join(SANDBOX, "seat-withdraw-held-"));
+  const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(dir, "agent-registry.sqlite") });
+  const conversation = registry.ensureConversation("codex", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
+  registry.setConversationMigration(conversation.id, {
+    intentId: "held-intent", phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
+  });
+  const held = registry.holdDelivery(conversation.id, "wake the seat", "seat-withdraw-held-key");
+  setAgentRegistryForTests(registry);
+  try {
+    expect(await defaultSeatTickSources().withdrawWake({ ...WAKE, clientMessageId: "seat-withdraw-held-key", operationId: null }, "the seat rotated")).toBe("withdrawn");
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", text: "" });
+  } finally {
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
 });

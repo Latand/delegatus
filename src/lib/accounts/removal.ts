@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
 import { accountLiveSessionKind, liveAccountConversationIds, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
-import { agentRegistry, type AccountPathRewrite, type AccountRetirementReport } from "@/lib/agent/registry";
+import { agentRegistry, RegistryWriterBusyError, type AccountPathRewrite, type AccountRetirementReport } from "@/lib/agent/registry";
 
 export type { ManagedAccountEngine };
 export type AccountRemovalBlocker = "live_sessions" | "queued_pin" | "current_conversations";
@@ -755,10 +755,15 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
     const beforeRetirement = registry.readOnlySnapshot();
     let retirement: AccountRetirementReport;
     try {
-      retirement = registry.retireAccount(engine, accountId, "default", {}, { rewrite: rewrites });
+      /* A non-waiting write: this step runs inside the accounts registry's
+         file lock (docs/design/delivery-progress-and-drain.md, C5). A registry
+         lock held elsewhere takes the failure branch below with nothing
+         retired, and the operator is asked to try again. */
+      retirement = registry.retireAccountNow(engine, accountId, "default", {}, { rewrite: rewrites });
     } catch (error) {
       putHomeBack();
       spec.registry.journal(null);
+      if (error instanceof RegistryWriterBusyError) throw new Error("the agent registry is busy; nothing was removed, try the removal again");
       if (error instanceof Error && error.message === "account has live sessions") throw new AccountRemovalBlockedError(["live_sessions"]);
       if (error instanceof Error && error.message === "account has current conversations") throw new AccountRemovalBlockedError(["current_conversations"]);
       throw error;
@@ -831,7 +836,8 @@ export function recoverManagedAccountRemoval(input: {
     if (homeExists) { input.clearJournal(); return "restored"; }
     if (!input.listed) return scrub();
     try {
-      agentRegistry().retireAccount(input.engine, input.accountId, "default", {}, { rewrite: input.entry.rewrites ?? [] });
+      /* Busy, like any refusal here, is retried by the next listing. */
+      agentRegistry().retireAccountNow(input.engine, input.accountId, "default", {}, { rewrite: input.entry.rewrites ?? [] });
     } catch {
       return null;
     }

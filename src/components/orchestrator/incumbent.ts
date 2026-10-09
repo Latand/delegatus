@@ -17,7 +17,7 @@ export interface IncumbentContext {
   limit: number | null;
   /** 0-100, or null when the model has no configured window. */
   percent: number | null;
-  /** TRUE means the number is derived from transcript bytes, not reported. */
+  /** TRUE means token usage is estimated or unconfirmed after compaction. */
   estimated: boolean;
   /** Where the number came from, operator-readable — shown in the tooltip so a
       guess can never be mistaken for a provider count. */

@@ -463,6 +463,28 @@ function terminalEvent(seq: number): LifecycleEvent {
   };
 }
 
+test("the controller delivers completed-lane merges once and keeps those the wake bound held back", async () => {
+  const options = {
+    pipelines: [], now: NOW,
+    state: { ...OVERDUE, eventsThrough: 0, lastProposalAt: new Date(NOW).toISOString() },
+    events: Array.from({ length: 7 }, (_, index) => ({ ...terminalEvent(index + 1), type: "pipeline_merged" as const,
+      pipelineId: `pipeline_merge_${index + 1}`, summary: `pull request #${index + 1} merged, head ${"a".repeat(40)} — ship feature ${index + 1}` })),
+  };
+  const rig = harness(options);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", items: 5, deferred: 2 });
+  expect(rig.written.at(-1)!.eventsThrough).toBe(5);
+  expect(rig.sent[0]!.text).toContain("pull request #5 merged");
+  expect(rig.sent[0]!.text).not.toContain("pull request #6 merged");
+  options.now += 61 * MINUTE;
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", items: 2 });
+  expect(rig.sent[1]!.text).toContain("pull request #6 merged");
+  expect(rig.sent[1]!.text).not.toContain("pull request #5 merged");
+  expect(rig.written.at(-1)!.eventsThrough).toBe(7);
+  options.now += 61 * MINUTE;
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+  expect(rig.sent).toHaveLength(2);
+});
+
 test("a quiet check writes one journal line, sends nothing, and raises no card", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: { lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString() } });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
@@ -7266,6 +7288,29 @@ test("a second interruption parking an announced running stall wakes its seat de
   expect(parked.sent).toHaveLength(1);
 });
 
+test("a wake's journal settlement waits for the lock off the loop, and a write the lock refused answers undecided until the next tick", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C2. */
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-wake-settlement", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const conversation = registry.ensureConversation("codex", "/wake-settlement.jsonl", "default");
+    const held = registry.holdDelivery(conversation.id, "seat wake", "wake-settlement-key");
+    registry.beginDeliveryAttempt(held.id, held.generationId!);
+    const target = { conversationId: conversation.id, operationId: held.command.operationId, deliveryId: held.id };
+    await holder.hold(500);
+    const { value: refused, gapMs } = await longestLoopGap(() => settleRecordFromJournal(registry, target, { status: "delivered", reason: null }));
+    expect(refused).toBeNull();
+    expect(gapMs).toBeLessThan(50);
+    await Bun.sleep(550);
+    expect(await settleRecordFromJournal(registry, target, { status: "delivered", reason: null })).toMatchObject({ state: "delivered" });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});
 
 // Authentication recovery drives the actual transcript, selector, seat command,
 // bridge and Telegram service. Only process launch and bot HTTP are replaced.

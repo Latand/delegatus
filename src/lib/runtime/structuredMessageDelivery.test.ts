@@ -9,12 +9,14 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import type { RuntimeHostClient } from "./client";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, type RuntimeSnapshot } from "./contracts";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapability } from "./runtimeImageStore";
 import { structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 
 import { sendReceiptFor } from "./sendSettlement";
+import { DeliveryProgressStore } from "./deliveryProgress";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
@@ -2242,7 +2244,7 @@ test("dead structured recovery stays behind an instruction whose delivery fate i
   });
 });
 
-test("a completed pipeline-stage send replaces dead host ownership and reaches a fresh claim", async () => {
+test.each([false, true])("a completed pipeline-stage send replaces dead host ownership and reaches a fresh claim, automatic=%s", async automatic => {
   const { registry, conversation } = registryWithConversation("pipeline-account");
   const generation = conversation.generations.at(-1)!;
   registry.reconcileConversations([{
@@ -2286,7 +2288,7 @@ test("a completed pipeline-stage send replaces dead host ownership and reaches a
     turn: "unknown",
   };
   const hostedSnapshot = snapshot(conversation.id);
-  hostedSnapshot.sessions[0] = { ...hostedSnapshot.sessions[0]!, sessionKey: key };
+  hostedSnapshot.sessions[0] = { ...hostedSnapshot.sessions[0]!, sessionKey: key, writerClaim: "fresh-viewer-owner" };
   let currentSnapshot = deadSnapshot;
   let recoveryCalls = 0;
   const commands: unknown[] = [];
@@ -2323,6 +2325,7 @@ test("a completed pipeline-stage send replaces dead host ownership and reaches a
     text: "continue after the completed stage host exited",
     hasImages: false,
   }, {
+    ...(automatic ? { idleContinuationAllowed: () => true } : {}),
     enabled: () => true,
     client: () => client,
     registry: () => registry,
@@ -2706,7 +2709,7 @@ test("held delivery stays fenced when persisted ownership is unavailable", async
     enabled: () => true,
     client: () => missingSessionClient,
     registry: () => registry,
-  })).toEqual({ outcome: "held", cause: "the durable registry has no current generation for this conversation" });
+  })).toEqual({ outcome: "held", cause: "the durable registry has no current generation for this conversation", waitReason: "awaiting-host" });
 });
 
 test("held delivery fences a missing runtime client without startup failure evidence", async () => {
@@ -3096,6 +3099,146 @@ test("a failed session read while reconciling an uncertain send does not authori
   }, registry);
   expect(registry.snapshot().heldDeliveries[held.id]).toEqual(before);
   registry.close();
+});
+
+test("a reconcile whose runtime read fails leaves the record a queue executor leads, and records the cause on its own unresolved admission", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P9 and A5. */
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const reconcile = (held: ReturnType<typeof registry.holdDelivery>) => deliverHeldStructuredMessage({
+    conversationId: conversation.id, path: artifactPath, deliveryId: held.id, clientMessageId: held.clientMessageId!, text: held.text,
+    command: held.command, reconcileUncertain: true,
+  }, {
+    enabled: () => true, registry: () => registry, progress,
+    client: () => ({ readSession: async () => { throw new Error("runtime read failed once"); },
+      command: async () => { throw new Error("no command may be dispatched"); } }) as unknown as RuntimeHostClient,
+  });
+  const led = registry.holdDelivery(conversation.id, "the queue is dispatching this", "led-by-queue");
+  registry.beginDeliveryAttempt(led.id, conversation.generations.at(-1)!.id);
+  progress.note(led.command.operationId, conversation.id, { waitReason: "dispatching", executorId: "queue-executor", nextWakeMs: 30_000, originalKey: "led-by-queue" });
+  clock += 5_000;
+  progress.stalled(led.command.operationId);
+  const before = structuredClone(progress.get(led.command.operationId)!);
+  clock += 5_000;
+  await reconcile(led);
+  expect(progress.get(led.command.operationId)).toEqual(before);
+
+  const own = registry.holdDelivery(conversation.id, "the admission lost its acknowledgement", "own-admission");
+  registry.beginDeliveryAttempt(own.id, conversation.generations.at(-1)!.id);
+  progress.note(own.command.operationId, conversation.id, { waitReason: "evidence-unreadable", detail: "the runtime journal did not acknowledge the admission", originalKey: "own-admission" });
+  await reconcile(own);
+  expect(progress.get(own.command.operationId)).toMatchObject({ waitReason: "evidence-unreadable", detail: "the runtime journal could not be read: runtime read failed once", terminal: null });
+  registry.close();
+});
+
+test("a held drain names the host's recovery on the send's record before awaiting it, stalls within the bound while it hangs, and a refused recovery leaves the reservation for the next pass untyped", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P9 and A5. */
+  const { StructuredDeliveryQueue } = await import("./structuredDeliveryQueue");
+  const { registry, conversation } = registryWithConversation();
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: conversation.engine, sessionId: generation.id },
+    artifactPath: generation.path, cwd: generation.launchProfile.cwd, accountId: generation.accountId,
+    launchProfile: generation.launchProfile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 11, protocolVersion: "v2",
+      writerClaimEpoch: 8, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 8, claimOwner: "structured-host:stale-owner", pendingAction: null,
+  });
+  const held = registry.holdDelivery(conversation.id, "deliver after the host recovers", "drain-recovery-key");
+  registry.beginDeliveryAttempt(held.id, generation.id);
+  const claimed = structuredClone(registry.snapshot().heldDeliveries[held.id]);
+  const operationId = held.command.operationId;
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(operationId, conversation.id, { waitReason: "awaiting-host", originalKey: "drain-recovery-key" });
+  let commands = 0;
+  let refuse!: () => void;
+  const draining = deliverHeldStructuredMessage({
+    conversationId: conversation.id, path: artifactPath, deliveryId: held.id, clientMessageId: "drain-recovery-key", text: held.text, command: held.command,
+  }, {
+    enabled: () => true, registry: () => registry, progress, kick: () => {},
+    client: () => ({ readSession: async () => null, command: async () => { commands += 1; throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+    recover: () => new Promise((resolve) => { refuse = () => resolve(null); }),
+  });
+  for (let attempt = 0; attempt < 200 && !refuse; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof refuse).toBe("function");
+  clock += 10_001;
+  const queue = new StructuredDeliveryQueue({ effects: async () => [], transition: async () => {}, status: async () => null, progress },
+    () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  await queue.tick();
+  const recovering = progress.get(operationId)!;
+  expect(recovering).toMatchObject({ waitReason: "recovering-host", originalKey: "drain-recovery-key", terminal: null });
+  expect(typeof recovering.stalledSince).toBe("string");
+  refuse();
+  const outcome = await draining;
+  expect(outcome).toMatchObject({ outcome: "held" });
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "awaiting-host", terminal: null });
+  /* The claim the drain made is left for the coordinator to requeue. */
+  expect(registry.snapshot().heldDeliveries[held.id]).toEqual(claimed);
+  expect(commands).toBe(0);
+  registry.close();
+});
+
+test("an injection a switch overtook between preflight and its reservation is recorded before its ending waits for the lock, and ends failed or stays held, never typed", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P1/P5, A1, Note 2. */
+  const { sqliteRegistryFixture, registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const overtaken = async (lockHeldMs: number) => {
+    const made = sqliteRegistryFixture("llv-inject-switch-race", { sqliteWriterDeadlineMs: 150 });
+    const holder = registryLockHolder(made.sqliteFilename);
+    const registry = made.registry;
+    try {
+      registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "default",
+        launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }), turn: { state: "idle", source: "empty", terminalAt: null },
+        observedAt: "2026-07-13T00:00:00.000Z" }]);
+      const conversation = registry.conversationForPath(artifactPath)!;
+      recordStructuredOwner(registry, conversation);
+      const progress = new DeliveryProgressStore(null);
+      let commands = 0;
+      const originalHold = registry.holdDeliveryOffLoop.bind(registry);
+      registry.holdDeliveryOffLoop = (async (...args: Parameters<AgentRegistry["holdDeliveryOffLoop"]>) => {
+        /* The switch lands between the preflight and the reservation. */
+        registry.commitMigrationIntent({ engine: "codex", targetId: "b", origin: "manual", requestId: "inject-race",
+          expectedRevision: registry.engineRouting("codex").revision });
+        const held = await originalHold(...args);
+        if (lockHeldMs > 0) await holder.hold(lockHeldMs);
+        return held;
+      }) as AgentRegistry["holdDeliveryOffLoop"];
+      let duringEnding: ReturnType<DeliveryProgressStore["get"]> | undefined;
+      const originalWrite = registry.deliveryWrite.bind(registry);
+      registry.deliveryWrite = ((correlation: { label: string; operationId?: string | null }, write: () => unknown, correlate?: never) => {
+        if (correlation.label === "delivery.terminalize" && correlation.operationId) duringEnding = progress.get(correlation.operationId);
+        return originalWrite(correlation, write as never, correlate);
+      }) as AgentRegistry["deliveryWrite"];
+      const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id, clientMessageId: "overtaken-injection",
+        kind: "inject", text: "context the switch overtook" }, {
+        enabled: () => true, registry: () => registry, progress, kick: () => {}, requestMigrationTick: () => {},
+        client: () => ({ readSession: sessionReader(async () => snapshot(conversation.id)),
+          command: async () => { commands += 1; throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+      } as never);
+      const operationId = (result as { operationId: string }).operationId;
+      return { result, duringEnding, after: progress.get(operationId), commands, operationId,
+        reservation: Object.values(registry.snapshot().heldDeliveries).find((delivery) => delivery.clientMessageId === "overtaken-injection") };
+    } finally {
+      await holder.close();
+      registry.close();
+      made.cleanup();
+    }
+  };
+
+  const refused = await overtaken(600);
+  expect(refused.result).toMatchObject({ ok: true, outcome: "held" });
+  expect(refused.duringEnding).toMatchObject({ operationId: refused.operationId, waitReason: "switching-accounts", originalKey: "overtaken-injection", terminal: null });
+  expect(refused.after).toMatchObject({ waitReason: "switching-accounts", terminal: null });
+  expect(refused.reservation).toMatchObject({ state: "held" });
+  expect(refused.commands).toBe(0);
+
+  const ended = await overtaken(0);
+  expect(ended.result).toMatchObject({ ok: false, outcome: "failed", status: 409 });
+  expect(ended.duringEnding).toMatchObject({ operationId: ended.operationId, waitReason: "switching-accounts", terminal: null });
+  expect(ended.after).toMatchObject({ terminal: { state: "failed" } });
+  expect(ended.commands).toBe(0);
 });
 
 test("held delivery authorizes legacy fallback from persisted tmux ownership", async () => {
@@ -3958,6 +4101,258 @@ test("a live deputy takes the Viewer's own interruption continuation and nothing
   }
 });
 
+test("a dead-host resume that throws leaves the accepted send recorded as awaiting-host with its deadline", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P4: the reservation exists
+     before the resume, so the send is accepted, and its record says what it
+     waits on while the resume runs and after it fails. */
+  const { registry, conversation } = registryWithConversation();
+  const deadSnapshot = snapshot(conversation.id);
+  deadSnapshot.sessions[0] = { ...deadSnapshot.sessions[0]!, host: "dead" };
+  const progress = new DeliveryProgressStore(null);
+  let duringResume: ReturnType<DeliveryProgressStore["get"]> = null;
+  const client = {
+    readSession: sessionReader(async () => deadSnapshot),
+    command: async () => { throw new Error("nothing may be commanded"); },
+  } as unknown as RuntimeHostClient;
+  const result = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "resume-throws",
+    text: "keep this through a failed resume",
+    hasImages: false,
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    progress,
+    recover: async (request: { operationId?: string }) => {
+      duringResume = { ...progress.get(request.operationId!)! };
+      throw new Error("recovery spawn failed");
+    },
+    kick: () => {},
+  } as never);
+
+  /* Read before matching: the matcher writes into what it inspects. */
+  const operationId = (result as { operationId: string }).operationId;
+  expect(typeof operationId).toBe("string");
+  expect(result).toMatchObject({ ok: true, outcome: "held" });
+  expect(duringResume).toMatchObject({ waitReason: "recovering-host", originalKey: "resume-throws", nextWakeAt: null });
+  const record = progress.get(operationId)!;
+  expect(record).toMatchObject({ waitReason: "awaiting-host", originalKey: "resume-throws", kind: "send", terminal: null, deadlinePolicy: "settlement-window" });
+  expect(record.detail).toContain("recovery spawn failed");
+  expect(record.deadlineAt).not.toBeNull();
+  expect(record.nextWakeAt).not.toBeNull();
+});
+
+/* docs/design/delivery-progress-and-drain.md, P16 and A1: a same-key replay
+   that finds the runtime host out of reach is answered from the reservation
+   already written. The queue leads that send's record now, so the replay
+   leaves its phase, clocks and stall, and still wakes the drain. */
+test("an outage replay of a send the queue is dispatching keeps the queue's record, its clocks and its stall, and answers the same operation", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const commanded: string[] = [];
+  const request = { path: artifactPath, conversationId: conversation.id, clientMessageId: "outage-replay-key", text: "the instruction the queue is sending" };
+  const live = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commanded.push(command.operationId!);
+      return { operationId: command.operationId, replayed: false, receipt: {
+        operationId: command.operationId, idempotencyKey: "outage-replay-key", conversationId: conversation.id, kind: "send",
+        status: "queued", text: request.text, imageCount: 0, at: "2026-07-13T00:00:00.000Z", revision: 1,
+      } };
+    },
+  } as unknown as RuntimeHostClient;
+  const admitted = await enqueueStructuredMessage(request, { enabled: () => true, client: () => live, registry: () => registry, progress, kick: () => {} });
+  expect(admitted).toMatchObject({ ok: true, outcome: "queued" });
+  const operationId = (admitted as { operationId: string }).operationId;
+  /* The queue listed it and is handing it over; the hand-over outlived the bound. */
+  progress.note(operationId, conversation.id, { waitReason: "dispatching", detail: "handing the message to the host", executorId: "queue-executor", nextWakeMs: 30_000 });
+  clock += 5_000;
+  progress.stalled(operationId);
+  const before = structuredClone(progress.get(operationId)!);
+  expect(before.stalledSince).not.toBeNull();
+  clock += 5_000;
+  let ticks = 0;
+  const unreadable = {
+    readSession: async () => { throw new Error("runtime session read failed"); },
+    command: async () => { throw new Error("no command may be dispatched"); },
+  } as unknown as RuntimeHostClient;
+  const replay = await enqueueStructuredMessage(request, { enabled: () => true, client: () => unreadable, registry: () => registry, progress,
+    requestMigrationTick: () => { ticks += 1; }, kick: () => {} });
+  expect(replay).toMatchObject({ ok: true, outcome: "held", operationId });
+  expect(progress.get(operationId)).toEqual(before);
+  const unreachable = await enqueueStructuredMessage(request, { enabled: () => true, client: () => null, registry: () => registry, progress,
+    requestMigrationTick: () => { ticks += 1; }, kick: () => {} });
+  expect(unreachable).toMatchObject({ ok: true, outcome: "held", operationId });
+  expect(progress.get(operationId)).toEqual(before);
+  expect(ticks).toBe(2);
+  expect(commanded).toEqual([operationId]);
+  registry.close();
+});
+
+test("an outage replay continues the record an earlier outage admission wrote, without restarting its clocks", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const request = { path: artifactPath, conversationId: conversation.id, clientMessageId: "outage-continued-key", text: "held through the outage" };
+  const dependencies = { enabled: () => true, client: () => null, registry: () => registry, progress, requestMigrationTick: () => {}, kick: () => {} };
+  const first = await enqueueStructuredMessage(request, dependencies);
+  expect(first).toMatchObject({ ok: true, outcome: "held" });
+  const operationId = (first as { operationId: string }).operationId;
+  const opened = structuredClone(progress.get(operationId)!);
+  expect(opened).toMatchObject({ waitReason: "evidence-unreadable", originalKey: "outage-continued-key", executorId: null, terminal: null });
+  clock += 5_000;
+  expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "held", operationId });
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "evidence-unreadable", phaseSince: opened.phaseSince, lastProgressAt: opened.lastProgressAt, attempt: opened.attempt });
+  registry.close();
+});
+
+function reclaimedOwner(registry: AgentRegistry, conversation: ReturnType<typeof registryWithConversation>["conversation"]): void {
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: conversation.engine, sessionId: generation.id },
+    artifactPath: generation.path, cwd: generation.launchProfile.cwd, accountId: generation.accountId,
+    launchProfile: generation.launchProfile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 11, protocolVersion: "v2",
+      writerClaimEpoch: 8, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 8, claimOwner: "structured-host:stale-owner", pendingAction: null,
+  });
+}
+
+/* docs/design/delivery-progress-and-drain.md, P9 and A5, the lost-ack branch:
+   a reconcile performs a recovery, a session read and a republish of its own.
+   On a record no queue executor leads, each is named while it lasts; one a
+   queue executor leads keeps its phase, clocks and stall. */
+test("an uncertain send's reconcile names the host's recovery on a record no queue leads and stalls within the bound, and leaves a queue-led record as it was", async () => {
+  const { StructuredDeliveryQueue } = await import("./structuredDeliveryQueue");
+  const { registry, conversation } = registryWithConversation();
+  reclaimedOwner(registry, conversation);
+  const generation = conversation.generations.at(-1)!;
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const reconcileOnce = (held: HeldDelivery, recover: () => Promise<null>) => deliverHeldStructuredMessage({
+    conversationId: conversation.id, path: artifactPath, deliveryId: held.id, clientMessageId: held.clientMessageId!, text: held.text,
+    command: held.command, reconcileUncertain: true,
+  }, {
+    enabled: () => true, registry: () => registry, progress, kick: () => {},
+    client: () => ({ readSession: async () => null, command: async () => { throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+    recover,
+  });
+  const lost = registry.holdDelivery(conversation.id, "the admission lost its acknowledgement", "reconcile-recovery-key");
+  registry.beginDeliveryAttempt(lost.id, generation.id);
+  const operationId = lost.command.operationId;
+  progress.note(operationId, conversation.id, { waitReason: "evidence-unreadable", detail: "the runtime journal did not acknowledge the admission: socket closed", originalKey: "reconcile-recovery-key" });
+  let refuse: (() => void) | undefined;
+  const reconciling = reconcileOnce(lost, () => new Promise((resolve) => { refuse = () => resolve(null); }));
+  for (let attempt = 0; attempt < 200 && !refuse; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof refuse).toBe("function");
+  clock += 5_000;
+  const queue = new StructuredDeliveryQueue({ effects: async () => [], transition: async () => {}, status: async () => null, progress },
+    () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  await queue.tick();
+  const recovering = progress.get(operationId)!;
+  expect(recovering).toMatchObject({ waitReason: "recovering-host", originalKey: "reconcile-recovery-key", terminal: null });
+  expect(typeof recovering.stalledSince).toBe("string");
+  expect(clock - Date.parse(recovering.phaseSince)).toBeLessThanOrEqual(10_000);
+  expect(recovering.attempt).toBe(0);
+  refuse!();
+  await reconciling;
+
+  const led = registry.holdDelivery(conversation.id, "the queue is dispatching this", "reconcile-led-key");
+  registry.beginDeliveryAttempt(led.id, generation.id);
+  progress.note(led.command.operationId, conversation.id, { waitReason: "dispatching", executorId: "queue-executor", nextWakeMs: 30_000, originalKey: "reconcile-led-key" });
+  clock += 5_000;
+  progress.stalled(led.command.operationId);
+  const before = structuredClone(progress.get(led.command.operationId)!);
+  await reconcileOnce(led, async () => null);
+  expect(progress.get(led.command.operationId)).toEqual(before);
+  registry.close();
+});
+
+test("an uncertain send's reconcile whose session read hangs names that read on a record no queue leads", async () => {
+  const { STRUCTURED_DELIVERY_TIMING } = await import("./structuredDeliveryQueue");
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const progress = new DeliveryProgressStore(null);
+  const lost = registry.holdDelivery(conversation.id, "the admission lost its acknowledgement", "reconcile-read-key");
+  registry.beginDeliveryAttempt(lost.id, conversation.generations.at(-1)!.id);
+  const operationId = lost.command.operationId;
+  progress.note(operationId, conversation.id, { waitReason: "evidence-unreadable", detail: "the runtime journal did not acknowledge the admission: socket closed", originalKey: "reconcile-read-key" });
+  const stallMs = STRUCTURED_DELIVERY_TIMING.stallMs;
+  STRUCTURED_DELIVERY_TIMING.stallMs = 40;
+  let answer: (() => void) | undefined;
+  try {
+    const reconciling = deliverHeldStructuredMessage({
+      conversationId: conversation.id, path: artifactPath, deliveryId: lost.id, clientMessageId: "reconcile-read-key", text: lost.text,
+      command: lost.command, reconcileUncertain: true,
+    }, {
+      enabled: () => true, registry: () => registry, progress, kick: () => {},
+      client: () => ({
+        readSession: () => new Promise((resolve) => { answer = () => resolve(null); }),
+        command: async () => { throw new Error("nothing may be commanded"); },
+      }) as unknown as RuntimeHostClient,
+      recover: async () => null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(progress.get(operationId)).toMatchObject({ waitReason: "checking", detail: "reading the recipient's runtime session", terminal: null });
+    answer!();
+    await reconciling;
+  } finally {
+    STRUCTURED_DELIVERY_TIMING.stallMs = stallMs;
+    registry.close();
+  }
+});
+
+/* docs/design/delivery-progress-and-drain.md, P9: the inventory sidecar owns
+   no progress store, so the waits before the journal holds a structured send
+   would be recorded nowhere there. It claims nothing; the Viewer's pass makes
+   the recovery, on the send's original-key record, once. */
+test("the inventory sidecar's drain claims no structured send, and the Viewer's pass records the host's recovery on the original key", async () => {
+  const { createMigrationDeliveryPort } = await import("@/lib/accounts/migration/deliveryPort");
+  const { registry, conversation } = registryWithConversation();
+  reclaimedOwner(registry, conversation);
+  const held = registry.holdDelivery(conversation.id, "deliver after the host recovers", "sidecar-recovery-key");
+  expect(held.state).toBe("assigned");
+  const progress = new DeliveryProgressStore(null);
+  progress.note(held.command.operationId, conversation.id, { waitReason: "awaiting-host", originalKey: "sidecar-recovery-key" });
+  const before = structuredClone(registry.snapshot().heldDeliveries[held.id]);
+  let sidecarCalls = 0;
+  const previous = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+  try {
+    await drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({
+      progress: null,
+      structuredDelivery: async () => { sidecarCalls += 1; return "held"; },
+    }), registry);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
+  }
+  expect(sidecarCalls).toBe(0);
+  expect(registry.snapshot().heldDeliveries[held.id]).toEqual(before);
+  expect(progress.get(held.command.operationId)).toMatchObject({ waitReason: "awaiting-host" });
+
+  let recoveries = 0;
+  let release: (() => void) | undefined;
+  const draining = drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({
+    progress,
+    structuredDelivery: (request, dependencies) => deliverHeldStructuredMessage(request, {
+      ...dependencies, enabled: () => true, registry: () => registry, kick: () => {},
+      client: () => ({ readSession: async () => null, command: async () => { throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+      recover: () => { recoveries += 1; return new Promise((resolve) => { release = () => resolve(null); }); },
+    }),
+  }), registry);
+  for (let attempt = 0; attempt < 200 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(progress.get(held.command.operationId)).toMatchObject({ waitReason: "recovering-host", originalKey: "sidecar-recovery-key", terminal: null });
+  release!();
+  await draining;
+  expect(recoveries).toBe(1);
+  registry.close();
+});
 
 test.each(["unchanged", "active", "reply-during-read", "reply-before-command"] as const)("automatic continuation admission rechecks idle ownership and stage evidence: %s", scenario => {
   const { registry, conversation } = registryWithConversation();
@@ -4199,4 +4594,168 @@ test.each(["unchanged", "writer", "generation", "active", "missing-proof", "exec
     expect(await send()).toMatchObject({ ok: false, admission: "refused" });
     expect(state.deliveries).toBe(0);
   } finally { journal.close(); }
+});
+
+
+test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut continuation recovers idle ownership before admission: %s", async stateAtRestart => {
+  const { registry, conversation, journal, session, state, client } = idleContinuationFixture();
+  let recoveries = 0;
+  let republications = 0;
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  // A delivered continuation was working when the second release cut it.
+  const first = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "stage-provider-first-cut", text: "Continue", origin: { kind: "agent", role: "pipeline" } }, {
+    enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, idleContinuationAllowed: () => true,
+  });
+  expect(first).toMatchObject({ ok: true });
+  Object.assign(session, { host: stateAtRestart === "dead" ? "dead" : "unhosted", writerClaim: null, turn: "idle", activeTurnId: null });
+  publish();
+  let missing = stateAtRestart === "missing";
+  const restartedClient = { ...client, readSession: async () => missing ? null : journal.readSession({ conversationId: conversation.id }) } as RuntimeHostClient;
+  const request = { path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "stage-provider-second-cut", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" } };
+  const dependencies = {
+    enabled: () => true, registry: () => registry, client: () => restartedClient, kick: () => {},
+    idleContinuationAllowed: () => state.eligible,
+    republish: async () => {
+      republications++;
+      if (stateAtRestart !== "republish") return false;
+      Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish(); return true;
+    },
+    recover: async () => {
+      recoveries++; missing = false;
+      Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish();
+      return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
+    },
+  };
+  try {
+    expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "delivered" });
+    const delivery = registry.deliveryAdmissionForKey(conversation.id, request.clientMessageId);
+    expect(delivery.outcome).toBe("admitted");
+    if (delivery.outcome === "admitted") {
+      expect(registry.conversationDeliverySnapshot({ conversationId: conversation.id }).heldDeliveries[delivery.deliveryId]!.command.onlyIfIdle!.writerClaim).toBe("fixture:2");
+    }
+    expect(recoveries).toBe(stateAtRestart === "republish" ? 0 : 1);
+    expect(republications).toBe(1);
+    expect(state.deliveries).toBe(2);
+    expect(state.commands).toBe(2);
+  } finally { journal.close(); registry.close(); }
+});
+
+test.each([
+  ["published", null],
+  ["unavailable", "no runtime session is registered after host recovery"],
+  ["stage-changed", "stage eligibility changed during host republication"],
+  ["active", "turn=running"],
+  ["attention", "attention=1"],
+  ["no-writer", "has no writer claim"],
+] as const)("a missing restart-cut projection republishes its live durable owner: %s", async (scenario, reason) => {
+  const { registry, conversation, journal, session, publish, state, client } = idleContinuationFixture();
+  const generation = conversation.generations.at(-1)!;
+  const key = { engine: conversation.engine, sessionId: generation.id };
+  const entry = registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  let missing = true;
+  let republications = 0;
+  let recoveries = 0;
+  let spawns = 0;
+  const restartedClient = { ...client, readSession: async () => missing ? null : journal.readSession({ conversationId: conversation.id }) };
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => {
+    recoveries++;
+    return recoverDeadStructuredConversation(request, {
+      ...dependencies, transport: () => "structured", park: () => null,
+      spawn: async () => { spawns++; throw new Error("a live owner must not spawn a successor"); },
+    });
+  };
+  const request = { path: generation.path, conversationId: conversation.id,
+    clientMessageId: "restart-live-owner", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" } };
+  const dependencies = {
+    enabled: () => true, registry: () => registry, client: () => restartedClient, kick: () => {},
+    idleContinuationAllowed: () => state.eligible, recover,
+    republish: async (publishedKey: typeof key) => {
+      republications++;
+      expect(publishedKey).toEqual(key);
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      if (scenario === "unavailable") return false;
+      missing = false;
+      session.writerClaim = "fixture:republished";
+      if (scenario === "stage-changed") state.eligible = false;
+      if (scenario === "active") Object.assign(session, { turn: "running", activeTurnId: "operator-turn" });
+      if (scenario === "attention") session.attentionIds = ["permission"];
+      if (scenario === "no-writer") session.writerClaim = null;
+      publish();
+      return true;
+    },
+  };
+  try {
+    // Real recovery hands this live claim back without publishing a projection.
+    expect(await recover({ path: generation.path, conversationId: conversation.id }, { registry, client: restartedClient }))
+      .toMatchObject({ conversationId: conversation.id, spawned: false });
+    expect(await restartedClient.readSession()).toBeNull();
+    recoveries = 0;
+    const result = await enqueueStructuredMessage(request, dependencies);
+    expect(republications).toBe(1);
+    expect(recoveries).toBe(scenario === "unavailable" ? 1 : 0);
+    expect(spawns).toBe(0);
+    if (reason) {
+      expect(result).toMatchObject({ ok: false, status: 409, admission: "refused", error: expect.stringContaining(reason) });
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(0);
+      expect(state.commands).toBe(0);
+      expect(state.deliveries).toBe(0);
+    } else {
+      expect(result).toMatchObject({ ok: true, outcome: "delivered" });
+      expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "delivered", operationId: result!.operationId });
+      expect(state.commands).toBe(1);
+      expect(state.deliveries).toBe(1);
+      const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
+      expect(delivery.command.onlyIfIdle).toEqual({ revision: journal.readSession({ conversationId: conversation.id })!.revision,
+        writerClaim: "fixture:republished" });
+    }
+  } finally { journal.close(); registry.close(); }
+});
+
+
+test.each([
+  ["stage-changed", "stage eligibility changed during host recovery"],
+  ["active", "turn=running"],
+  ["attention", "attention=1"],
+  ["failed", "host recovery failed: publication unavailable"],
+  ["not-resumable", "conversation cannot be resumed"],
+  ["missing-publication", "has no writer claim"],
+  ["unknown-admission", "earlier continuation admission must be reconciled"],
+] as const)("a restart-cut continuation preserves refusal evidence without reserving a send: %s", async (scenario, reason) => {
+  const { registry, conversation, journal, session, state, client } = idleContinuationFixture();
+  let recoveries = 0;
+  Object.assign(session, { host: "unhosted", writerClaim: null });
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  publish();
+  if (scenario === "unknown-admission") {
+    const uncertain = registry.holdDelivery(conversation.id, "Continue", "restart-refused");
+    registry.beginDeliveryAttempt(uncertain.id, uncertain.generationId!);
+  }
+  const dependencies = {
+    enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+    idleContinuationAllowed: () => state.eligible, republish: async () => false,
+    recover: async () => {
+      recoveries++;
+      if (scenario === "failed") throw new Error("publication unavailable");
+      if (scenario === "not-resumable") return null;
+      if (scenario !== "missing-publication") Object.assign(session, { host: "hosted", writerClaim: "fixture:2" });
+      if (scenario === "stage-changed") state.eligible = false;
+      if (scenario === "active") Object.assign(session, { turn: "running", activeTurnId: "operator-turn" });
+      if (scenario === "attention") session.attentionIds = ["permission"];
+      publish();
+      return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
+    },
+  };
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: "restart-refused", text: "Continue", origin: { kind: "agent", role: "pipeline" } }, dependencies);
+    expect(result).toMatchObject({ ok: false, admission: "refused" });
+    if (result?.ok === false) expect(result.error).toContain(reason);
+    expect(recoveries).toBe(scenario === "unknown-admission" ? 0 : 1);
+    expect(state.commands).toBe(0);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(scenario === "unknown-admission" ? 1 : 0);
+  } finally { journal.close(); registry.close(); }
 });

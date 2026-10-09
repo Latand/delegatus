@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 41;
+export const ORCHESTRATOR_PROMPT_VERSION = 43;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -250,7 +250,10 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
  * a missing priority is stated, never turned into a request to label (D2).
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
-Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
+Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues with suggest_replies and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+
+const SHIPPED_BOARD_REPORT_DIRECTIVES = [`${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`];
 
 /** The heading of the required reporting and cross-project rules. */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
@@ -397,6 +400,8 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 const ORCHESTRATOR_PERSONALITY = `## Who you are
 Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work with suggested replies. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.`;
 
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.";
+
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key \`viewer\`). You never act outside them.
 
 ${ORCHESTRATOR_PERSONALITY}
@@ -420,10 +425,10 @@ The gateway relays the user's intent to you with send_message. A directive may c
 The two channels above carry words; this one carries their screen. request_attention moves the operator's one active Delegatus view to a card and verifies it landed; they keep a one-action Return. Use it when you do something concrete they care about right now, and pair it with the words that explain it (chat reply or bridge report) — a move nobody explained is a jump.
 Move them when: you just spawned or resumed a worker for something they asked for (focus that conversation as you say it is running); a review verdict, merge or deploy lands (focus the card it landed on); a lane blocks on THEM (focus the surface that is blocking, and ask in the same breath).
 Do not move them for polling, routine status, your own bookkeeping, or twice for the same event. One move per real outcome; reason is one operator-safe sentence about why to look, never the card's contents. NO_ACTIVE_VIEW means nobody is at the desk — that is normal, not a failure to retry in a loop.
-Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape. intent "show" frames and highlights the card; "open" also opens it. A rejected target names the fields its kind expects: read it rather than guessing another shape.
+Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.
 
 ## Reply drafts (suggest_replies)
-Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to. Work you can decide yourself is no ask: do it and say what you did. Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
+Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to. Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
 They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision, and never a substitute for asking clearly in the message itself. The newest set replaces your previous one for that conversation, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.
 
 ${ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE}
@@ -480,7 +485,7 @@ ${ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE}
 - Replacing manual spawns is a non-goal: the user's own agents keep working, and you coordinate them without taking them over.
 - Re-derive board state each turn from bounded snapshots; keep none of it in context.
 
-Prototype review: point to the task's review.`;
+${ORCHESTRATOR_PROTOTYPE_DIRECTIVE}`;
 
 /** Identifies the generated role table inside a delivered mandate. The table
     runs from this heading to the first blank line, and delivery replaces it
@@ -566,7 +571,7 @@ function withoutRoleTable(text: string): string {
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
-  { markers: ["Prototype review:"], directive: "Prototype review: point to the task's review." },
+  { markers: ["Prototype review:"], directive: ORCHESTRATOR_PROTOTYPE_DIRECTIVE },
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
@@ -618,7 +623,10 @@ export function orchestratorMandateWithRoleTable(mandate: string, roleTable: str
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
     SHIPPED_GREETING_OFFERS.reduce(
       (text, shipped) => text.split(shipped).join(ORCHESTRATOR_GREETING_OFFER),
-      mandate
+      SHIPPED_BOARD_REPORT_DIRECTIVES.reduce(
+        (text, shipped) => text.split(shipped).join(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE),
+        mandate.replace(/^Prototype review: point to the task's review\.$/m, ORCHESTRATOR_PROTOTYPE_DIRECTIVE),
+      )
         .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
         .split(SHIPPED_DEPLOYS_SECTION).join(""),
     ),

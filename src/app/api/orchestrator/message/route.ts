@@ -14,27 +14,31 @@ export const dynamic = "force-dynamic";
  * and receipts. */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);
-  if (rejection) return rejection;
+  if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   let body: Record<string, unknown>;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+    return NextResponse.json({ error: "invalid JSON", admission: "refused" }, { status: 400 });
   }
   if (!body || typeof body !== "object" || Array.isArray(body)
     || typeof body.project !== "string" || !body.project.trim()
     || typeof body.text !== "string" || !body.text.trim() || body.action !== undefined) {
-    return NextResponse.json({ error: "project and message text are required; this endpoint sends messages only" }, { status: 400 });
+    return NextResponse.json({ error: "project and message text are required; this endpoint sends messages only", admission: "refused" }, { status: 400 });
   }
   if (body.image != null
     || (body.images != null && (!Array.isArray(body.images) || body.images.length > 0))
     || (body.files != null && (!Array.isArray(body.files) || body.files.length > 0))) {
-    return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported" }, { status: 400 });
+    return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported", admission: "refused" }, { status: 400 });
   }
   const project = canonicalOrchestratorProject(body.project);
+  const voice = body.voiceDelegatus as { sessionId?: unknown; proposalId?: unknown } | undefined;
+  if (body.voiceDelegatus !== undefined && (!voice || typeof voice.sessionId !== "string" || typeof voice.proposalId !== "string"))
+    return NextResponse.json({ code: "voice_admission_refused" }, { status: 400 });
   const admitted = admitOrchestratorRelay(req, project,
     typeof body.conversationId === "string" ? body.conversationId : undefined,
-    body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined);
+    body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
+    voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined);
   if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
   return conversationHostPOST(new NextRequest(req.url, {
     method: "POST", headers: req.headers,
@@ -43,6 +47,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       conversationId: admitted.recipient,
       clientMessageId: body.clientMessageId,
       text: body.text,
+      ...(voice ? { voiceDelegatus: voice } : {}),
       policy: "steer-or-queue",
       images: [],
     }),

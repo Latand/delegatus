@@ -9,7 +9,7 @@ export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRo
   return { ...publicRound, variants: variants.map(v => ({ ...v,
     frames: v.frames.map(({ image, original, ...frame }) => ({ ...frame, image: media(image), ...(original ? { original: media(original) } : {}) })),
     videos: v.videos.map(video => ({ ...video, media: media(video.media) })) })),
-    ...(decision ? { decision: { chosen: decision.chosen, comment: decision.comment, at: decision.at,
+    ...(decision ? { decision: { chosen: decision.chosen, ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
       delivery: { state: decision.delivery.state, retryable: ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
 }
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
@@ -18,7 +18,7 @@ export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica 
 }
 
 /** What the summary reads of a round: a stored round and its public view both carry it. */
-type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt"> & { variants: ReadonlyArray<{ number: number; name: string }>;
+type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt" | "questions"> & { variants: ReadonlyArray<{ number: number; name: string }>;
   decision?: Pick<PrototypeDecision, "chosen" | "comment" | "at"> & { delivery: { state: PrototypeDeliveryState } } };
 /** Pure selectors: at most one waiting round per task, and only the newest.
     A newer round replaces every undecided round before it, and a decision
@@ -28,8 +28,8 @@ export function prototypeReviewSummary(rounds: readonly SummaryRound[]): Prototy
   const latest = rounds.at(-1);
   if (!latest) return undefined;
   return { latestReviewId: latest.id, waitingReviewId: latest.decision ? null : latest.id, title: latest.title,
-    rounds: rounds.length, createdAt: latest.createdAt,
-    ...(latest.decision ? { decision: { chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
+    rounds: rounds.length, createdAt: latest.createdAt, ...(latest.questions?.length ? { asks: "questions" as const } : {}),
+    ...(latest.decision ? { decision: { ...(latest.questions?.length ? { answered: true as const } : {}), chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
       comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}) };
 }
 /** A summary built elsewhere (an older installation's replica, a held poll)
@@ -53,11 +53,16 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[]): PrototypeRe
   return tasks.flatMap(task => {
     const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
     const reviewId = summary?.waitingReviewId;
-    if (!summary || !reviewId) return [];
+    if (!summary || !reviewId || !prototypeWaitsOnOperator(summary)) return [];
     /* The notice names the task the jump lands on; the waiting round's own title, which may be older than the latest, rides second. */
     const waiting = (task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? []).find(round => round.id === reviewId);
     const roundTitle = waiting?.title ?? (reviewId === summary.latestReviewId ? summary.title : undefined);
     return [{ id: `prototype:${reviewId}`, project: task.project, taskId: task.id, reviewId, title: firstLineTitle(task.text), ...(roundTitle ? { roundTitle } : {}),
+      ...(waiting?.questions?.length || summary.asks === "questions" ? { asks: "questions" as const } : {}),
       createdAt: summary.createdAt, target: { kind: "prototype-review" as const, taskId: task.id, reviewId } }];
   });
+}
+
+export function prototypeWaitsOnOperator(summary: PrototypeReviewSummary | undefined): boolean {
+  return !!summary?.waitingReviewId && !summary.waitingDismissal;
 }

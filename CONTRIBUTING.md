@@ -302,8 +302,25 @@ then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
 systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
 refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
-(docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted.
+(docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted. Linux commands run in a transient service with
+`KillMode=control-group`, a two-second TERM-to-KILL bound and a finite deadline
+(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes). A recorded caller start
+identity detects a hard-killed wrapper; detached descendants stay owned by the
+service. Surviving children fail the command before the manager reaps them.
+Linux requires a reachable user systemd manager. macOS and Windows use an
+independent identity-bound guardian with best-effort execution and one warning
+per owning run; a detached child can escape between guardian polls. The strong
+lifetime guarantee applies to Linux native containment, as recorded in
+`docs/verification/test-child-lifetime.md`.
 An existing `NODE_OPTIONS` is preserved.
+
+Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
+isolated home, config, state and temporary root. The preload registers real
+Node and Bun children before spawn returns, checks for survivors, and reaps
+them before deleting its temporary root. Direct and nested Linux test runners
+enter their own service before test modules load. Portable runs use an independent
+guardian. Fixtures with blocking barriers check their recorded
+parent identity within the barrier; asynchronous fixtures check it on a timer.
 
 `LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns

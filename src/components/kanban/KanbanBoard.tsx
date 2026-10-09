@@ -9,7 +9,7 @@ import { conversationIdentity, formatConversationHash } from "@/lib/accounts/ide
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import type { SeatRefs } from "@/lib/tasks/groupHide";
+import { isCurrentSeatConversation, type SeatRefs } from "@/lib/tasks/groupHide";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -25,7 +25,7 @@ import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { isCardHandle, startCardGesture } from "./cardDrag";
-import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, OPEN_RAIL_WIDTH, openRailTier, type KanbanLayoutMode, type OpenRailTier } from "./kanbanLayout";
+import { kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanLayoutMode } from "./kanbanLayout";
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
@@ -56,13 +56,15 @@ import { cardDismissal } from "./cardDismissal";
 import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, dismissUnstartedLaunches, type AssignmentPorts } from "./kanbanAssignments";
 import { SeatActionWires } from "./SeatActionWires";
-import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
-import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
+import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived, readerShown } from "./kanbanFocus";
+import { closeReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
-import { cycleOpenAgent, draftAgents, openAgents } from "./openAgents";
-import { OPEN_AGENTS_SHORTCUT, OpenAgentsList, OpenAgentsRail } from "./OpenAgentsRail";
+import { cycleOpenAgent, openAgents } from "./openAgents";
+import { AgentWindow, OPEN_AGENTS_SHORTCUT, OpenAgentsPill } from "./AgentWindow";
+import { AgentWindowOpener } from "./agentWindowOpener";
+import { readerReady, useAgentWindowGeometry, useReaderReady } from "./agentWindowGeometry";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
 import { pipelineTitle, stageNames } from "./PipelineSection";
@@ -159,6 +161,10 @@ export interface KanbanBoardProps {
   /** A conversation or task the Viewer was asked to open while this board
       shows: its card is revealed, and a conversation opens as a reader. */
   focus?: string | null;
+  /** Which request `focus` answers. The Viewer keeps `focus` for a while
+      after the open, so a second request for the same conversation (a link
+      followed again) names the same path, and only this tells them apart. */
+  focusNonce?: number;
   /** A reader opened: the same seen-stamp opening a conversation leaves. */
   onConversationOpened?: (path: string) => void;
   /** Conversations, the project's every conversation: for what no card draws (review decks, collapsed workers)
@@ -275,6 +281,16 @@ function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/* Whether the operator's last input on the page was a key. The reader given
+   the keyboard after a click, or by a link nobody pressed a key for, shows no
+   focus ring. Watched for the page, so a board that mounts again still knows;
+   an event a script dispatched is nobody's input. */
+let keyedLast = false;
+if (typeof document !== "undefined") {
+  document.addEventListener("keydown", (event) => { if (event.isTrusted) keyedLast = true; }, true);
+  document.addEventListener("pointerdown", (event) => { if (event.isTrusted) keyedLast = false; }, true);
+}
+
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
@@ -351,6 +367,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The full attention chip would reach into ⋯ (measured, so it follows the locale's label and the
      digits of the count); the chip then keeps its dot and count, as it does in a compact bar. */
   const [chipCrowded, setChipCrowded] = useState(false);
+  /* Even compact, the bar's groups would run into the chip with the open agents' slot in the row. */
+  const [barTight, setBarTight] = useState(false);
   const [tab, setTab] = useState<TaskStatus>("assigned");
   const [query, setQuery] = useState("");
   const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
@@ -372,7 +390,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
     | { kind: "account"; target: AccountTarget }
     | { kind: "links"; target: WorkLinkTarget }
-    | { kind: "agents" }
   >();
   const { receipts, show, dismiss } = useReceipts();
 
@@ -415,10 +432,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
      operator widened. Tabs already show one column at full width, and the
      cross-project Overview keeps its fixed shares and reads no pin. */
   const widthControls = mode !== "tabs" && !props.overview;
-  const widthControlsRef = useRef(widthControls);
-  widthControlsRef.current = widthControls;
-  const widenIfNarrowRef = useRef(wideColumns.widenIfNarrow);
-  widenIfNarrowRef.current = wideColumns.widenIfNarrow;
   const workInAssignedRef = useRef(wideColumns.workInAssigned);
   workInAssignedRef.current = wideColumns.workInAssigned;
   /* A wide shelf gives the space back when the operator goes back to work in
@@ -439,7 +452,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
     };
   }, []);
   const renderSeat = props.seat;
-  const seatView = useMemo(() => renderSeat?.(boardId) ?? null, [renderSeat, boardId]);
+  /* The seat's expand button opens the seat's conversation in the agent
+     window like any agent; the button takes the keyboard back when the
+     window closes. Read through a ref: the opener is defined further down. */
+  const openFromSeatRef = useRef<(file: FileEntry, from: HTMLElement | null, placeholder?: string) => void>(() => {});
+  const openFromSeat = useCallback((file: FileEntry, from: HTMLElement | null, placeholder?: string) => openFromSeatRef.current(file, from, placeholder), []);
+  /* What the seat's composer says, kept for the same conversation's composer in the window. */
+  const [seatPlaceholder, setSeatPlaceholder] = useState<{ key: string; text: string } | null>(null);
+  const seatView = useMemo(() => {
+    const seat = renderSeat?.(boardId) ?? null;
+    return seat ? <AgentWindowOpener.Provider value={openFromSeat}>{seat}</AgentWindowOpener.Provider> : null;
+  }, [renderSeat, boardId, openFromSeat]);
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
@@ -478,50 +501,44 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const owners = useMemo(() => conversationOwners(cards, files), [cards, files]);
   const anchors = useMemo(() => cardAnchors(cards, owners), [cards, owners]);
   const [placement] = useState(() => new ReaderPlacement());
-  /* One reader at a time may take the whole window; it is the same reader,
-     moved, and goes back into its card when it leaves. */
-  const [fullReader, setFullReader] = useState<string | null>(null);
-  /* A conversation no card holds (a review round in a deck, a collapsed worker, an engine's subagent) opens as a
-     reader of its own, in the whole window: the same transcript and composer, for as long as it is open. It is
-     not remembered, nothing is written to the board, and it belongs to the project it was opened in: a board kept
-     mounted across a project switch never shows it over another project. */
-  const [looseReader, setLooseReader] = useState<{ key: string; path: string; project: string } | null>(null);
-  const loose = looseReader?.project === project ? looseReader : null;
-  const looseRef = useRef(loose);
-  looseRef.current = loose;
-  const toggleFull = useCallback((key: string) => setFullReader((current) => (current === key ? null : key)), []);
-  /* The window is the loose reader's only place: leaving it, or its project, closes the reader. */
-  useEffect(() => {
-    if (!looseReader) return;
-    if (looseReader.project !== project) {
-      setLooseReader(null);
-      setFullReader((current) => (current === looseReader.key ? null : current));
-    } else if (fullReader !== looseReader.key) {
-      setLooseReader(null);
-    }
-  }, [fullReader, looseReader, project]);
-  /* Going anywhere else on the board leaves the loose reader's window first, so it never stays over the card,
-     reader or pipeline the operator went to. */
-  const leaveLoose = useCallback((keep: string | null) => {
-    const current = looseRef.current;
-    if (!current || current.key === keep) return;
-    setLooseReader(null);
-    setFullReader((full) => (full === current.key ? null : full));
+  /* The agent window (docs/design/agent-window.md): every conversation opened
+     on the board opens here, never inside its card. `windowAgent` is the agent
+     asked for, null with the window closed; `shown` is the one in the reader,
+     which follows once the agent asked for is ready, so the window never shows
+     an empty reader. The window belongs to the project it was opened in: a
+     project switch leaves it behind, and it does not come back on return. */
+  const [windowState, setWindowState] = useState<{ project: string; agent: string | null; shown: string | null }>({ project, agent: null, shown: null });
+  if (windowState.project !== project) setWindowState({ project, agent: null, shown: null });
+  const requestedAgent = windowState.project === project ? windowState.agent : null;
+  const shownState = windowState.project === project ? windowState.shown : null;
+  const setWindow = useCallback((agent: string | null, shown?: string | null) => {
+    setWindowState((current) => {
+      const next = { project, agent, shown: shown === undefined ? (current.project === project ? current.shown : null) : shown };
+      return next.agent === current.agent && next.shown === current.shown && next.project === current.project ? current : next;
+    });
+  }, [project]);
+  /* Where the window and the park stand, measured onto the board. */
+  useAgentWindowGeometry(rootRef);
+  /* The agent the pill and Alt+J bring the window back on. */
+  const lastShown = useRef<string | null>(null);
+  /* Whether the agent brought in takes the keyboard: an open or a switch does,
+     an attention handoff and a row's × leave focus where it is. */
+  const focusOnShow = useRef(false);
+  const windowAgentRef = useRef<string | null>(null);
+  /* The control outside the board's cards the window was opened from (the
+     seat's expand button): closing the window gives it the keyboard back. */
+  const openedFrom = useRef<HTMLElement | null>(null);
+  const focusAfterWindow = useCallback((fallback: string) => {
+    const from = openedFrom.current;
+    openedFrom.current = null;
+    queueMicrotask(() => (from?.isConnected ? from : rootRef.current?.querySelector<HTMLElement>(fallback))?.focus({ preventScroll: true }));
   }, []);
-  /* Escape puts it back, unless the key belongs to a field or an open menu.
-     Listened for on the document: the reader is a portal, so its key events
-     never pass through the overlay in React's tree. */
-  useEffect(() => {
-    if (!fullReader) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      const target = event.target as HTMLElement | null;
-      if (target?.closest?.("input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog']")) return;
-      setFullReader(null);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [fullReader]);
+  const leaveWindow = useCallback(() => {
+    if (!windowAgentRef.current) return;
+    setWindow(null, null);
+    /* The pill brings the window back; it takes the keyboard. */
+    focusAfterWindow("[data-open-agents-pill]");
+  }, [setWindow, focusAfterWindow]);
   const parkRef = useCallback((park: HTMLDivElement | null) => placement.setPark(park), [placement]);
   const filesByIdentity = useMemo(() => new Map(files.map((file) => [conversationIdentity(file), file] as const)), [files]);
   /* A conversation that has left this board's files keeps its reader mounted
@@ -552,8 +569,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return { stage, folded, attempts: operationalAttempts(pipeline, stage.id), shown, file, readerKey: file && !folded ? conversationIdentity(file) : null };
     });
   }, [sheetSummary, paneFolds, paneAttempts, filesByPath, filesByConversation]);
-  /* A conversation a pane shows is mounted in that pane, unless it has the window. */
-  const sheetSlots = useMemo(() => new Set(sheetPanes.flatMap((pane) => (pane.readerKey && pane.readerKey !== fullReader ? [pane.readerKey] : []))), [sheetPanes, fullReader]);
+  /* A conversation a pane shows is mounted in that pane, unless the agent window shows it or is bringing it in. */
+  const sheetSlots = useMemo(() => new Set(sheetPanes.flatMap((pane) => (pane.readerKey && pane.readerKey !== shownState && pane.readerKey !== requestedAgent ? [pane.readerKey] : []))), [sheetPanes, shownState, requestedAgent]);
 
   /* A reader's owner is rebuilt with the model; while it names the same card, title and stage, the reader keeps
      the object it had, so a model rebuild does not re-render every open reader. */
@@ -571,20 +588,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const file = owner?.file ?? filesByIdentity.get(reader.key) ?? filesByPath.get(reader.path) ?? lastSeenFiles.current.get(reader.key);
       if (!file) return [];
       const card = owner ? cardsById.get(owner.cardId) : undefined;
-      const inSheet = sheetSlots.has(reader.key);
       return [{
         readerKey: reader.key,
         file,
-        folded: reader.folded && fullReader !== reader.key && !inSheet,
-        full: fullReader === reader.key,
-        inSheet,
+        inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
+        ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
+        /* The window is the operator's conversation window: the agent in its
+           reader takes the one composer from any other place of the same
+           conversation, the seat's included. */
+        ...(shownState === reader.key ? { composerPrimary: true } : {}),
       }];
     });
-    if (loose && !views.some((view) => view.readerKey === loose.key)) {
-      const file = filesByIdentity.get(loose.key) ?? filesByPath.get(loose.path) ?? lastSeenFiles.current.get(loose.key);
-      if (file) views.push({ readerKey: loose.key, file, folded: false, full: true, owner: null });
-    }
     /* A pane's conversation no card has open is mounted for as long as the pane shows it. */
     if (sheetSummary) {
       const open = new Set(openReaders.map((reader) => reader.key));
@@ -594,27 +609,68 @@ export function KanbanBoard(props: KanbanBoardProps) {
         views.push({
           readerKey: pane.readerKey,
           file: pane.file,
-          folded: false,
-          full: fullReader === pane.readerKey,
-          inSheet: fullReader !== pane.readerKey,
+          inSheet: shownState !== pane.readerKey,
           owner: stableOwner(pane.readerKey, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } }),
         });
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, fullReader, loose, sheetSlots, sheetSummary, sheetPanes]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs, seatPlaceholder]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
-  /* The agents open on the board, for the rail at its side. */
-  const railAgents = useMemo(
-    () => [...openAgents(t, readerViews, openReaders, props.now), ...draftAgents(t, [...cardsById.values()])],
-    [t, readerViews, openReaders, props.now, cardsById],
-  );
-  const railKeysRef = useRef<readonly string[]>([]);
-  railKeysRef.current = railAgents.map((agent) => agent.key);
-  const railShown = railAgents.length > 0;
-  const [railTier, setRailTier] = useState<OpenRailTier>("full");
+  /* An agent closed while it is in the reader and its neighbour has not
+     read yet: it has left the list and stays in the reader until the
+     neighbour can take its place, then it closes (see closeReaderFor). */
+  const [closing, setClosing] = useState<{ key: string; memory: ReaderMemory } | null>(null);
+  /* The agents open on the board, for the agent window's list. */
+  const openNow = useMemo(() => openAgents(t, readerViews, openReaders, props.now), [t, readerViews, openReaders, props.now]);
+  const windowAgents = useMemo(() => (closing ? openNow.filter((agent) => agent.key !== closing.key) : openNow), [openNow, closing]);
+  const windowKeysRef = useRef<readonly string[]>([]);
+  windowKeysRef.current = windowAgents.map((agent) => agent.key);
+  /* The agent in the reader. One whose conversation is gone from the list
+     (closed elsewhere, or its file left the board) is not shown. */
+  const shown = shownState && openNow.some((agent) => agent.key === shownState) ? shownState : null;
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  /* An agent asked for that is not open any more leaves the window on the
+     one still shown, or closes it. */
+  const requestedListed = requestedAgent !== null && windowAgents.some((agent) => agent.key === requestedAgent);
+  const windowAgent = requestedListed ? requestedAgent : requestedAgent ? shown : null;
+  windowAgentRef.current = windowAgent;
+  const windowOpen = windowAgent !== null && shown !== null;
+  if (shown) lastShown.current = shown;
+  /* The agent asked for comes into the reader once its feed is ready: at once
+     for one already open, after its first read for a new one. The previous
+     agent stays in the reader until then, and a first open shows the window
+     with its conversation. */
+  const incoming = requestedListed && requestedAgent !== shown ? requestedAgent : null;
+  useReaderReady(placement, incoming, useCallback((key: string) => setWindow(key, key), [setWindow]));
+  /* The agent closed leaves once the reader has moved on from it: to its
+     neighbour, or with the window. */
+  useLayoutEffect(() => {
+    if (!closing || shown === closing.key) return;
+    closing.memory.update((readers) => closeReader(readers, closing.key));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the close it held is done
+    setClosing(null);
+  }, [closing, shown]);
+  /* Escape closes the window in one press, unless the key belongs to a field,
+     a menu or another dialog. Listened for on the document: the reader is a
+     portal, so its key events never pass through the window in React's tree. */
+  useEffect(() => {
+    if (!windowAgent) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.("input, textarea, select, [contenteditable='true'], [role='menu']")) return;
+      const dialog = target?.closest?.("[role='dialog']");
+      if (dialog && !dialog.hasAttribute("data-agent-window-frame")) return;
+      leaveWindow();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [windowAgent, leaveWindow]);
+
   /* A write this browser refused leaves every reader open on this page; the
      operator is told once that they will not come back after a reload. */
   const toldUnremembered = useRef(false);
@@ -637,20 +693,21 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     readersChanged(readerPaths ? readerPaths.split("\n") : []);
   }, [readerPaths, readersChanged]);
+  /* The cards mark the agents open from them; none of them hosts one. */
   const readerKeysByCard = useMemo(() => {
     const byCard = new Map<string, string[]>();
     for (const reader of openReaders) {
       const owner = owners.get(reader.key);
-      if (!owner || reader.key === fullReader || sheetSlots.has(reader.key)) continue;
+      if (!owner) continue;
       const keys = byCard.get(owner.cardId) ?? [];
       keys.push(reader.key);
       byCard.set(owner.cardId, keys);
     }
     return new Map([...byCard].map(([cardId, keys]) => [cardId, keys.join("\n")] as const));
-  }, [openReaders, owners, fullReader, sheetSlots]);
+  }, [openReaders, owners]);
 
-  /* A card re-ranked inside its column is moved by React, reader and all; the
-     feed positions that move reset come back before paint. */
+  /* A feed position a move between the window, a pane and the park reset
+     comes back before paint. */
   useLayoutEffect(() => {
     placement.restoreScrolls();
   });
@@ -670,10 +727,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const barWidth = element.getBoundingClientRect().width;
       const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
       const seatWidth = seat?.getBoundingClientRect().width ?? 0;
-      /* The open-agents rail takes its strip out of what the seat leaves. */
-      const tier = openRailTier(beside - seatWidth);
-      setRailTier(tier);
-      setMode(kanbanLayoutModeBeside(beside, seatWidth + (railShown ? OPEN_RAIL_WIDTH[tier] : 0)));
+      setMode(kanbanLayoutModeBeside(beside, seatWidth));
       setBarWide(barWidth >= BAR_WIDE_MIN);
       setBarWrap(kanbanLayoutMode(barWidth) === "tabs");
       setReasonsBelowBar(barWidth < 1168);
@@ -690,25 +744,37 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (aside) observer?.observe(aside);
     if (seat) observer?.observe(seat);
     return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, settled); if (frame) cancelAnimationFrame(frame); };
-  }, [hasAside, seatSide, railShown]);
+  }, [hasAside, seatSide]);
 
   /* The chip is fixed over the bar's right reserve and the bar's groups can run into it (the uk
      label is the widest). With the bar's own filters in the row, measure the chip in its full form
      against ⋯ and compact it only when they would touch. Measuring takes the attribute off and puts
      it back inside one task, so nothing is drawn between and the verdict does not depend on the
-     last one. */
+     last one. The open agents' slot is measured in the compact row the same way: where even that
+     row runs into the chip, the slot is not drawn (the agents stay open, Alt+J brings the window),
+     and whether it is drawn depends on the width alone, never on how many agents are open. */
   useLayoutEffect(() => {
     const bar = rootRef.current?.querySelector<HTMLElement>('.bar[data-bar="project"]');
-    if (!bar || reasonsBelowBar) { setChipCrowded(false); return; }
+    if (!bar) { setChipCrowded(false); setBarTight(false); return; }
     const fit = () => {
       const chip = bar.querySelector<HTMLElement>("[data-attention-count]");
       const more = bar.querySelector<HTMLElement>('[data-bar-group="more"]');
       if (!chip || !more) return;
+      const touches = () => chip.getBoundingClientRect().left < more.getBoundingClientRect().right + CHIP_CLEARANCE;
       const compact = bar.hasAttribute("data-bar-compact");
-      bar.removeAttribute("data-bar-compact");
-      const crowded = chip.getBoundingClientRect().left < more.getBoundingClientRect().right + CHIP_CLEARANCE;
-      if (compact) bar.setAttribute("data-bar-compact", "");
+      const tight = bar.hasAttribute("data-bar-tight");
+      bar.removeAttribute("data-bar-tight");
+      let crowded = false;
+      if (!reasonsBelowBar) {
+        bar.removeAttribute("data-bar-compact");
+        crowded = touches();
+      }
+      bar.setAttribute("data-bar-compact", "");
+      const squeezed = !barWrap && touches();
+      if (!compact) bar.removeAttribute("data-bar-compact");
+      if (tight) bar.setAttribute("data-bar-tight", "");
       setChipCrowded(crowded);
+      setBarTight(squeezed);
     };
     fit();
     if (typeof ResizeObserver !== "function") return;
@@ -717,7 +783,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const mutation = typeof MutationObserver === "function" ? new MutationObserver(fit) : null;
     mutation?.observe(bar, { childList: true, subtree: true, characterData: true });
     return () => { resize.disconnect(); mutation?.disconnect(); };
-  }, [reasonsBelowBar, barWide, barWrap, locale, hasAside, seatSide, railShown]);
+  }, [reasonsBelowBar, barWide, barWrap, locale, hasAside, seatSide]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -1405,7 +1471,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon" || open.value.kind === "agents") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1596,7 +1662,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     };
   };
 
-  /* ── A reader's actions: full pane, link, and Link / Unlink ───────────── */
+  /* ── A reader's actions: link, and Link / Unlink ──────────────────────── */
   const conversationName = (view: ReaderView) => cleanTitle(view.file.title ?? "", 48) || view.owner?.cardTitle || t("kanban.untitledConversation");
   const readerMenu = (key: string, anchor: HTMLElement, stop: ReaderStop): { label: string; items: KanbanMenuItem[] } | null => {
     const view = readerViews.find((candidate) => candidate.readerKey === key);
@@ -1608,7 +1674,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return {
       label: t("kanban.readerActions"),
       items: [
-        { type: "item", id: "full", label: fullReader === key ? t("kanban.readerLeaveFull") : t("kanban.readerFull"), onSelect: () => toggleFull(key) },
         {
           type: "item",
           id: "copyLink",
@@ -1837,11 +1902,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [step]);
 
   /* ── Opening what a card holds ───────────────────────────────────────── */
-  /* What to bring into view once React has committed: the card, and the
-     reader when one was opened. */
-  const pendingReveal = useRef<{ cardId: string | null; readerKey: string | null; focusReader: boolean; focusSelector?: string; landing?: boolean } | null>(null);
-  const revealCard = useCallback((cardId: string, readerKey: string | null = null, focusReader = false, focusSelector?: string, landing = false) => {
-    leaveLoose(readerKey);
+  /* The card to bring into view once React has committed. */
+  const pendingReveal = useRef<{ cardId: string; focusSelector?: string } | null>(null);
+  /* Going to a card leaves the agent window first, so it never stays over the
+     card the operator went to. */
+  const revealCard = useCallback((cardId: string, focusSelector?: string) => {
+    if (windowAgentRef.current) setWindow(null, null);
     const card = cardsByIdRef.current.get(cardId);
     if (card) {
       setCollapsed((current) => {
@@ -1853,62 +1919,65 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (query && !cardMatchesShown(modelRef.current, card)) setQuery("");
       if (modeRef.current === "tabs") setTab(card.status);
     }
-    pendingReveal.current = { cardId, readerKey, focusReader, focusSelector, landing };
+    pendingReveal.current = { cardId, focusSelector };
     setRevealTick((tick) => tick + 1);
-  }, [query, leaveLoose]);
-  /* What each attention request's handoff changed about a reader, so that
-     request's Return undoes exactly that: close a reader it opened, fold again
-     one it unfolded. A reader that was already open and expanded is not the
-     handoff's to touch. Any gesture of the operator's on that reader makes it
+  }, [query, setWindow]);
+  /* The agent each attention request's handoff opened, so that request's
+     Return closes exactly that one. An agent that was already open is not the
+     handoff's to touch. Any gesture of the operator's on that agent makes it
      theirs again. */
-  const handoffOwned = useRef(new Map<string, { key: string; restore: "close" | "fold" }>());
+  const handoffOwned = useRef(new Map<string, { key: string }>());
   const disown = useCallback((key: string) => {
     for (const [requestId, owned] of handoffOwned.current) if (owned.key === key) handoffOwned.current.delete(requestId);
   }, []);
+  /* What the seat names, for the handlers that must not re-bind on a new answer. */
+  const seatRefsRef = useRef(seatRefs);
+  useLayoutEffect(() => { seatRefsRef.current = seatRefs; }, [seatRefs]);
+  /* Every conversation opens in the agent window and joins its list at the
+     end; one already open is shown where it stands in the list. The board
+     under the window does not move. */
   const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean; landing?: boolean } = {}) => {
     const key = conversationIdentity(file);
     if (!options.handoff) disown(key);
-    const owner = ownersRef.current.get(key);
-    if (owner) memory.update((readers) => openReader(readers, key, file.path));
-    setFocusedReader(key);
+    openedFrom.current = null;
+    memory.update((readers) => openReader(readers, key, file.path));
+    /* The seat's conversation is never the context the operator selected for
+       its own composer, so opening it leaves the selection where it was. */
+    if (!isCurrentSeatConversation(seatRefsRef.current, file)) setFocusedReader(key);
     onConversationOpened?.(file.path);
-    /* Revealing leaves another loose reader's window, so a new one takes the window after it. */
-    revealCard(owner?.cardId ?? "", key, options.focus !== false, undefined, options.landing);
-    if (!owner) {
-      setLooseReader({ key, path: file.path, project });
-      setFullReader(key);
-    }
-  }, [memory, onConversationOpened, revealCard, disown, project]);
+    focusOnShow.current = options.focus !== false;
+    /* A launch shows its agent at once, in the commit its draft leaves the
+       card, so the board settles under the window and not before it. */
+    setWindow(key, options.landing ? key : undefined);
+  }, [memory, onConversationOpened, disown, setWindow]);
+  useLayoutEffect(() => {
+    openFromSeatRef.current = (file, from, placeholder) => {
+      /* Its conversation draws no tile, so the board may not have read it yet. */
+      lastSeenFiles.current.set(conversationIdentity(file), file);
+      if (placeholder) setSeatPlaceholder({ key: conversationIdentity(file), text: placeholder });
+      openReaderFor(file);
+      openedFrom.current = from;
+    };
+  }, [openReaderFor]);
   const [revealTick, setRevealTick] = useState(0);
   useLayoutEffect(() => {
     const wanted = pendingReveal.current;
     if (!wanted) return;
     pendingReveal.current = null;
-    const root = rootRef.current;
-    if (!root) return;
-    const slot = wanted.readerKey ? placement.slotOf(wanted.readerKey) : null;
-    const target = slot ?? (wanted.cardId ? root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`) : null);
+    const target = rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`);
     if (!target) return;
-    if (wanted.landing) {
-      /* A launched card stands where its draft stood. The column stays as it is while that head is in view; a
-         scroll would move the content as visibly as a layout shift, and bring the reader's foot up under the header. */
-      const card = wanted.cardId ? root.querySelector<HTMLElement>(`.card[data-id="${cssEscape(wanted.cardId)}"]`) : null;
-      const body = card?.closest<HTMLElement>(".col-body");
-      if (card && body) {
-        const head = card.getBoundingClientRect().top;
-        const view = body.getBoundingClientRect();
-        /* An agent being read in the same column stays in the window: the launched card stands under it. */
-        const readingBeside = [...body.querySelectorAll<HTMLElement>("[data-kanban-reader]")].some((reader) => {
-          if (card.contains(reader)) return false;
-          const box = reader.getBoundingClientRect();
-          return box.bottom > view.top && box.top < view.bottom;
-        });
-        if (!readingBeside && (head < view.top || head > view.bottom - 40)) card.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
-      } else target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
-    } else target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
-    if (slot && wanted.focusReader) slot.querySelector<HTMLElement>("[data-kanban-reader]")?.focus({ preventScroll: true });
+    target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     if (wanted.focusSelector) target.querySelector<HTMLElement>(wanted.focusSelector)?.focus({ preventScroll: true });
-  }, [revealTick, placement]);
+  }, [revealTick]);
+  /* The agent brought into the window takes the keyboard, when it was opened
+     or switched to by the operator. */
+  useLayoutEffect(() => {
+    if (!shown || !focusOnShow.current) return;
+    focusOnShow.current = false;
+    const reader = placement.slotOf(shown)?.querySelector<HTMLElement>("[data-kanban-reader]");
+    /* A reader that came back with its own focus (its composer, its caret) keeps it. */
+    if (reader && !reader.contains(document.activeElement)) reader.focus({ preventScroll: true, ...(keyedLast ? {} : { focusVisible: false }) });
+  }, [shown, placement]);
   const ownersRef = useRef(owners);
   ownersRef.current = owners;
   const anchorsRef = useRef(anchors);
@@ -1983,14 +2052,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (pipeline) stageDrafts.settleFromStage(key, pipeline);
     }
   }, [pipelines, draftsVersion, stageDrafts]);
-  /* When a waiting stage starts, its panel becomes that conversation's reader,
-     folded as the panel was. A draft the start overtook keeps the panel, which
+  /* When a waiting stage starts, its panel leaves the card and the stage's
+     conversation joins the agent window's list. A draft the start overtook keeps the panel, which
      says the draft was not delivered, until the operator lets it go. A panel
      whose pipeline left the board goes with it. */
   useEffect(() => {
     if (!stagePanels.size) return;
     let next = stagePanels;
-    const promoted: Array<{ file: FileEntry; folded: boolean }> = [];
+    const promoted: FileEntry[] = [];
     for (const [key, panel] of stagePanels) {
       const summary = cards.flatMap((card) => card.pipelines).find((entry) => entry.pipeline.id === panel.pipelineId);
       const stage = summary?.pipeline.stages.find((entry) => entry.id === panel.stageId);
@@ -2005,15 +2074,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       /* The attempt's conversation is not on the board yet: the panel waits for it. */
       if (!file) continue;
       next = withEntry(next, key, undefined);
-      promoted.push({ file, folded: panel.folded });
+      promoted.push(file);
     }
     if (next !== stagePanels) setStagePanels(next);
     if (promoted.length) {
-      memory.update((readers) => promoted.reduce<OpenReader[]>((current, { file, folded }) => {
-        const key = conversationIdentity(file);
-        const opened = openReader(current, key, file.path);
-        return folded ? foldReader(opened, key, true) : opened;
-      }, [...readers]));
+      memory.update((readers) => promoted.reduce<OpenReader[]>((current, file) => openReader(current, conversationIdentity(file), file.path), [...readers]));
     }
   }, [stagePanels, cards, draftsVersion, stageDrafts, filesByPath, filesByConversation, memory]);
   const panelsByCard = useMemo(() => {
@@ -2042,7 +2107,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
           const root = rootRef.current;
           const card = root?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`);
           const button = card?.querySelector<HTMLElement>(`[data-open-stages="${cssEscape(pipelineId)}"]`);
-          const back = opener?.isConnected && opener !== document.body && root?.contains(opener)
+          /* An opener that went to the park with its reader is not on screen to take focus. */
+          const back = opener?.isConnected && opener !== document.body && root?.contains(opener) && !opener.closest(".reader-park")
             ? opener
             : button ?? card ?? root?.querySelector<HTMLElement>(".board-frame");
           back?.focus({ preventScroll: true });
@@ -2094,22 +2160,38 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "links", target } });
   }, [menu]);
-  const foldReaderFor = useCallback((key: string, folded: boolean) => {
+  /* Closing one agent closes nothing else. Closing the one in the window
+     brings its neighbour into the same reader (the next, or the previous at
+     the end), so the window never leaves the screen: in the same commit when
+     the neighbour has read, as it has when it waited laid out in the park.
+     One that has not (never shown, or its saved tail gone) reads first, the
+     way a switch does, and the agent closed stays in the reader until then,
+     out of the list. The last one closes the window. */
+  const closeReaderFor = useCallback((key: string) => {
     disown(key);
-    memory.update((readers) => foldReader(readers, key, folded));
-  }, [memory, disown]);
-  const closeReaderFor = useCallback((key: string, refocusCard = true) => {
-    disown(key);
-    const cardId = ownersRef.current.get(key)?.cardId;
-    setFullReader((current) => (current === key ? null : current));
-    setLooseReader((current) => (current?.key === key ? null : current));
+    const agent = windowAgentRef.current;
+    const onScreen = shownRef.current;
+    if (agent && (agent === key || onScreen === key)) {
+      const keys = windowKeysRef.current;
+      const at = keys.indexOf(key);
+      const neighbour = at < 0 ? null : keys[at + 1] ?? keys[at - 1] ?? null;
+      /* An agent still on its way into the reader stays asked for. */
+      const next = agent === key ? neighbour : agent;
+      if (onScreen === key && next && !readerReady(placement.containerOf(next))) {
+        setWindow(next);
+        setClosing({ key, memory });
+        return;
+      }
+      setWindow(next, onScreen === key ? next : onScreen);
+      if (!next) focusAfterWindow(".board-frame");
+    }
     memory.update((readers) => closeReader(readers, key));
-    if (cardId && refocusCard) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(`.card[data-id="${cssEscape(cardId)}"]`)?.focus({ preventScroll: true }));
-  }, [memory, disown]);
+  }, [memory, disown, setWindow, placement, focusAfterWindow]);
   const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
   /* A conversation the Viewer was asked to open lands in its reader. */
   const focusTarget = props.focus ?? null;
+  const focusNonce = props.focusNonce;
   useEffect(() => {
     if (!focusTarget) return;
     if (focusTarget.startsWith("task::")) {
@@ -2129,7 +2211,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (focusTarget.startsWith("draft::")) {
       const id = focusTarget.slice("draft::".length);
       const holder = [...cardsByIdRef.current.values()].find((card) => card.drafts.includes(id));
-      if (holder) revealCard(holder.id, null, false, `[data-kanban-draft="${cssEscape(id)}"] textarea`);
+      if (holder) revealCard(holder.id, `[data-kanban-draft="${cssEscape(id)}"] textarea`);
       return;
     }
     const file = filesByPath.get(focusTarget);
@@ -2137,7 +2219,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     /* On its card, or, for a conversation no card holds, as a reader of its own in the window. */
     openReaderFor(file);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per request
-  }, [focusTarget]);
+  }, [focusTarget, focusNonce]);
 
   const focusCard = useCallback((cardId: string) => {
     const card = cardsById.get(cardId);
@@ -2238,13 +2320,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The conversation the operator is in: the reader holding keyboard focus,
      else the one opened last, while it stays open and expanded. */
   const [focusedReader, setFocusedReader] = useState<string | null>(null);
+  /* The readers that hold the seat's conversation: the focus sync and the selection skip them. */
+  const seatReaderKeys = useMemo(() => new Set(readerViews.filter((view) => view.seat).map((view) => view.readerKey)), [readerViews]);
+  const seatReaderKeysRef = useRef(seatReaderKeys);
+  useLayoutEffect(() => { seatReaderKeysRef.current = seatReaderKeys; }, [seatReaderKeys]);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const sync = () => {
       const active = document.activeElement as HTMLElement | null;
       const reader = typeof active?.closest === "function" ? active.closest<HTMLElement>("[data-kanban-reader]") : null;
-      if (reader && root.contains(reader)) setFocusedReader(reader.dataset.kanbanReader ?? null);
+      /* The seat's own conversation keeps the keyboard without becoming the selection. */
+      if (reader && root.contains(reader) && !seatReaderKeysRef.current.has(reader.dataset.kanbanReader ?? "")) setFocusedReader(reader.dataset.kanbanReader ?? null);
     };
     const later = () => queueMicrotask(sync);
     root.addEventListener("focusin", sync);
@@ -2254,61 +2341,46 @@ export function KanbanBoard(props: KanbanBoardProps) {
       root.removeEventListener("focusout", later);
     };
   }, []);
-  const focusedView = focusedReader ? readerViews.find((view) => view.readerKey === focusedReader && !view.folded) : undefined;
+  /* With the window open the conversation the operator is in is the one in its
+     reader, whatever path brought it there and wherever focus stands, so a
+     composer's selected-context line is the same for an agent after an open,
+     a switch or a close. */
+  const inReader = windowOpen && !seatReaderKeys.has(shown ?? "") ? shown : focusedReader;
+  const focusedView = inReader ? readerViews.find((view) => view.readerKey === inReader) : undefined;
 
-  /* ── The open-agents rail ────────────────────────────────────────────── */
-  /* A segment takes the board to its agent the way the card's own tile does:
-     the card revealed and scrolled to, the reader unfolded and focused. A
-     reader that has the whole window gives it up first, or the one asked for
-     would open under it. */
-  const readerViewsRef = useRef(readerViews);
-  readerViewsRef.current = readerViews;
+  /* ── The agent window's list ─────────────────────────────────────────── */
+  /* A row, ‹ › and Alt+J / Alt+K bring their agent into the window's reader. */
   const jumpToAgent = useCallback((key: string) => {
-    if (key.startsWith("draft::")) {
-      const id = key.slice("draft::".length);
-      const holder = [...cardsByIdRef.current.values()].find((card) => card.drafts.includes(id));
-      if (holder) revealCard(holder.id, null, false, `[data-kanban-draft="${cssEscape(id)}"] textarea`);
-      return;
-    }
-    const view = readerViewsRef.current.find((candidate) => candidate.readerKey === key);
-    if (!view) return;
-    /* The agent's column widens as its Widen button would widen it, unless it
-       is already wide or a pin holds the wide share. */
-    const cardId = ownersRef.current.get(key)?.cardId;
-    const status = cardId ? cardsByIdRef.current.get(cardId)?.status : undefined;
-    if (status && widthControlsRef.current) widenIfNarrowRef.current(status);
-    setFullReader((current) => (current && current !== key ? null : current));
-    openReaderFor(view.file);
-  }, [openReaderFor, revealCard]);
-  const closeFromRail = useCallback((key: string) => {
-    if (key.startsWith("draft::")) draftCloseRef.current?.(key.slice("draft::".length));
-    else closeReaderFor(key, false);
-  }, [closeReaderFor]);
+    if (!windowKeysRef.current.includes(key)) return;
+    disown(key);
+    focusOnShow.current = true;
+    setWindow(key);
+  }, [disown, setWindow]);
+  /* The pill, and Alt+J with the window closed, bring the window back on the
+     agent shown last. */
+  const reopenWindow = useCallback(() => {
+    openedFrom.current = null;
+    const keys = windowKeysRef.current;
+    const back = lastShown.current && keys.includes(lastShown.current) ? lastShown.current : keys[0];
+    if (back) jumpToAgent(back);
+  }, [jumpToAgent]);
+  const stepAgent = useCallback((step: 1 | -1) => {
+    const next = cycleOpenAgent(windowKeysRef.current, windowAgentRef.current, step);
+    if (next) jumpToAgent(next);
+  }, [jumpToAgent]);
   const closeAllAgents = useCallback(() => {
-    const keys = new Set(railKeysRef.current);
-    for (const key of keys) {
-      if (key.startsWith("draft::")) draftCloseRef.current?.(key.slice("draft::".length));
-      else disown(key);
-    }
-    setFullReader((current) => (current && keys.has(current) ? null : current));
+    const keys = new Set(windowKeysRef.current);
+    for (const key of keys) disown(key);
+    setWindow(null, null);
     memory.update((readers) => readers.filter((reader) => !keys.has(reader.key)));
-    menu.close(false);
-    /* The rail goes with the last agent; the board keeps the keyboard. */
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(".board-frame")?.focus({ preventScroll: true }));
-  }, [memory, disown, menu]);
-  /* The compact tier's list goes with the last agent it listed. */
-  const agentsListOpen = menu.open?.value.kind === "agents";
-  useEffect(() => {
-    if (agentsListOpen && !railShown) menu.close(false);
-  }, [agentsListOpen, railShown, menu]);
-  const railCurrent = focusedReader && railAgents.some((agent) => agent.key === focusedReader) ? focusedReader : null;
-  const railCurrentRef = useRef(railCurrent);
-  railCurrentRef.current = railCurrent;
-  const jumpRef = useRef(jumpToAgent);
-  jumpRef.current = jumpToAgent;
-  /* Alt+J and Alt+K walk the open agents from the one the operator is in,
-     from inside a composer too. Read by the key's place (`code`), so the
-     chord is the same under every keyboard layout. */
+    /* The window and the pill go with the last agent; the board keeps the keyboard. */
+    focusAfterWindow(".board-frame");
+  }, [memory, disown, setWindow, focusAfterWindow]);
+  const agentStepRef = useRef({ stepAgent, reopenWindow });
+  agentStepRef.current = { stepAgent, reopenWindow };
+  /* Alt+J and Alt+K walk the open agents, from inside a composer too; with
+     the window closed they bring it back. Read by the key's place (`code`),
+     so the chord is the same under every keyboard layout. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return;
@@ -2316,16 +2388,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!step || sheetOpen.current) return;
       const root = rootRef.current;
       if (!root?.isConnected || root.closest("[hidden], [inert]")) return;
-      const keys = railKeysRef.current;
-      if (!keys.length) return;
+      if (!windowKeysRef.current.length) return;
       event.preventDefault();
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("[data-kanban-reader]") : null;
-      const from = active && root.contains(active) ? active.dataset.kanbanReader ?? null : railCurrentRef.current;
-      const next = cycleOpenAgent(keys, from, step);
-      if (next) {
-        menu.close(false);
-        jumpRef.current(next);
-      }
+      menu.close(false);
+      if (windowAgentRef.current) agentStepRef.current.stepAgent(step);
+      else agentStepRef.current.reopenWindow();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -2348,10 +2415,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [cardsById, selection, focusedPath]);
   reportPresenceRef.current = reportPresence;
-  useEffect(() => { reportPresence(); }, [reportPresence]);
+  /* Before paint: a composer's selected-context line reads this report, so the
+     agent coming into the window is drawn with its line on its first frame. */
+  useLayoutEffect(() => { reportPresence(); }, [reportPresence]);
 
   /* ── Focus handoff: the board half, without a camera (#688, C6) ──────── */
-  /* Conversations no card holds resolve too: a handoff opens them as a reader of their own. */
+  /* Conversations no card holds resolve too: a handoff opens them in the agent window. */
   const looseAnchors = useMemo(() => new Set(files.filter((file) => !owners.has(conversationIdentity(file))).map((file) => file.path)), [files, owners]);
   const focusIndex = useMemo(() => kanbanFocusIndex(model, anchors, project, looseAnchors), [model, anchors, project, looseAnchors]);
   useEffect(() => focusHandoffBus.setBoard({
@@ -2368,11 +2437,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         const key = conversationIdentity(file);
         const requestId = destination.requestId ?? "";
         const before = openReadersRef.current.find((reader) => reader.key === key);
-        /* A resumed move finds the reader it already opened: ownership stays as
+        /* A resumed move finds the agent it already opened: ownership stays as
            the first move recorded it. */
-        if (!handoffOwned.current.has(requestId) && (!before || before.folded)) {
-          handoffOwned.current.set(requestId, { key, restore: before ? "fold" : "close" });
-        }
+        if (!handoffOwned.current.has(requestId) && !before) handoffOwned.current.set(requestId, { key });
         openReaderFor(file, { focus: false, handoff: true });
       } else if (cardId) {
         revealCard(cardId);
@@ -2388,10 +2455,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
         const looseFile = filesByPath.get(loosePath);
         return looseFile && readerArrived(root, placement.slotOf(conversationIdentity(looseFile))) ? (destination.intent === "open" ? "reader" : "visible") : null;
       }
-      /* A loose reader's window covers the board: nothing under it has arrived, and a resumed handoff moves again. */
-      if (looseRef.current) return null;
       const file = destination.intent === "open" && destination.path ? filesByPath.get(destination.path) : undefined;
-      if (file && readerArrived(root, placement.slotOf(conversationIdentity(file)))) return "reader";
+      if (file) {
+        const slot = placement.slotOf(conversationIdentity(file));
+        /* In the window, the conversation is where the operator is; its feed settling makes it the reader. */
+        if (readerArrived(root, slot)) return "reader";
+        if (readerShown(root, slot)) return "visible";
+      }
+      /* The agent window covers the board: nothing under it has arrived, and a resumed handoff moves again. */
+      if (windowAgentRef.current) return null;
       const anchor = destination.anchorKeys.find((key) => anchors.has(key));
       const cardId = anchor ? anchors.get(anchor) : undefined;
       return cardId && cardOnScreen(root, cardId, cssEscape) ? "visible" : null;
@@ -2400,13 +2472,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       const owned = handoffOwned.current.get(requestId ?? "");
       if (!owned) return;
       handoffOwned.current.delete(requestId ?? "");
-      if (owned.restore === "fold") memory.update((readers) => foldReader(readers, owned.key, true));
-      else {
-        setFullReader((current) => (current === owned.key ? null : current));
-        memory.update((readers) => closeReader(readers, owned.key));
-      }
+      /* The window the handoff opened goes with the agent it opened. */
+      if (windowAgentRef.current === owned.key) setWindow(null, null);
+      memory.update((readers) => closeReader(readers, owned.key));
     },
-  }), [project, focusIndex, anchors, looseAnchors, filesByPath, openReaderFor, revealCard, memory, placement]);
+  }), [project, focusIndex, anchors, looseAnchors, filesByPath, openReaderFor, revealCard, memory, placement, setWindow]);
 
   /* ── What the board is not drawing: hidden groups, empty tasks off the
      board, and conversations closed on it ─────────────────────────────── */
@@ -2446,7 +2516,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       : null;
   const openMenu = menuFor();
   const trayOpen = menu.open?.value.kind === "tray" ? menu.open : null;
-  const agentsOpen = menu.open?.value.kind === "agents" ? menu.open : null;
   const linkOpen = menu.open?.value.kind === "link" ? menu.open : null;
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
   const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
@@ -2475,19 +2544,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     .filter((task) => task.id !== linkOwnerTask?.id && task.board !== "hidden")
     .filter((task) => !linkQuery.trim() || task.text.toLowerCase().includes(linkQuery.trim().toLowerCase()))
     .slice(0, 50) : [];
-  /* A shelf column holding an open conversation widens to reading width. */
+  /* A shelf column holding an agent draft widens to reading width, and so
+     does Inbox while `+ Task` composes in it. An open conversation stands in
+     the agent window and leaves its column's width as it was. */
   const readingStatuses = new Set<TaskStatus>();
-  /* Any column holding an open conversation, Assigned included, keeps the agent's minimum width. */
+  /* A draft in Assigned keeps the agent's minimum width. */
   const agentStatuses = new Set<TaskStatus>();
-  for (const view of readerViews) {
-    /* A conversation standing in the Stages sheet is not in its column. */
-    if (view.folded || !view.owner || view.inSheet) continue;
-    const card = cardsById.get(view.owner.cardId);
-    if (!card || collapsed.has(card.id)) continue;
-    agentStatuses.add(card.status);
-    if (card.status !== "assigned") readingStatuses.add(card.status);
-  }
-  /* So does one holding an agent draft, and Inbox while `+ Task` composes in it. */
   for (const card of cardsById.values()) {
     if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
     /* A draft holds the width its launched conversation will need, in whichever column its card stands. */
@@ -2530,7 +2592,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setComposingTask(false);
     setCreatedTasks((current) => [...current.filter((entry) => entry.task.id !== task.id), { task, basis: storedTasksRef.current }]);
     show(t("kanban.taskCreated", { title: task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled") }));
-    revealCard(`task:${task.id}`, null, false, ".title-trigger");
+    revealCard(`task:${task.id}`, ".title-trigger");
   }, [show, t, revealCard]);
   const addAgentRef = useRef(props.onAddAgent);
   addAgentRef.current = props.onAddAgent;
@@ -2605,6 +2667,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       launching.current.delete(id);
       launchedDrafts.current.add(id);
       draftCloseRef.current?.(id);
+      /* The launched agent goes on in the agent window. */
       openReaderFor(files.find((file) => conversationIdentity(file) === identity) ?? entry.file, { landing: true });
     }
   });
@@ -2655,7 +2718,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       readerKeysByCard={readerKeysByCard}
       panelsByCard={panelsByCard}
       actingByCard={actingByCard}
-      placement={placement}
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       heldLaunches={heldLaunches}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
@@ -2711,7 +2773,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       panes={sheetPanes}
       flowsById={flowsById}
       initialFocus={sheet.focus}
-      fullReader={fullReader}
+      windowReader={shown}
       placement={placement}
       drafts={stageDrafts}
       ports={pipelinePorts}
@@ -2720,7 +2782,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onChooseAttempt={(stageId, n) => setPaneAttempts((current) => withEntry(current, stageDraftKey(sheet.pipelineId, stageId), n))}
       onStageMenu={(stage, anchor) => menu.setOpen({ anchor, value: { kind: "stage", cardId: sheetSummary.card.id, pipelineId: sheet.pipelineId, stageId: stage.id, from: "sheet" } })}
       onOpenRecorded={openRecorded}
-      onLeaveFull={(key) => setFullReader((current) => (current === key ? null : current))}
+      onLeaveWindow={leaveWindow}
       onClose={closeSheet}
     />
   ) : null;
@@ -2783,20 +2845,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
       {props.overview ? (
         /* The Overview keeps the bar it had before the project board's header was put in order
-           (#1801 was the project board only): its three facts, and the tools wrapping under the
-           island on its narrow faces. */
+           (#1801 was the project board only), and the tools wrapping under the island on its
+           narrow faces. Who is working is said once, on the Overview's top line above it; who
+           needs you is said once, by the attention island at the bar's right end, as on a
+           project board. */
         <header className="bar" data-bar="overview">
           <span className="summary">
-            <span className="dot" aria-hidden="true" />
-            <span className="num">{t("kanban.overviewWorking", { count: model.totals.working })}</span>
-            {model.totals.needsYou ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="dot warn" aria-hidden="true" />
-                <span className="num">{t("kanban.overviewNeeds", { count: model.totals.needsYou })}</span>
-              </>
-            ) : null}
-            <span aria-hidden="true">·</span>
             <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
           </span>
           {reachStatus}
@@ -2815,7 +2869,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           ) : null}
         </header>
       ) : (
-        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar || chipCrowded ? "" : undefined}>
+        <header className="bar" data-bar="project" data-bar-tier={barWide ? "wide" : "narrow"} data-bar-wrap={barWrap ? "" : undefined} data-bar-compact={reasonsBelowBar || chipCrowded ? "" : undefined} data-bar-tight={barTight ? "" : undefined}>
           {props.barLead ? <div className="bar-slot bar-lead" data-bar-group="where">{props.barLead(barWide)}</div> : null}
           <span className="summary" data-bar-group="status">
             {reachStatus ?? (
@@ -2826,6 +2880,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               </>
             )}
           </span>
+          <OpenAgentsPill count={windowAgents.length} open={windowOpen} onOpen={windowOpen ? leaveWindow : reopenWindow} />
           <span className="grow" />
           {searchTools("find")}
           <div className="bar-group" data-bar-group="view">
@@ -2856,20 +2911,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className="kb-pane" ref={boardPaneRef}>
       <div className="kb-page">
       {seatSide ? null : seatView}
-      <div className={`board-frame${railShown ? " with-rail" : ""}`} id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
-      {/* The open agents stand beside the columns, below a seat on top, so the seat keeps its width. */}
-      {railShown ? (
-        <OpenAgentsRail
-          agents={railAgents}
-          tier={railTier}
-          current={railCurrent}
-          listOpen={menu.open?.value.kind === "agents"}
-          onJump={jumpToAgent}
-          onClose={closeFromRail}
-          onCloseAll={closeAllAgents}
-          onShowList={(anchor) => menu.setOpen({ anchor, value: { kind: "agents" } })}
-        />
-      ) : null}
+      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
       {!loaded ? (
         /* The columns it is loading, in the tracks this width gives them (#2071). */
         <KanbanColumnsSkeleton mode={mode} style={boardStyle} />
@@ -2925,20 +2967,33 @@ export function KanbanBoard(props: KanbanBoardProps) {
       </div>
       {props.aside ? <div ref={asideRef} className="kb-aside">{props.aside}</div> : null}
       </div>
-      <div ref={parkRef} className="reader-park" hidden aria-hidden="true" />
+      <div ref={parkRef} className="reader-park" aria-hidden="true" />
       {sheetView}
-      {fullReader && readerViews.some((view) => view.readerKey === fullReader) ? (
-        <div className="reader-full" data-reader-full={fullReader}>
-          <ReaderSlot placement={placement} readerKey={fullReader} />
-        </div>
+      {/* The window's reader, and the agent it is bringing in, in a slot of
+          its own under it: laid out on screen and not drawn, so its feed
+          reads while the one shown stays. Keyed by agent, so the incoming
+          slot becomes the shown one without moving the conversation. */}
+      {shown || incoming ? (
+        <AgentWindow
+          agents={windowAgents}
+          current={windowAgent}
+          pending={!shown}
+          onJump={jumpToAgent}
+          onStep={stepAgent}
+          onClose={closeReaderFor}
+          onCloseAll={closeAllAgents}
+          onLeave={leaveWindow}
+        >
+          {shown ? <ReaderSlot key={shown} placement={placement} readerKey={shown} /> : null}
+          {incoming ? <ReaderSlot key={incoming} placement={placement} readerKey={incoming} incoming /> : null}
+        </AgentWindow>
       ) : null}
       <ReaderPortals
         placement={placement}
         readers={readerViews}
         now={props.now}
-        onFold={foldReaderFor}
         onClose={closeReaderFor}
-        onFull={toggleFull}
+        onLeave={leaveWindow}
         onMenu={openReaderMenu}
         onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
         onCloseConversation={props.onCloseConversation}
@@ -2981,18 +3036,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
             </button>
           )) : <p className="note">{t("kanban.linkPickerEmpty")}</p>}
           <p className="note">{t("kanban.linkPickerNote")}</p>
-        </KanbanPopover>
-      ) : null}
-      {agentsOpen && railShown ? (
-        <KanbanPopover anchor={agentsOpen.anchor} within={rootRef.current} label={t("kanban.openAgents.aria", { count: railAgents.length })} onClose={menu.close} initialFocus="[data-open-agent-jump]" className="open-agents">
-          <div className="head num">{t("kanban.openAgents.head", { count: railAgents.length })}</div>
-          <OpenAgentsList
-            agents={railAgents}
-            current={railCurrent}
-            onJump={(key) => { menu.close(false); jumpToAgent(key); }}
-            onClose={closeFromRail}
-            onCloseAll={closeAllAgents}
-          />
         </KanbanPopover>
       ) : null}
       {trayOpen ? (
@@ -3057,7 +3100,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, heldLaunches, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, newTask, heldLaunches, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -3080,7 +3123,6 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   readerKeysByCard: ReadonlyMap<string, string>;
   panelsByCard: ReadonlyMap<string, string>;
   actingByCard: ReadonlyMap<string, string>;
-  placement: ReaderPlacement;
   model: KanbanModel;
   mode: KanbanLayoutMode;
   activeTab: TaskStatus;
@@ -3113,7 +3155,6 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       readerKeys={readerKeysByCard.get(card.id) ?? ""}
       stagePanels={panelsByCard.get(card.id) ?? ""}
       acting={actingByCard.get(card.id) ?? ""}
-      placement={placement}
       editing={editing.get(card.id) ?? null}
       failedEdit={failedEdits.get(card.id) ?? null}
       incomingEdit={incomingEdits.get(card.id) ?? null}

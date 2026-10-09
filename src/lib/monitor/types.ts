@@ -235,6 +235,8 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  /** Journal identity of a merge this visible line announces on delivery. */
+  mergeEventSeq?: number;
   diskPressureEpisode?: string;
   /** Version credited only by delivery of this visible item. */
   itemVersion?: string;
@@ -329,6 +331,8 @@ export type SeatTickVerdict =
     kind: "wake";
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
+    /** All owed merges in this page, including those the item bound cut. */
+    pendingMergeSeqs?: number[];
     deferred: number;
     /** Terminal children this wake deliberately did NOT list (#1749, #1783),
         by reason and as counts of CHILDREN rather than of owed outcomes.
@@ -601,6 +605,7 @@ export interface SeatTickEventInput {
    * seat had closed itself earlier in the same session. Events that name no
    * pipeline at all (a deploy outcome, a held delivery) are never terminal by
    * this field: nothing about them has finished.
+   * A recent pipeline_merged event remains owed after its lane is terminal.
    */
   pipelineTerminal: boolean;
 }

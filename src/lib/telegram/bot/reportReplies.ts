@@ -64,14 +64,18 @@ export const productionReportReplyPorts: ReportReplyPorts = {
     // A migration hold has not reached the runtime journal. Fence only a
     // still-held row under the same lock its assignment uses.
     if (deliveryId) {
-      const withdrawn = await withAccountMutationLockAsync(() => {
+      const withdrawn = await withAccountMutationLockAsync(async () => {
         const registry = agentRegistry();
         const row = registry.readOnlySnapshot().heldDeliveries[deliveryId];
-        if (row?.state !== "held" || row.command.operationId !== operationId) return false;
-        registry.terminalizeHeldDelivery(deliveryId, "Telegram reply recipient rotated before delivery");
-        return true;
+        if (row?.state !== "held" || row.command.operationId !== operationId) return "unknown" as const;
+        /* Off the loop (docs/design/delivery-progress-and-drain.md, C2), and
+           decided inside the write: an attempt that claimed the row while the
+           writer was held keeps it. Refused, it is not withdrawn. */
+        const ended = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
+          () => registry.withdrawHeldDelivery(deliveryId, operationId, "Telegram reply recipient rotated before delivery"));
+        return ended.acquired ? ended.value : "unknown";
       }, { caller: "report reply withdrawal" });
-      if (withdrawn) return "withdrawn";
+      if (withdrawn === "withdrawn" || withdrawn === "too-late") return withdrawn;
     }
     const client = runtimeHostClient();
     return client ? withdrawRuntimeWake(operationId, "Telegram reply recipient rotated before delivery", client) : "unknown";

@@ -1,9 +1,10 @@
 # Relay slice 2a: the install's bounded tool loop for direct reads
 
-Status: design, written by the architect stage of the slice 2a lane on
-2026-10-08. Code claims were checked at `e65e6603` on `main`. Nothing here is
-implemented yet. Slice 2b (direct actions) follows as its own lane on top of
-this one and is only given seams here.
+Status: implemented. The architect wrote the slice 2a design on 2026-10-08,
+checking code claims at `e65e6603` on `main`; the implemented 2a baseline is
+`c9a93de8` in PR #2622. This document retains that byte contract and historical
+scope. Slice 2b is implemented on top of it; its action contract and seam
+resolutions are in [relay-slice2b-actions.md](relay-slice2b-actions.md).
 
 ## Originating requirement
 
@@ -446,7 +447,7 @@ Deferred.
 | Item | Install side in 2a | Code |
 |---|---|---|
 | F1 | Listed in `ClaimRequest.features`. The descriptor half is the service's. | `poller.ts:214` |
-| F2 | Not listed. Seam §10. | `poller.ts:214` |
+| F2 | Added by [2b §10](relay-slice2b-actions.md#10-advertise-f2-only-when-every-2b-item-is-implemented). | `poller.ts:214` |
 | F3 | `mode` stays `direct` \| `handoff`. | `protocol.ts:119` unchanged |
 | I1 | Parsed: ≤ 128 (lenient over their 100), unique names. Order not relied on. | `protocol.ts:134-141` |
 | I2 | Hand-off item as slice 1. | `protocol.ts:116-120` |
@@ -461,17 +462,17 @@ Deferred.
 | C5 | Hand-off and unknown tools are never sent (enum, §3.1); a `denied` from the service reaches the model. | §3.1 |
 | C6 | §4. | |
 | R1 | `toolCallResultSchema` requires the nine fields and parses the optional ones; unknown fields ignored. | `protocol.ts` (new) |
-| R2 | `ok`, `error`, `denied` go to the model; `pending` is polled. `confirmation_pending`, `outcome_unknown` are 2b: in 2a either one makes the next round final, and the model sees the status only. | `toolLoop.ts` |
+| R2 | `ok`, `error`, `denied` go to the model; `pending` is polled. `confirmation_pending`, `outcome_unknown` are 2b: in 2a either one makes the next round final, and the model sees the status only. 2b adds the action projection and reply-only unknown final ([2b §7–§8](relay-slice2b-actions.md#7-confirmation_pending-flow-and-expiry)). | `toolLoop.ts` |
 | R3 | The six codes reach the model by name; `unavailable` is retried (§3.3); `too_many_calls` ends calling. | `toolLoop.ts`, prompt |
 | R4 | §6. | `toolLoop.ts` `mayQuote` |
-| R5 | `delivered: true` is 2b; in 2a it is treated as terminal like R6. | §10 |
+| R5 | `delivered: true` remains terminal; [2b §7](relay-slice2b-actions.md#7-confirmation_pending-flow-and-expiry) adds action delivery framing. | §10 |
 | R6 | A result with `calls_remaining: 0` makes the next round final. | §5 |
 | B1–B3 | §5. | |
 | L1–L3 | §5, §3.3. | |
 | L4 | §2.2: calls only after heartbeat 1, keeper beats across rounds. | `runner.ts:291-403` restructured |
-| L5 | 2b. No install change; noted in §10. | |
+| L5 | Service stamp plus ledger: [2b §4](relay-slice2b-actions.md#4-an-action-is-never-issued-twice). | |
 | E1 | §3.3 table. | `toolLoop.ts` |
-| E2 | 2b. | §10 |
+| E2 | [2b §5](relay-slice2b-actions.md#5-hand-off-after-an-action-e2). | §10 |
 | X1 | Copied byte for byte (§11). | `src/lib/externalRelay/fixtures/relay_v1/` |
 | X2 | Generated (§11). | `evidence/external-relay/install_tool_loop.json` |
 
@@ -502,17 +503,18 @@ export const toolCallResultSchema = z.object({
 All 26 samples of X1 `tool_call_results.json` parse under it (2b samples
 included), which the replay test asserts.
 
-## 10. Seams for 2b, not built here
+## 10. Seams resolved by slice 2b
 
-| 2b item | Where it plugs in |
+| 2b item | Implemented resolution |
 |---|---|
-| F2 `relay_tool_actions` | Appended to `CLAIM_FEATURES`; `callableReads` becomes `callableTools(request, features)` and admits `effect: "action"` items. |
-| L2 actions run alone | `runCalls` takes a schedule: in 2a all calls of a round run together; 2b runs a round's reads, then each action alone. |
-| `confirmation_pending`, R5 `delivered` | The result projection gains `summary`, `expires_at`; the final-round frame tells the model what awaits confirmation and not to repeat what was delivered, and `ignore` becomes a valid finish. In 2a these statuses already end calling (§9 R2, R5). |
-| R6 `outcome_unknown` | The final-round frame says the action may have happened; no retry (the per-run map already prevents one). |
-| E2 `handoff_after_action` | Once an action was admitted, the final schema drops `handoff`; `complete` (`runner.ts:110-144`) maps a 409 `handoff_after_action` to a completion with an answer. |
-| L5 stamped request | No install change: a lost lease already ends with no completion, and a stamped request is never offered again, so §4's replay path cannot re-run an action. |
-| Records | `toolCalls[].status` already takes every R2 value. |
+| F2 `relay_tool_actions` | `callableTools` admits requester-bearing direct actions through the audience gate; [2b §3.1 and §10](relay-slice2b-actions.md#10-advertise-f2-only-when-every-2b-item-is-implemented). |
+| L2 actions run alone | At most one action per round, after reads settle under a held lease; [2b §3.2](relay-slice2b-actions.md#32-scheduling-a-round-l2). |
+| `confirmation_pending`, R5 `delivered` | Summary and relative `expires_in_s`, terminal final; no confirmation call or repeated delivery; [2b §7](relay-slice2b-actions.md#7-confirmation_pending-flow-and-expiry). |
+| R6 `outcome_unknown` | Local ambiguity also produces terminal unknown; final schema and validation require reply; [2b §8](relay-slice2b-actions.md#8-outcome_unknown). |
+| Post-execution action denial | Denial remains a result, closes calls and prevents hand-off. Exhausted same-ID `unavailable` retries keep the denial with prompt-only `execution_unknown:true` and require a reply; unresolved outcomes retain ambiguity across later refusals; [2b §4.3](relay-slice2b-actions.md#43-the-fate-of-an-action-the-install-could-not-observe). |
+| E2 `handoff_after_action` | Hand-off removed after a POST is sent; 409 completion resent as failed/invalid_answer; [2b §5](relay-slice2b-actions.md#5-hand-off-after-an-action-e2). |
+| L5 stamped request | Service ledger plus stamp, no install state; [2b §4](relay-slice2b-actions.md#4-an-action-is-never-issued-twice). |
+| Records | Action rows add effect; read rows remain byte-identical; [2b §3.6](relay-slice2b-actions.md#36-records). |
 
 ## 11. Test plan
 

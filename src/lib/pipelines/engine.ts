@@ -29,7 +29,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, REGISTRY_WRITER_BUSY, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -353,6 +353,8 @@ export interface PipelinePorts {
     policy?: "queue";
     /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
     continuationAllowed?: () => Promise<boolean>;
+    /** The delivery layer's refusal, retained by provider recovery when it parks. */
+    onRefused?: (reason: string) => void;
     project?: string;
     cwd?: string;
     /** Admission time of the attempt this message continues. An update drain
@@ -729,7 +731,7 @@ async function spawnPipelineAgent(
   } catch (error) {
     if ((error instanceof ActivationSuperseded || error instanceof RuntimeSwitchSuperseded) && begun.kind !== "replay") {
       // This adapter has not dispatched; only its own fresh reservation is safe to cancel.
-      registry.failStructuredSpawn(begun.receipt.launchId, "stage activation cancelled before dispatch");
+      await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage activation cancelled before dispatch");
     }
     throw error;
   }
@@ -753,7 +755,7 @@ async function spawnPipelineAgent(
     /* Nothing was dispatched, and the receipt has to say so itself (#1678):
        the engine re-dispatches only on the receipt's own terminal verdict,
        exactly as the spawn layer records one after its transport fails. */
-    registry.failStructuredSpawn(begun.receipt.launchId, unavailable);
+    await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, unavailable);
     throw new Error(unavailable);
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
@@ -1394,7 +1396,10 @@ export function defaultPipelinePorts(
       const recovery = stagedLaunchRecovery(receipt);
       // An uncertain/delivered operation can outlive the controller's budget.
       if (recovery && recovery.phase !== "unpublished") return false;
-      const failed = registry.failSpawn(launchId, reason);
+      /* The engine's tick is synchronous here: a non-waiting write, and a
+         lock held elsewhere answers false, which the next tick asks again
+         (docs/design/delivery-progress-and-drain.md, C5). */
+      const failed = registry.failSpawnNow(launchId, reason);
       invalidateRegistryProjection();
       return failed;
     },
@@ -1621,7 +1626,10 @@ export function defaultPipelinePorts(
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       }, input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {});
-      if (result?.ok !== true && result?.transportUncertain === true) input.onUncertain?.();
+      if (result?.ok !== true) {
+        input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host");
+        if (result?.transportUncertain === true) input.onUncertain?.();
+      }
       return result?.ok === true;
     },
     invalidateProviderContinuation,
@@ -1665,7 +1673,10 @@ export function defaultPipelinePorts(
       const id = conversationId as ViewerConversationId;
       const migration = registry.conversation(id)?.migration;
       if (migration?.phase === "failed-recoverable" && migration.targetId === targetAccountId) {
-        registry.retryConversationMigration(id, migration.revision);
+        /* Off the loop; refused, the engine waits and asks again (C2). */
+        const retried = await registry.deliveryWrite({ label: "migration.retry", operationId: migration.operationId },
+          () => registry.retryConversationMigration(id, migration.revision));
+        if (!retried.acquired) throw new Error(REGISTRY_WRITER_BUSY);
       } else {
         registry.requestConversationReseat(id, targetAccountId);
       }
@@ -2419,12 +2430,23 @@ async function recoverProviderCut(
   const key = providerContinuationKey(pipeline, stage, attempt);
   const cutTs = wait.turnTs;
   const controlGeneration = pipeline.controlGeneration;
+  let continuationRefusal: string | null = null;
   const continuationAllowed = async () => {
     const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attemptEvidenceFloor(attempt), undefined, cutTs);
-    return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt
-      && pipeline.controlGeneration === controlGeneration && !attempt.report && !attempt.verdict && !wait.retryCancelled
-      && latest?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, latest)
-      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs;
+    continuationRefusal = pipeline.state !== "running" ? "pipeline is no longer running"
+      : pipeline.closedAt ? "pipeline was closed"
+      : pipeline.hiddenAt ? "pipeline was hidden"
+      : pipeline.controlGeneration !== controlGeneration ? "pipeline control generation changed"
+      : attempt.report ? "stage completion was reported"
+      : attempt.verdict ? "stage verdict was recorded"
+      : wait.retryCancelled ? "provider retry was cancelled by operator control"
+      : !latest ? "stage transcript evidence could not be read"
+      : latest.promptHistoryComplete === false ? "delivered prompt history is incomplete"
+      : newerExternalProviderPrompt(attempt, latest) ? "newer external stage activity was recorded"
+      : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
+      : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
+      : null;
+    return continuationRefusal === null;
   };
   let delivered: boolean;
   try {
@@ -2432,10 +2454,10 @@ async function recoverProviderCut(
     persist();
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
-      policy: "queue", continuationAllowed,
+      policy: "queue", continuationAllowed, onRefused: reason => { continuationRefusal ??= reason; },
       project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
-    waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
+    waitForProviderTransport(pipeline, attempt, condition, `continuation transport failed: ${String(error)}`, ports, persist);
     return true;
   }
   if (delivered) {
@@ -2447,7 +2469,7 @@ async function recoverProviderCut(
     recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     persist();
-  } else waitForProviderTransport(pipeline, attempt, condition, "continuation refused", ports, persist);
+  } else waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
   return true;
 }
 
@@ -11871,16 +11893,19 @@ function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null
  * it already, so neither has a row to clear or bring back. Whether the lane
  * moved since a card drew it is the caller's check, made under this lock.
  */
-function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string): PipelinePatchResult | null {
+function applyPipelineDismissal(pipeline: Pipeline, dismiss: boolean, by: DismissedBy, now: string, note?: string): PipelinePatchResult | null {
   if (pipeline.state === "draft" || pipeline.state === "closed") {
     return { error: `a ${pipeline.state} pipeline has no board row to ${dismiss ? "hide" : "show"}`, status: 409 };
   }
   if (dismiss) {
     pipeline.dismissedAt = now;
     pipeline.dismissedBy = by;
+    if (note) pipeline.dismissedNote = note;
+    else delete pipeline.dismissedNote;
   } else {
     pipeline.dismissedAt = null;
     delete pipeline.dismissedBy;
+    delete pipeline.dismissedNote;
   }
   return null;
 }
@@ -11903,12 +11928,13 @@ export async function setPipelineDismissal(
   by: DismissedBy,
   ports: PipelinePorts = defaultPipelinePorts(),
   drawnMovedAt?: number | null,
+  note?: string,
 ): Promise<PipelinePatchResult> {
   return withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
     if (dismiss && laneMovedSince(pipeline, drawnMovedAt)) return { pipeline, moved: true };
-    const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now());
+    const refused = applyPipelineDismissal(pipeline, dismiss, by, ports.now(), note);
     if (refused) return refused;
     persist();
     return { pipeline };

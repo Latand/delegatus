@@ -154,6 +154,71 @@ function plan(verdict: SeatTickVerdict, fingerprint: string, eventsThrough: numb
   return seatTickWakeCommitPlan(verdict, { fingerprint, eventsThrough })!;
 }
 
+describe("completed lane merges", () => {
+  const merge = (seq: number, over: Partial<SeatTickEventInput> = {}) => event({
+    seq, type: "pipeline_merged", pipelineId: `pipeline_merge_${seq}`, pipelineTerminal: true,
+    summary: `ship feature ${seq} — pull request #${seq} merged, head ${"a".repeat(40)}`, ...over,
+  });
+  const idle = (over: Partial<SeatTickCheckInput> = {}) => input({
+    pipelines: [], tasks: [], state: stateWith({ eventsThrough: 0, lastProposalAt: new Date(NOW).toISOString() }), ...over,
+  });
+
+  test("a lost wake leaves every merge owed, and a delivered bounded wake leaves the remainder", () => {
+    const events = [merge(1), merge(2), merge(3), event({ seq: 4, type: "task_finished", pipelineTerminal: true })];
+    const first = seatTickDecision(idle({ events, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 2 } }));
+    expect(first.verdict.kind).toBe("wake");
+    if (first.verdict.kind !== "wake") return;
+    expect(first.verdict.items.map(item => item.id)).toEqual(["pipeline_merge_1", "pipeline_merge_2"]);
+    expect(first.verdict.deferred).toBe(1);
+    expect(first.state.eventsThrough).toBe(0);
+    expect(seatTickDecision(idle({ events, state: first.state })).verdict.kind).toBe("wake");
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 4), NOW);
+    expect(landed.eventsThrough).toBe(2);
+    const next = seatTickDecision(idle({ events: events.filter(event => event.seq > 2), state: landed, now: NOW + 61 * MINUTE }));
+    expect(next.verdict.kind).toBe("wake");
+    if (next.verdict.kind !== "wake") return;
+    expect(next.verdict.items.map(item => item.id)).toEqual(["pipeline_merge_3"]);
+    const done = seatTickWakeCommit(next.state, plan(next.verdict, "fp-1", 4), NOW + 61 * MINUTE);
+    expect(seatTickDecision(idle({ state: done, now: NOW + 122 * MINUTE })).verdict.kind).toBe("quiet");
+  });
+
+  test("a merge omitted from the rendered wake remains owed", () => {
+    const events = [merge(1), merge(2)];
+    const decision = seatTickDecision(idle({ events }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    // The renderer can retain a later short line while cutting an earlier one.
+    const frozenText = seatTickWakeMessage({ project: PROJECT, reasons: decision.verdict.reasons,
+      items: decision.verdict.items.slice(1), deferred: 1, signals: [] });
+    const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "fp-1", eventsThrough: 2, frozenText })!;
+    const landed = seatTickWakeCommit(decision.state, commit, NOW);
+    expect(landed.eventsThrough).toBe(0);
+    const next = seatTickDecision(idle({ events, state: landed, now: NOW + 61 * MINUTE }));
+    expect(next.verdict.kind).toBe("wake");
+    if (next.verdict.kind !== "wake") return;
+    expect(next.verdict.items.map(item => item.id)).toEqual(["pipeline_merge_1"]);
+  });
+
+  test("merges respect the configured interval and survive an exhausted reason guard", () => {
+    const settings = effectiveSeatTickSettings({ ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: 15 }, NOW, SEAT_TICK_WAKE_INTERVAL_MS);
+    const state = stateWith({ eventsThrough: 0, lastWakeAt: new Date(NOW).toISOString(), lastProposalAt: new Date(NOW).toISOString(),
+      wakesWithoutChange: { "lane-event": DEFAULT_SEAT_TICK_POLICY.retryGuard }, lastWakeFingerprint: "fp-1" });
+    const events = [merge(1, { at: new Date(NOW).toISOString() })];
+    const early = seatTickDecision(idle({ events, state, settings, now: NOW + 14 * MINUTE }));
+    expect(early.verdict.kind).toBe("quiet");
+    expect(early.state.eventsThrough).toBe(0);
+    expect(seatTickDecision(idle({ events, state: early.state, settings, now: NOW + 15 * MINUTE })).verdict.kind).toBe("wake");
+  });
+
+  test("old or undated merges and other completed-lane events remain history", () => {
+    const events = [merge(1, { at: new Date(NOW - DEFAULT_SEAT_TICK_POLICY.backlogAfterMs - 1).toISOString() }),
+      merge(2, { at: "unreadable" }), event({ seq: 3, pipelineTerminal: true })];
+    const decision = seatTickDecision(idle({ events }));
+    expect(decision.verdict.kind).toBe("quiet");
+    expect(decision.state.eventsThrough).toBe(3);
+  });
+});
+
 test("a project with open work and no active seat reports no-seat and asks for one card, never a spawn", () => {
   const decision = seatTickDecision(input({ seat: null, pipelines: [lane()] }));
   expect(decision.verdict).toEqual({
