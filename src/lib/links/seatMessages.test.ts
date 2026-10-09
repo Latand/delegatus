@@ -73,3 +73,17 @@ test("a removed grant remains a plain revoked-link refusal by its former machine
   try { resolveSeatMessageMachine("Former", project.project); throw new Error("expected refusal"); }
   catch (error) { expect((error as { code?: string }).code).toBe("link_revoked"); }
 });
+
+
+test("an idle install without message storage reuses its absence until the database changes", async () => {
+  const { Database } = await import("bun:sqlite");
+  seatMessagesPart(link);
+  const close = Database.prototype.close;
+  let reads = 0;
+  Database.prototype.close = function (...args: Parameters<typeof close>) { reads++; return close.apply(this, args); };
+  try { for (let n = 0; n < 10; n++) seatMessagesPart(link); }
+  finally { Database.prototype.close = close; }
+  expect(reads).toBe(0);
+  queueSeatMessage(link, project.project, "A newly queued message.", "fixture-seat", "after-idle");
+  expect(seatMessagesPart(link).out).toHaveLength(1);
+});

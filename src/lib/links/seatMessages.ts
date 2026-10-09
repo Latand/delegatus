@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 import { peerSeatMessages, recordSeatMessages, wasSeatLinkRevoked } from "./boardLinks";
 import { linkedContext, type LinkedPeer } from "./linked";
 import { grantRows, peerRows } from "./protocol";
@@ -24,11 +24,17 @@ const CODE = /^[a-zA-Z0-9_-]{1,64}$/;
 const OBJECT = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const seed = { collection: "link_messages", schemaVersion: 1, migrationId: "linked-seat-messages-v1", key: (row: Row) => row.key, loadRecords: (): Row[] => [] };
 const stores = new Map<string, SqliteStateCollection<Row>>();
+const missing = new Map<string, string>();
 function collection(create = false): SqliteStateCollection<Row> | null {
   const file = statePath("state.sqlite");
   const held = stores.get(file);
   if (held) return held;
-  if (!create && !stateCollectionsInitialized(file, [seed])) return null;
+  if (!create) {
+    const signature = stateDatabaseSignature(file);
+    if (missing.get(file) === signature) return null;
+    if (!stateCollectionsInitialized(file, [seed])) { missing.set(file, signature); return null; }
+  }
+  missing.delete(file);
   if (create) initializeStateCollections(file, [seed]);
   const opened = new SqliteStateCollection<Row>(file, { collection: seed.collection, schemaVersion: 1,
     busyMessage: "linked seat messages busy", key: seed.key, clone: structuredClone, strictDecode: true,
@@ -128,6 +134,7 @@ function validMessage(row: SeatMessage, projects: ReadonlySet<string>): boolean 
 
 export function acceptSeatMessages(link: LinkedPeer, part: SeatMessagePart): number {
   recordSeatMessages(link.key, true);
+  if (!part.out?.length && !part.ack?.length) return 0;
   const newMessages = (part.out ?? []).filter(message => !rows().some(row => row.key === `in:${link.install}:${message.id}`));
   const today = rows().filter(row => row.dir === "in" && row.link === link.install && (row.receivedAt ?? 0) >= Date.now() - DAY).length;
   if (today + newMessages.length > 200) refuse("quota", "The link's daily seat-message quota was reached.");
@@ -192,7 +199,9 @@ export function seatMessagesPart(link: LinkedPeer | null): SeatMessagePart {
 /** A per-message process lease fences overlapping Viewer generations. The
  * local delivery key recovers a send admitted before an outcome was saved. */
 export async function drainSeatMessages(link: LinkedPeer): Promise<void> {
-  for (const row of rows().filter(row => row.dir === "in" && row.link === link.install && row.connection === connection(link) && (row.st === "received" || row.st === "delivering"))) {
+  const snapshot = rows();
+  const pending = snapshot.filter(row => row.dir === "in" && row.link === link.install && row.connection === connection(link) && (row.st === "received" || row.st === "delivering"));
+  for (const row of pending) {
     if (row.lease && procBackend.pidAlive(row.lease.pid) && !procBackend.processExited(row.lease.pid)
       && (row.lease.identity === null || procBackend.processIdentity(row.lease.pid) === row.lease.identity)) continue;
     const lease = { pid: process.pid, identity: procBackend.processIdentity(process.pid), token: randomUUID() };
@@ -223,6 +232,6 @@ export async function drainSeatMessages(link: LinkedPeer): Promise<void> {
     }
   }
   // A retained id outlives the replay window. Prune in bounded batches.
-  const expired = rows().filter(row => Date.now() - (row.receivedAt ?? row.at) > 35 * DAY).slice(0, 100);
+  const expired = (pending.length ? rows() : snapshot).filter(row => Date.now() - (row.receivedAt ?? row.at) > 35 * DAY).slice(0, 100);
   if (expired.length) collection(true)!.boundedPatch(expired.length, tx => { for (const row of expired) tx.delete(row.key); });
 }
