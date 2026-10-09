@@ -19522,12 +19522,17 @@ describe("floating voice companion", () => {
         await page.evaluate(() => {
           const panel = document.createElement("div");
           panel.id = "placement-scroll-probe";
-          panel.style.cssText = "position:fixed;left:20px;top:20px;width:600px;height:240px;overflow:auto;z-index:2";
+          panel.style.cssText = "position:fixed;right:16px;bottom:16px;width:600px;height:240px;overflow:auto;z-index:2";
           panel.innerHTML = '<div style="height:6000px"></div><div id="placement-skipped-card" style="content-visibility:auto;contain-intrinsic-size:900px"><div data-log-feed-scroller style="height:800px;overflow:auto">' +
             Array.from({ length: 100 }, (_, i) => `<div data-placement-descendant style="display:contents"><button data-placement-descendant>Action ${i}</button><span data-placement-descendant>Visible when scrolled ${i}</span><div data-placement-descendant style="cursor:col-resize;width:30px;height:10px"></div><svg data-placement-descendant width="12" height="12"><path d="M0 0L12 12" /></svg></div>`).join("") + '</div></div>';
           document.body.append(panel);
-          const reads = { boxes: 0, lines: 0 };
+          const reads = { boxes: 0, lines: 0, styles: 0 };
           Object.assign(window, { placementProbeReads: reads });
+          const style = window.getComputedStyle;
+          window.getComputedStyle = function (element, pseudo) {
+            if (element.matches("[data-placement-descendant]")) reads.styles++;
+            return style.call(window, element, pseudo);
+          };
           const box = Element.prototype.getBoundingClientRect;
           Element.prototype.getBoundingClientRect = function () {
             if (this.closest("#placement-skipped-card") && this.id !== "placement-skipped-card") reads.boxes++;
@@ -19542,24 +19547,30 @@ describe("floating voice companion", () => {
         });
         await page.waitForTimeout(1_000);
         const hidden = await page.evaluate(() => ({
-          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number } }).placementProbeReads,
+          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number; styles: number } }).placementProbeReads,
           skipped: !document.querySelector("[data-placement-descendant] button")!.checkVisibility({ contentVisibilityAuto: true }),
         }));
         expect(hidden.skipped).toBe(true);
         expect(hidden.boxes).toBe(0);
         expect(hidden.lines).toBe(0);
+        expect(hidden.styles).toBe(0);
 
         await page.evaluate(() => { document.getElementById("placement-scroll-probe")!.scrollTop = 6_000; });
         await page.waitForTimeout(1_000);
         const visible = await page.evaluate(() => ({
-          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number } }).placementProbeReads,
+          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number; styles: number } }).placementProbeReads,
           shown: document.querySelector("[data-placement-descendant] button")!.checkVisibility({ contentVisibilityAuto: true }),
         }));
         expect(visible.shown).toBe(true);
         expect(visible.boxes).toBeGreaterThan(0);
         expect(visible.lines).toBeGreaterThan(0);
+        expect(visible.styles).toBeGreaterThan(0);
+        const placement = await readCompanion(page);
+        expect(placement.insideViewport).toBe(true);
+        expect(placement.overlapArea).toBe(0);
+        expect(placement.handleArea).toBe(0);
         expect(pageErrors).toEqual([]);
-        fs.writeFileSync(path.join(out, "reads.json"), JSON.stringify({ hidden, visible }, null, 2));
+        fs.writeFileSync(path.join(out, "reads.json"), JSON.stringify({ hidden, visible, placement }, null, 2));
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   });

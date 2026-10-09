@@ -19,6 +19,7 @@ import { CompanionCharacter, type CharacterHandle } from "./CompanionCharacter";
 import { awaitsReport, CompanionTranscript, transcriptLabels, transcriptRect, TRANSCRIPT_CSS } from "./CompanionTranscript";
 import type { SessionTranscriptRecord } from "@/lib/voiceCompanion/transcriptRecord";
 import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
+import { createPageVisibilityGuard } from "./pageVisibility";
 
 /**
  * The floating voice companion (#2519, docs/design/voice-companion-research.md §9, §10).
@@ -140,6 +141,7 @@ function reachable(within: Element | null, box: { left: number; top: number; rig
     track, the control's width over the surface's height, counts as well. */
 function controlRects(self: Element | null, extra: string | undefined, rows: string | undefined): Rect[] {
   const rects: Rect[] = [];
+  const canRead = createPageVisibilityGuard();
   const clips = new Map<Element, DOMRect | null>();
   const surfaces = rows ? [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface)) : [];
   const views = new Map<HTMLElement, Rect | null>();
@@ -148,7 +150,7 @@ function controlRects(self: Element | null, extra: string | undefined, rows: str
   /* The cursor is inherited, so the outermost element that sets one stands for all it contains. */
   const walk = (parent: Element, inherited: boolean) => {
     for (const child of parent.children) {
-      if (child === self || !(child instanceof HTMLElement)) continue;
+      if (child === self || !(child instanceof HTMLElement) || !canRead(child)) continue;
       // display:contents has no box but may contain visible controls.
       if (!hasRenderedBox(child) && getComputedStyle(child).display !== "contents") continue;
       const active = !isPassiveCursor(getComputedStyle(child).cursor);
@@ -158,7 +160,7 @@ function controlRects(self: Element | null, extra: string | undefined, rows: str
   };
   walk(document.body, !isPassiveCursor(getComputedStyle(document.body).cursor));
   for (const node of nodes) {
-    if (self?.contains(node) || !hasRenderedBox(node)) continue;
+    if (self?.contains(node) || !canRead(node) || !hasRenderedBox(node)) continue;
     const style = getComputedStyle(node);
     if (style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
     const box = node.getBoundingClientRect();
@@ -190,13 +192,14 @@ function boxOf(element: Element): Element {
     character, its lane nor the collapsed shape is placed over one by itself. */
 function textRects(self: Element | null): Rect[] {
   const rects: Rect[] = [];
+  const canRead = createPageVisibilityGuard();
   const clips = new Map<Element, DOMRect | null>();
   const shown = new Map<Element, boolean>();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const range = document.createRange();
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const parent = node.parentElement;
-    if (!parent || !node.nodeValue?.trim() || self?.contains(parent)) continue;
+    if (!parent || !node.nodeValue?.trim() || self?.contains(parent) || !canRead(parent)) continue;
     if (!shown.has(parent)) shown.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && (boxOf(parent).checkVisibility?.({ contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true }) ?? true));
     if (!shown.get(parent)) continue;
     range.selectNodeContents(node);
@@ -214,18 +217,20 @@ function textRects(self: Element | null): Rect[] {
     feed's avatars stands where the next row's will be. Kept off as the page's text is. */
 function rowGraphics(self: Element | null, rows: string | undefined): Rect[] {
   if (!rows) return [];
+  const canRead = createPageVisibilityGuard();
   const clips = new Map<Element, DOMRect | null>();
-  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface))
+  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface) && canRead(surface))
     .flatMap((surface) => [...surface.querySelectorAll<Element>("img, svg, canvas, video, [role='img']")])
-    .filter((node) => !node.parentElement?.closest("svg") && (node.checkVisibility?.({ contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true }) ?? true))
+    .filter((node) => canRead(node) && !node.parentElement?.closest("svg") && (node.checkVisibility?.({ contentVisibilityAuto: true, checkOpacity: true, checkVisibilityCSS: true }) ?? true))
     .flatMap((node) => reachable(node.parentElement, node.getBoundingClientRect(), clips) ?? []);
 }
 
 /** The surfaces that fill with rows (a conversation's feed), as the part of each a reader can see. */
 function rowSurfaces(self: Element | null, rows: string | undefined): Rect[] {
   if (!rows) return [];
+  const canRead = createPageVisibilityGuard();
   const clips = new Map<Element, DOMRect | null>();
-  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface) && hasRenderedBox(surface))
+  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface) && canRead(surface) && hasRenderedBox(surface))
     .flatMap((surface) => reachable(surface.parentElement, surface.getBoundingClientRect(), clips) ?? []);
 }
 

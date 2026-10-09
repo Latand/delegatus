@@ -1,4 +1,5 @@
 import type { Rect } from "@/lib/voiceCompanion/placement";
+import { createPageVisibilityGuard } from "./pageVisibility";
 
 /**
  * What the desktop shell tells the voice companion about its own surfaces
@@ -18,10 +19,11 @@ const FEED_STRIP_HEIGHT = 44;
 /** Room kept for a feed's way-back strip before the strip exists. Once it is shown it is protected as
     the control it is, and the two readings give the same rectangle. */
 export function companionReserved(): Rect[] {
+  const canRead = createPageVisibilityGuard();
   return [...document.querySelectorAll<HTMLElement>(COMPANION_ROWS)].flatMap((feed) => {
-    if (feed.checkVisibility?.({ contentVisibilityAuto: true }) === false) return [];
+    if (!canRead(feed) || feed.checkVisibility?.({ contentVisibilityAuto: true }) === false) return [];
     const box = feed.getBoundingClientRect();
-    const shown = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].some((strip) => strip.checkVisibility?.({ contentVisibilityAuto: true }) !== false && Math.abs(strip.getBoundingClientRect().top - box.bottom) < 2);
+    const shown = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].some((strip) => canRead(strip) && strip.checkVisibility?.({ contentVisibilityAuto: true }) !== false && Math.abs(strip.getBoundingClientRect().top - box.bottom) < 2);
     return shown || box.height <= FEED_STRIP_HEIGHT ? [] : [{ x: box.x, y: box.bottom - FEED_STRIP_HEIGHT, width: box.width, height: FEED_STRIP_HEIGHT }];
   });
 }
