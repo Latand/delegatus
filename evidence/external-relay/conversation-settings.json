@@ -1,0 +1,48 @@
+{
+  "readings": [
+    {
+      "locale": "en",
+      "width": 390,
+      "overflow": false,
+      "passwordFields": 0,
+      "targets": 3,
+      "frames": [
+        "variant-1-paired-top-390-en.png",
+        "variant-1-paired-bottom-390-en.png"
+      ]
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "overflow": false,
+      "passwordFields": 0,
+      "targets": 3,
+      "frames": [
+        "variant-1-paired-top-1440-en.png",
+        "variant-1-paired-bottom-1440-en.png"
+      ]
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "overflow": false,
+      "passwordFields": 0,
+      "targets": 3,
+      "frames": [
+        "variant-1-paired-top-390-uk.png",
+        "variant-1-paired-bottom-390-uk.png"
+      ]
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "overflow": false,
+      "passwordFields": 0,
+      "targets": 3,
+      "frames": [
+        "variant-1-paired-top-1440-uk.png",
+        "variant-1-paired-bottom-1440-uk.png"
+      ]
+    }
+  ]
+}

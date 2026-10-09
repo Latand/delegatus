@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { feedPathAllowed } from "@/lib/externalRelay/feedAccess";
 import { readTailChunk } from "@/lib/logRead";
 import { MAX_CHUNK } from "@/lib/scanner/roots";
 import type { ApiError, LogChunk } from "@/lib/types";
@@ -49,10 +50,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ chunks: Rec
   }
   const chunks: Record<string, LogChunk | ApiError> = {};
   let budget = BATCH_BUDGET;
+  const allowed = feedPathAllowed(req);
   /* Sequential on purpose: the byte budget is spent in request order, and a
      dozen warm stat+read pairs cost far less than the parallelism would win. */
   for (const { id, path, offset } of parseReqs(body)) {
-    const chunk = await readTailChunk(path, offset, budget);
+    const chunk = await readTailChunk(path, offset, budget, allowed);
     if (!chunk) {
       chunks[id] = { error: "path not allowed" };
       continue;

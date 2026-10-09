@@ -81,6 +81,8 @@ import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
 import { activityDot, cleanTitle } from "./utils";
+import { relayChatsCatalog, RelayChatsView, useRelayChats } from "./externalRelay/RelayChats";
+import { relayIdOfChatsProject } from "@/lib/externalRelay/relayChats";
 import { PRODUCT_NAME } from "@/lib/brand";
 
 const PROJECT_KEY = "llvProject";
@@ -267,6 +269,14 @@ function ViewerApp() {
     () => (createdCatalog.length ? [...polledProjectCatalog, ...createdCatalog] : polledProjectCatalog),
     [polledProjectCatalog, createdCatalog],
   );
+  /* The relay's chats (relay-slice3.md §4) are listed with the other
+     conversations: each paired service whose chats hold one is an entry of the
+     sidebar under its name, and its leaf lists them (RelayChats.tsx). */
+  const relayChats = useRelayChats();
+  const railCatalog = useMemo(() => {
+    const relays = relayChatsCatalog(relayChats);
+    return relays.length ? [...projectCatalog, ...relays] : projectCatalog;
+  }, [projectCatalog, relayChats]);
   const projectDisplayNames = useMemo(() => {
     if (!createdCatalog.length) return polledProjectDisplayNames;
     const merged = { ...polledProjectDisplayNames };
@@ -1604,7 +1614,7 @@ function ViewerApp() {
           return (
             <MobileProjectSheet
               files={files}
-              projectCatalog={projectCatalog}
+              projectCatalog={railCatalog}
               projectDisplayNames={projectDisplayNames}
               pipelines={pipelines}
               workflows={workflows}
@@ -1669,7 +1679,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
 
   const shell = (
     <div className="flex h-full">
@@ -1678,7 +1688,7 @@ function ViewerApp() {
         <button type="button" className="rounded-[8px] bg-brand px-3 py-1.5 font-semibold text-on-brand pointer-coarse:min-h-11" onClick={() => window.location.reload()}>{t("selfUpdate.reconnect.reload")}</button>
       </div> : null}
       {isMobile || railHidden ? null : (
-        <ProjectRail onHide={toggleRail} files={files} projectCatalog={projectCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
+        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
       )}
       {/* Hidden rail (issue #1819): one small control at the top-left edge of
           the main area brings it back, and nothing else of the rail is left on
@@ -1704,7 +1714,7 @@ function ViewerApp() {
           the rest of the row instead of being covered. Desktop only — the phone
           reaches the same orchestrator through slice C (#979) — and never on
           the Overview, which is not a project and so has no seat. */}
-      {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW ? (
+      {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW && !relayIdOfChatsProject(project) ? (
         <OrchestratorDock
           project={project}
           projectName={projectTitle(project, projectDisplayNames[project], cachedProjectName(project)) ?? (loaded ? t("dash.projectUnnamed") : "…")}
@@ -1758,7 +1768,9 @@ function ViewerApp() {
             ) : null}
           </div>
         )}>
-        {project === OVERVIEW && !liftedProject ? (
+        {relayIdOfChatsProject(project) && !liftedProject ? (
+          <RelayChatsView relayId={relayIdOfChatsProject(project)!} payload={relayChats} mobileShell={mobileShell} />
+        ) : project === OVERVIEW && !liftedProject ? (
           <OverviewBoard
             files={files}
             projectCatalog={projectCatalog}
