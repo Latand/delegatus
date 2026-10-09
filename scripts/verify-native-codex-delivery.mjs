@@ -129,7 +129,7 @@ const queuedFilePath=(entry,name)=>(entry?.proof?.input??[]).filter(item=>item.t
 /* Provider requests whose newest user message carried exactly these images. */
 const providerTurnsWith=images=>runtime.provider.requests.filter(request=>JSON.stringify(request.images)===JSON.stringify(images));
 const providerTurnsWithText=text=>runtime.provider.requests.filter(request=>request.texts.some(value=>value.includes(text)));
-const codexVersion=Bun.spawnSync([values.codex,'--version']).stdout.toString().trim();
+const codexVersion=Bun.spawnSync([values.codex,'--version'],{timeout:5000,killSignal:'SIGKILL'}).stdout.toString().trim();
 /* The original request, sent again under its own key once its operation is terminal. */
 const askAgain=async(route,key)=>{const response=await runtime.handle(new Request('http://localhost'+route,{method:'POST',headers:{'content-type':'application/json'},body:bodies.get(route+key)}));return {status:response.status,receipt:(await response.json().catch(()=>({}))).receipt?.status??null};};
 const results={codexVersion,threadIdPrefix:threadId.slice(0,8)};

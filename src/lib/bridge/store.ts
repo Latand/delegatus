@@ -270,7 +270,7 @@ function normalizeResolvedAsks(value: unknown): BridgeResolvedAskV1[] {
     if (!Number.isInteger(candidate.seq) || (candidate.seq as number) < 1) continue;
     if (typeof candidate.at !== "string" || !Number.isFinite(Date.parse(candidate.at))) continue;
     if (!isDismissedBy(candidate.by)) continue;
-    resolved.set(candidate.seq as number, { seq: candidate.seq as number, at: candidate.at, by: candidate.by });
+    resolved.set(candidate.seq as number, { seq: candidate.seq as number, at: candidate.at, by: candidate.by, ...(typeof candidate.note === "string" ? { note: candidate.note } : {}) });
   }
   return [...resolved.values()].sort((left, right) => left.seq - right.seq).slice(-BRIDGE_ANSWERED_REF_CAPACITY);
 }
@@ -1027,7 +1027,7 @@ export function recordBridgeDirectivePendingAnswer(
  */
 export function resolveBridgeAsks(
   seqs: readonly number[],
-  options: { by: DismissedBy; at: string; undo?: boolean; inProject?: (project: string) => boolean },
+  options: { by: DismissedBy; at: string; undo?: boolean; note?: string; inProject?: (project: string) => boolean },
 ): { resolved: number[]; alreadyClear: number[]; unknown: number[] } {
   const wanted = [...new Set(seqs.filter((seq) => Number.isInteger(seq) && seq > 0))];
   if (!wanted.length) return { resolved: [], alreadyClear: [], unknown: [] };
@@ -1045,7 +1045,7 @@ export function resolveBridgeAsks(
         continue;
       }
       if (options.undo) held.delete(seq);
-      else held.set(seq, { seq, at: options.at, by: options.by });
+      else held.set(seq, { seq, at: options.at, by: options.by, ...(options.note ? { note: options.note } : {}) });
       result.resolved.push(seq);
     }
     if (!result.resolved.length) return { result, changed: false };

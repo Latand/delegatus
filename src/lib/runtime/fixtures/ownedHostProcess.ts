@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
@@ -6,29 +8,21 @@ import type { EngineHost } from "../engineHost";
 
 /** A private process behind a fake transport, for the real controller kill fence. */
 export async function ownedHostProcess() {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  const child = spawn(process.execPath, ["-e", `await import(${JSON.stringify(path.resolve(import.meta.dir, "../../testing/fixtureLifetime.ts"))}); setInterval(() => {}, 1000)`], {
     detached: true,
     stdio: "ignore",
   });
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-    child.once("error", () => resolve());
-  });
-  const cleanup = async () => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    child.kill("SIGTERM");
-    const escalation = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    }, 1_000);
-    try { await exited; }
-    finally { clearTimeout(escalation); }
-  };
+  const cleanup = () => stopFixtureProcess(child);
   try {
-    await new Promise<void>((resolve, reject) => {
-      child.once("spawn", resolve);
-      child.once("error", reject);
-    });
     const identity = captureProcessIdentity(child.pid!);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+        timer = setTimeout(() => reject(new Error("owned host fixture did not spawn within 5000ms")), 5_000);
+      });
+    } finally { clearTimeout(timer); }
     if (!identity.startIdentity || !identity.bootEpoch) throw new Error("fixture child has no complete process identity");
     return {
       identity,

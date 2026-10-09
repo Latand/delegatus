@@ -1,3 +1,4 @@
+import { signalFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -41,13 +42,8 @@ const root = path.resolve(import.meta.dir, "..");
 const adapter = path.join(root, "scripts", "runtime-host-viewer-adapter.ts");
 
 function stopRecordedSleep(pidFile: string): void {
-  if (!fs.existsSync(pidFile)) return;
-  const pid = Number(fs.readFileSync(pidFile, "utf8"));
-  if (!Number.isInteger(pid) || pid < 1) return;
-  try {
-    const command = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0", 1)[0];
-    if (path.basename(command ?? "") === "sleep") process.kill(pid, "SIGKILL");
-  } catch { /* the timeout already reaped the recorded helper child */ }
+  const file = `${pidFile}.identity`;
+  if (fs.existsSync(file)) signalFixtureIdentity(JSON.parse(fs.readFileSync(file, "utf8")), "SIGKILL");
 }
 
 test("candidate MCP probes read through the candidate Viewer endpoint", () => {
@@ -98,7 +94,9 @@ set -eu
 if [ ! -f ${quoted(started)} ]; then
   : > ${quoted(started)}
   (sleep 120) &
-  echo $! > ${quoted(childPidFile)}
+  sleep_pid=$!
+      echo "$sleep_pid" > ${quoted(childPidFile)}
+      ${quoted(process.execPath)} -e ${quoted(`import fs from "node:fs"; import { captureProcessIdentity } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/lib/processIdentity.ts"))}; fs.writeFileSync(process.argv[1], JSON.stringify(captureProcessIdentity(Number(process.argv[2]))));`)} ${quoted(`${childPidFile}.identity`)} "$sleep_pid"
   wait
 fi
 exec /usr/bin/git upload-pack ${quoted(remote)}
@@ -124,7 +122,7 @@ exec /usr/bin/git upload-pack ${quoted(remote)}
     const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), 40_000); });
     const result = await Promise.race([child.exited, timeout]);
     if (result === "timeout") {
-      try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+      child.kill("SIGKILL");
       await child.exited;
     } else if (timer) clearTimeout(timer);
     const stdout = await new Response(child.stdout).text();

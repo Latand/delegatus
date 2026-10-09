@@ -62,21 +62,16 @@ verified_exec() {
 if [[ ${1:-} == --in-cpu-scope ]]; then shift; verified_exec "$@"; fi
 run() {
   if cpu_applies; then
-    if ! user_manager; then
-      # A caller already in a work scope (a pipeline host's command, a
-      # sandboxed stage without the user bus) is bounded by that scope's quota.
-      [[ $(own_cgroup) == */"$slice"/* ]] && verified_exec "$@"
-      refuse "no reachable systemd user manager"
-    fi
+    user_manager || refuse "no reachable systemd user manager"
     systemctl --user set-property --runtime "$slice" CPUWeight=100 "CPUQuota=${aggregate}%" CPUQuotaPeriodSec=20ms >/dev/null 2>&1 \
       || refuse "the user manager refused the quota for $slice"
-    exec systemd-run --user --scope -q --collect "--slice=$slice" -p "MemoryMax=${LLV_GATE_MEM:-8G}" \
-      -p CPUWeight=100 -p "CPUQuota=${scope_quota}%" -p CPUQuotaPeriodSec=20ms -- /bin/bash "${BASH_SOURCE[0]}" --in-cpu-scope "$@"
+    export LLV_OWNED_RUN_CPU_SLICE="$slice" LLV_OWNED_RUN_CPU_QUOTA="$scope_quota"
+    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" /bin/bash "${BASH_SOURCE[0]}" --in-cpu-scope "$@"
   fi
   if user_manager; then
-    exec systemd-run --user --scope -q -p "MemoryMax=${LLV_GATE_MEM:-8G}" -- "$@"
+    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" "$@"
   fi
-  exec "$@"
+  exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
 
 # CPU-pressure admission with hysteresis, as in src/lib/runtime/cpuPressure.ts:
