@@ -1941,6 +1941,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     if (outcome.ok && outcome.matched) {
       prior = state.tasks.find(task => task.id === outcome.task.id);
+      assertMaintenanceWrite(maintainer, { note: input.note ?? null }, prior);
       matchedFields = changedFieldNames(fieldValues(prior), outcome.task);
     }
     return {
@@ -1950,7 +1951,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   const fields = result.replay ? [] : matchedFields ?? Object.keys(result.task);
-  if (!result.replay) logMaintenanceWrite(maintainer, "create_task", prior, result.task, fields);
+  if (!result.replay) logMaintenanceWrite(maintainer, result.matched ? "update_task" : "create_task", prior, result.task, fields);
   return { ...taskAcknowledgement(result.task, args, fields), replay: result.replay, ...(result.matched !== undefined ? { matched: result.matched } : {}), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 

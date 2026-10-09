@@ -20,11 +20,12 @@ export function TaskMotionLine({ motion, working, nowMs, plain = false, full = f
   const note = hold && !["operator", "external", "postponed", "unstated"].includes(hold.kind) ? hold.note : "";
   const refUrl = referenceUrl ?? (hold?.ref && /^https?:\/\//i.test(hold.ref) ? hold.ref : null);
   const age = !quiet && motion.since ? fmtAgeSeconds(Math.max(0, (nowMs - Date.parse(motion.since)) / 1000)) : "";
-  const lastSeen = recurred ? new Date(recurred.lastSeenAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const lastSeen = recurred ? fmtAgeSeconds(Math.max(0, (nowMs - Date.parse(recurred.lastSeenAt)) / 1000)) : "";
+  const lastSeenDate = recurred ? new Date(recurred.lastSeenAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
   const recurrence = recurred ? `${t("kanban.finding.count", { count: recurred.count })} · ${t("kanban.finding.lastSeen")} ${lastSeen}` : "";
   const fullText = [recurrence, label, note, motion.due ? t("kanban.motion.due") : "", age, motion.holdStillSet ? t("kanban.motion.holdStillSet") : ""].filter(Boolean).join(" · ");
   const content = <>
-    {recurred ? <span data-finding-recurrence="">{t("kanban.finding.count", { count: recurred.count })} · {t("kanban.finding.lastSeen")} <time dateTime={recurred.lastSeenAt} title={recurred.lastSeenAt}>{lastSeen}</time></span> : null}
+    {recurred ? <span data-finding-recurrence="">{t("kanban.finding.count", { count: recurred.count })} · {t("kanban.finding.lastSeen")} <time dateTime={recurred.lastSeenAt} title={lastSeenDate}>{lastSeen}</time></span> : null}
     {!quiet ? <span>{recurred ? " · " : ""}{label}</span> : null}
     {note ? <span> · {note}</span> : null}
     {motion.due ? <span> · {t("kanban.motion.due")}</span> : null}

@@ -16,7 +16,7 @@ import { TASK_SYNC_GROUPS, UNTITLED_TASK_TEXT, type BoardTask, type TaskSyncGrou
 import { countBoardTasks } from "@/lib/tasks/boardVisibility";
 import { repairLinkedTasks } from "./taskRepair";
 
-import { stampMs } from "./stamp";
+import { nextStamp, stampMs } from "./stamp";
 import { effectiveStamp, newestStamp, raiseFloor, type TaskSyncWrite } from "./taskStamp";
 import { encodeTask, isWireGone, isWireStub, MalformedRow, wireGroup, type WireRow, type WireTask } from "./taskWire";
 import { isTombstone, stubKey, tombstoneKey } from "./tombstones";
@@ -91,10 +91,14 @@ function mergeRow(local: BoardTask | null, row: WireTask, link: ApplyLink, write
     // Only the owner hands a task on, judged by the link the call came over.
     if (group === "machine" && (local.machine ?? self.id) !== link.install) continue;
     if (group === "handover" && row.handover && row.handover.to !== link.install) continue;
-    // Finding identity stays local. Hold a conflicting status and its stamp;
-    // independent groups still merge, and a later replay can retry the status.
+    // Reject a conflicting reopen as a local status decision. A newer stamp
+    // carries Done back to the peer, so acknowledging this page converges.
     if (group === "status" && row.status !== "done" && local.findingKey !== undefined
-      && tasks.some(task => task.id !== local.id && task.project === local.project && task.status !== "done" && task.findingKey === local.findingKey)) continue;
+      && tasks.some(task => task.id !== local.id && task.project === local.project && task.status !== "done" && task.findingKey === local.findingKey)) {
+      stamps.status = nextStamp(row.s.status, write.now(), self.prefix);
+      won = true;
+      continue;
+    }
     if (restoresTitle) {
       merged.text = row.text;
       merged.chosen = true;

@@ -15,8 +15,8 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "absent.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent-control.sock");
-const { viewerMcpBindings } = await import("./bindings");
-const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
+const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
 const { loadTasks } = await import("@/lib/tasks/store");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
@@ -67,4 +67,37 @@ test("published finding schemas, recurrence, receipts and key updates through MC
       expect((await call("update_task", { taskId: next.task.id, findingKey })).isError).toBe(true);
     }
   } finally { await client.close(); await server.close(); receipts.close(); }
+});
+
+test("a recurring create remains an update for maintenance permissions", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const { createTask } = await import("@/lib/tasks/commands");
+  const { claimMaintenanceRun, patchMaintenanceRun, readMaintenanceRun } = await import("@/lib/boardMaintenance/store");
+  const worker = "conversation_finding-maintainer";
+  const project = "finding-maintenance";
+  const snapshot = structuredClone(new AgentRegistry(path.join(sandbox, "finding-registry.json")).readOnlySnapshot());
+  snapshot.conversations[worker] = { id: worker, agentRole: "maintainer", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  const domain = { callerAttribution: () => ({ kind: "agent", conversationId: worker, role: "builder" }), registrySnapshot: () => snapshot, listPipelineRecords: () => [], operatorLocale: () => "uk" };
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
+  let seq = 0;
+  const call = (tool: string, args: Record<string, unknown>) => service.callTool(tool, { clientRequestId: `finding-maintenance-${++seq}`, ...args });
+  const made = mutateTasks(tasks => {
+    const result = createTask(tasks, { project, text: "Збережений заголовок", details: "Operator context", placement: "unplaced", findingKey: "maintenance:recurrence" });
+    if (!result.ok) throw new Error(result.error);
+    return { tasks: result.tasks, result: result.task };
+  });
+  const claimed = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 3, seat: { conversationId: "fixture-seat", seatEpoch: 1 }, repoDir: "/fixtures/repository" });
+  if (!claimed.claimed) throw new Error("claim expected");
+  patchMaintenanceRun(claimed.run.runId, { conversationId: worker, state: "running" });
+  try {
+    expect(await call("update_task", { taskId: made.id, details: "Replacement" })).toMatchObject({ ok: false, code: "maintainer_details_overwrite_refused" });
+    expect(await call("create_task", { project, text: "Новий звіт", findingKey: made.findingKey, note: "Повторено" })).toMatchObject({ ok: true, matched: true });
+    const run = readMaintenanceRun(claimed.run.runId)!;
+    expect(run.counts.created).toBe(0);
+    expect(run.log.changes).toHaveLength(1);
+    expect(run.log.changes[0]).toMatchObject({ taskId: made.id, tool: "update_task" });
+    expect(await call("update_task", { taskId: made.id, details: "Replacement" })).toMatchObject({ ok: false, code: "maintainer_details_overwrite_refused" });
+    expect(loadTasks().find(task => task.id === made.id)).toMatchObject({ text: made.text, details: made.details, finding: { count: 2 } });
+  } finally { patchMaintenanceRun(claimed.run.runId, { state: "succeeded" }); }
 });

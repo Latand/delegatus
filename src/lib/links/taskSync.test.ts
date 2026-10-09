@@ -119,20 +119,25 @@ test("peer reopening keeps a keyed Done task closed while its open successor hol
   const at = Date.now() + 1000;
   const reopening = peerRow({ ...wire(done), status: "inbox" }, at);
   reopening.s = { ...wire(done).s, status: nextStamp(done.sync!.s.status!, at, peerLink.prefix) };
-  expect(applyTaskRows([reopening], peerLink, { filePath: file }).changed).toBe(0);
-  expect(find(file, initial.id)).toEqual(done);
+  expect(applyTaskRows([reopening], peerLink, { filePath: file }).changed).toBe(1);
+  const rejected = find(file, initial.id)!;
+  expect(rejected).toMatchObject({ status: "done", findingKey: body.findingKey, finding: done.finding });
+  expect(rejected.sync!.s.status! > reopening.s.status).toBe(true);
   expect(loadTasks(file).filter(task => task.findingKey === body.findingKey && task.status !== "done")).toHaveLength(1);
 
   // Independent peer edits still merge while the conflicting status stays held.
   const edited = { ...reopening, text: "Peer corrected the completed title", s: { ...reopening.s, text: nextStamp(reopening.s.text, at + 1, peerLink.prefix) } };
   expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(1);
-  expect(find(file, initial.id)).toMatchObject({ status: "done", text: edited.text, findingKey: body.findingKey, finding: done.finding, sync: { s: { status: done.sync!.s.status } } });
+  expect(find(file, initial.id)).toMatchObject({ status: "done", text: edited.text, findingKey: body.findingKey, finding: done.finding, sync: { s: { status: rejected.sync!.s.status } } });
   expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(0);
   expect(observe()).toMatchObject({ matched: true, task: { id: successor.id, finding: { count: 2 } } });
 
-  // Once the successor finishes, the retained peer status can be accepted.
+  // A refused reopen stays refused. A fresh peer decision can reopen once
+  // the successor finishes; stale acknowledgements cannot resurrect it.
   edit(file, successor.id, { status: "done" });
-  expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(1);
+  expect(applyTaskRows([edited], peerLink, { filePath: file }).changed).toBe(0);
+  const fresh = { ...edited, s: { ...edited.s, status: nextStamp(rejected.sync!.s.status!, at + 2, peerLink.prefix) } };
+  expect(applyTaskRows([fresh], peerLink, { filePath: file }).changed).toBe(1);
   expect(find(file, initial.id)).toMatchObject({ status: "inbox", findingKey: body.findingKey });
   expect(observe()).toMatchObject({ matched: true, task: { id: initial.id, finding: { count: 2 } } });
 });

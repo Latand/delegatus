@@ -75,7 +75,7 @@ describe("finding recurrence (#2648)", () => {
             const line = target.locator("[data-finding-recurrence]");
             await line.waitFor();
             await target.scrollIntoViewIfNeeded();
-            const reading = await line.evaluate(element => {
+            const reading = await line.evaluate((element, lang) => {
               const container = element.closest(".motion-line")!;
               const box = container.getBoundingClientRect();
               // Text-node ranges include every rendered fragment, including
@@ -83,23 +83,39 @@ describe("finding recurrence (#2648)", () => {
               const range = document.createRange();
               range.selectNodeContents(element);
               const fragments = [...range.getClientRects()];
+              const holdReason = element.nextElementSibling;
+              const holdRange = document.createRange();
+              if (holdReason) holdRange.selectNodeContents(holdReason);
+              const holdFragments = holdReason ? [...holdRange.getClientRects()] : [];
+              const time = element.querySelector("time")!;
+              const dateTime = time.getAttribute("datetime")!;
+              const expectedDate = new Date(dateTime).toLocaleString(lang === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
               return { text: element.textContent, dateTime: element.querySelector("time")?.getAttribute("datetime"),
+                timeText: time.textContent, timeTitle: time.getAttribute("title"), expectedDate,
+                holdReason: holdReason?.textContent ?? null,
+                holdReasonVisible: holdFragments.length > 0 && holdFragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
                 title: container.getAttribute("title"),
                 horizontalClipped: container.scrollWidth > container.clientWidth + 1,
                 verticalClipped: container.scrollHeight > container.clientHeight + 1,
                 scrollHeight: container.scrollHeight, clientHeight: container.clientHeight,
                 recurrenceVisible: fragments.length > 0 && fragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
                 left: Math.min(...fragments.map(rect => rect.left)), right: Math.max(...fragments.map(rect => rect.right)) };
-            });
+            }, lang);
             expect(reading.text).toContain(translate(lang, "kanban.finding.count", { count }));
             expect(reading.text).toContain(translate(lang, "kanban.finding.lastSeen"));
-            expect(reading.dateTime).toBe("2026-10-09T08:00:00.000Z");
+            const lastSeenAt = await page.evaluate(id => (window as unknown as { evidence: { storedTask(id: string): { finding: { lastSeenAt: string } } } }).evidence.storedTask(id).finding.lastSeenAt, id);
+            expect(reading.dateTime).toBe(lastSeenAt);
+            expect(reading.timeText).toBe(translate(lang, "time.agoMin", { n: 20 }));
+            expect(reading.timeTitle).toBe(reading.expectedDate);
+            expect(reading.timeTitle).not.toBe(lastSeenAt);
             expect(reading.horizontalClipped).toBe(false);
             expect(reading.recurrenceVisible).toBe(true);
             if (id === "t-finding") expect(reading.verticalClipped).toBe(false);
             else {
               expect(reading.title).toContain(reading.text!.trim());
               expect(reading.title).toContain(translate(lang, "kanban.hold.worker"));
+              expect(reading.holdReason).toContain(translate(lang, "kanban.hold.worker"));
+              if (width === 1440) expect(reading.holdReasonVisible).toBe(true);
             }
             if (lang === "en") expect(reading.text).not.toContain("last seen");
             expect(reading.left).toBeGreaterThanOrEqual(0);

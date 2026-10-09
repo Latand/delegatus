@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTask, patchTask, type CreateTaskInput } from "./commands";
-import { loadTasksFile, mutateTasksFile } from "./store";
+import { loadTasksFile, loadTasksForList, mutateTasksFile, taskSelectionSource } from "./store";
 import { readFindingKey } from "./finding";
+import { taskRevision } from "./revision";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-finding-"));
@@ -24,6 +25,29 @@ function create(body: CreateTaskInput, now = first) {
 }
 
 describe("finding identity", () => {
+  test("converging project identities combine histories while preserving both task records", () => {
+    const old = create({ ...input, project: "dir-converging", text: "First task", details: "First context" });
+    const current = create({ ...input, project: "repo-converged", text: "Second task", details: "Second context" }, later);
+    expect(create({ ...input, project: current.task.project }, later).task.finding?.count).toBe(2);
+    expect(persistProjectAliases([{ source: "dir-converging", target: "repo-converged", displayName: "Joined project" }])).toBe(true);
+    const projected = loadTasksFile(file).tasks;
+    expect(projected).toHaveLength(2);
+    expect(projected.find(task => task.id === old.task.id)).toMatchObject({ text: old.task.text, details: old.task.details, status: old.task.status, findingKey: input.findingKey, finding: { count: 3, lastSeenAt: later } });
+    expect(projected.find(task => task.id === current.task.id)).toMatchObject({ text: current.task.text, details: current.task.details, status: current.task.status });
+    expect(projected.filter(task => task.findingKey === input.findingKey)).toHaveLength(1);
+    expect(taskRevision(projected.find(task => task.id === old.task.id)!)).not.toBe(taskRevision(old.task));
+    expect(taskRevision(projected.find(task => task.id === current.task.id)!)).not.toBe(taskRevision(current.task));
+    expect(loadTasksForList(file)).toEqual(projected);
+    expect(taskSelectionSource(file)!.read(current.task.id)?.findingKey).toBeUndefined();
+    expect(taskSelectionSource(file)!.read(old.task.id)?.finding?.count).toBe(3);
+    const match = create({ ...input, project: "dir-converging" }, later);
+    expect(match).toMatchObject({ matched: true, task: { id: old.task.id, finding: { count: 4 } } });
+    expect(loadTasksFile(file).tasks).toHaveLength(2);
+    expect(loadTasksFile(file).tasks.find(task => task.id === old.task.id)?.finding?.count).toBe(4);
+    expect(loadTasksFile(file).tasks.find(task => task.id === current.task.id)?.findingKey).toBeUndefined();
+    expect(create({ ...input, project: "repo-converged" }, later).task.finding?.count).toBe(5);
+  });
+
   test("an old project alias matches the open finding", () => {
     expect(persistProjectAliases([{ source: "dir-legacy", target: "repo-current", displayName: "Current project" }])).toBe(true);
     const keyed = { ...input, project: "repo-current", findingKey: "alias:socket" };
