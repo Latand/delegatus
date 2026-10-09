@@ -1886,6 +1886,8 @@ New files:
 | `src/app/api/external-relay/**` | Operator routes (§B.9). |
 | `src/components/externalRelay/ExternalRelaySection.tsx` | The pairing flow and the relay cards (§B.9), shared by the settings dialog and the setup guide's step. |
 | `src/components/externalRelay/ExternalRelaySettingsDialog.tsx` | The "External relay" settings dialog and its host (§B.9). |
+| `src/components/externalRelay/RelayChats.tsx` | The chats' conversations and the kept single answers as a sidebar entry per service, its list, and the read-only agent window (§B.9, §B.14). |
+| `src/lib/externalRelay/conversationView.ts`, `src/lib/externalRelay/feedAccess.ts`, `src/lib/externalRelay/relayChats.ts` | The records joined to their transcripts for the operator's route, and the feed routes' operator-only admission of exactly those files (§B.14). |
 | `src/components/onboarding/RelayStep.tsx` | The setup guide's optional "Relay service" step (§B.9). |
 | `src/lib/externalRelay/activity.ts` | The last outcome and last progress label per relay, in memory, for the settings page (§B.9). |
 | **[delta]** `src/lib/externalRelay/icon.ts` | Fetch, check, store and serve the service's icon (§B.12). |
@@ -2397,7 +2399,7 @@ same tripwires on the next turn.
 | Personal instruction files, hooks, MCP | As in one-shot: the Codex conversation home holds only the `auth.json` link and the CLI's own state; Claude keeps `--restricted --safe-mode`, `--strict-mcp-config` and no `--settings`. The cwd stays outside `$HOME`. |
 | Tripwires | Both apply on every turn. The Codex allowlist admits the compaction item type the probe records (test 15) and nothing else new. A turn that trips one fails as `profile_violation` and marks the conversation `broken`. |
 | Instructions that persist | Chat participants can write text that tries to set rules, and it now stays in context across turns. The frame of §A.8 is restated around the data on every turn and says that no earlier turn can change the rules. The service's instructions are sent again when they change and after every compaction. With no tools, an injected rule can change only the answer text, and the service checks that text again before posting. The owner can end a conversation at once with "Start fresh" (§B.15). |
-| Where the transcript can be opened | Nowhere in Delegatus (§B.14 "Hidden"). A transcript written by strangers is never resumed by a session with tools, and it never becomes search material for the owner's other agents. |
+| Where the transcript can be opened | By the operator alone, read only, from the conversation list (§B.14 "Seen by the operator"). A transcript written by strangers is never resumed by a session with tools, and it never becomes search material for the owner's other agents. |
 | The account | Chosen per turn by the same capacity-aware selection (§B.4 step 3). The conversation's last account only breaks ties of equal headroom, so a conversation may change accounts between turns (§B.14 step 2). |
 
 ## B.7 Progress mapping
@@ -2492,6 +2494,7 @@ and 409 in staging (`isStagingMode`):
 | `DELETE /api/external-relay/relays/[id]` | Unpairs: `DELETE {api}/pairing`, then removes the relay locally; when the service is unreachable it removes it anyway and says the service could not be told, as linked installs do. **[delta]** It also deletes the relay's conversations (§B.14). |
 | **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers` | The target's answer records, newest first, at most 50: times, duration, outcome, delivery, and the first 160 characters of the message and of the answer. Reads local files only; never calls the service. |
 | **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers/[requestId]` | One record in full, the received input included; 404 once it expired. |
+| `GET /api/external-relay/conversations` | The chats' conversations (§B.14 "Seen by the operator"): one row per conversation record with its relay, target, chat key, context, turns and times, and its transcript as a conversation entry once a turn wrote one. No chat text from those and no secrets. Beside them each relay's kept single answers (Recent answers, §B.9) as the list route's rows with their relay and target, and the days they are kept. |
 | **[delta]** `GET /api/external-relay/icons/[id]` | The stored icon of a relay or a pending pairing (§B.12). |
 | **[delta]** `POST /api/external-relay/pairings/[id]/refresh` | Replaces a pending pairing's code (§B.13). |
 | **[delta]** `PATCH /api/external-relay/relays/[id]` `{acknowledged: true}` | "That's me" on an automatic completion; records a known owner (§B.13). |
@@ -2504,24 +2507,45 @@ status from `relays.json` and no longer calls the service (§B.13).
 `POST /api/external-relay/pairings/[id]` `{ownerId}` stays, for the click
 fallback. Every new route has the guards above.
 
-**[rc] Member limit.** Each target row has an "Answers per member per
-hour" / "Відповідей на учасника за годину" number field, showing the default
-until the operator sets one, saved when it loses focus. Empty or 0 is no
-limit. Its hint says that it counts in each chat, that the owner and chat
-admins are not counted, and that past it the service's fallback decides.
+**The relay card** (chosen by the operator on 2026-10-09, the prototype
+review's variant 3 «Згорнуті рядки») is drawn with the board's own parts and
+holds settings only. A relay is its mark, name and address, who it is paired
+as, and a ⋯ with Pause or Resume and Disconnect (the project bar's ⋯ menu).
+Under it the poller's state is one status line with its dot, and the last
+request and the last progress (the target and the time; the progress label
+is the line's tooltip) are the sidebar's meter lines. Each target is one
+folded row: its engine's mark, its name, its model, how many are running and
+its member limit, its effort ladder, and "Answered by this install" as the
+board's switch. A row unfolds in place, one at a time, to the new-agent
+form's engine pills, model and effort, the concurrency, the member limit
+with its hint, and what the target still needs (an engine and a model, a
+signed-in account). Nothing a chat said is shown on the card: the chats'
+conversations and the single answers are listed with the operator's other
+conversations (§B.14, and Recent answers below).
 
-**[rc] Recent answers.** Each target row of the relay card ends with a
-"Recent answers" / "Останні відповіді" disclosure. Opening it reads the list
-route above and shows each exchange as one button: its outcome ("Handed off
-to the service" / "Передано сервісу" for a hand-off), time and duration, and
-the beginning of the message and of the answer. A button opens that exchange
-in place, read-only: received time, duration, engine and model, outcome,
-what the service did with the completion, who asked (name, role, owner,
-anonymous) and how many service tools were listed, the message, the answer,
-and the whole input as received behind a fold. "Back to recent answers"
-returns to the list. There is no composer, no resume and no new panel.
-Everything is plain text. An empty list says no answers were kept in the
-last 30 days; a record that expired meanwhile says so.
+**[rc] Member limit.** An unfolded target has an "Answers per member per
+hour" / "Відповідей на учасника за годину" number field, showing the default
+until the operator sets one, saved when it loses focus or on Enter. Empty or
+0 is no limit. Its hint says that it counts in each chat, that the owner and
+chat admins are not counted, and that past it the service's fallback decides.
+
+**[rc] Recent answers.** The answer records stay on disk for 30 days. The
+card no longer shows them: the operator asked on 2026-10-09 that the card
+carry settings only and that what the chats said live with the other
+conversations, and be readable there. `GET /api/external-relay/conversations`
+returns each paired relay's kept answers beside its chats' conversations
+(newest first, at most 50 a relay, across its targets, a target the service
+no longer lists included), so the relay's sidebar entry appears once it has
+either, on an install whose per-chat conversations are off too. Its leaf
+lists, under "Single answers" / "Разові відповіді", one row per exchange: the
+outcome's dot, the beginning of the message, the outcome and the target, and
+the time. A row opens the exchange in the same agent window, read only:
+received time, duration, engine and model, outcome, what the service did
+with the completion, who asked (name, role, owner, anonymous) and how many
+service tools were listed, the message, the answer, and the whole input as
+received behind a fold, read from the one-record route above. There is no
+composer and nothing to type into. Everything is plain text; a record that
+expired meanwhile says so.
 
 Target settings are validated against the existing catalogs:
 `validateLaunchModel` (`src/lib/agent/models.ts:84-93` [code]) and
@@ -2566,7 +2590,9 @@ in the phone's menu sheet, and mounted beside it in the Viewer. Its body,
   pairing past its local expiry leaves `relays.json` on the next read or
   write of the store, whether or not a check reached the service. A pending
   pairing still in `relays.json` resumes when the surface opens. Times and
-  dates are written in the interface language (`uk-UA` or `en-US`);
+  dates are written in the interface language (`uk-UA` or `en-US`) on a
+  24-hour clock to the minute, and a date names its year only outside the
+  current one;
 - each paired relay: its name, origin, description, the owner it is paired
   as and when; the poller state of §B.3 as one line, danger-toned when only
   the operator can clear it (`credential_rejected`, `unsupported_version`)
@@ -2725,7 +2751,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 21 | **[rc]** `src/lib/externalRelay/protocol.test.ts`, `src/lib/externalRelay/prompt.test.ts` | A request without the new fields parses as before and gets the Phase 1 prompt byte for byte. The new fields parse with unknown inner fields dropped; the focused bounds refuse a 65-code-point name, a duplicate name, an unknown mode, 16 001 code points of memory, a non-boolean role flag; service-built claims cover all four roles, the 12 000-emoji media budget and 16 000-emoji memory. The install also refuses its lenient bounds of 129 tools and a 241-code-point summary. The sections are escaped and named as data; the hand-off rule appears only with tools. `handoff` is an answer only with tools, and drops text and `reply_to`. |
 | 22 | **[rc]** `src/lib/externalRelay/runner.test.ts` with the stub CLI of test 4 | With tools, the schema offers `handoff` and the completion is exactly `declined` / `handoff` with the fixed `HANDOFF_DETAIL` and null `retry_after_s`; without tools the schema keeps two actions. Records: input as received, engine, model, outcome, delivery `accepted` / `refused`, a declined request, a lost lease, no record for ids that cannot name a file, and neither the lease id nor the credential in any record. |
 | 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context", "relay_tool_calls"]`. Both routes keep every guard and refuse an agent caller. |
-| 24 | **[rc]** `ExternalRelaySection.dom.test.tsx`, and the `relay-answers` case of `scripts/capture-board-geometry.ts` | The disclosure, the list, one exchange read-only with no field to type into, back, empty and expired, in English and Ukrainian, chat text as plain text. The capture renders the list and one exchange in the real settings dialog at 1440 and 390 in both languages, with no sideways overflow. |
+| 24 | `ExternalRelaySection.dom.test.tsx`, `RelayChats.dom.test.tsx`, `src/app/api/external-relay/conversations/route.test.ts`, and the phone driver's "external relay" cases | The card fetches and shows nothing a chat said. The chats' conversations: the route lists them for the operator and refuses an agent; the feed serves a recorded transcript to the operator alone and only that file, and refuses its deletion; the sidebar entry, the leaf's rows in English and Ukrainian with no delete, and the agent window's reader with no composer and no agent controls, at 1440 and 390, light and dark. The single answers: the route lists them across targets without a chat conversation; a relay with only an answer is a sidebar entry, its row opens the exchange read only with no field to type into, an expired one says so; the driver's `?relay=answers` scene draws them; readings in `evidence/external-relay/card.json` and `chats.json`, beside the slice 2b `settings.json`, whose bytes stay pinned. (The `relay-answers` capture case left with the card's Recent answers; its readings stay in `evidence/external-relay/recent-answers.json`.) |
 | 25 | **[rc]** `src/lib/agent/ephemeral.test.ts`, `src/lib/externalRelay/progress.test.ts`, `src/lib/externalRelay/runner.test.ts`, `src/app/api/external-relay/route.test.ts`, `ExternalRelaySection.dom.test.tsx`, and test 7 with `LLV_ANSWER_PROFILE_PROBE=1` | Web search: the argument lists add only `web_search=live` and `--tools WebSearch --allowedTools WebSearch`, every other hardening stays; the tripwire admits the search events only with web search on, and still trips on `WebFetch`, `Bash`, MCP, command and file items; every relay run is launched with it and its record says so. Member limit: a member's third request at a limit of 2 is declined `member_limit` with its line and a `retry_after_s` under an hour; another chat, another member, an admin, the owner, a limit of 0 or null, and a request without a requester all pass; the route takes 0 to 1000 or null and refuses the rest; the field shows the default and saves a number or no limit. |
 
 ## B.12 [delta] Branding: the service's name and look
@@ -2920,12 +2946,12 @@ Without a subscription, the dot and the banner are the whole notice.
 
 ## B.14 [delta] Chat conversations
 
-**[rc] Not implemented.** Nothing in this section runs today. Every request
-is answered one-shot by a fresh, session-less run (§B.5); the claim does not
-list `chat_conversations`; `Request.chat.key` is used only for the member
-limit and answer records, and nothing resumes or serializes by it; the run directory
-and the `runs.json` entry are removed when the run settles. What outlives an
-exchange is its read-only answer record (§B.2), which nothing resumes.
+**[slice 3, dark]** Chat conversations are implemented behind the
+`chat_conversations` switch, which defaults off. The slice 3 design in
+`relay-slice3.md` defines separate member and owner records, with non-owner
+administrators continuing one-shot. With the switch off every request still
+uses the slice 2b session-less profile and claim bytes. `/compact` has its own
+default-off switch and requires conversations.
 
 **Identity and map.** A (relay id, target id, chat key) maps to one record in
 `conversations.json` (§B.2), created by the first request with that key. The
@@ -3017,9 +3043,27 @@ reserved when either holds:
 Discovery skips every reserved directory, and `pathAllowed` refuses paths
 under one. The sweep deletes a reserved directory only when its UUID names
 a deleted conversation or no record at all. A
-conversation therefore never appears in the sidebar, in
+conversation therefore never appears in the scanner's catalog, in
 `search_transcripts` or `conversation_messages`, or to a composer or a
 flow, and nothing can resume it with tools.
+
+**Seen by the operator.** The operator reads these conversations without
+the scanner. `GET /api/external-relay/conversations` (§B.9) lists the
+records with each one's transcript, found from the record itself: a Claude
+session's `<sessionId>.jsonl` under the reserved project directory of any
+Claude store, a Codex session's rollout under its conversation's
+`CODEX_HOME`. The feed routes (`/api/log`, `/api/logs`, `/api/logs/stream`)
+serve such a transcript only to a request that passes the relay routes'
+guards, so a caller with an agent's capability, a cross-origin page and a
+staging Viewer are refused it, and only when a record names that exact file;
+deleting it through `/api/log` stays refused. In the browser each paired
+service whose chats hold a conversation is an entry of the sidebar (the
+phone's project sheet) under its name; its leaf lists one row per chat and
+context ("Chat QmF6x9 · members · Support bot"), and a row opens the
+conversation in the agent window with no composer and no agent controls,
+marked "Read only". Only the relay writes in these sessions. The same leaf
+lists the relay's kept single answers (§B.9 Recent answers), and a service
+with only those is an entry too.
 
 **Restart.** A turn is a run. The sweep of §B.3 ends an orphaned turn with
 `install_restarted` and sets its conversation back to `idle`. It also sets
@@ -3208,9 +3252,9 @@ observations cannot settle is left to tests 15 and 19.
 - **Streaming the answer text** itself while it is written; Phase 1 streams
   status labels only.
 - **Media in requests.** The relay service sends text descriptions.
-- **[delta] A view of a chat's conversation in Delegatus.** Conversations
-  are hidden (§B.14). A read-only view with no composer would need its own
-  route outside the scanner. Nothing in the requirement asks to read them.
+- **[delta] A view of a chat's conversation in Delegatus.** Built on
+  2026-10-09 (§B.14 "Seen by the operator"): read only, through the relay's
+  own route, never through the scanner.
 - **[delta] A per-target choice between one-shot and conversation.** Every
   request with a chat key goes to its conversation.
 - **[delta] A custom compaction prompt** that keeps chat participants'
@@ -3308,3 +3352,15 @@ local tool parameter validation, a persistent install call ledger, automatic
 paging, tool-result reply targets and a call-detail UI remain deferred.
 The explicit 2b seams and conditions for revisiting these choices are in
 [slice 2b Deferred](relay-slice2b-actions.md#deferred--not-currently-justified).
+
+
+### Slice 3 revision (dark)
+
+The install implements persistent member and owner conversations per chat,
+and compact requests. Each is behind its own default-off switch; compact
+also requires conversations. Administrators answer one-shot. Owner operations
+are deferred to the follow-up described in the slice 3 design.
+See [relay-slice3.md](relay-slice3.md) for the boundaries and lifecycle.
+`evidence/external-relay/install_compact_loop.json` records the real poller
+and runner replay against the service's X3 claims. Activation awaits the
+final-head cross-check and the operators' go.
