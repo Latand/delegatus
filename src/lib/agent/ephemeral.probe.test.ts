@@ -6,7 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { buildEphemeralCommand, runEphemeralAgent, type EphemeralAgentRequest } from "./ephemeral";
-import { answerSchema, roundSchema } from "@/lib/externalRelay/protocol";
+import { answerSchema, roundSchema, replyAnswerSchema } from "@/lib/externalRelay/protocol";
 import { callableReads } from "@/lib/externalRelay/toolLoop";
 import { x1Request } from "@/lib/externalRelay/toolLoop.fixture";
 import type { AccountContext } from "@/lib/accounts/contracts";
@@ -227,3 +227,13 @@ for (const engine of ["codex", "claude"] as const)
     }
     expect(JSON.stringify(body)).not.toContain(marker);
   }, 30_000);
+
+for (const engine of ["codex", "claude"] as const)
+  for (const [name, schema] of Object.entries({ action_round: roundSchema(callableReads(x1Request("member")), { handoff: false }), unknown_reply: replyAnswerSchema }))
+    (engine === "codex" ? codexProbe : claudeProbe)(`${engine} accepts the 2b ${name} schema`, async () => {
+      const body = await captureModelRequest({ ...request(engine), schema });
+      const sent = engine === "claude" ? (body.tools as { input_schema: unknown }[])[0]!.input_schema
+        : (body.text as { format: { schema: unknown } }).format.schema;
+      expect(sent).toEqual(schema);
+      expect(JSON.stringify(body)).not.toContain(marker);
+    }, 30_000);
