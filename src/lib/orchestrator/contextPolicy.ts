@@ -10,7 +10,8 @@
  * usage they can prove and say plainly that the threshold is unknown.
  *
  * Crossing a threshold changes WORDS in get_orchestrator's payload and
- * nothing else — see `./health`, whose recommendation carries no action.
+ * nothing else in that read — see `./health`. The opted-in seat tick reads
+ * context independently to decide automatic rotation at a safe point.
  */
 
 import { claudeCapacity, type ContextCapacityHints } from "../scanner/contextCapacity";

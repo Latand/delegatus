@@ -4,6 +4,7 @@ import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
 import { chromium, type Browser, type Page } from "playwright-core";
 import postcss from "postcss";
+import type { BunPlugin } from "bun";
 
 /* Imported through the `@/` alias deliberately, and not only for the copy it
    checks below: inside `bun test`, `Bun.build` resolves a tsconfig path
@@ -49,6 +50,18 @@ import { translate } from "@/lib/i18n";
  * committed: the numbers are the evidence, and this driver is how they are
  * reproduced.
  */
+
+// Bun's standalone fixture bundler does not implement Next's server-action
+// boundary. This fixture has no transcript, so that unrelated transport must
+// never run; keep its server module out of the browser just as Next does.
+const serverActionBoundary: BunPlugin = {
+  name: "fixture-server-action-boundary",
+  setup(build) {
+    build.onLoad({ filter: /structuredUserMetadataAction\.ts$/ }, () => ({ loader: "js",
+      contents: 'export async function structuredUserProvenance() { throw new Error("No transcript metadata in this rendered fixture"); }',
+    }));
+  },
+};
 
 const browserTest = process.env.LLV_SEAT_TICK_BROWSER_TEST === "1" ? test : test.skip;
 const EVIDENCE = path.resolve("evidence/issue-1681");
@@ -674,6 +687,7 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
   const build = await Bun.build({
     entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
     target: "browser",
+    plugins: [serverActionBoundary],
     outdir: path.join(OUT, "bundle"),
     define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
   });
@@ -1054,6 +1068,7 @@ browserTest("#2396 rendered: the seat tick panel at 1440 and 390, light and dark
   const build = await Bun.build({
     entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
     target: "browser",
+    plugins: [serverActionBoundary],
     outdir: path.join(OUT, "bundle-2396"),
     define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
   });
@@ -1148,3 +1163,92 @@ browserTest("#2396 rendered: the seat tick panel at 1440 and 390, light and dark
     expect(read.efforts, `${key} the model's own ladder`).toEqual(["low", "medium", "high", "xhigh", "max"]);
   }
 }, 900_000);
+
+
+browserTest("context auto-rotation rendered in the shared tick panel, English and Ukrainian, light and dark", async () => {
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync(EVIDENCE, { recursive: true });
+  const build = await Bun.build({
+    entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
+    target: "browser",
+    plugins: [serverActionBoundary],
+    outdir: path.join(OUT, "bundle-auto-rotation"),
+    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
+  });
+  if (!build.success) throw new Error(build.logs.join("\n"));
+  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
+  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
+      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      return new Response(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+  const base = `http://127.0.0.1:${server.port}`;
+  const readings: unknown[] = [];
+  try {
+    for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+      for (const layout of [{ width: 1440, height: 900, dock: 440, surface: "desktop" }, { width: 640, height: 600, dock: 360, surface: "desktop" }, { width: 390, height: 844, dock: 0, surface: "phone" }]) {
+        const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: theme });
+        try {
+          const page = await context.newPage();
+          await page.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
+          const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+          await page.goto(`${base}/?surface=${layout.surface}&dock=${layout.dock}&locale=${locale}&autoRotate=failed&face=default`);
+          const phone = layout.surface === "phone";
+          await page.waitForSelector(phone ? "[data-seat-tick-row]" : "[data-seat-tick-chip]");
+          await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
+          await page.waitForSelector("[data-seat-tick-auto-rotate-threshold]");
+          expect(await page.locator("[data-seat-tick-auto-rotate-enabled]").getAttribute("aria-checked")).toBe("true");
+          // The failure line speaks the operator's language and keeps the engine's error out.
+          const failed = await page.locator("[data-seat-tick-auto-rotate-failed]").innerText();
+          expect(failed).not.toContain("fixture launch refused");
+          expect(failed).toContain(locale === "en" ? "did not replace the orchestrator; the current one keeps working. Next try after" : "не замінила оркестратора, поточний працює далі. Наступна — після");
+          expect((await page.locator("[data-seat-tick-auto-rotate]").innerText()).toLowerCase()).toContain(translate(locale, "seatTick.autoRotate.head").toLowerCase());
+          expect(await page.locator("[data-seat-tick-auto-rotate-about]").innerText()).toBe(translate(locale, "seatTick.autoRotate.about"));
+          expect(await page.locator("[data-seat-tick-auto-rotate] label").innerText()).toBe(translate(locale, "seatTick.autoRotate.thresholdLabel"));
+          await page.locator("[data-seat-tick-auto-rotate-threshold]").fill("65");
+          await page.locator("[data-seat-tick-auto-rotate]").scrollIntoViewIfNeeded();
+          await page.locator("[data-seat-tick-save]").scrollIntoViewIfNeeded();
+          await page.evaluate(() => {
+            const caption = document.querySelector("[data-seat-tick-auto-rotate-failed]")!;
+            const save = document.querySelector("[data-seat-tick-save]")!;
+            for (let parent = caption.parentElement; parent; parent = parent.parentElement) {
+              if (parent.scrollHeight > parent.clientHeight && /auto|scroll/.test(getComputedStyle(parent).overflowY)) {
+                parent.scrollTop += Math.max(0, caption.getBoundingClientRect().bottom - save.getBoundingClientRect().top + 8);
+                break;
+              }
+            }
+          });
+          const geometry = await page.evaluate(() => {
+            const host = document.querySelector("[data-seat-tick-popover]") ?? document.querySelector('[data-mobile2-sheet="tick"]')!;
+            const hostBox = host.getBoundingClientRect();
+            const save = document.querySelector("[data-seat-tick-save]")!.getBoundingClientRect();
+            const clipped: string[] = [];
+            for (const selector of ["[data-seat-tick-auto-rotate-enabled]", "[data-seat-tick-auto-rotate-about]", "[data-seat-tick-auto-rotate-threshold]", "[data-seat-tick-auto-rotate-failed]", "[data-seat-tick-save]"]) {
+              const control = document.querySelector(selector)!;
+              const box = control.getBoundingClientRect();
+              if (box.left < hostBox.left - 1 || box.right > hostBox.right + 1 || box.left < -1 || box.right > innerWidth + 1
+                || box.top < hostBox.top - 1 || box.bottom > (selector.includes("save") ? innerHeight : save.top) + 1) clipped.push(selector);
+            }
+            return { overflow: host.scrollWidth > host.clientWidth, clipped, saveReachable: save.top >= 0 && save.bottom <= innerHeight, width: hostBox.width };
+          });
+          expect(errors).toEqual([]); expect(geometry.overflow).toBe(false); expect(geometry.clipped).toEqual([]); expect(geometry.saveReachable).toBe(true);
+          await page.screenshot({ path: path.join(OUT, `auto-rotation-${theme}-${locale}-${layout.width}.png`) });
+          readings.push({ theme, locale, viewport: layout, ...geometry });
+        } finally { await context.close(); }
+      }
+    }
+  } finally { await browser.close(); server.stop(true); }
+  fs.writeFileSync(path.join(EVIDENCE, "auto-rotation.json"), `${JSON.stringify(readings, null, 2)}\n`);
+}, 360_000);

@@ -348,3 +348,20 @@ test("maintenance needs no reason, clamps hours and survives tick expiry", () =>
   if (!reset.ok) throw new Error(reset.error); expect(reset.settings.maintenance?.intervalHours).toBe(3);
   const invalid = applySeatTickSettingsChange(current, { maintenance: { enabled: "yes" as never } }, { at, actor }); expect(invalid.ok).toBe(false);
 });
+
+test("auto-rotation requires a reason from every agent, attributes changes and survives schedule lapse", () => {
+  const current = defaultSeatTickSettings(PROJECT);
+  expect(current.autoRotate).toBeUndefined();
+  expect(change(current, { autoRotate: { enabled: true } })).toMatchObject({ ok: false, error: expect.stringContaining("autoRotate.why is required") });
+  const armed = settingsOf(change(current, { autoRotate: { enabled: true, thresholdPercent: 95, why: "operator requested in chat" } }));
+  expect(armed.autoRotate).toEqual({ enabled: true, thresholdPercent: 90, updatedAt: AT, setBy: SEAT, why: "operator requested in chat" });
+  const reset = settingsOf(change(armed, { autoRotate: { thresholdPercent: null, why: "operator requested default" } }));
+  expect(reset.autoRotate?.thresholdPercent).toBe(50);
+  const temporary = settingsOf(change(armed, { wakeIntervalMinutes: 30, reason: "pause routine wakes", until: new Date(NOW + 60_000).toISOString() }));
+  expect(seatTickSettingsAfterLapse(PROJECT, effectiveSeatTickSettings(temporary, NOW + 60_001, HOUR_MS)).autoRotate).toEqual(armed.autoRotate);
+  expect(settingsOf(change(temporary, { wakeIntervalMinutes: null })).autoRotate).toEqual(armed.autoRotate);
+  const gateway = applySeatTickSettingsChange(current, { autoRotate: { enabled: true } }, { at: AT, actor: { ...SEAT, kind: "gateway" } });
+  expect(gateway.ok).toBe(true);
+  const file = settingsFile(); writeSeatTickSettings(PROJECT, armed, file);
+  expect(readSeatTickSettings(PROJECT, file).autoRotate).toEqual(armed.autoRotate);
+});

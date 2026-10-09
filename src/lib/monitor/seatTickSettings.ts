@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
+import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
 import { applyLineEdits, type LineEdits, type LineTarget } from "@/lib/lineEdits";
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
@@ -89,7 +90,16 @@ export interface BoardMaintenanceSetting {
   updatedAt: string;
   setBy: SeatTickSettingsActor;
 }
+export const AUTO_ROTATE_DEFAULT_PERCENT = Math.round(ROTATION_THRESHOLD_FRACTION * 100);
+export interface AutoRotateSetting {
+  enabled: boolean;
+  thresholdPercent: number;
+  updatedAt: string;
+  setBy: SeatTickSettingsActor;
+  why: string | null;
+}
 export interface SeatTickSettings {
+  autoRotate?: AutoRotateSetting | null;
   maintenance?: BoardMaintenanceSetting | null;
   project: string;
   /** Whether the Viewer ticks this project at all. */
@@ -116,6 +126,7 @@ export interface SeatTickSettings {
 /** The settings as one check should read them: the record with its expiry
     already applied. */
 export interface EffectiveSeatTickSettings {
+  autoRotate?: AutoRotateSetting | null;
   maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
   maintenanceSetting?: BoardMaintenanceSetting | null;
   enabled: boolean;
@@ -149,6 +160,7 @@ export interface EffectiveSeatTickSettings {
 }
 
 export interface SeatTickSettingsChange {
+  autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null; why?: string | null };
   maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
   enabled?: boolean;
   /** `null` restores the default interval. */
@@ -221,6 +233,7 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
   const raw = value as Record<string, unknown>;
   return {
     project,
+    ...(normalizeAutoRotate(raw.autoRotate) ? { autoRotate: normalizeAutoRotate(raw.autoRotate) } : {}),
     ...(normalizeMaintenance(raw.maintenance) ? { maintenance: normalizeMaintenance(raw.maintenance) } : {}),
     enabled: raw.enabled !== false,
     wakeIntervalMinutes: normalizeInterval(raw.wakeIntervalMinutes),
@@ -235,6 +248,16 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     updatedAt: isoOrNull(raw.updatedAt),
     setBy: normalizeActor(raw.setBy),
   };
+}
+
+function normalizeAutoRotate(value: unknown): AutoRotateSetting | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const r = value as Partial<AutoRotateSetting>;
+  const actor = normalizeActor(r.setBy);
+  return typeof r.enabled === "boolean" && Number.isInteger(r.thresholdPercent)
+    && r.thresholdPercent! >= 50 && r.thresholdPercent! <= 90 && isoOrNull(r.updatedAt) && actor
+    ? { enabled: r.enabled, thresholdPercent: r.thresholdPercent!, updatedAt: r.updatedAt!, setBy: actor,
+      why: typeof r.why === "string" ? redactMonitorText(r.why).trim().slice(0, 200) || null : null } : null;
 }
 
 interface SeatTickSettingsFile {
@@ -350,7 +373,7 @@ export function effectiveSeatTickSettings(
   const configured = settings.updatedAt !== null;
   if (lapsed || seatTickSettingsAreDefault(settings)) {
     return {
-      maintenance, maintenanceSetting: settings.maintenance,
+      maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
       reason: settings.reason,
@@ -366,7 +389,7 @@ export function effectiveSeatTickSettings(
     };
   }
   return {
-    maintenance, maintenanceSetting: settings.maintenance,
+    maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
       ? defaultWakeIntervalMs
@@ -396,11 +419,11 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "autoRotate">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting) return restored;
-  return { ...restored, ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.autoRotate) return restored;
+  return { ...restored, ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -422,7 +445,7 @@ export function applySeatTickSettingsChange(
   change: SeatTickSettingsChange,
   context: { at: string; actor: SeatTickSettingsActor },
 ): SeatTickSettingsChangeResult {
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "autoRotate"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   const enabled = Object.hasOwn(change, "enabled") ? change.enabled : current.enabled;
@@ -505,9 +528,31 @@ export function applySeatTickSettingsChange(
     }
     maintenance = { enabled: on, intervalHours: hours, updatedAt: context.at, setBy: context.actor };
   }
+  let autoRotate = current.autoRotate;
+  if (Object.hasOwn(change, "autoRotate")) {
+    const raw = change.autoRotate;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "autoRotate must be an object" };
+    const on = Object.hasOwn(raw, "enabled") ? raw.enabled : autoRotate?.enabled ?? false;
+    if (typeof on !== "boolean") return { ok: false, error: "autoRotate.enabled must be a boolean" };
+    const why = typeof raw.why === "string" ? redactMonitorText(raw.why).trim().slice(0, 200) || null : null;
+    if (context.actor.kind !== "gateway" && !why) return { ok: false, error: "autoRotate.why is required: say why automatic rotation is being changed and on whose request" };
+    let percent = autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT;
+    if (Object.hasOwn(raw, "thresholdPercent")) {
+      const given = raw.thresholdPercent;
+      const number = typeof given === "number" ? given : typeof given === "string" && given.trim() ? Number(given) : NaN;
+      if (given === null) percent = AUTO_ROTATE_DEFAULT_PERCENT;
+      else if (!Number.isFinite(number)) notes.push("autoRotate.thresholdPercent was not a number; kept the stored threshold");
+      else {
+        percent = Math.max(50, Math.min(90, Math.round(number)));
+        if (percent !== given) notes.push(`autoRotate.thresholdPercent normalized to ${percent}`);
+      }
+    }
+    autoRotate = { enabled: on, thresholdPercent: percent, updatedAt: context.at, setBy: context.actor, why };
+  }
   const next: SeatTickSettings = {
     project: current.project,
     ...(maintenance ? { maintenance } : {}),
+    ...(autoRotate ? { autoRotate } : {}),
     enabled,
     wakeIntervalMinutes,
     reason,
