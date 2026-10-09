@@ -147,6 +147,8 @@ export const en = {
   "externalRelay.poller.credentialRejected": "The service no longer accepts this pairing. Disconnect and pair again.",
   "externalRelay.poller.unsupportedVersion": "The service needs a newer Delegatus. Update, then pair again.",
   "externalRelay.poller.paused": "Paused. This install takes no requests from the service.",
+  "externalRelay.answers.open": "Recent answers",
+
   "relayChats.heading": "Relay chats",
   "relayChats.hint": "What this install answered through the relay: each chat's conversation and each single answer. Read only: only the relay writes in them.",
   "relayChats.chat": "Chat {chat}",

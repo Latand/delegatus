@@ -146,6 +146,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.poller.credentialRejected": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
   "externalRelay.poller.unsupportedVersion": "Сервісу потрібен новіший Delegatus. Оновіть і під’єднайте знову.",
   "externalRelay.poller.paused": "Призупинено. Інсталяція не бере запитів від сервісу.",
+  "externalRelay.answers.open": "Останні відповіді",
+
   "relayChats.heading": "Чати ретранслятора",
   "relayChats.hint": "Що ця інсталяція відповіла через ретранслятор: розмова кожного чату й кожна разова відповідь. Лише для читання: пише в них тільки ретранслятор.",
   "relayChats.chat": "Чат {chat}",
