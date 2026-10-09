@@ -288,3 +288,24 @@ test("status shows two Codex native boundaries without inventing a rotation thre
   expect(body.context).toMatchObject({ tokens: 150_000, limit: 200_000, percent: 75, estimated: false });
   expect(body.rotation).toMatchObject({ recommended: false, threshold: null, thresholdUnknown: true });
 });
+
+test.each([
+  { model: "sonnet-4-5", runtimeWindow: null, beta: null, limit: null, percent: null, level: "none" },
+  { model: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, limit: 1_000_000, percent: 24, level: "none" },
+  { model: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", limit: 1_000_000, percent: 24, level: "none" },
+  { model: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, limit: 200_000, percent: 100, level: "strongly_recommend" },
+])("status validates registry overflow after runtime and launch mode resolution: %j", async ({ model, runtimeWindow, beta, limit, percent, level }) => {
+  const transcript = seatWithTranscript(2_048);
+  fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", message: {
+    model: "claude-sonnet-4-5", usage: { input_tokens: 240_000 }, context_window: runtimeWindow, beta,
+  } }) + "\n");
+  const snapshot = JSON.stringify((await import("@/lib/orchestrator/seats")).orchestratorSeatFor("proj-a"));
+  const body = await readOrchestratorIncumbent("proj-a", dependencies({
+    conversation: () => conversation(transcript, { model }),
+    sessionCounts: productionIncumbentDependencies.sessionCounts,
+  }));
+  expect(body.context).toMatchObject({ tokens: 240_000, limit, percent, estimated: false });
+  expect(body.rotation).toMatchObject({ level, thresholdUnknown: limit === null });
+  if (limit === null) expect(body.rotation).toMatchObject({ recommended: false, threshold: null, causes: [], reasons: [] });
+  expect(JSON.stringify((await import("@/lib/orchestrator/seats")).orchestratorSeatFor("proj-a"))).toBe(snapshot);
+});

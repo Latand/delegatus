@@ -3,7 +3,7 @@ import type { CtxUsage, FileEntry } from "../types";
 import { tailRecordsResult } from "./activity";
 import { globalCache } from "./caches";
 import { numberValue, recordValue, stringValue } from "./json";
-import { claudeCapacity, claudeCapacityHints, type ContextCapacity } from "./contextCapacity";
+import { claudeCapacity, claudeCapacityHints, usableContextCapacity, type ContextCapacity } from "./contextCapacity";
 
 const ctxCache = globalCache<[number, number, CtxUsage | null, string | null]>("ctx-v3");
 
@@ -13,8 +13,8 @@ function unknownUsage(usedTokens: number, observedAt: string): CtxUsage {
 
 export function contextUsage(usedTokens: number | null, capacity: ContextCapacity | null, observedAt: string): CtxUsage | null {
   if (usedTokens === null || usedTokens <= 0) return null;
-  if (!capacity || capacity.windowTokens <= 0) return unknownUsage(usedTokens, observedAt);
-  if (capacity.source !== "runtime" && usedTokens > capacity.windowTokens) return unknownUsage(usedTokens, observedAt);
+  capacity = usableContextCapacity(capacity, usedTokens);
+  if (!capacity) return unknownUsage(usedTokens, observedAt);
   const cap = capacity.source === "registry" ? 99 : 100;
   return {
     usedTokens,

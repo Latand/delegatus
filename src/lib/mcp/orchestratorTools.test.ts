@@ -1031,3 +1031,27 @@ test("Codex native compactions are informational even with fresh runtime capacit
   expect(await read()).toMatchObject({ health: { transcript: { compactionCount: 2 }, context: { tokens: 150_000, limit: 200_000, percent: 75, estimated: false } }, rotation: { level: "none", threshold: null, thresholdUnknown: true } });
   expect(posts).toEqual([]);
 });
+
+test.each([
+  { model: "sonnet-4-5", runtimeWindow: null, beta: null, limit: null, percent: null, level: "none" },
+  { model: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, limit: 1_000_000, percent: 24, level: "none" },
+  { model: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", limit: 1_000_000, percent: 24, level: "none" },
+  { model: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, limit: 200_000, percent: 100, level: "strongly_recommend" },
+])("MCP validates registry overflow after runtime and launch mode resolution: %j", async ({ model, runtimeWindow, beta, limit, percent, level }) => {
+  const transcript = path.join(sandbox, "registry-overflow.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", message: {
+    model: "claude-sonnet-4-5", usage: { input_tokens: 240_000 }, context_window: runtimeWindow, beta,
+  } }) + "\n");
+  const begun = testRegistry.beginSpawnRequest({ engine: "claude", cwd: sandbox, clientAttemptId: "seed_0000001", launchProfile: { model, title: "Registry capacity" } });
+  seatActive("proj-a", begun.receipt.conversationId, transcript);
+  const snapshot = JSON.stringify(orchestratorSeatFor("proj-a"));
+  const { control, posts } = controlStub();
+  const body = await bindingsWith(control).get_orchestrator({ clientRequestId: crypto.randomUUID(), project: "proj-a" }) as {
+    health: { context: unknown }; rotation: unknown;
+  };
+  expect(body.health.context).toMatchObject({ tokens: 240_000, limit, percent, estimated: false });
+  expect(body.rotation).toMatchObject({ level, thresholdUnknown: limit === null });
+  if (limit === null) expect(body.rotation).toMatchObject({ recommended: false, threshold: null, causes: [], reasons: [] });
+  expect(posts).toEqual([]);
+  expect(JSON.stringify(orchestratorSeatFor("proj-a"))).toBe(snapshot);
+});

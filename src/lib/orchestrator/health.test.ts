@@ -441,3 +441,18 @@ test("an unproven active segment never falls back to whole-history bytes", () =>
   expect(context).toMatchObject({ tokens: null, estimated: true });
   expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy: OPUS }).recommended).toBe(false);
 });
+
+test("fresh usage beyond a registry window leaves capacity and rotation threshold unknown", () => {
+  for (const tokens of [200_000, 200_001, 240_000]) {
+    const file = transcript([{ type: "assistant", message: { model: "claude-sonnet-4-5", usage: { input_tokens: tokens } } }]);
+    const gathered = readOrchestratorTranscriptFacts(file, null);
+    const policy = contextWindowPolicyFor("claude", "sonnet-4-5", gathered);
+    const context = contextReading({ policy, facts: gathered });
+    const overflow = tokens > 200_000;
+    expect(context).toMatchObject({ tokens, limit: overflow ? null : 200_000, percent: overflow ? null : 100, estimated: false });
+    expect(rotationRecommendation({ context, facts: gathered, activity: "live", policy })).toMatchObject({
+      level: overflow ? "none" : "strongly_recommend", thresholdUnknown: overflow,
+      ...(overflow ? { threshold: null, causes: [], reasons: [] } : {}),
+    });
+  }
+});

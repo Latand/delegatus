@@ -102,3 +102,17 @@ test("explicit launch mode agrees with the server policy and invalidates the cap
   expect(ctxFor(file)?.windowTokens).toBe(200_000);
   expect(ctxFor({ ...file, launchModel: "sonnet-4-5[1m]" })?.windowTokens).toBe(1_000_000);
 });
+
+test("registry overflow stays unknown unless launch mode or runtime supplies a usable window", () => {
+  for (const runtimeWindow of [null, 200_000]) {
+    const file = entry([{ type: "assistant", timestamp: OBSERVED_AT, message: {
+      model: "claude-sonnet-4-5", context_window: runtimeWindow, usage: { input_tokens: 240_000 },
+    } }], "claude-projects");
+    expect(ctxFor({ ...file, launchModel: "sonnet-4-5" })).toMatchObject({
+      usedTokens: 240_000, windowTokens: runtimeWindow, pct: runtimeWindow ? 100 : null, source: runtimeWindow ? "runtime" : "unknown",
+    });
+    expect(ctxFor({ ...file, launchModel: "sonnet-4-5[1m]" })).toMatchObject({
+      usedTokens: 240_000, windowTokens: runtimeWindow ?? 1_000_000, pct: runtimeWindow ? 100 : 24, source: runtimeWindow ? "runtime" : "registry",
+    });
+  }
+});

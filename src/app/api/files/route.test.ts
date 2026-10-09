@@ -183,6 +183,9 @@ test.each([
   { launchModel: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, tokens: 120_000, window: 200_000, percent: 60, source: "runtime", advice: "strongly_recommend" },
   { launchModel: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", tokens: 120_000, window: 1_000_000, percent: 12, source: "registry", advice: "none" },
   { launchModel: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, tokens: 240_000, window: 1_000_000, percent: 24, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: null, tokens: 240_000, window: null, percent: null, source: "unknown", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, tokens: 240_000, window: 200_000, percent: 100, source: "runtime", advice: "strongly_recommend" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", tokens: 240_000, window: 1_000_000, percent: 24, source: "registry", advice: "none" },
 ])("files projection and panel fallback preserve launch mode and capacity provenance: %j", async ({ launchModel, runtimeWindow, beta, tokens, window, percent, source, advice }) => {
   const artifactPath = path.join(registryRoot, "rotation-context.jsonl");
   fs.writeFileSync(artifactPath, JSON.stringify({ type: "assistant", message: {
@@ -197,7 +200,7 @@ test.each([
   const entry = { ...scanned, model: models.display, launchModel: models.launch };
   entry.ctx = ctxFor(entry);
   expect(entry.launchModel).toBe("claude-sonnet-4-5");
-  expect(entry.ctx?.windowTokens).toBe(beta ? 1_000_000 : tokens > 200_000 ? null : 200_000);
+  expect(entry.ctx?.windowTokens).toBe(runtimeWindow ?? (beta ? 1_000_000 : tokens > 200_000 ? null : 200_000));
 
   const registry = agentRegistry();
   const cwd = process.cwd();
@@ -228,6 +231,7 @@ test.each([
   expect(state.kind).toBe("live");
   if (state.kind !== "live") throw new Error("expected a live panel fallback");
   expect(state.rotation?.level ?? "none").toBe(advice);
+  if (window === null) expect(state.rotation).toBeNull();
   if (advice === "strongly_recommend") expect(state.rotation?.contextPercent).toBe(percent);
 });
 

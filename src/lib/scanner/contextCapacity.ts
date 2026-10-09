@@ -11,6 +11,15 @@ export interface ContextCapacity {
 export interface ContextCapacityHints {
   runtimeWindow?: number | null;
   modes?: readonly string[];
+  /** Fresh provider usage can disprove a nominal registry window. */
+  reportedContextTokens?: number | null;
+}
+
+/** Registry overflow leaves capacity unknown; a runtime window is authoritative. */
+export function usableContextCapacity(capacity: ContextCapacity | null, usedTokens: number | null): ContextCapacity | null {
+  if (!capacity || capacity.windowTokens <= 0) return null;
+  if (capacity.source !== "runtime" && usedTokens !== null && usedTokens > capacity.windowTokens) return null;
+  return capacity;
 }
 
 /** Runtime capacity wins; explicit launch mode then qualifies the registry row.
@@ -24,8 +33,8 @@ export function claudeCapacity(model: string | null, hints: ContextCapacityHints
   if (!normalized) return null;
   const mode = hints.modes?.some((value) => value.toLowerCase().includes("context-1m-2025-08-07")) ? "1m" : normalized.mode;
   const windowTokens = registryWindow(resolveRegistryKey(normalized.key), mode);
-  return windowTokens === null ? null
-    : { windowTokens, source: "registry", confidence: "approximate", registryVersion: MODEL_REGISTRY_VERSION };
+  return usableContextCapacity(windowTokens === null ? null
+    : { windowTokens, source: "registry", confidence: "approximate", registryVersion: MODEL_REGISTRY_VERSION }, hints.reportedContextTokens ?? null);
 }
 
 export function claudeCapacityHints(row: Record<string, unknown>): ContextCapacityHints {
