@@ -9,7 +9,7 @@ import { conversationIdentity, formatConversationHash } from "@/lib/accounts/ide
 import { useLocale } from "@/lib/i18n";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import type { SeatRefs } from "@/lib/tasks/groupHide";
+import { isCurrentSeatConversation, type SeatRefs } from "@/lib/tasks/groupHide";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -63,6 +63,7 @@ import { stagePanelKey } from "./KanbanCard";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
 import { cycleOpenAgent, openAgents } from "./openAgents";
 import { AgentWindow, OPEN_AGENTS_SHORTCUT, OpenAgentsPill } from "./AgentWindow";
+import { AgentWindowOpener } from "./agentWindowOpener";
 import { readerReady, useAgentWindowGeometry, useReaderReady } from "./agentWindowGeometry";
 import { operationalAttempts } from "./pipelineGraph";
 import { browserPipelinePorts, type PipelinePorts } from "./pipelinePorts";
@@ -451,7 +452,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
     };
   }, []);
   const renderSeat = props.seat;
-  const seatView = useMemo(() => renderSeat?.(boardId) ?? null, [renderSeat, boardId]);
+  /* The seat's expand button opens the seat's conversation in the agent
+     window like any agent; the button takes the keyboard back when the
+     window closes. Read through a ref: the opener is defined further down. */
+  const openFromSeatRef = useRef<(file: FileEntry, from: HTMLElement | null) => void>(() => {});
+  const openFromSeat = useCallback((file: FileEntry, from: HTMLElement | null) => openFromSeatRef.current(file, from), []);
+  const seatView = useMemo(() => {
+    const seat = renderSeat?.(boardId) ?? null;
+    return seat ? <AgentWindowOpener.Provider value={openFromSeat}>{seat}</AgentWindowOpener.Provider> : null;
+  }, [renderSeat, boardId, openFromSeat]);
   const seatSide = Boolean(seatView) && seatFrame.placement === "side";
   /* The model's own clock moves in 15 s steps: it only phrases ages and
      waits, and a per-second clock would rebuild every card each tick. */
@@ -514,12 +523,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
      an attention handoff and a row's × leave focus where it is. */
   const focusOnShow = useRef(false);
   const windowAgentRef = useRef<string | null>(null);
+  /* The control outside the board's cards the window was opened from (the
+     seat's expand button): closing the window gives it the keyboard back. */
+  const openedFrom = useRef<HTMLElement | null>(null);
+  const focusAfterWindow = useCallback((fallback: string) => {
+    const from = openedFrom.current;
+    openedFrom.current = null;
+    queueMicrotask(() => (from?.isConnected ? from : rootRef.current?.querySelector<HTMLElement>(fallback))?.focus({ preventScroll: true }));
+  }, []);
   const leaveWindow = useCallback(() => {
     if (!windowAgentRef.current) return;
     setWindow(null, null);
     /* The pill brings the window back; it takes the keyboard. */
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-open-agents-pill]")?.focus({ preventScroll: true }));
-  }, [setWindow]);
+    focusAfterWindow("[data-open-agents-pill]");
+  }, [setWindow, focusAfterWindow]);
   const parkRef = useCallback((park: HTMLDivElement | null) => placement.setPark(park), [placement]);
   const filesByIdentity = useMemo(() => new Map(files.map((file) => [conversationIdentity(file), file] as const)), [files]);
   /* A conversation that has left this board's files keeps its reader mounted
@@ -574,6 +591,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
         file,
         inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
+        ...(!owner && isCurrentSeatConversation(seatRefs, file) ? { seat: true } : {}),
+        /* The window is the operator's conversation window: the agent in its
+           reader takes the one composer from any other place of the same
+           conversation, the seat's included. */
+        ...(shownState === reader.key ? { composerPrimary: true } : {}),
       }];
     });
     /* A pane's conversation no card has open is mounted for as long as the pane shows it. */
@@ -591,7 +613,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1912,6 +1934,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openReaderFor = useCallback((file: FileEntry, options: { focus?: boolean; handoff?: boolean; landing?: boolean } = {}) => {
     const key = conversationIdentity(file);
     if (!options.handoff) disown(key);
+    openedFrom.current = null;
     memory.update((readers) => openReader(readers, key, file.path));
     setFocusedReader(key);
     onConversationOpened?.(file.path);
@@ -1920,6 +1943,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
        card, so the board settles under the window and not before it. */
     setWindow(key, options.landing ? key : undefined);
   }, [memory, onConversationOpened, disown, setWindow]);
+  useLayoutEffect(() => {
+    openFromSeatRef.current = (file, from) => {
+      /* Its conversation draws no tile, so the board may not have read it yet. */
+      lastSeenFiles.current.set(conversationIdentity(file), file);
+      openReaderFor(file);
+      openedFrom.current = from;
+    };
+  }, [openReaderFor]);
   const [revealTick, setRevealTick] = useState(0);
   useLayoutEffect(() => {
     const wanted = pendingReveal.current;
@@ -2144,10 +2175,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         return;
       }
       setWindow(next, onScreen === key ? next : onScreen);
-      if (!next) queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(".board-frame")?.focus({ preventScroll: true }));
+      if (!next) focusAfterWindow(".board-frame");
     }
     memory.update((readers) => closeReader(readers, key));
-  }, [memory, disown, setWindow, placement]);
+  }, [memory, disown, setWindow, placement, focusAfterWindow]);
   const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
   /* A conversation the Viewer was asked to open lands in its reader. */
@@ -2315,6 +2346,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The pill, and Alt+J with the window closed, bring the window back on the
      agent shown last. */
   const reopenWindow = useCallback(() => {
+    openedFrom.current = null;
     const keys = windowKeysRef.current;
     const back = lastShown.current && keys.includes(lastShown.current) ? lastShown.current : keys[0];
     if (back) jumpToAgent(back);
@@ -2329,8 +2361,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     setWindow(null, null);
     memory.update((readers) => readers.filter((reader) => !keys.has(reader.key)));
     /* The window and the pill go with the last agent; the board keeps the keyboard. */
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>(".board-frame")?.focus({ preventScroll: true }));
-  }, [memory, disown, setWindow]);
+    focusAfterWindow(".board-frame");
+  }, [memory, disown, setWindow, focusAfterWindow]);
   const agentStepRef = useRef({ stepAgent, reopenWindow });
   agentStepRef.current = { stepAgent, reopenWindow };
   /* Alt+J and Alt+K walk the open agents, from inside a composer too; with
