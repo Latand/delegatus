@@ -55,7 +55,7 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
       const result = incomingSync(current, input);
       const link = linkedPeer("grant", current.id);
       if (result.status === 200 && link) {
-        await drainSeatMessages(link);
+        if (result.agreed) await drainSeatMessages(link);
         // A revocation while the delivery awaited a host never sends more data.
         if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) return unauthorized();
         const freshLink = linkedPeer("grant", current.id);
@@ -66,10 +66,11 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
         if (body.s !== digest || link.projects.size !== freshLink.projects.size || [...link.projects].some(project => !freshLink.projects.has(project))) {
           // Every project-bearing part was built before delivery awaited. A
           // changed boundary starts a fresh handshake; no old page is exported.
+          result.agreed = false;
           result.body = { v: 1, now: Date.now(), store: body.store, s: digest, taskWireVersion: body.taskWireVersion,
             shared: local.slice(0, 100), index: 0, total: local.length, need: true, tasks: { wait: true } };
         }
-        (result.body as Record<string, unknown>).sm = seatMessagesPart(freshLink);
+        (result.body as Record<string, unknown>).sm = result.agreed ? seatMessagesPart(freshLink) : { v: 1 };
       }
       markGrantSync(current, result.status === 200 ? null : String((result.body as { error?: string }).error ?? "unavailable"));
       return answer(result.body, result.status);

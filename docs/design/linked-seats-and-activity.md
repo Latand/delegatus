@@ -813,8 +813,8 @@ describes; this slice exposes agents of shared projects through the boards.
 The peer response checks the grant and fresh shared-project intersection after
 runtime delivery returns. A changed sharing boundary discards the response's
 old task, agent and shared-list pages and starts a fresh list handshake. The
-caller drains received messages before constructing any outbound page and
-checks the current link again. When the intersection becomes empty, a waiting
+caller confirms the current sharing lists before draining received messages
+and checks the current link before constructing its next outbound page. When the intersection becomes empty, a waiting
 task exchange no longer keeps the handshake running indefinitely.
 
 `src/lib/links/boardSync.test.ts` holds delivery in each direction while
@@ -830,3 +830,36 @@ the fixes were written. These protections belong on both installs: each host
 must check its own export boundary and normalize the messages it receives.
 The wire version is unchanged; one upgraded side retains compatibility while
 the older host still needs the fixes to protect its own boundary.
+
+
+## 16. Sharing agreement and fresh local delivery admission
+
+Each sync confirms the current sharing lists before the caller sends queued
+message text. The granting side exports messages only when the complete lists
+agree; an authorization change during runtime delivery clears that agreement
+and starts another handshake. Intermediate shared-list pages contain no
+queued words. Pending received messages also wait for the fresh agreement
+before reaching local admission, including after a receiver restart. Projects
+that remain shared resume once both lists agree.
+
+A received message carries an in-process authorization check into local
+delivery. The check reads the current connection and shared-project intersection
+after runtime reads and admission-lock waits, immediately before a fresh durable
+reservation. Unsharing refuses with `project_not_linked`; revoking or replacing
+the connection refuses with `link_revoked`. The check stays outside the durable
+command, so an operation already admitted retains its original receipt and
+recovery binding. Refusal acknowledgements remain scheduled after unsharing.
+
+The two-install HTTP tests pause the runtime client's session read with zero
+local reservations, remove sharing or revoke the link, and release the read.
+Both directions require zero new reservations and runtime commands, plus the
+corresponding durable refusal. Pagination cases change a 102-project list to
+101, assert that removed-project text stays off every page in both directions,
+and require remaining-project messages to resume. These cases failed before
+the corresponding fixes.
+
+Both installs need these fixes to protect both directions. Update the granting
+side first, then the caller. The wire remains compatible with earlier builds;
+a host still running the earlier seat-message implementation retains the races
+in its own export and admission paths. An installation predating seat messages
+continues board sync and refuses unsupported messaging as described in §14.

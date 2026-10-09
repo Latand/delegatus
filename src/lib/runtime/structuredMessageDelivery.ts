@@ -1,3 +1,4 @@
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import crypto from "node:crypto";
 
 import {
@@ -49,6 +50,8 @@ import { isInterruptionObligationId } from "./interruptionObligations";
 import { RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 export interface StructuredMessageRequest {
+  /** Live authorization at fresh reservation, after runtime and lock waits. */
+  admissionGuard?: () => void;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -244,6 +247,9 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
 }
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409,
+  });
   return {
     ok: false,
     structured: true,
@@ -474,21 +480,27 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
+    if (!replay) request.admissionGuard?.();
     const generation = conversation.generations.at(-1);
     const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
       conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
     }
-    const place = () => registry.holdDelivery(
-      conversation.id,
-      deliveryText,
-      idempotencyKey,
-      payloadKind,
-      refs,
-      contentDigest,
-      commandInput(request),
-      { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
-    );
+    const place = () => {
+      if (request.admissionGuard && !registry.preflightDeliveryReservation(
+        conversation.id, deliveryText, idempotencyKey, payloadKind, refs, contentDigest, commandInput(request),
+      )) request.admissionGuard();
+      return registry.holdDelivery(
+        conversation.id,
+        deliveryText,
+        idempotencyKey,
+        payloadKind,
+        refs,
+        contentDigest,
+        commandInput(request),
+        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
+      );
+    };
     /* Publication and reservation are one section per key, as on the live
        path: two racing attempts under the same client message id see a durable
        winner, and the bytes are published once, before the row that names
@@ -1052,6 +1064,7 @@ export async function enqueueStructuredMessage(
       content.contentDigest,
       commandInput(request),
     );
+    if (!terminalReplay) request.admissionGuard?.();
   } catch (error) {
     return deliveryFailure(error);
   }
@@ -1161,6 +1174,7 @@ export async function enqueueStructuredMessage(
         commandInput(request),
       );
       if (replay) return replay;
+      request.admissionGuard?.();
       if (rawImages.length > 0 && !publishedImages) {
         (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
         publishedImages = true;

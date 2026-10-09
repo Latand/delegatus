@@ -2202,12 +2202,23 @@ for (const revoked of [false, true]) for (const side of ["receiver", "caller"] a
         if (!held) await Bun.sleep(10);
       }
       expect(held).toBe(true);
+      // The preliminary sharing probe completed before this runtime wait.
+      await captured(b);
+      expect((await request(receiving, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
       const changed = revoked
         ? await request(receiving, receiving === a ? `/api/links/peers/${id}` : `/api/links/grants?id=${grant.id}`, "DELETE")
         : await request(receiving, "/api/links/shared", "POST", { v: 1, all: false, projects: [] });
       expect(changed.status).toBe(200);
     } finally { await request(receiving, "/test/seat-delivery?mode=release"); }
     const result = await syncing;
+    expect((await request(receiving, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
+    expect((await request(receiving, "/test/seat-delivery")).body.commands).toBe(0);
+    const database = new Database(path.join(root, names[receiving === a ? 0 : 1]!, "state.sqlite"), { readonly: true });
+    try {
+      const inbox = database.query("SELECT value_json FROM state_rows WHERE collection = 'link_messages'").all() as { value_json: string }[];
+      expect(inbox.map(row => JSON.parse(row.value_json)).filter(row => row.dir === "in"))
+        .toEqual([expect.objectContaining({ st: "refused", code: revoked ? "link_revoked" : "project_not_linked" })]);
+    } finally { database.close(); }
     const pages = await captured(b);
     if (!revoked || side === "receiver") expect(pages.length).toBeGreaterThan(0);
     for (const page of pages) {
@@ -2217,7 +2228,11 @@ for (const revoked of [false, true]) for (const side of ["receiver", "caller"] a
       expect(wire).not.toContain(key);
     }
     expect(result).toMatchObject({ status: revoked ? 409 : 200 });
-    if (!revoked) await sync(a, id);
+    if (!revoked) {
+      await sync(a, id);
+      expect((await request(sender, `/test/seat-receipt?operationId=${inbound.body.operationId}`)).body)
+        .toMatchObject({ state: "refused", code: "project_not_linked" });
+    }
   }, 30_000);
 }
 
@@ -2258,5 +2273,66 @@ for (const label of ["M".repeat(100), "<>/" + "M".repeat(97)]) {
     expect(after[0]!.text).toContain(`project ${after[0]!.command.origin.project}.`);
     expect(after[0]!.command.origin.project).not.toMatch(/[<>\u0000-\u001f]/);
     expect((await request(a, `/test/seat-receipt?operationId=${sent.body.operationId}`)).body).toMatchObject({ state: "accepted" });
+  }, 30_000);
+}
+
+for (const changedSide of ["caller", "receiver"] as const) {
+  test(`paginated sharing change on ${changedSide} fences queued words both ways until agreement`, async () => {
+    const remotes = Object.fromEntries(Array.from({ length: 101 }, (_, index) => {
+      const remote = `code.example.test/acme/page-${index}`;
+      return [projectIdentityFromRemote(`https://${remote}`, "/")!.project, remote];
+    }));
+    const remaining = Object.keys(remotes);
+    const kept = remaining[0]!;
+    const a = await install(`paged-messages-${changedSide}-a`, remotes);
+    const b = await install(`paged-messages-${changedSide}-b`, remotes);
+    const id = await link(a, b, { projects: [key, ...remaining] });
+    const grant = ((await request(b, "/api/links/grants")).body.grants as { label: string }[])[0]!;
+    for (const base of [a, b]) for (const project of [key, kept]) {
+      await request(base, "/test/seat", "POST", { project });
+      expect((await request(base, "/test/seat-send", "POST", { project, machine: base === a ? id : grant.label,
+        text: project === key ? "Removed project plaintext canary." : "Remaining project resumes.", clientMessageId: `paged-${project}` })).status).toBe(200);
+    }
+    await request(changedSide === "caller" ? a : b, "/api/links/shared", "POST", { v: 1, all: false, projects: remaining });
+    await request(b, "/test/capture");
+    await sync(a, id);
+    const pages = await captured(b);
+    expect(pages.length).toBeGreaterThan(2);
+    for (const page of pages) {
+      expect(page.request).not.toContain("Removed project plaintext canary.");
+      expect(page.response).not.toContain("Removed project plaintext canary.");
+      const requestBody = JSON.parse(page.request);
+      const responseBody = JSON.parse(page.response);
+      if (responseBody.need === true || responseBody.shared !== undefined) expect(responseBody.sm?.out ?? []).toHaveLength(0);
+      if (requestBody.shared !== undefined) expect(requestBody.sm?.out ?? []).toHaveLength(0);
+    }
+    for (const base of [a, b]) {
+      const deliveries = (await request(base, "/test/seat-deliveries")).body as unknown as { text: string }[];
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]!.text).toContain("Remaining project resumes.");
+    }
+  }, 30_000);
+}
+
+for (const side of ["caller", "receiver"] as const) {
+  test(`pending ${side} message waits for fresh sharing agreement before local admission`, async () => {
+    const names = [`pending-agreement-${side}-a`, `pending-agreement-${side}-b`];
+    let a = await install(names[0]!); let b = await install(names[1]!);
+    const id = await link(a, b);
+    for (const base of [a, b]) await request(base, "/test/seat", "POST", { project: key });
+    const grant = ((await request(b, "/api/links/grants")).body.grants as { label: string }[])[0]!;
+    const receiving = side === "caller" ? a : b;
+    const sender = side === "caller" ? b : a;
+    await request(sender, "/test/seat-send", "POST", { project: key, machine: side === "caller" ? grant.label : id,
+      text: "Pending instruction before the sharing change.", clientMessageId: "pending-agreement" });
+    await request(receiving, "/test/seat-crash?point=before");
+    await request(a, `/api/links/peers/${id}`, "POST").catch(() => null);
+    await stopInstall(receiving);
+    if (side === "caller") a = await install(names[0]!); else b = await install(names[1]!);
+    await request(side === "caller" ? b : a, "/api/links/shared", "POST", { v: 1, all: false, projects: [] });
+    await sync(a, id);
+    const currentReceiver = side === "caller" ? a : b;
+    expect((await request(currentReceiver, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
+    expect((await request(currentReceiver, "/test/seat-delivery")).body.commands).toBe(0);
   }, 30_000);
 }

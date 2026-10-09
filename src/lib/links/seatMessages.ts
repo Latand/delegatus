@@ -1,3 +1,4 @@
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 /** Durable, one-hop seat messages riding the existing linked-board exchange. */
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
@@ -115,7 +116,9 @@ export function seatMessageReceipt(operationId: string) {
 }
 export function messagesPending(id: string): boolean {
   const link = linkedContext().links.find(link => link.side === "peer" && link.id === id);
-  return !!link && peerSeatMessages(link.key) && rows().some(row => row.dir === "out" && row.link === link.install && row.connection === connection(link) && !row.ack && link.projects.has(row.p) && Date.now() - row.at <= 30 * DAY);
+  return !!link && peerSeatMessages(link.key) && rows().some(row => row.link === link.install && row.connection === connection(link) && (
+    row.dir === "in" ? row.ackPending && (row.st === "accepted" || row.st === "refused")
+      : !row.ack && link.projects.has(row.p) && Date.now() - row.at <= 30 * DAY));
 }
 
 /** The envelope is strict. Invalid individual rows with a valid id get a refusal. */
@@ -212,10 +215,12 @@ export async function drainSeatMessages(link: LinkedPeer): Promise<void> {
     });
     if (!held) continue;
     try {
-      const live = linkedContext().links.find(current => current.key === link.key && current.install === link.install && connection(current) === held.connection);
-      const outcome = !live ? { st: "refused" as const, code: "link_revoked" }
-        : !live.projects.has(held.p) ? { st: "refused" as const, code: "project_not_linked" }
-        : await deliverLinkedSeatMessage(held.p, held.t!, held.prelude!, `peer:${link.prefix}:${held.id}`);
+      const admissionGuard = () => {
+        const live = linkedContext().links.find(current => current.key === link.key && current.install === link.install && connection(current) === held.connection);
+        if (!live) throw new DeliveryAdmissionRefusedError("link_revoked");
+        if (!live.projects.has(held.p)) throw new DeliveryAdmissionRefusedError("project_not_linked");
+      };
+      const outcome = await deliverLinkedSeatMessage(held.p, held.t!, held.prelude!, `peer:${link.prefix}:${held.id}`, admissionGuard);
       collection(true)!.boundedPatch(2, tx => {
         const current = tx.get(held.key); if (current?.lease?.token !== lease.token) return;
         delete current.lease;

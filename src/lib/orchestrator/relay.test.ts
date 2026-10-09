@@ -809,9 +809,9 @@ test("linked relay preserves a terminal resume failure across admission recovery
     return { ok: false, structured: true, outcome: "failed", status: 503, error: "Fixture resume failed", operationId: held.command.operationId };
   });
   try {
-    const first = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture");
+    const first = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture", () => {});
     expect(first).toMatchObject({ st: "refused", code: "delivery_failed" });
-    const recovered = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture");
+    const recovered = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture", () => {});
     expect(recovered).toMatchObject({ st: "refused", code: "delivery_failed", operationId: first.operationId });
     expect(admitted).toBe(1);
   } finally { setLinkedSeatEnqueueForTests(null); }

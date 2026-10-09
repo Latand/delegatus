@@ -62,25 +62,28 @@ let seatCrash: "before" | "after" | null = null;
 let dropSeatAnswer = false;
 let seatDeliveryMode: "hold" | null = null;
 let seatDeliveryHeld = false;
+let seatRuntimeCommands = 0;
 let releaseSeatDelivery: (() => void) | null = null;
 setLinkedSeatEnqueueForTests(async message => {
-  if (seatDeliveryMode === "hold") {
-    seatDeliveryHeld = true;
-    await new Promise<void>(resolve => { releaseSeatDelivery = resolve; });
-    seatDeliveryHeld = false;
-    seatDeliveryMode = null;
-  }
   if (seatCrash === "before") process.exit(0);
   const result = await enqueueStructuredMessage(message, {
   enabled: () => true, registry: agentRegistry, client: () => ({
     readSession: async ({ conversationId }: { conversationId: string }) => {
+      if (seatDeliveryMode === "hold") {
+        seatDeliveryHeld = true;
+        await new Promise<void>(resolve => { releaseSeatDelivery = resolve; });
+        seatDeliveryHeld = false;
+        seatDeliveryMode = null;
+      }
       const generation = agentRegistry().conversation(conversationId as `conversation_${string}`)!.generations.at(-1)!;
       return { conversationId, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server",
         host: "hosted", turn: "busy", provenance: "structured", revision: 1, artifactPath: generation.path, cwd: dir,
         activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [], capabilities: { steer: true, structuredAttention: true } };
     },
-    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => ({
-      operationId: command.operationId, replayed: false, receipt: { ...command, kind: "send", status: "queued", at: new Date().toISOString(), revision: 1 } }),
+    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => {
+      seatRuntimeCommands++;
+      return { operationId: command.operationId, replayed: false, receipt: { ...command, kind: "send", status: "queued", at: new Date().toISOString(), revision: 1 } };
+    },
   } as unknown as RuntimeHostClient), kick: () => {}, requestMigrationTick: () => {}, startupRecovered: () => {},
 });
   if (seatCrash === "after") process.exit(0);
@@ -200,7 +203,7 @@ const server = http.createServer(async (request, response) => {
       if (mode === "release") releaseSeatDelivery?.();
       else if (mode === "hold") seatDeliveryMode = mode;
       else if (mode === "reset") seatDeliveryMode = null;
-      json(response, { held: seatDeliveryHeld }); return;
+      json(response, { held: seatDeliveryHeld, commands: seatRuntimeCommands }); return;
     }
     if (path === "/test/seat-receipt") { json(response, seatMessageReceipt(query.get("operationId")!)); return; }
     if (path === "/test/seat-crash") { seatCrash = query.get("point") as "before" | "after"; json(response, { ok: true }); return; }

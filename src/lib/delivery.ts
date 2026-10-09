@@ -1,3 +1,4 @@
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor } from "@/lib/agent/cli";
@@ -53,6 +54,7 @@ import {
  */
 
 export interface DeliveryFailure {
+  code?: string;
   ok: false;
   outcome: "failed";
   error: string;
@@ -266,6 +268,7 @@ export function migrationDeliveryOutcome(outcome: DeliveryOutcome): "delivered" 
 }
 
 function failure(error: unknown, status = 500, actuation?: "started"): DeliveryFailure {
+  if (error instanceof DeliveryAdmissionRefusedError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
   return {
     ok: false,
     outcome: "failed",
@@ -683,6 +686,8 @@ export interface ConversationMessage {
   conversationId?: string | null;
   clientMessageId?: string | null;
   reservedDeliveryId?: string | null;
+  /** In-process fence checked after waits before a fresh local reservation. */
+  admissionGuard?: () => void;
   text: string;
   images: InboxImagePayload[];
   /** The "on resume" profile chosen in the control strip (issue #241 §4): when a
@@ -743,6 +748,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
   if (rejected) return rejected;
   if (conversation) {
     try {
+      message.admissionGuard?.();
       const recovered = await (overrides.recover ?? recoverDeadStructuredConversation)(
         { path: message.path, conversationId: conversation.id },
         { registry },
@@ -754,6 +760,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           path: recovered.path,
           conversationId: recovered.conversationId,
           clientMessageId: message.clientMessageId,
+          admissionGuard: message.admissionGuard,
           text,
           hasImages: images.length > 0,
           ...(message.origin ? { origin: message.origin } : {}),
@@ -771,6 +778,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           const uncertain = structured.transportUncertain && structured.operationId;
           return {
             ...failure(structured.error, structured.status, uncertain ? "started" : undefined),
+            ...(structured.code ? { code: structured.code } : {}),
             ...(structured.operationId ? { operationId: structured.operationId } : {}),
             ...(uncertain ? { resend: "verify-first" as const } : {}),
           };
@@ -823,6 +831,11 @@ export async function deliverConversationMessage(message: ConversationMessage, o
         } catch {
           contentDigest = null;
         }
+        if (message.admissionGuard && !registry.preflightDeliveryReservation(
+          conversation.id, heldText, message.clientMessageId ?? null,
+          images.length ? "ephemeral-images" : textBytes > 32_000 ? "ephemeral-text" : "text", [], contentDigest,
+          message.origin ? { origin: message.origin } : {},
+        )) message.admissionGuard();
         queued = registry.holdDelivery(
           conversation.id,
           heldText,

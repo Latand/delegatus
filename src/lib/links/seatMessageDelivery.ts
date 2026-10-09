@@ -1,3 +1,4 @@
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { agentRegistry } from "@/lib/agent/registry";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { resolveOrchestratorRelay } from "@/lib/orchestrator/relay";
@@ -19,7 +20,7 @@ export function setLinkedSeatEnqueueForTests(value: Enqueue | null): void { enqu
 
 /** Called only after the peer token and shared-project intersection admit the
  * wire row. Authorship is frozen by the receiving install, never by headers. */
-export async function deliverLinkedSeatMessage(project: string, text: string, sourceProject: string, clientMessageId: string): Promise<{
+export async function deliverLinkedSeatMessage(project: string, text: string, sourceProject: string, clientMessageId: string, admissionGuard: () => void): Promise<{
   st: "accepted" | "refused" | "retry"; code?: string; operationId?: string;
 }> {
   const author = linkedSeatMessageAuthor(sourceProject);
@@ -29,10 +30,15 @@ export async function deliverLinkedSeatMessage(project: string, text: string, so
   if (admitted.terminalReceipt?.state === "failed") return { st: "refused", code: admitted.terminalReceipt.duplicateRisk ? "delivery_unverified" : "delivery_failed", operationId: admitted.operationId };
   // An earlier reservation already owns these words, including after rotation.
   if (admitted.operationId) return { st: "accepted", operationId: admitted.operationId };
+  try { admissionGuard(); }
+  catch (error) {
+    if (error instanceof DeliveryAdmissionRefusedError) return { st: "refused", code: error.code };
+    throw error;
+  }
   const conversation = agentRegistry().readOnlySnapshot().conversations[admitted.recipient];
   const path = conversation?.generations.at(-1)?.path ?? "";
   const request = { conversationId: admitted.recipient, path, text: admitted.text, origin: admitted.origin,
-    clientMessageId, policy: "steer-or-queue" as const, images: [] };
+    clientMessageId, admissionGuard, policy: "steer-or-queue" as const, images: [] };
   const structured = await enqueue(request);
   if (structured) {
     if (structured.ok) return { st: "accepted", operationId: structured.operationId };
@@ -46,5 +52,6 @@ export async function deliverLinkedSeatMessage(project: string, text: string, so
   }
   const legacy = await deliverConversationMessage({ ...request, pid: null });
   if (legacy.ok) return { st: "accepted", operationId: legacy.operationId ?? undefined };
+  if (legacy.code) return { st: "refused", code: legacy.code };
   return { st: "retry" };
 }

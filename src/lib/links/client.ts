@@ -165,18 +165,18 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
     const agentState = agentCursors(`peer:${id}`);
     let agentMore = false;
     let messageMoved = 0;
+    // Each sync confirms the current lists before exporting queued words.
+    let messagesAgreed = false;
     for (let calls = 0; calls < MAX_SYNC_CALLS; calls++) {
       stillLinked();
-      const deliveryLink = linkedPeer("peer", id);
-      if (deliveryLink) await drainSeatMessages(deliveryLink);
-      // Delivery can wait for the runtime host. Build every wire part only
+      // A prior delivery can wait for the runtime host. Build every wire part
       // after checking the live authorization and sharing boundary again.
-      stillLinked();
       const currentLocal = sharedProjects();
       const currentHash = sharedDigest(currentLocal);
       if (currentHash !== localHash) {
         local = currentLocal;
         localHash = currentHash;
+        messagesAgreed = false;
         send = true;
         sent = 0;
         lastSent.delete(sentKey);
@@ -195,7 +195,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       const pushAgents = outboundAgents && ("rows" in outboundAgents || "reset" in outboundAgents) ? outboundAgents : null;
       const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
       const messageLink = linkedPeer("peer", id);
-      const sm = seatMessagesPart(messageLink);
+      const sm = messagesAgreed && !send && remoteTotal === null ? seatMessagesPart(messageLink) : { v: 1 as const };
       const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, sm, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash, taskWireVersion: TASK_WIRE_VERSION,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
         ...(remoteTotal !== null ? { want: received.length } : {}), ...taskParts,
@@ -228,7 +228,6 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       recordSeatMessages(`peer:${id}`, answer.body.sm !== undefined);
       if (messageLink && answer.body.sm !== undefined) {
         messageMoved += acceptSeatMessages(messageLink, answer.body.sm);
-        await drainSeatMessages(messageLink);
         messageMore = !!(sm.out?.length || sm.ack?.length || answer.body.sm.out?.length || answer.body.sm.ack?.length);
         if (messageMore) messageMoved++;
       }
@@ -300,6 +299,10 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       }
       // A shared list that changed in this answer can link a project whose
       // rows have not moved yet; one more call carries them.
+      messagesAgreed = !send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true;
+      const deliveryLink = linkedPeer("peer", id);
+      if (messagesAgreed && deliveryLink) await drainSeatMessages(deliveryLink);
+      stillLinked();
       const localKeys = new Set(local.map((project) => project.key));
       const linkedAfter = new Set(remote.map((project) => project.key).filter((key) => localKeys.has(key)));
       const linkedSame = linkedAfter.size === linked.size && [...linkedAfter].every((key) => linked.has(key));

@@ -177,7 +177,7 @@ export function removePeer(id: string): Link | undefined {
 export const sharedDigest = (projects: SharedProject[]) => sha(JSON.stringify(projects)).slice(0, 8);
 const partialShared = sharedLinkState("protocol.partialShared", () => new Map<string, { hash: string; total: number; rows: SharedProject[]; at: number }>());
 
-export function incomingSync(grant: Grant, input: unknown): { status: number; body: object } {
+export function incomingSync(grant: Grant, input: unknown): { status: number; body: object; agreed?: boolean } {
   if (partialShared.size) for (const [id, pending] of partialShared) if (Date.now() - pending.at > 600_000) partialShared.delete(id);
   if (!input || typeof input !== "object" || (input as Record<string, unknown>).v !== 1) return { status: 400, body: { error: "malformed" } };
   const wire = input as Record<string, unknown>;
@@ -233,7 +233,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
   // M.10: an idle call writes no grant file; a page with rows counts as movement.
   usedGrant(grant, !!messageMoved || served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
-  return { status: 200, body: { v: 1, sm: { v: 1 }, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
+  return { status: 200, agreed, body: { v: 1, sm: { v: 1 }, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
     ...(wire.s !== remoteHash ? { need: true } : {}),
     ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts,
     ...(agents ? { agents } : {}), ...(agentAck !== undefined ? { agentAck } : {}) } };
