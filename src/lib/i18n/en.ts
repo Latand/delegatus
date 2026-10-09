@@ -212,7 +212,7 @@ export const en = {
   "externalRelay.target.concurrency": "At once",
   "externalRelay.target.choose": "Choose…",
   "externalRelay.target.answeredHere": "Answered by this install",
-  "externalRelay.target.needsEngine": "Choose an engine and a model before this install can answer.",
+  "externalRelay.target.needsEngine": "Choose an engine and a model",
   "externalRelay.target.memberLimit": "Answers per member per hour",
   "externalRelay.target.memberLimitNone": "No limit",
   "externalRelay.target.memberLimitHint": "Counted in each chat. The owner and chat admins are not counted. Past the limit the service decides, by its fallback setting, whether its own assistant answers. Empty or 0: no limit.",

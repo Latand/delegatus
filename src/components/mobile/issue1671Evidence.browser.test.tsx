@@ -900,6 +900,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
                 color: getComputedStyle(node).color,
               })),
               pairedAs: Array.from(element.querySelectorAll("[data-external-relay-paired-at]")).map((node) => node.textContent),
+              /* A line the row cuts short: who it is paired as, a target's model and load, or what it still needs. */
+              cut: Array.from(element.querySelectorAll("[data-external-relay-paired-at], [data-external-relay-running] .truncate")).filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.textContent),
               pairing: element.querySelector("[data-external-relay-pairing]")?.getAttribute("data-external-relay-pairing") ?? null,
               pairingText: (element.querySelector("[data-external-relay-pairing]") as HTMLElement | null)?.innerText ?? null,
               lastOutcome: element.querySelector("[data-external-relay-last-outcome]")?.textContent ?? null,
@@ -956,6 +958,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
           if (reading.conversationContent) failures.push(`${label}: the card shows conversation content`);
           const times = [reading.lastOutcome, reading.lastProgress, ...reading.pairedAs].filter(Boolean).join(" ");
           if (locale === "uk" && /AM|PM/.test(times)) failures.push(`${label}: Ukrainian times read ${JSON.stringify(times)}`);
+          if (/\d:\d{2}:\d{2}/.test(`${times} ${reading.pairingText ?? ""}`)) failures.push(`${label}: a time shows its seconds: ${JSON.stringify(times)}`);
+          if (reading.cut.length) failures.push(`${label}: lines cut short: ${JSON.stringify(reading.cut)}`);
           if (phone && reading.minControlHeight < 43.5) failures.push(`${label}: controls under 44px: ${reading.shortControls.join(" | ")}`);
           if (scene === "paired") {
             if (JSON.stringify(reading.states) !== JSON.stringify(["polling", "paused"])) failures.push(`${label}: poller states ${JSON.stringify(reading.states)}`);

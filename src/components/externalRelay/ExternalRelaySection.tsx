@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pause, Play, Unplug } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Pause, Play, RotateCcw, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { effortTierLabel } from "@/components/builderCopy";
@@ -144,10 +144,14 @@ function safeLink(value: string | null): string | null {
   } catch { return null; }
 }
 
-/** Times and dates in the UI's language, as the rest of the interface writes them. */
+/** Times and dates in the UI's language on the board's 24-hour clock, to the minute; a date names its year only outside this one. */
 const localeTag = (locale: string) => locale === "uk" ? "uk-UA" : "en-US";
-const clock = (value: string, locale: string) => new Date(value).toLocaleTimeString(localeTag(locale));
-const stamp = (value: string, locale: string) => new Date(value).toLocaleString(localeTag(locale));
+const clock = (value: string, locale: string) => new Date(value).toLocaleTimeString(localeTag(locale), { hour: "2-digit", minute: "2-digit", hour12: false });
+const stamp = (value: string, locale: string) => {
+  const date = new Date(value);
+  const year = date.getFullYear() === new Date().getFullYear() ? undefined : "numeric";
+  return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+};
 
 const ownerLine = (owner: Owner) => owner.handle ? `${owner.display_name} (${owner.handle})` : owner.display_name;
 const modelLabel = (engine: RelayEngine | null, model: string | null) => engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
@@ -385,7 +389,7 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
         <>
           <p role="status" className="flex items-start gap-1.5 text-primary"><Dot tone={ended === "denied" ? "danger" : "muted"} className="mt-[5px]" />{t(ended === "denied" ? "externalRelay.pairing.denied" : ended === "cancelled" ? "externalRelay.pairing.cancelled" : ended === "completed" ? "externalRelay.pairing.completedElsewhere" : "externalRelay.pairing.expired")}</p>
           {status?.reason ? <p className="pl-3 text-caption leading-4 text-muted">{status.reason}</p> : null}
-          <button type="button" onClick={reset} className={`${QUIET} self-start`}><ChevronLeft className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.pairing.again")}</button>
+          <button type="button" onClick={reset} className={`${QUIET} self-start`}><RotateCcw className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.pairing.again")}</button>
         </>
       ) : status?.status === "awaiting_install" && status.owner ? (
         <>
@@ -480,7 +484,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: 
   const canAnswer = target.engine !== null && target.model !== null && !noAccount;
   const limit = target.memberLimitPerHour === undefined ? RELAY_MEMBER_ANSWERS_PER_HOUR : target.memberLimitPerHour;
   const configured = target.engine !== null && target.model !== null;
-  const summary = [modelLabel(target.engine, target.model), t("externalRelay.target.running", { count: running, max: target.concurrency }), limit ? t("externalRelay.target.perHour", { count: limit }) : null].filter(Boolean).join(" · ");
+  const load = [t("externalRelay.target.running", { count: running, max: target.concurrency }), limit ? t("externalRelay.target.perHour", { count: limit }) : null].filter(Boolean).join(" · ");
   const here = target.answered_by === "install";
   const name = (key: Parameters<TFunction>[0]) => `${t(key)} · ${target.name}`;
   return (
@@ -493,8 +497,13 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: 
             <span className="line-clamp-2 break-words text-ui font-semibold leading-4 text-primary" title={target.name}>{target.name}</span>
             <span data-external-relay-running={running} className={`flex min-w-0 items-center gap-1 text-caption ${noAccount ? "text-warning" : "text-muted"}`}>
               {noAccount ? <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden /> : null}
-              <span className="truncate">{configured ? summary : t("externalRelay.target.needsEngine")}</span>
-              {configured && target.effort ? <EffortScale effort={target.effort} color={`var(--color-${target.engine}-mark)`} className="ml-0.5" /> : null}
+              {configured ? (
+                <>
+                  <span className="shrink-0">{modelLabel(target.engine, target.model)}</span>
+                  {target.effort ? <EffortScale effort={target.effort} color={`var(--color-${target.engine}-mark)`} /> : null}
+                  <span className="min-w-0 truncate">{` · ${load}`}</span>
+                </>
+              ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}

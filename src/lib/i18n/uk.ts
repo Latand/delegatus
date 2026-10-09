@@ -211,7 +211,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.target.concurrency": "Одночасно",
   "externalRelay.target.choose": "Оберіть…",
   "externalRelay.target.answeredHere": "Відповідає ця інсталяція",
-  "externalRelay.target.needsEngine": "Оберіть рушій і модель, щоб ця інсталяція могла відповідати.",
+  "externalRelay.target.needsEngine": "Оберіть рушій і модель",
   "externalRelay.target.memberLimit": "Відповідей на учасника за годину",
   "externalRelay.target.memberLimitNone": "Без ліміту",
   "externalRelay.target.memberLimitHint": "Рахується в кожному чаті окремо. Власника й адміністраторів чату не рахуємо. Понад ліміт сервіс сам вирішує за своїм налаштуванням запасного варіанта, чи відповідає його власний асистент. Порожньо або 0: без ліміту.",

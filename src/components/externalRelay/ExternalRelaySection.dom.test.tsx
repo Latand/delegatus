@@ -24,6 +24,7 @@ const { ExternalRelaySection } = await import("./ExternalRelaySection");
 const { RelayStep } = await import("@/components/onboarding/RelayStep");
 const { resetEngineAccountsStoresForTests } = await import("@/hooks/useEngineAccounts");
 const { setLocale } = await import("@/lib/i18n");
+const { ExternalRelaySettingsDialog } = await import("./ExternalRelaySettingsDialog");
 
 const OWNER = { namespace: "example", id: "owner-1", display_name: "Person A", handle: "@person_a" };
 const target = (over: Record<string, unknown> = {}) => ({
@@ -156,7 +157,11 @@ test("a pairing the service declined shows its reason as text and starts again",
   expect(ended.textContent).toContain("The relay service declined this pairing.");
   expect(ended.textContent).toContain("<b>not admitted</b>");
   expect(ended.querySelector("b")).toBeNull();
-  await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Start again"));
+  /* Starting again is a new pairing: it carries the board's repeat icon, never a back chevron. */
+  const again = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Start again");
+  expect(again?.querySelector("svg.lucide-rotate-ccw")).toBeTruthy();
+  expect(again?.querySelector("svg.lucide-chevron-left")).toBeNull();
+  await click(again);
   expect(host.querySelector("[data-external-relay-connect-area]")).toBeTruthy();
 });
 
@@ -196,6 +201,8 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
   /* Each target is one folded row: its model, running count and limit, and the switch. */
   const first = card.querySelector("[data-external-relay-target=bot-1]")!;
   expect(first.querySelector("[data-external-relay-running]")?.textContent).toBe("Opus 5.5 · 1 of 2 running · 10/h");
+  /* The effort ladder belongs to the model, so it sits right after the model's name. */
+  expect(first.querySelector("[data-external-relay-running] [data-effort-pills]")?.previousElementSibling?.textContent).toBe("Opus 5.5");
   expect(first.querySelector("[data-external-relay-target-fold]")?.getAttribute("aria-expanded")).toBe("false");
   expect(first.querySelectorAll("select")).toHaveLength(0);
   expect(switchOf(first).getAttribute("role")).toBe("switch");
@@ -221,7 +228,7 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
   /* A target with no engine yet says what it needs and cannot answer. */
   const third = card.querySelector("[data-external-relay-target=bot-3]")!;
   expect(switchOf(third).disabled).toBe(true);
-  expect(third.textContent).toContain("Choose an engine and a model before this install can answer.");
+  expect(third.querySelector("[data-external-relay-running]")?.textContent).toBe("Choose an engine and a model");
 
   /* Changing the engine sends that engine's default model and clears the effort. */
   await unfold(first);
@@ -358,14 +365,15 @@ test("the setup guide's step reports a relay paired earlier and offers no Skip w
   expect(host.querySelector("[data-onboarding-relay-skip]")).toBeNull();
 });
 
-test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 24-hour clock", async () => {
+test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 24-hour clock to the minute", async () => {
   accounts({ claude: [signedIn("main")] });
   const outcomeAt = "2026-09-28T17:08:43.000Z";
   const progressAt = "2026-09-28T17:07:10.000Z";
   const pairedAt = "2026-09-27T17:27:16.000Z";
+  const expiresAt = new Date(Date.now() + 600_000).toISOString();
   answers.relay = {
     relays: [relay({ pairedAt, targets: [target({ engine: "claude", model: "opus", effort: "low" })] })],
-    pending: [pending({ id: "pair-2", expires_at: new Date(Date.now() + 600_000).toISOString() })],
+    pending: [pending({ id: "pair-2", expires_at: expiresAt })],
     status: [{ id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: outcomeAt, lastProgress: { targetId: "bot-1", label: "Пишу відповідь", at: progressAt } }, running: {} }],
   };
   answers.pairing = { status: "pending" };
@@ -374,13 +382,19 @@ test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 
   try {
     const host = await mount(<ExternalRelaySection />);
     const card = host.querySelector("[data-external-relay=relay-1]")!;
-    expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(`Відповіли · ${new Date(outcomeAt).toLocaleTimeString("uk-UA")}`);
-    expect(card.querySelector("[data-external-relay-last-progress]")?.textContent).toContain(new Date(progressAt).toLocaleTimeString("uk-UA"));
-    expect(card.textContent).toContain(new Date(pairedAt).toLocaleString("uk-UA"));
+    const minute = (at: string) => new Date(at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+    expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(`Відповіли · ${minute(outcomeAt)}`);
+    expect(card.querySelector("[data-external-relay-last-progress]")?.textContent).toBe(`Support bot · ${minute(progressAt)}`);
+    /* The pairing date is short: day, month's abbreviation and the minute, without seconds or this year. */
+    expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toBe(`Під’єднано як Person A (@person_a) · ${new Date(pairedAt).toLocaleString("uk-UA", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`);
+    expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toMatch(/вер\./);
     const pairing = host.querySelector("[data-external-relay-pairing]")!;
-    expect(pairing.textContent).not.toMatch(/AM|PM/);
-    expect(card.textContent).not.toMatch(/AM|PM/);
-    expect(card.textContent).toMatch(/\d{2}\.\d{2}\.2026/);
+    expect(pairing.textContent).toContain(`Код дійсний до ${minute(expiresAt)}.`);
+    for (const text of [pairing.textContent, card.textContent]) {
+      expect(text).not.toMatch(/AM|PM/);
+      expect(text).not.toMatch(/\d:\d{2}:\d{2}/);
+      expect(text).not.toMatch(/\d{2}\.\d{2}\.2026/);
+    }
     await unfold(card.querySelector("[data-external-relay-target=bot-1]")!);
     const effort = card.querySelector<HTMLSelectElement>('select[aria-label^="Зусилля"]')!;
     expect(card.querySelector("[data-external-relay-running]")?.textContent).toContain("10/год");
@@ -391,6 +405,35 @@ test("in Ukrainian the relay surface writes times and dates as uk-UA does, on a 
   } finally {
     setLocale("en");
   }
+});
+
+test("a pairing from another year names its year; English times are on the same 24-hour clock", async () => {
+  accounts({ claude: [signedIn("main")] });
+  const pairedAt = "2025-03-04T09:14:00.000Z";
+  answers.relay = { relays: [relay({ pairedAt })], pending: [], status: [{ id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: "2026-09-28T17:08:43.000Z", lastProgress: null }, running: {} }] };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const card = host.querySelector("[data-external-relay=relay-1]")!;
+  expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toBe(`Paired as Person A (@person_a) · ${new Date(pairedAt).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}`);
+  expect(card.querySelector("[data-external-relay-paired-at]")?.textContent).toMatch(/Mar \d+, 2025/);
+  expect(card.querySelector("[data-external-relay-last-outcome]")?.textContent).toMatch(/^Answered · \d{2}:\d{2}$/);
+  expect(card.textContent).not.toMatch(/AM|PM/);
+});
+
+test("the settings dialog explains what a relay is until one is paired, then opens on the relay", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [], pending: [], status: [] };
+  route();
+  let host = await mount(<ExternalRelaySettingsDialog onClose={() => {}} />);
+  expect(host.querySelector("[data-external-relay-intro]")?.textContent).toContain("A relay service can send this install questions");
+  await act(async () => mounted!.root.unmount());
+  host.remove();
+  mounted = null;
+
+  answers.relay = { relays: [relay()], pending: [], status: [] };
+  host = await mount(<ExternalRelaySettingsDialog onClose={() => {}} />);
+  expect(host.querySelector("[data-external-relay=relay-1]")).toBeTruthy();
+  expect(host.querySelector("[data-external-relay-intro]")).toBeNull();
 });
 
 test("a refusal made by this install, or its own failure, never reads as the relay service's refusal", async () => {

@@ -2590,7 +2590,9 @@ in the phone's menu sheet, and mounted beside it in the Viewer. Its body,
   pairing past its local expiry leaves `relays.json` on the next read or
   write of the store, whether or not a check reached the service. A pending
   pairing still in `relays.json` resumes when the surface opens. Times and
-  dates are written in the interface language (`uk-UA` or `en-US`);
+  dates are written in the interface language (`uk-UA` or `en-US`) on a
+  24-hour clock to the minute, and a date names its year only outside the
+  current one;
 - each paired relay: its name, origin, description, the owner it is paired
   as and when; the poller state of §B.3 as one line, danger-toned when only
   the operator can clear it (`credential_rejected`, `unsupported_version`)
