@@ -3984,7 +3984,7 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
   });
 }
 
-/** Validation runs before receipt access and the resolved input is reused at dispatch. */
+/** Fresh admission resolves the name before claiming; replay retains the recorded result. */
 function orchestratorProjectBinding(
   dependencies: ViewerMcpDomainDependencies,
   run: (resolved: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>,
@@ -4024,7 +4024,7 @@ function orchestratorProjectBinding(
         throw error;
       }
     },
-    { authorizeReceipt: async (args: McpToolArgs) => { resolved.set(args, await resolve(args)); } },
+    { prepareAdmission: async (args: McpToolArgs) => { resolved.set(args, await resolve(args)); } },
   );
 }
 
@@ -6741,9 +6741,9 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
-async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpRequestBindingInput> {
+async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = await resolveOrchestratorToolProject(required(args, "project"), dependencies);
+  const named = required(args, "project");
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
@@ -6756,10 +6756,11 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
+  const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
-    target: { project, identity: orchestratorSeatFor(project).active?.conversationId ?? null },
+    target: { project, identity: project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
     sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
@@ -7086,6 +7087,7 @@ export function viewerMcpRecoverableTools(
     },
     send_message_to_orchestrator: {
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
+      bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {

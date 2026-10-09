@@ -1258,8 +1258,18 @@ async function runOrchestratorSeatRequest(
         : !spawnedConversationId
           ? "spawn response omitted conversationId"
           : "spawn did not report an accepted launch");
+    // A fresh validator refusal can close admission only while the spawn's
+    // durable fence confirms that its downstream key reserved no launch.
+    // A pending replay may already have launched, so it retains uncertainty.
+    let refused = false;
+    if (begun.kind === "begun" && spawned.status >= 400 && spawned.status < 500
+      && !launchId && !text(spawned.body.operationId) && spawned.body.actuation !== "started") {
+      const { fenceSpawnAdmissionRejection } = await import("@/lib/agent/spawnCommand");
+      const fence = await fenceSpawnAdmissionRejection(spawnBody, spawned.status, error, { registry: agentRegistry });
+      refused = fence?.kind === "fenced";
+    }
     const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
-    return { status: spawned.status, body: { ...spawned.body, seat: terminalized?.seat ?? null } };
+    return { status: spawned.status, body: { ...spawned.body, ...(refused ? { admission: "refused" } : {}), seat: terminalized?.seat ?? null } };
   }
   const activated = await activate({
     project,

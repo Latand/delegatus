@@ -11,10 +11,13 @@ import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
 import { POST as seatPOST } from "@/app/api/orchestrator/seat/route";
 
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { executeSpawnRequest, productionSpawnCommandDependencies } from "@/lib/agent/spawnCommand";
+import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { requireOperatorAuthority, rotationActor, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
-import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { executeOrchestratorSeatRequest, productionSeatCommandDependencies, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setBridgeReports } from "@/lib/projects/settings";
 import { readDeputies } from "@/lib/orchestrator/deputies";
@@ -546,6 +549,76 @@ test("a seat caller sends to the seat named by the project's display name", asyn
   expect(orchestratorSeatFor("Example project").active).toBeNull();
 });
 
+for (const changedName of ["renamed", "ambiguous"] as const) {
+  for (const uncertain of [false, true]) {
+    test(`original-key orchestrator send recovery survives a ${changedName === "renamed" ? "renamed" : "newly ambiguous"} display name with ${uncertain ? "uncertain" : "settled"} admission`, async () => {
+      seatActive("project-a", SEATED_ID, null);
+      const projects = [{ project: "project-a", displayName: "Example project" }];
+      let posts = 0;
+      const { service, receipts } = projectService({ post: async () => {
+        posts++;
+        if (uncertain) throw new McpDispatchUncertainError("response lost");
+        return { ok: true, outcome: "delivered", operationId: "fixture-operation" };
+      } }, projects);
+      let claims = 0;
+      const claim = receipts.claim.bind(receipts);
+      receipts.claim = (...args) => { claims++; return claim(...args); };
+      const args = { clientRequestId: "name-recovery", project: "Example project", text: "status?" };
+      const original = await service.callTool("send_message_to_orchestrator", args);
+      expect(original).toMatchObject(uncertain ? { ok: false, code: "outcome_unknown" } : { ok: true });
+      if (changedName === "renamed") projects[0]!.displayName = "Renamed project";
+      else projects.push({ project: "project-b", displayName: "Example project" });
+      for (const recoveryOnly of [false, true]) {
+        expect(await service.callTool("send_message_to_orchestrator", { ...args, recoveryOnly })).toMatchObject(
+          uncertain ? { ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } } : { ok: true, replayed: true, conversationId: SEATED_ID },
+        );
+      }
+      expect(await service.callTool("send_message_to_orchestrator", { ...args, text: "changed" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+      expect(posts).toBe(1);
+      expect(claims).toBe(1);
+    });
+  }
+}
+
+test("renamed-project receipt recovery still refuses a different authenticated relay sender", async () => {
+  seatActive("project-a", SEATED_ID, null);
+  const projects = [{ project: "project-a", displayName: "Example project" }];
+  let caller = "conversation_caller";
+  const { posts, control } = controlStub();
+  const { service } = projectService(control, projects, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: caller }),
+    attentionAuthority: () => ({ kind: "worker", conversationId: caller }),
+  });
+  const args = { clientRequestId: "renamed-ownership", project: "Example project", text: "status?" };
+  expect((await service.callTool("send_message_to_orchestrator", args)).ok).toBe(true);
+  projects[0]!.displayName = "Renamed project";
+  caller = "conversation_other";
+  expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+  expect(posts).toHaveLength(1);
+});
+
+for (const tool of ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"] as const) {
+  for (const changedName of ["renamed", "ambiguous"] as const) {
+    for (const uncertain of [false, true]) test(`recorded ${uncertain ? "uncertain" : "settled"} ${tool} replays after its display name becomes ${changedName}`, async () => {
+      const projects = [{ project: "project-a", displayName: "Example project" }];
+      const { posts, control } = controlStub();
+      const { service } = projectService({ post: async (...args) => {
+        const result = await control.post(...args);
+        if (uncertain) throw new McpDispatchUncertainError("response lost");
+        return result;
+      } }, projects);
+      const args = { clientRequestId: "wrapped-name-recovery", project: "Example project", text: "status?" };
+      const original = await service.callTool(tool, args);
+      expect(original).toMatchObject(uncertain ? { ok: false, details: { outcome: "unknown", nextAction: "original-key-lookup" } } : { ok: true });
+      if (changedName === "renamed") projects[0]!.displayName = "Renamed project";
+      else projects.push({ project: "project-b", displayName: "Example project" });
+      expect(await service.callTool(tool, args)).toEqual({ ...original, replayed: true });
+      expect(await service.callTool(tool, { ...args, text: "changed" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+      expect(posts).toHaveLength(1);
+    });
+  }
+}
+
 
 test("unknown orchestrator project is refused before claiming or dispatching", async () => {
   const { posts, control } = controlStub();
@@ -665,6 +738,48 @@ test("orchestrator creation, rotation and parallel asks preserve definite server
         ok: false, error: "orchestrator request is invalid", details: { status: 422, code: "invalid_orchestrator_request", outcome: "not-executed", nextAction: "new-request-permitted" },
       });
     }
+  } finally {
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+    await server.stop(true);
+  }
+});
+
+for (const pendingReplay of [false, true]) test(`real nested spawn validation ${pendingReplay ? "retains uncertainty for a pending replay" : "refuses orchestrator creation before launch admission"}`, async () => {
+  const replies: { status: number; body: Record<string, unknown> }[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const reply = await executeOrchestratorSeatRequest(await request.json(), {
+      ...productionSeatCommandDependencies,
+      engineReadiness: () => "connected",
+      spawn: async (body) => {
+        const response = await executeSpawnRequest({ headers: new Headers({ host: "127.0.0.1", [VIEWER_SPAWN_CAPABILITY_HEADER]: ensureOperatorSpawnCapability() }), json: async () => body } as unknown as NextRequest, {
+          ...productionSpawnCommandDependencies, registry: () => testRegistry, engineReadiness: () => "connected",
+        });
+        return { status: response.status, body: await response.json() };
+      },
+    });
+    replies.push(reply);
+    return Response.json(reply.body, { status: reply.status });
+  } });
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  try {
+    const { service } = projectService(productionViewerControlDependencies());
+    const args = { clientRequestId: "nested-validator-refused", project: "Example project", cwd: path.join(sandbox, "missing-directory") };
+    if (pendingReplay) beginOrchestratorSeatIntent({ project: "project-a", mandate: "own the board", clientRequestId: args.clientRequestId, mode: "spawn", engine: "claude", model: "opus", telegramGrant: false, now: AT });
+    const result = await service.callTool("create_orchestrator", args);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({ status: 400, body: { error: expect.stringContaining("directory does not exist") } });
+    expect(testRegistry.spawnReceiptForClientAttempt(args.clientRequestId)).toBeNull();
+    expect(result).toMatchObject(pendingReplay ? {
+      ok: false, code: "outcome_unknown", retryable: false,
+      details: { status: 400, outcome: "unknown", nextAction: "original-key-lookup" },
+    } : {
+      ok: false, error: expect.stringContaining("directory does not exist"), retryable: false,
+      details: { status: 400, admission: "refused", outcome: "not-executed", nextAction: "new-request-permitted" },
+    });
+    expect(await service.callTool("create_orchestrator", args)).toEqual({ ...result, replayed: true });
+    expect(replies).toHaveLength(1);
   } finally {
     if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
     else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;

@@ -349,6 +349,9 @@ export interface McpDispatchTracker {
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
   authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  /** Fresh admission checks, after authority and existing-receipt lookup,
+      before any claim. Mutable names must not conceal a recorded result. */
+  prepareAdmission?: (args: McpToolArgs) => void | Promise<void>;
   /** Who the receipt belongs to, as the Viewer decides it for this call (the
       caller and the target it is allowed to reach). Asked before every receipt
       read, claim or in-process join, and part of the receipt's key, so one
@@ -2326,9 +2329,12 @@ export interface McpRecoveryEvidence {
 }
 
 export interface McpRecoverableTool {
-  /** Resolve the server-derived caller and target for these arguments. Runs
-      before the receipt store is touched; may throw {@link McpToolRefusal}. */
+  /** Resolve the server-derived caller and target for fresh admission. Runs
+      before receipt access unless bindForRecovery authenticates that access first. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Authenticate recovery without resolving a mutable target name. Existing
+      receipts supply their own target; absent receipts still run bind before admission. */
+  bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
   /** Read-only: what the downstream durable records say about this binding.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
   recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
@@ -2647,7 +2653,7 @@ export function createMcpToolService(
         let bound: McpRequestBindingInput;
         const callerStartedAt = performance.now();
         try {
-          bound = await tool.bind(digestArgs);
+          bound = await (tool.bindForRecovery ?? tool.bind)(digestArgs);
         } catch (error) {
           outcome = "failure";
           return failure(
@@ -2662,7 +2668,7 @@ export function createMcpToolService(
         } finally {
           phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - callerStartedAt;
         }
-        const binding: McpRequestBinding = {
+        let binding: McpRequestBinding = {
           version: 1,
           toolName: typedTool,
           clientRequestId: requestId,
@@ -2857,6 +2863,25 @@ export function createMcpToolService(
           return answerFromEvidence(evidence, true, record.result);
         };
         const claimStartedAt = performance.now();
+        if (tool.bindForRecovery) {
+          let record: McpReceiptRecord | null;
+          try {
+            record = await store.lookup(key);
+          } catch (cause) {
+            return unreadableReceipt(cause, false);
+          }
+          if (record) return recoverRecord(record);
+          try {
+            const fresh = await tool.bind(digestArgs);
+            if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+            binding = { ...binding, ...fresh };
+          } catch (error) {
+            return failure(typedTool, requestId,
+              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof McpToolRefusal ? error.details : undefined);
+          }
+        }
         if (recoveryOnly) {
           let record: McpReceiptRecord | null;
           try {
@@ -3029,6 +3054,29 @@ export function createMcpToolService(
       };
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
+        const prepare = bindings[typedTool].prepareAdmission;
+        if (prepare) {
+          let existing: McpReceiptRecord | null = null;
+          if (supportsMcpRecovery(receipts)) {
+            try {
+              existing = await measure("replay", () => receipts.lookup(key));
+            } catch {
+              return recoveryAnswer(typedTool, requestId, {
+                outcome: "unknown", evidence: "mcp-receipt", reason: "the receipt store could not be read", ids: {},
+              }, false);
+            }
+          }
+          if (!existing) {
+            try {
+              await measure("caller", () => prepare(effectiveArgs));
+            } catch (error) {
+              return failure(typedTool, requestId,
+                error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof McpToolRefusal ? error.details : undefined);
+            }
+          }
+        }
         const claim = await measure("claim", () => receipts.claim(key, digest, retention));
         if (claim.kind === "conflict") {
           outcome = "conflict";
