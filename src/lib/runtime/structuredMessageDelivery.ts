@@ -1164,9 +1164,9 @@ export async function enqueueStructuredMessage(
   request: StructuredMessageRequest,
   dependencies: StructuredMessageDependencies = {},
 ): Promise<StructuredMessageResult | null> {
-  const continuationRefused = () => refusedBeforeReservation({ ok: false, structured: true, outcome: "failed",
-    error: "automatic continuation cancelled because the stage or idle conversation changed", status: 409 });
-  if (dependencies.idleContinuationAllowed && !await dependencies.idleContinuationAllowed()) return continuationRefused();
+  const continuationRefused = (reason: string) => refusedBeforeReservation({ ok: false, structured: true, outcome: "failed",
+    error: `automatic continuation unavailable: ${reason}`, status: 409 });
+  if (dependencies.idleContinuationAllowed && !await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed");
   /* A seat's deputy takes its one ask and nothing after it, whoever sends and
      whether it is live or ended (docs/design/ghost-seat.md §4). Refused before
      anything is reserved, so no host is resumed for it. The one exception is
@@ -1193,7 +1193,7 @@ export async function enqueueStructuredMessage(
   const progress = progressPort(dependencies.progress);
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
-    if (dependencies.idleContinuationAllowed) return continuationRefused();
+    if (dependencies.idleContinuationAllowed) return continuationRefused("runtime host is unreachable");
     return holdDuringRuntimeSynchronization(
       request,
       registry,
@@ -1208,7 +1208,7 @@ export async function enqueueStructuredMessage(
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
     console.error("[structured delivery] runtime session read failed", error);
-    if (dependencies.idleContinuationAllowed) return continuationRefused();
+    if (dependencies.idleContinuationAllowed) return continuationRefused(`runtime session read failed: ${error instanceof Error ? error.message : String(error)}`);
     return holdDuringRuntimeSynchronization(
       request,
       registry,
@@ -1218,29 +1218,79 @@ export async function enqueueStructuredMessage(
       { progress, reason: "evidence-unreadable", detail: `the runtime session could not be read: ${error instanceof Error ? error.message : String(error)}` },
     );
   }
+  let continuationRecoveredHost = false;
   if (dependencies.idleContinuationAllowed) {
-    if (!session?.writerClaim || !runtimeIdleKillMatches(session, session.sessionKey,
-      { revision: session.revision, writerClaim: session.writerClaim })
-      || !await dependencies.idleContinuationAllowed()) return continuationRefused();
+    /* Startup leaves pipeline cuts to their controller. Requiring a hosted
+       idle fence before recovering that host left restart-cut stages waiting
+       forever on an unhosted session. Recover only the durable current owner,
+       without reserving a send that the drain could deliver past this guard. */
+    if (!session || session.host === "dead" || session.host === "unhosted") {
+      const owner = persistedCurrentOwner(request, registry);
+      if (owner?.kind !== "structured") return continuationRefused("no durable structured owner is available for recovery");
+      const retired = supersededRejection(registry, owner.conversation);
+      if (retired) return retired;
+      if (deliveryFence(owner.conversation) === "held") return continuationRefused("an account migration owns the conversation");
+      const generation = owner.conversation.generations.at(-1)!;
+      if (session && (session.sessionKey.engine !== owner.conversation.engine || session.sessionKey.sessionId !== generation.id)) {
+        return continuationRefused("runtime session is not the conversation's current generation");
+      }
+      const key = request.clientMessageId?.trim();
+      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed") {
+        return continuationRefused("an earlier continuation admission must be reconciled before host recovery");
+      }
+      const overlong = key ? refusedIdempotencyKey(key) : null;
+      if (overlong) return overlong;
+      try {
+        assertStructuredTextEnvelope(request.text);
+        const republish = dependencies.republish ?? republishStructuredDeliveryHost;
+        if (session) session = (await refreshRepublishedSession(session, client, republish)).session;
+        else if (await republish({ engine: owner.conversation.engine, sessionId: generation.id })) {
+          // A live durable owner can survive the loss of its runtime projection;
+          // recovery hands that owner back without publishing it.
+          session = await readRuntimeSession(client, { conversationId: owner.conversation.id });
+        }
+        if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host republication");
+        if (!session || session.host === "dead" || session.host === "unhosted") {
+          const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
+            path: generation.path, conversationId: owner.conversation.id, origin: request.origin,
+          }, { registry, client });
+          if (!recovered) return continuationRefused("the conversation cannot be resumed");
+          if (recovered.hold) return continuationRefused("the recovered host's account is parked");
+          continuationRecoveredHost = recovered.spawned;
+          session = await readRuntimeSession(client, { conversationId: owner.conversation.id });
+        }
+      } catch (error) {
+        return continuationRefused(`host recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host recovery");
+    if (!session) return continuationRefused("no runtime session is registered after host recovery");
+    if (!session.writerClaim) return continuationRefused(`recipient host is ${session.host} and has no writer claim`);
+    if (!runtimeIdleKillMatches(session, session.sessionKey,
+      { revision: session.revision, writerClaim: session.writerClaim })) {
+      return continuationRefused(`recipient is not ready for an idle continuation (host=${session.host}, turn=${session.turn}, active turn=${session.activeTurnId !== null}, attention=${session.attentionIds.length}, retirement blocked=${session.retirementBlocked === true})`);
+    }
     let fence = { revision: session.revision, writerClaim: session.writerClaim };
     const key = request.clientMessageId?.trim();
     if (key) {
       const evidence = registry.deliveryAdmissionForKey(session.conversationId, key);
-      if (evidence.outcome === "unknown") return continuationRefused();
+      if (evidence.outcome === "unknown") return continuationRefused("earlier continuation admission is unknown");
       if (evidence.outcome === "admitted") {
         const previous = registry.conversationDeliverySnapshot({ conversationId: session.conversationId }).heldDeliveries[evidence.deliveryId];
         const captured = previous?.command.onlyIfIdle;
-        if (!captured || captured.writerClaim !== session.writerClaim
-          || previous.generationId !== session.sessionKey.sessionId) return continuationRefused();
+        if (!captured) return continuationRefused("earlier continuation has no idle fence");
+        if (captured.writerClaim !== session.writerClaim) return continuationRefused("earlier continuation belongs to a different host writer");
+        if (previous.generationId !== session.sessionKey.sessionId) return continuationRefused("earlier continuation belongs to a different generation");
         if (previous.state === "failed") {
-          if (!["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "") || captured.revision === session.revision) return continuationRefused();
+          if (!["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return continuationRefused(`earlier continuation failed: ${previous.error || "no failure reason recorded"}`);
+          if (captured.revision === session.revision) return continuationRefused("idle revision has not changed since the earlier refusal");
           /* The journal proves either admission rejection or refusal before
              claiming the effect. Other execution failures and missing replies
              retain their key. Stage evidence is rechecked at actuation. */
           let rejected: RuntimeOperationResult | null;
           try { rejected = await client.operationStatus(previous.command.operationId); }
-          catch { return continuationRefused(); }
-          if (rejected?.operationId !== previous.command.operationId || !idleContinuationRefusedBeforeExecution(rejected)) return continuationRefused();
+          catch { return continuationRefused("earlier continuation journal receipt could not be read"); }
+          if (rejected?.operationId !== previous.command.operationId || !idleContinuationRefusedBeforeExecution(rejected)) return continuationRefused("journal does not prove the earlier continuation was refused before execution");
           request = { ...request, operationId: `${IDLE_CONTINUATION_RETRY_PREFIX}${crypto.randomUUID()}` };
         } else {
           fence = captured;
@@ -1521,7 +1571,7 @@ export async function enqueueStructuredMessage(
       nextWakeMs: null,
     });
   }
-  let recoveredHost = false;
+  let recoveredHost = continuationRecoveredHost;
   /* Ownership recovery comes BEFORE capability evaluation: a dead projection
      carries no image capability, and judging the payload against it would 409
      a session whose recovered host advertises image input. */
@@ -1751,7 +1801,7 @@ export async function enqueueStructuredMessage(
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);
-    if (admitted === "continuation-cancelled") return continuationRefused();
+    if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.
          The requeue waits for the lock off the loop; refused, the reservation stays assigned and unclaimed. */

@@ -34,7 +34,7 @@ import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
-import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -2699,6 +2699,25 @@ if (PROTO) {
     { number: 1, name: L("Treemap", "Деревоподібна карта"), description: L("Area by size.", "Площа за розміром."), videos: [], frames: [{ image: image(960, 600, 280, "treemap"), caption: L("report", "звіт"), width: 1440 }] },
     { number: 2, name: L("Sorted bars", "Впорядковані смуги"), description: L("One bar per directory.", "Смуга на кожен каталог."), videos: [], frames: [{ image: image(960, 600, 310, "bars"), caption: L("report", "звіт"), width: 1440 }] },
   ], { decision: decided([2], L("Bars. Add the reclaimable column.", "Смуги. Додайте колонку «можна звільнити»."), 4 * 60 * MIN, "failed") })];
+  if (PROTO === "questions") {
+    const questionnaire: PrototypeQuestion[] = [
+      { id: "place", text: L("Where should the questionnaire live?", "Де має бути опитувальник?"), options: [{ label: L("In the existing review window", "У наявному вікні рев’ю"), recommended: true }, { label: L("In a separate window", "В окремому вікні") }] },
+      { id: "surfaces", text: L("Which surfaces do you use?", "Якими інтерфейсами ви користуєтеся?"), multiple: true, options: [{ label: L("Desktop", "Комп’ютер"), recommended: true }, { label: L("Phone", "Телефон") }] },
+      { id: "timing", text: L("When should we ask?", "Коли ставити питання?"), other: true, options: [{ label: L("Before ambiguous work", "Перед неоднозначною задачею"), recommended: true }, { label: L("On every task", "Для кожної задачі") }] },
+      { id: "comment", text: L("Where do extra details go?", "Де писати додаткові деталі?"), options: [{ label: L("In one shared field", "В одному спільному полі"), recommended: true }, { label: L("Beside each question", "Біля кожного питання") }] },
+      { id: "start", text: L("What follows the answers?", "Що робити після відповідей?"), options: [{ label: L("Restate the understanding and start", "Записати розуміння та почати"), recommended: true }, { label: L("Wait for another approval", "Чекати ще одного підтвердження") }] },
+    ];
+    const images = protoRounds["t-search"]![0]!.variants.slice(0,2);
+    const questionRound = (taskId: string, questions: PrototypeQuestion[], variants: PrototypeRoundView["variants"] = []) => round(`r-questions-${taskId}`, taskId, L("A few questions before work", "Кілька питань перед роботою"), 4 * MIN, variants, { questions });
+    protoRounds["t-search"] = [questionRound("t-search", questionnaire)];
+    protoRounds["t-upload"] = [questionRound("t-upload", questionnaire.slice(0,3), images)];
+    protoRounds["t-links"] = [questionRound("t-links", questionnaire.map(q => ({ ...q, multiple: true })))];
+    const longText = L("Which information should remain visible while you answer the questions and compare the proposed layout? Please include the navigation, task context and the controls you use most often. ", "Яка інформація має залишатися видимою, поки ви відповідаєте на питання та порівнюєте запропоноване оформлення? Врахуйте навігацію, контекст задачі та елементи керування, якими користуєтеся найчастіше. ");
+    protoRounds["t-disk"] = [questionRound("t-disk", questionnaire.slice(0,3).map(q => ({ ...q, text: (longText.repeat(3)).slice(0,300), options: q.options.map((o,j) => ({ ...o, label: (`${j + 1}. ${longText}`).slice(0,120) })) })))];
+    const answered = questionRound("t-export", questionnaire);
+    answered.decision = { chosen: [], answers: questionnaire.map(q => ({ questionId: q.id, options: [0] })), skipped: true, comment: L("Keep the recommended defaults.", "Залиште рекомендовані відповіді."), at: iso(MIN), delivery: { state: "sent", retryable: false } };
+    protoRounds["t-export"] = [answered];
+  }
   protoPublish();
   Object.assign(window, { protoPosts });
 }
@@ -2974,7 +2993,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
@@ -2985,7 +3004,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       else if (!held.decision) {
         const state = protoSaveState[taskId] ?? "sent";
-        held.decision = { chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
+        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
       }
       protoPublish();
     }
