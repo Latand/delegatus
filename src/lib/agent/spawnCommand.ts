@@ -55,6 +55,7 @@ import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMess
 import { queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
 import { structuredSpawnGap, spawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
+import { loadPipelines } from "@/lib/pipelines/store";
 import { listFiles } from "@/lib/scanner";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
@@ -122,6 +123,9 @@ export interface SpawnCommandDependencies {
   spawnTmuxAgent?: typeof spawnAgentWithPrompt;
   adoptPipelineAttemptFromSource?: typeof adoptPipelineAttemptFromSource;
   pipelineAttemptTargetForSource?: typeof pipelineAttemptTargetForSource;
+  /** Task context of a server-attributed stage caller; historical lineage
+      children are evidence of the stage and hold no stage of their own. */
+  pipelineTaskIdsForCaller?(conversationId: string): readonly string[];
   /**
    * A grant the VIEWER itself elects for a launch it makes on its own timer
    * (issue #1086), rather than one derived from the request's session origin.
@@ -173,6 +177,10 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   storeImages: (images) => runtimeImageStore().putMany(images),
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
+  pipelineTaskIdsForCaller: (conversationId) => [...new Set(loadPipelines()
+    .filter(pipeline => pipeline.runs.some(run => run.attempts.some(attempt =>
+      !attempt.historical && attempt.conversationId === conversationId)))
+    .flatMap(pipeline => pipeline.taskIds))],
 
   recordOperatorRequest,
   engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
@@ -741,6 +749,12 @@ export async function executeSpawnRequest(
        uses for every other launch, so a task that does not exist aborts the
        launch before anything is actuated. */
     const explicitTaskIds = typeof body.taskId === "string" && body.taskId.trim() ? [body.taskId.trim()] : null;
+    /* MCP stamps the launcher from its authenticated session, independently
+       of lineage selectors. Resolve a stage helper's task context before its
+       reservation; explicit targets win and a replay keeps its membership. */
+    const taskIds = explicitTaskIds ?? (!existingAttempt && launcher.value
+      ? dependencies.pipelineTaskIdsForCaller?.(launcher.value.conversationId)
+      : null);
     /* Both a runnable launch and an explicit-account preflight failure reserve
        the same durable launch identity. Keep the request assembled at this
        seam so the terminal receipt retains the lineage, origin, grants and
@@ -777,7 +791,7 @@ export async function executeSpawnRequest(
       launchProfile,
       clientAttemptId,
       requestDigest,
-      ...(explicitTaskIds ? { taskIds: explicitTaskIds } : {}),
+      ...(taskIds?.length ? { taskIds } : {}),
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
          draft and canonical delivered echo persist through scan lag. */
       launchDisplay,
