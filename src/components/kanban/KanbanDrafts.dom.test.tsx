@@ -3,7 +3,6 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { translate } from "@/lib/i18n";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -252,11 +251,15 @@ test("a draft is drawn inside the card that holds it, is never sent to Conversat
   /* A draft is not an open agent until it launches: no pill for it in the header. */
   expect(host.querySelector("[data-open-agents-pill]")).toBeNull();
 
-  /* The draft is the composer alone, with no close button of its own: Escape in its empty field puts it away. */
+  /* The new agent form (#2559) closes an empty composer with Escape. Each
+     card must hand back its own draft id, including a draft held by a task. */
   expect(onA!.querySelectorAll("select, [role=radio]")).toHaveLength(0);
+  const onAField = onA!.querySelector("textarea")!;
+  flushSync(() => onAField.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(closed).toEqual(["draft-on-a"]);
   const field = alone!.querySelector("textarea")!;
   flushSync(() => field.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-  expect(closed).toEqual(["draft-alone"]);
+  expect(closed).toEqual(["draft-on-a", "draft-alone"]);
 });
 
 test("crossing a width breakpoint keeps a card's draft pane mounted", async () => {
