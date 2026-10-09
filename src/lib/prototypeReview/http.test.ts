@@ -133,6 +133,21 @@ test("no orchestrator keeps the decision, combination, exact comment and history
   const conflict = await reviewPOST(request("/review",{ reviewId: id,chosen: [1],comment: "Changed decision" }),"task-prototype"); expect(conflict.status).toBe(409);
 });
 
+test("a decision on the newer of two rounds retires the older undecided one: nothing waits, history keeps it as superseded", async () => {
+  const older = await publish(await fullInput("design-round")); const newer = await publish(await fullInput("revise-round"));
+  expect((await read()).waitingReviewId).toBe(newer);
+  const save = await reviewPOST(request("/review",{ reviewId: newer,chosen: [2],comment: "Two." }),"task-prototype"); expect(save.status).toBe(200);
+  const body = await read();
+  expect(body.waitingReviewId).toBeNull(); expect(body.summary?.waitingReviewId).toBeNull();
+  expect(body.rounds.map(round => [round.id, round.supersededBy ?? null])).toEqual([[older, newer], [newer, null]]);
+  expect(prototypeReviewNotices(loadTasks())).toEqual([]);
+  expect(withPrototypeReviewSummaries(loadTasks())[0]!.prototypeReview?.waitingReviewId).toBeNull();
+  const replica = prototypeReviewReplica(loadTasks()[0]!)!;
+  expect(isPrototypeReplica(replica, "task-prototype", "project-a")).toBe(true); expect(replica.rounds[0]).not.toHaveProperty("supersededBy");
+  /* The superseded round keeps its own history and can still be decided by hand. */
+  expect((await reviewPOST(request("/review",{ reviewId: older,chosen: [1],comment: "" }),"task-prototype")).status).toBe(200);
+});
+
 test("publication replay survives source removal; changed payload refuses reuse", async () => {
   const input = await fullInput("replay"); const id = await publish(input);
   await fs.rm(path.dirname(input.variants[0]!.frames![0]!.path), { recursive: true });

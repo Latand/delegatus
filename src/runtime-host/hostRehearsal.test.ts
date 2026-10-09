@@ -254,3 +254,18 @@ test("rename slice 3: the rollback a passing rehearsal carried out is part of it
   expect(report.ok).toBe(true);
   expect(report.recovery).toEqual(recoveryEvidence);
 });
+
+
+test("a bound stable entry alone cannot admit journal seeding before runtime readiness", async () => {
+  const { ports, recorded } = harness({ listener: [true] });
+  let probes = 0;
+  ports.probeReady = async () => {
+    probes++;
+    if (probes === 1) { expect(recorded.seeded).toBe(0); return false; }
+    return true;
+  };
+  const report = await rehearseRuntimeHost(ports, options);
+  expect(report.ok).toBe(true);
+  expect(probes).toBe(3); // two predecessor polls and one matching successor
+  expect(report.succession.predecessorReadyMs).toBe(500);
+});

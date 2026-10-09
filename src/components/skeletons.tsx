@@ -285,7 +285,7 @@ export function KanbanSkeleton({ project = null, overview = false }: { project?:
  * on the right, and one more assistant block. The bar and the composer around
  * it are the real ones.
  */
-export function FeedSkeleton({ className = "" }: { className?: string }) {
+export function FeedSkeleton({ className = "", latestOnly = false }: { className?: string; latestOnly?: boolean }) {
   const { t } = useLocale();
   const block = (key: string, widths: string[]) => (
     <div key={key} aria-hidden className="flex flex-col gap-2">
@@ -294,11 +294,14 @@ export function FeedSkeleton({ className = "" }: { className?: string }) {
   );
   return (
     <Status testId="feed" label={t("common.loadingCap")} className={`flex min-h-0 flex-1 flex-col justify-end gap-5 overflow-hidden px-4 pb-4 pt-6 ${className}`}>
-      {block("earlier", ["92%", "84%", "48%"])}
-      <div aria-hidden data-skeleton-bubble="" className="ml-auto flex w-[55%] flex-col gap-2 rounded-[12px] bg-card p-3 shadow-1">
-        <Bar width="90%" height={11} />
-        <Bar width="60%" height={11} />
-      </div>
+      {/* A conversation that is only now starting has no earlier history: just where the first answer will be. */}
+      {latestOnly ? null : block("earlier", ["92%", "84%", "48%"])}
+      {latestOnly ? null : (
+        <div aria-hidden data-skeleton-bubble="" className="ml-auto flex w-[55%] flex-col gap-2 rounded-[12px] bg-card p-3 shadow-1">
+          <Bar width="90%" height={11} />
+          <Bar width="60%" height={11} />
+        </div>
+      )}
       {block("latest", ["100%", "100%", "60%"])}
     </Status>
   );

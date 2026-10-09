@@ -104,6 +104,7 @@ test("an accepted deploy records the seat that started it, so the tick can wake 
   expect(receipt).toMatchObject({ deploymentId: "deploy-1", wakeOnSettle: true });
   expect(recorded).toEqual([{
     deploymentId: "deploy-1",
+    idempotencyKey: "d1",
     conversationId: "conversation_seat",
     project: VIEWER_PROJECT,
     revision: SHA,

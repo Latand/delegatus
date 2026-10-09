@@ -24,6 +24,8 @@ import {
   seatFailureCopy,
   seatRefsOf,
   seatRequestSettled,
+  seatVacated,
+  vacatedSeatReplacement,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   type RotationHint,
@@ -90,6 +92,21 @@ describe("the panel names every state in the map (#977)", () => {
     expect(deriveOrchestratorPanelState({ ...base, status: status() })).toEqual({ kind: "draft", vacated: false });
     expect(deriveOrchestratorPanelState({ ...base, status: status({ seat: seat(), exists: false }) }))
       .toEqual({ kind: "draft", vacated: true });
+  });
+
+  test("a seat is vacated only when its record stands and its conversation is gone — one predicate for both create forms", () => {
+    expect(seatVacated(null)).toBe(false);
+    expect(seatVacated(status())).toBe(false);
+    expect(seatVacated(status({ seat: seat(), exists: true }))).toBe(false);
+    expect(seatVacated(status({ seat: seat(), exists: false }))).toBe(true);
+    expect(seatVacated(status({ seat: null, exists: false }))).toBe(false);
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: false }))).toEqual({
+      replaceIncumbent: true,
+      expectedIncumbentSeatEpoch: 4,
+    });
+    expect(vacatedSeatReplacement(status({ seat: seat(), exists: true }))).toEqual({});
+    expect(vacatedSeatReplacement(status())).toEqual({});
+    expect(vacatedSeatReplacement(null)).toEqual({});
   });
 
   test("a POST on the wire and a durable pending intent are both creating", () => {

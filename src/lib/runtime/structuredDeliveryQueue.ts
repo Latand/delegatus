@@ -3,7 +3,8 @@ import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
 import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
-import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeSendSettings } from "./commands";
+import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeProviderRecoveryRef, parseRuntimeSendSettings } from "./commands";
+import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
@@ -46,6 +47,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Re-read the idle revision after claiming an automatic continuation. */
+  idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
   /** Hold a fresh autonomous turn while original accepted work settles. */
@@ -250,6 +253,7 @@ interface SendEffect {
   content: StructuredMessageContent;
   contentDigest: string;
   turnId?: string | null;
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   kind: "send" | "steer";
   runtime?: RuntimeSendSettings;
@@ -290,6 +294,7 @@ interface ControlEffect {
   conversationId: string;
   kind: "answer" | "interrupt" | "kill";
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
+  providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
@@ -437,6 +442,11 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
      independent content and runtime profile. */
   const selectedContext = parseSelectedContextRef(effect.payload.selectedContext);
   const origin = parseMessageOrigin(effect.payload.origin);
+  let onlyIfIdle: import("./contracts").RuntimeIdleKillFence | undefined;
+  try {
+    if (effect.payload.onlyIfIdle !== undefined) onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
+  } catch { return null; }
+  if (onlyIfIdle && (effect.kind !== "runtime.send" || policy !== "queue" || turnId !== null)) return null;
   return {
     operationId,
     conversationId,
@@ -449,6 +459,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     ...(runtime ? { runtime } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(origin ? { origin } : {}),
+    ...(onlyIfIdle ? { onlyIfIdle } : {}),
   };
 }
 
@@ -505,6 +516,7 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     return { operationId, conversationId, kind: "answer", attentionId, resolution: effect.payload.resolution, eventSeq: effect.eventSeq };
   }
   if (effect.kind === "runtime.kill") {
+    if (effect.payload.providerRecovery !== undefined && effect.payload.onlyIfIdle === undefined) return null;
     const key = effect.payload.sessionKey;
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
@@ -516,6 +528,8 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
       ...(effect.payload.onlyIfIdle !== undefined
         ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
+      ...(effect.payload.providerRecovery !== undefined
+        ? { providerRecovery: parseRuntimeProviderRecoveryRef(effect.payload.providerRecovery) } : {}),
       eventSeq: effect.eventSeq,
     };
   }
@@ -858,6 +872,7 @@ export class StructuredDeliveryQueue {
       sessionKey: { engine: "codex" | "claude"; sessionId: string },
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
+      providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
     ) => Promise<boolean> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
@@ -1526,7 +1541,7 @@ export class StructuredDeliveryQueue {
     }
   }
 
-  private async drainTarget(effects: DeliveryEffect[], lane?: DeliveryLane): Promise<boolean> {
+  private async drainTarget(effects: DeliveryEffect[], lane?: DeliveryLane, guardedLease?: ActuationLease): Promise<boolean> {
     let updateHeld = false;
     const waitAll = (reason: DeliveryWaitReason, wake: "retry" | "event" = "event", detail?: string | null) => {
       for (const effect of effects) this.noteWait(effect, reason, { wake, ...(detail !== undefined ? { detail } : {}) });
@@ -1645,6 +1660,12 @@ export class StructuredDeliveryQueue {
           replacesTurn: effect.kind !== "inject" && effect.policy === "interrupt-active" };
       }
       if (this.port.handoffHeld?.()) { blockRest("update-handoff"); this.noteWait(effect, "update-handoff"); return true; }
+      if (effect.kind === "send" && effect.onlyIfIdle && !guardedLease) {
+        const blocked = await withConversationActuation(effect.conversationId,
+          lease => this.drainTarget([effect], lane, lease));
+        if (blocked) return true;
+        continue;
+      }
       /* #862: a compaction in flight holds back everything that would write to
          the thread — messages and reconfigures — but never another control.
          Kill is the operator's safety valve and interrupt/answer are how a turn
@@ -1805,6 +1826,10 @@ export class StructuredDeliveryQueue {
         && !!this.port.autonomousTurnHeld?.(effect.operationId, durableStatuses.get(effect.operationId)?.admittedAt
           ?? durableStatuses.get(effect.operationId)?.at);
       if (!host) {
+        if (effect.kind === "send" && effect.onlyIfIdle) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+          continue;
+        }
         if (heldForUpdate()) { updateHeld = true; this.noteWait(effect, "update-drain"); continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) {
           this.noteWait(effect, "recovery-contended", { wake: "retry" });
@@ -1830,6 +1855,10 @@ export class StructuredDeliveryQueue {
       }
       const health = state.value;
       if (health.status === "dead" || health.status === "unhosted") {
+        if (effect.kind === "send" && effect.onlyIfIdle) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+          continue;
+        }
         if (heldForUpdate()) { updateHeld = true; this.noteWait(effect, "update-drain"); continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) {
           this.noteWait(effect, "recovery-contended", { wake: "retry" });
@@ -1892,6 +1921,10 @@ export class StructuredDeliveryQueue {
          it back from the receipt; Claude and Codex receipts carry no route. */
       const recordsRoute = host.steerFallback === "interrupt";
       const clearedRoute: RuntimeTransitionDetails = recordsRoute ? { delivery: null, interruptedTurnId: null } : {};
+      if (effect.onlyIfIdle && (health.status !== "idle" || health.activeTurnRef !== null)) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+        continue;
+      }
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) {
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
@@ -1970,6 +2003,25 @@ export class StructuredDeliveryQueue {
         { fromStatuses: ["pending", "queued"] },
       ))) continue;
       this.noteWait(effect, shouldInterrupt ? "interrupting" : "dispatching", { lane, attempted: true, wake: "event" });
+      if (effect.onlyIfIdle) {
+        const claimed = await this.readStatus(effect.operationId);
+        if (!claimed.readable || claimed.value?.status !== "delivering") {
+          if (!claimed.readable) this.retrySoon();
+          continue;
+        }
+        const current = await readEvidence(() => this.port.idleContinuationCurrent?.(effect.conversationId, effect.onlyIfIdle!) ?? false);
+        if (!current.readable) {
+          // The claim succeeded and no host call began. Retry this same fenced
+          // operation when its session evidence is readable again.
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "idle continuation fence unavailable" });
+          this.retrySoon();
+          return true;
+        }
+        if (!current.value) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+          continue;
+        }
+      }
       if (firstDispatch) {
         this.firstDispatches.set(effect.operationId, firstDispatch);
         while (this.firstDispatches.size > 128) this.firstDispatches.delete(this.firstDispatches.keys().next().value!);
@@ -2940,7 +2992,7 @@ export class StructuredDeliveryQueue {
       }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority)) {
+          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
             if (effect.onlyIfIdle) {
               await transition("failed", { reason: "idle-retirement-deferred" });
               return { blocked: false, terminated: false };
@@ -2961,7 +3013,7 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority)) {
+        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
