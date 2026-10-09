@@ -796,3 +796,23 @@ test("MCP recovers admitted relay payload after response loss, target rotation a
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
   } finally { store.close(); }
 });
+
+
+test("linked relay preserves a terminal resume failure across admission recovery and never acknowledges it as accepted", async () => {
+  const { deliverLinkedSeatMessage, setLinkedSeatEnqueueForTests } = await import("@/lib/links/seatMessageDelivery");
+  const recipient = actor("project-b");
+  let admitted = 0;
+  setLinkedSeatEnqueueForTests(async message => {
+    admitted++;
+    const held = registry.holdDelivery(recipient.id as `conversation_${string}`, message.text, message.clientMessageId!, "text", [], null, { origin: message.origin });
+    registry.terminalizeHeldDelivery(held.id, "Fixture stopped-seat resume could not publish.");
+    return { ok: false, structured: true, outcome: "failed", status: 503, error: "Fixture resume failed", operationId: held.command.operationId };
+  });
+  try {
+    const first = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture");
+    expect(first).toMatchObject({ st: "refused", code: "delivery_failed" });
+    const recovered = await deliverLinkedSeatMessage("project-b", "Hold the lock.", "widget on Machine A", "peer:00112233:fixture");
+    expect(recovered).toMatchObject({ st: "refused", code: "delivery_failed", operationId: first.operationId });
+    expect(admitted).toBe(1);
+  } finally { setLinkedSeatEnqueueForTests(null); }
+});

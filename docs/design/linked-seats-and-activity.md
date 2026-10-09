@@ -1,7 +1,7 @@
 # Linked installs: seat-to-seat messages and agent activity across machines
 
-Status: design, 2026-10-09. Read-only design stage; nothing here is built.
-Every code claim was checked against `origin/main` at `08e85880b`. The
+Status: implemented, 2026-10-09. The observation below records the earlier
+read-only design stage. Its code claims were checked against `origin/main` at `08e85880b`. The
 orchestrator project resolution lane (`b462ead0`) had not landed on `main`
 when this was written; §10 says how this design sits on top of it.
 
@@ -766,3 +766,36 @@ built for them.
 | which side needs which version; does one side alone degrade safely | §7 |
 | failing-first tests at the link seams with two isolated installs | §9 |
 | no UI chrome | §8 |
+
+
+## 14. Implementation and verification
+
+Seat messages use the existing authenticated board exchange. Durable inbound
+and outbound rows fence retry and process restart; local delivery admission
+recovers the original reservation after a receiving seat rotates. Failed
+terminal reservations receive a refusal. A queued row also remembers its
+connection, so removing and re-pairing an install cannot revive old words.
+Revoked-link tombstones contain only the install id and the local label.
+
+The raw scan feed joins registry generations and continuity paths, task
+assignments, pipeline membership and designated seats. A designated seat is
+published even before its transcript reaches the scan cache. The receiver
+retains its seat row within the existing fifty-row project bound. Repository
+rename discovery proves both names against the same numeric forge id before
+aliasing; fork identities remain separate. Existing board surfaces render
+these rows, and the existing browser driver records desktop and phone geometry
+in [the evidence record](../../evidence/linked-seats-and-activity/geometry.json).
+
+Failing-first checks cover bidirectional relay, lost answers, sender and
+receiver restart, crash before and after delivery admission, truthful terminal
+failure, shared-project refusals, revoked and unreachable links, authority,
+version downgrade, bounds, registry joins and forge identity. Each install
+uses a private state root, home and temporary directory. MCP recovery reads the
+original outbound row and never submits another send.
+
+Both installs need this release for messages. Update the granting machine
+first, then the calling machine. Either side updated alone continues board
+sync and refuses seat messages until the other advertises support. Rich agent
+summaries require the sending side's update; optional role and seat fields are
+safe for older receivers. Per-host activity records remain deferred as §11
+describes; this slice exposes agents of shared projects through the boards.

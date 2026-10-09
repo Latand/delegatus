@@ -6,10 +6,12 @@ import { currentSelf, readSelf, checkSavedAddress, markOpenToInternet, type Chec
 import { publicEntry } from "@/lib/links/publicEntry";
 import { forgetGrantCount, grantView, isSharedProject, readGrants, readPeers, safeEqual, sha, sharedProjects, usedGrant, writeGrants, writePeers, type Grant, type Link, type PairCode, type SharedProject } from "./state";
 export { remoteProjects, updateRemoteProjects } from "./boardLinks";
-import { dropRemoteProjects, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
+import { dropRemoteProjects, rememberRevokedSeatLink, ownBoardStoreId, remoteProjects, remoteStore, updateRemoteProjects } from "./boardLinks";
 import { serveTasks } from "./taskServe";
 import { TASK_WIRE_VERSION } from "./taskWire";
 import { acceptAgents, agentPart, decodeCursor, dropAgents, touchAgents } from "./agentFeed";
+import { acceptSeatMessages, validSeatMessagePart } from "./seatMessages";
+import { recordSeatMessages } from "./boardLinks";
 import { linkedPeer } from "./linked";
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -123,9 +125,11 @@ export function authorizePeer(header: string | null, scope?: "board:sync"): Gran
 
 export function revokeGrant(id: string): boolean {
   const file = readGrants();
+  const removed = file.grants.find(grant => grant.id === id);
   const before = file.grants.length;
   file.grants = file.grants.filter((grant) => grant.id !== id);
   if (file.grants.length === before) return false;
+  rememberRevokedSeatLink("grant", id, removed!.install, removed!.label);
   dropRemoteProjects(id);
   dropAgents(`grant:${id}`);
   writeGrants(file);
@@ -166,7 +170,7 @@ export function putPeer(peer: Link): void {
 export function removePeer(id: string): Link | undefined {
   const file = readPeers();
   const peer = file.peers.find((row) => row.id === id);
-  if (peer) { file.peers = file.peers.filter((row) => row.id !== id); dropRemoteProjects(id); dropAgents(`peer:${id}`); writePeers(file); peerCalls.delete(id); }
+  if (peer) { rememberRevokedSeatLink("peer", id, peer.install, peer.label); file.peers = file.peers.filter((row) => row.id !== id); dropRemoteProjects(id); dropAgents(`peer:${id}`); writePeers(file); peerCalls.delete(id); }
   return peer;
 }
 
@@ -177,6 +181,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   if (partialShared.size) for (const [id, pending] of partialShared) if (Date.now() - pending.at > 600_000) partialShared.delete(id);
   if (!input || typeof input !== "object" || (input as Record<string, unknown>).v !== 1) return { status: 400, body: { error: "malformed" } };
   const wire = input as Record<string, unknown>;
+  if (wire.sm !== undefined && !validSeatMessagePart(wire.sm)) return { status: 400, body: { error: "malformed" } };
   if (typeof wire.store !== "string" || !/^[0-9a-f-]{36}$/.test(wire.store) || typeof wire.now !== "number" || !Number.isSafeInteger(wire.now)) return { status: 400, body: { error: "malformed" } };
   // A recreated store on A is rebuilt by A's own resync (M.8); B only records it.
   const heldStore = remoteStore(grant.id);
@@ -216,6 +221,9 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
     return { status: served.error === "quota" ? 429 : served.error === "clock" ? 409 : 400, body: { error: served.error } };
   }
   const projects = linkedPeer("grant", grant.id)?.projects ?? new Set<string>();
+  const messageLink = linkedPeer("grant", grant.id);
+  recordSeatMessages(`grant:${grant.id}`, wire.sm !== undefined);
+  const messageMoved = agreed && messageLink && wire.sm !== undefined ? acceptSeatMessages(messageLink, wire.sm as import("./seatMessages").SeatMessagePart) : 0;
   let agentAck: string | null | undefined;
   if (agreed && pushAgents !== undefined) {
     if (!acceptAgents(`grant:${grant.id}`, pushAgents, projects)) return { status: 400, body: { error: "malformed" } };
@@ -224,8 +232,8 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   if (agreed) touchAgents(`grant:${grant.id}`);
   const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
   // M.10: an idle call writes no grant file; a page with rows counts as movement.
-  usedGrant(grant, served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
-  return { status: 200, body: { v: 1, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
+  usedGrant(grant, !!messageMoved || served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
+  return { status: 200, body: { v: 1, sm: { v: 1 }, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
     ...(wire.s !== remoteHash ? { need: true } : {}),
     ...(sendLocal ? { shared: local.slice(want, want + 100), index: want, total: local.length } : {}), ...served.parts,
     ...(agents ? { agents } : {}), ...(agentAck !== undefined ? { agentAck } : {}) } };

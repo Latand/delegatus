@@ -1,5 +1,6 @@
 /** Private HTTP harness for the two-install protocol test. Never imported by production. */
 import fs from "node:fs";
+import pathModule from "node:path";
 import http from "node:http";
 import { NextRequest } from "next/server";
 
@@ -40,6 +41,16 @@ import { admitScannedConversations } from "@/lib/tasks/membership";
 import { admitRecoveredLaunch, admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { applyTaskCuratorProposals, collectTaskCuratorInputs } from "@/lib/tasks/curator";
 import { Database, Statement } from "bun:sqlite";
+import { agentRegistry } from "@/lib/agent/registry";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { seatMessageReceipt } from "./seatMessages";
+import { setForgeLookupForTests, forgeRenamesSettledForTests } from "@/lib/projects/forgeRename";
+import { setLinkedSeatEnqueueForTests } from "./seatMessageDelivery";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import * as seatMessageRoute from "@/app/api/orchestrator/message/route";
+
 
 const dir = process.argv[2]!;
 process.env.LLV_STATE_DIR = dir;
@@ -47,6 +58,26 @@ process.env.XDG_CONFIG_HOME = `${dir}/config`;
 process.env.LLV_STATE_OWNER = "viewer";
 process.env.LLV_TOKEN = "key";
 fs.mkdirSync(dir, { recursive: true });
+let seatCrash: "before" | "after" | null = null;
+let dropSeatAnswer = false;
+setLinkedSeatEnqueueForTests(async message => {
+  if (seatCrash === "before") process.exit(0);
+  const result = await enqueueStructuredMessage(message, {
+  enabled: () => true, registry: agentRegistry, client: () => ({
+    readSession: async ({ conversationId }: { conversationId: string }) => {
+      const generation = agentRegistry().conversation(conversationId as `conversation_${string}`)!.generations.at(-1)!;
+      return { conversationId, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server",
+        host: "hosted", turn: "busy", provenance: "structured", revision: 1, artifactPath: generation.path, cwd: dir,
+        activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [], capabilities: { steer: true, structuredAttention: true } };
+    },
+    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string }) => ({
+      operationId: command.operationId, replayed: false, receipt: { ...command, kind: "send", status: "queued", at: new Date().toISOString(), revision: 1 } }),
+  } as unknown as RuntimeHostClient), kick: () => {}, requestMigrationTick: () => {}, startupRecovered: () => {},
+});
+  if (seatCrash === "after") process.exit(0);
+  return result;
+});
+const seatCapabilities = new Map<string, string>();
 const schedule = new LinkedBoardSchedule({ ...productionSchedulePorts, now: () => Date.now() });
 let syncCalls = 0;
 let restartAgentFeedAfterPage: string | null = null;
@@ -54,6 +85,7 @@ let padSync = 0;
 let maxSyncBody = 0;
 let failSync: number | null = null;
 let legacyTaskWire = false;
+let injectSeatOrigin = false;
 // Rehearse the historical sender exactly: unchosen text became a placeholder
 // under its unchanged real stamp. Applies to both pushes and pull answers.
 const originalEnd = http.ClientRequest.prototype.end;
@@ -64,6 +96,11 @@ http.ClientRequest.prototype.end = function (this: http.ClientRequest, chunk: un
     for (const row of body.push?.rows ?? []) legacyRow(row);
     chunk = Buffer.from(JSON.stringify(body));
     this.setHeader("content-length", String((chunk as Buffer).length));
+  }
+  if (injectSeatOrigin && this.path === "/api/peer/v1/boards/sync" && Buffer.isBuffer(chunk)) {
+    const body = JSON.parse(chunk.toString("utf8")) as { sm?: { out?: Record<string, unknown>[] } };
+    for (const row of body.sm?.out ?? []) row.origin = { kind: "operator" };
+    chunk = Buffer.from(JSON.stringify(body)); this.setHeader("content-length", String((chunk as Buffer).length));
   }
   return Reflect.apply(originalEnd, this, [chunk, ...args]);
 } as typeof originalEnd;
@@ -149,6 +186,68 @@ const server = http.createServer(async (request, response) => {
     }
     const query = new URL(request.url ?? "/", "http://localhost").searchParams;
     const body = () => JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
+    if (path === "/test/seat-receipt") { json(response, seatMessageReceipt(query.get("operationId")!)); return; }
+    if (path === "/test/seat-crash") { seatCrash = query.get("point") as "before" | "after"; json(response, { ok: true }); return; }
+    if (path === "/test/drop-seat-answer") { dropSeatAnswer = true; json(response, { ok: true }); return; }
+    if (path === "/test/forge") {
+      const input = body() as { fullName: string; ids?: Record<string, number> };
+      setForgeLookupForTests(async name => ({ status: "found", id: input.ids?.[name] ?? 7, fullName: input.fullName }));
+      json(response, { ok: true }); return;
+    }
+    if (path === "/test/forge-settled") { await forgeRenamesSettledForTests(); json(response, { ok: true }); return; }
+    if (path === "/test/inject-seat-origin") { injectSeatOrigin = true; json(response, { ok: true }); return; }
+    if (path === "/test/seat" || path === "/test/worker") {
+      const project = String(body().project);
+      const registry = agentRegistry();
+      const spawn = registry.beginSpawnRequest({ engine: "codex", cwd: dir, explicitProject: project,
+        launchProfile: { cwd: dir, title: "Fixture seat", role: "worker" } });
+      if (spawn.kind !== "created") throw new Error("fixture spawn refused");
+      const receipt = spawn.receipt;
+      registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: receipt.conversationId.slice("conversation_".length) },
+        artifactPath: pathModule.join(dir, `${receipt.conversationId}.jsonl`), cwd: dir, accountId: null,
+        status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+      seatCapabilities.set(project, registry.rotateSpawnCapabilityForReceipt(receipt.launchId));
+      const clientRequestId = `fixture-seat-${receipt.conversationId}`;
+      if (path === "/test/seat") {
+      beginOrchestratorSeatIntent({ project, mandate: "Fixture mandate", clientRequestId, mode: "spawn" });
+      completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: receipt.conversationId, path: null });
+      }
+      json(response, { designated: path === "/test/seat" }); return;
+    }
+    if (path === "/test/seat-send") {
+      const input = body();
+      const project = String(input.project);
+      let capability = input.caller === "operator" ? undefined : seatCapabilities.get(project);
+      if (!capability && input.caller !== "operator") {
+        const active = orchestratorSeatFor(project).active;
+        if (active?.conversationId) capability = agentRegistry().rotateSpawnCapabilityForConversation(active.conversationId)?.capability;
+      }
+      const req = new NextRequest(`http://127.0.0.1/api/orchestrator/message`, { method: "POST",
+        headers: { host: "127.0.0.1", "content-type": "application/json", ...(capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}) },
+        body: JSON.stringify(input) });
+      const result = await seatMessageRoute.POST(req);
+      response.statusCode = result.status; json(response, await result.json()); return;
+    }
+    if (path === "/test/attribute-agent") {
+      const input = body() as { session: string; project: string; role: string; seat?: boolean; pipeline?: string; taskId?: string };
+      const file = lastScannedFiles()?.find(file => file.path.endsWith(`${input.session}.jsonl`));
+      if (!file) throw new Error("fixture transcript not scanned");
+      const registry = agentRegistry();
+      const spawn = registry.beginSpawnRequest({ engine: file.engine as "claude", cwd: dir, explicitProject: input.project,
+        role: input.role, launchProfile: { cwd: dir, title: "Fixture agent", role: "worker" } });
+      if (spawn.kind !== "created") throw new Error("fixture agent spawn refused");
+      const receipt = spawn.receipt;
+      registry.completeSpawn(receipt.launchId, { key: { engine: file.engine as "claude", sessionId: input.session }, artifactPath: file.path,
+        cwd: dir, accountId: null, status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+      if (input.seat) {
+        const clientRequestId = `fixture-seat-${receipt.conversationId}`;
+        beginOrchestratorSeatIntent({ project: input.project, mandate: "Fixture mandate", clientRequestId, mode: "spawn" });
+        completeOrchestratorSeatIntent({ project: input.project, clientRequestId, conversationId: receipt.conversationId, path: file.path });
+      }
+      if (input.pipeline) registry.rememberMembership(receipt.conversationId, { kind: "pipeline", containerId: input.pipeline, stageId: "build", role: input.role, slot: "build", parentConversationId: null, stageOrder: 0, round: 1 });
+      json(response, { conversationId: receipt.conversationId }); return;
+    }
+    if (path === "/test/seat-deliveries") { json(response, Object.values(agentRegistry().readOnlySnapshot().heldDeliveries)); return; }
     if (path === "/test/cpu") { const usage = process.cpuUsage(); json(response, { ms: (usage.user + usage.system) / 1000 }); return; }
     if (path === "/test/heap") {
       Bun.gc(true);
@@ -444,6 +543,9 @@ const server = http.createServer(async (request, response) => {
       await new Promise<void>((resolve) => { releaseSync = resolve; });
       syncHeld = false;
       releaseSync = null;
+    }
+    if (path === "/api/peer/v1/boards/sync" && dropSeatAnswer && (JSON.parse(resultBody.toString()) as { sm?: { ack?: unknown[] } }).sm?.ack?.length) {
+      dropSeatAnswer = false; response.destroy(); return;
     }
     // Wire bytes are counted by the test's TCP proxy; padding proves extra headers reach that count.
     const answerHeaders = Object.fromEntries(result.headers);

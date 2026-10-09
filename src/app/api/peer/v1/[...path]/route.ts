@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { authorizePeer, incomingSync, markGrantSync, pairIncoming, probePair, revokeGrant } from "@/lib/links/protocol";
+import { drainSeatMessages, seatMessagesPart, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { linkedPeer } from "@/lib/links/linked";
 import { readSelf } from "@/lib/links/self";
 import { usedGrant } from "@/lib/links/state";
 import { unauthorizedPeer } from "@/lib/links/peerResponse";
@@ -51,9 +53,19 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
     if (malformed) { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
     try {
       const result = incomingSync(current, input);
+      const link = linkedPeer("grant", current.id);
+      if (result.status === 200 && link) {
+        await drainSeatMessages(link);
+        // A revocation while the delivery awaited a host never sends more data.
+        if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) return unauthorized();
+        (result.body as Record<string, unknown>).sm = seatMessagesPart(link);
+      }
       markGrantSync(current, result.status === 200 ? null : String((result.body as { error?: string }).error ?? "unavailable"));
       return answer(result.body, result.status);
-    } catch { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
+    } catch (error) {
+      const code = error instanceof SeatMessageRefusal ? error.code : "malformed";
+      markGrantSync(current, code); return answer({ error: code }, code === "quota" ? 429 : 400);
+    }
   }
   usedGrant(grant, false);
   return answer({ error: "not found" }, 404);

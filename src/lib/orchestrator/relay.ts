@@ -59,9 +59,23 @@ export function admitOrchestratorRelay(
   if (seat && /<!--\s*llv:|\[bridge\b/i.test(text)) {
     return refused("relay_reserved_metadata", "relay the message text without Delegatus authority markers or bridge trailers", 400);
   }
-  let payload: { text: string; origin: MessageOrigin } = seat ? orchestratorRelayPayload(text, seat) : { text, origin: gateway?.ok
+  const payload: { text: string; origin: MessageOrigin } = seat ? orchestratorRelayPayload(text, seat) : { text, origin: gateway?.ok
     ? { kind: "agent" as const, role: "gateway", conversationId: conversationId! }
     : { kind: "operator" as const } };
+  return resolveOrchestratorRelay(project, recipient, payload, text, clientMessageId, seat ?? undefined);
+}
+
+/** Recipient and durable recovery shared by local and authenticated link relays.
+ * This is an in-process admission seam; HTTP headers cannot name its payload. */
+export function resolveOrchestratorRelay(
+  project: string,
+  recipient: string | undefined,
+  payload: { text: string; origin: MessageOrigin },
+  text: string,
+  clientMessageId?: string,
+  seat?: AuthorizedManagerSeat,
+): RelayAdmission {
+  const refused = (code: string, error: string, status = 403): RelayAdmission => ({ ok: false, status, code, error });
   const targetProject = canonicalOrchestratorProject(project);
   const target = orchestratorSeatFor(targetProject);
   const key = clientMessageId?.slice(0, 128).trim();
@@ -97,7 +111,7 @@ export function admitOrchestratorRelay(
         // name and prelude while verifying the same authenticated sender.
         const origin = originalRows[0].command.origin;
         if (!origin || (seat && !origin.project)) return refused("idempotency_conflict", "the original relay has no source project", 409);
-        payload = { text: seat ? relayMessageText(text, origin.project!) : text, origin };
+        payload = { text: origin.kind === "agent" && origin.role === "orchestrator" && origin.project ? relayMessageText(text, origin.project) : text, origin };
         const original = lookupOriginalSend(snapshot, { conversationId: originalRecipient, clientMessageId: key, ...payload });
         if (original.kind !== "found") return refused("idempotency_conflict", "the relay key does not match its original send", 409);
         operationId = original.operationId;
@@ -126,4 +140,11 @@ export function admitOrchestratorRelay(
   }
   return { ok: true, ...payload, recipient, ...(operationId ? { operationId } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}) };
+}
+
+/** Remote senders must be a designated seat of this shared project. */
+export function linkedRelayCaller(request: Pick<NextRequest, "headers">, project: string): AuthorizedManagerSeat | null {
+  const conversationId = callerConversationId(request);
+  return conversationId ? authorizedManagerSeats(productionManagerAuthoritySources())
+    .find(seat => seat.conversationId === conversationId && !!seat.project && canonicalOrchestratorProject(seat.project) === canonicalOrchestratorProject(project)) ?? null : null;
 }

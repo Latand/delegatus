@@ -2,10 +2,11 @@
  * A's sync schedule (docs/design/linked-installs.md M.5). Every 10 s A reads
  * its own cached task revision; a change in a linked project starts a call at
  * once. The timer wakes when the next call or read is due. Otherwise a call every 15 s while a board of a linked project is open,
- * every 10 s for 2 minutes after a call that moved data, else an interval that
+ * every 10 s for 10 minutes after a call that moved data, else an interval that
  * doubles from 30 s up to 5 minutes. Failures back off to 5 minutes. One call
  * at a time per link; B never calls.
  */
+import { messagesPending } from "./seatMessages";
 import { lastSyncMoved, syncPeer } from "./client";
 import { boardOpen } from "./boardPresence";
 import { linkedContext } from "./linked";
@@ -14,7 +15,7 @@ import { readPeers } from "./state";
 import { taskFeedSource } from "@/lib/tasks/store";
 
 export const TICK_MS = 10_000;
-const BURST_MS = 120_000;
+const BURST_MS = 600_000;
 const BURST_INTERVAL_MS = 10_000;
 const OPEN_INTERVAL_MS = 15_000;
 const IDLE_FIRST_MS = 30_000;
@@ -28,6 +29,7 @@ export interface SchedulePorts {
   links(): { id: string; projects: ReadonlySet<string> }[];
   ownRevision(): number;
   hasPush(id: string, projects: ReadonlySet<string>): boolean;
+  messagesPending?(id: string): boolean;
   boardOpen(projects: ReadonlySet<string>): boolean;
   sync(id: string): Promise<{ moved: number }>;
 }
@@ -58,6 +60,7 @@ export class LinkedBoardSchedule {
       if (!plan) { plan = { lastCallAt: now, nextAt: now, idle: IDLE_FIRST_MS, burstUntil: 0, failures: 0, running: false }; this.plans.set(link.id, plan); }
       if (plan.running) continue;
       if (revisionMoved && plan.failures === 0 && this.ports.hasPush(link.id, link.projects)) plan.nextAt = Math.min(plan.nextAt, now);
+      if (plan.failures === 0 && this.ports.messagesPending?.(link.id)) plan.nextAt = Math.min(plan.nextAt, now);
       // Opening a previously idle board must shorten the already-armed wait.
       if (plan.failures === 0 && this.ports.boardOpen(link.projects)) plan.nextAt = Math.min(plan.nextAt, plan.lastCallAt + OPEN_INTERVAL_MS);
       if (now < plan.nextAt) continue;
@@ -108,6 +111,7 @@ export const productionSchedulePorts: SchedulePorts = {
     if (!context.self || !peer) return false;
     return taskExchange({ id, install: peer.install, store: peer.store }, context.self).hasPush(projects);
   },
+  messagesPending,
   boardOpen: (projects) => boardOpen(projects),
   sync: async (id) => { await syncPeer(id); return { moved: lastSyncMoved(id) }; },
 };
