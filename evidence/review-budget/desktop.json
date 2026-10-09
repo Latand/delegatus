@@ -1,0 +1,34 @@
+[
+  {
+    "lang": "en",
+    "width": 1440,
+    "filed": false,
+    "text": "Review budget spent · 2 findings → follow-up after merge",
+    "clipped": false,
+    "measuredWidth": 428
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "filed": true,
+    "text": "Review budget spent · 2 findings → follow-up «Repair the retained review findings»",
+    "clipped": false,
+    "measuredWidth": 428
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "filed": false,
+    "text": "Бюджет рев’ю вичерпано · 2 зауваження → задача після мерджу",
+    "clipped": false,
+    "measuredWidth": 428
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "filed": true,
+    "text": "Бюджет рев’ю вичерпано · 2 зауваження → задача «Repair the retained review findings»",
+    "clipped": false,
+    "measuredWidth": 428
+  }
+]

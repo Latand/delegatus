@@ -1143,3 +1143,16 @@ test("runtime-switch state survives store reopening and malformed targets are re
   savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
   record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
 }));
+
+
+test("old nine-round records still load and malformed spent markers are refused", async () => isolatedDelivery(() => {
+  const lane = deliveryFixture("old-review-budget");
+  lane.stages[0]!.onFail = { to: "build", maxRounds: 9 };
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.stages[0]!.onFail!.maxRounds).toBe(9);
+  lane.reviewBudgetSpent = { stageId: "build", attempt: 2, findings: 1, head: "a".repeat(40), at: "2026-10-01T00:00:00Z" };
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.reviewBudgetSpent).toEqual(lane.reviewBudgetSpent);
+  lane.reviewBudgetSpent.attempt = 0;
+  expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+}));

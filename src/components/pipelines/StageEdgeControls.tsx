@@ -21,7 +21,8 @@ const EXHAUSTION_CHOICES = ["advance", "stop-after-fix"] as const satisfies read
  * what a spent budget does: fix once more and go on, or fix and wait for the
  * operator, #1868, #2187).
  * Frozen edges — a pass edge on a stage that already ran, a fail edge already
- * traversed — render as disabled with an explanation, mirroring the API's
+ * traversed — freeze their targets. A started gate permits lowering its budget.
+ * The controls mirror the API's
  * evidence-freeze guards so the control never fires a PATCH the server rejects.
  */
 export function StageEdgeControls({
@@ -87,7 +88,7 @@ export function StageEdgeControls({
               event.target.value ? stage.onFail?.onExhausted : undefined,
             )}
           >
-            <option value="">{t("pipelineSlot.failEdgeNone")}</option>
+            <option value="" disabled={pipeline.state !== "draft" && !!stage.onFail}>{t("pipelineSlot.failEdgeNone")}</option>
             {failTargets.map((candidate) => (
               <option key={candidate.id} value={candidate.id}>
                 {candidate.id === stage.id ? t("pipelineSlot.failEdgeSelf") : stageChipLabel(t, candidate)}
@@ -101,12 +102,12 @@ export function StageEdgeControls({
             <input
               type="number"
               min={1}
-              max={MAX_FAIL_EDGE_ROUNDS}
+              max={pipeline.state === "draft" ? MAX_FAIL_EDGE_ROUNDS : stage.onFail.maxRounds}
               value={stage.onFail.maxRounds}
-              disabled={disabled || busy || terminal || failFrozen}
+              disabled={disabled || busy || terminal}
               onChange={(event) => {
-                const rounds = Number.parseInt(event.target.value, 10);
-                if (Number.isInteger(rounds) && rounds >= 1 && rounds <= MAX_FAIL_EDGE_ROUNDS) {
+                const rounds = Number(event.target.value);
+                if (Number.isInteger(rounds) && rounds >= 1 && rounds <= (pipeline.state === "draft" ? MAX_FAIL_EDGE_ROUNDS : stage.onFail!.maxRounds)) {
                   void apply("fail", stage.onFail!.to, rounds, stage.onFail!.onExhausted);
                 }
               }}

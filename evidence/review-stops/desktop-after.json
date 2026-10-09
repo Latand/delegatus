@@ -9,10 +9,6 @@
           [
             "accept-head",
             "Accept as is"
-          ],
-          [
-            "continue-review",
-            "Review again"
           ]
         ],
         "findings": [
@@ -22,7 +18,6 @@
         "overlaps": [],
         "escapes": [],
         "buttonHeights": [
-          28,
           28
         ]
       },
@@ -111,10 +106,6 @@
           [
             "accept-head",
             "Accept as is"
-          ],
-          [
-            "continue-review",
-            "Review again"
           ]
         ],
         "findings": [
@@ -124,7 +115,6 @@
         "overlaps": [],
         "escapes": [],
         "buttonHeights": [
-          28,
           28
         ]
       },
@@ -213,10 +203,6 @@
           [
             "accept-head",
             "Прийняти як є"
-          ],
-          [
-            "continue-review",
-            "Ще одне ревʼю"
           ]
         ],
         "findings": [
@@ -226,7 +212,6 @@
         "overlaps": [],
         "escapes": [],
         "buttonHeights": [
-          28,
           28
         ]
       },
@@ -315,10 +300,6 @@
           [
             "accept-head",
             "Прийняти як є"
-          ],
-          [
-            "continue-review",
-            "Ще одне ревʼю"
           ]
         ],
         "findings": [
@@ -328,7 +309,6 @@
         "overlaps": [],
         "escapes": [],
         "buttonHeights": [
-          28,
           28
         ]
       },

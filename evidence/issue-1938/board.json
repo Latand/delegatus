@@ -2,28 +2,32 @@
   "frames": {
     "390": {
       "state": "needs_review",
-      "text": "Show the retry count in the bannerneeds reviewBuild→Critique↺1/1head 9b2e7d4c unreviewed · no rounds left · 20m",
-      "meta": "head 9b2e7d4c unreviewed · no rounds left · 20m",
-      "width": 366,
+      "needs": "1",
+      "badge": "review budget spent · critique",
+      "badgeState": "needs_review",
+      "text": "Build→Critique↺1/1Stopped after the last fix, as this pipeline asked: the fix is not reviewed. · 20m",
+      "meta": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed. · 20m",
+      "width": 310,
       "overflows": false
     },
     "1280-light": {
       "drawn": true,
       "state": "needs_review",
       "chip": "needs review",
-      "note": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+      "note": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed.",
+      "noteTitle": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
       "label": "Show the retry count in the banner: needs review · last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
-      "cardText": "Show the retry count in the bannerThe last review failed, and the fix after it was never reviewed.needs review·20m agoBuild→Critique↺1/1last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewedClose the pipelineOne more roundPast attempts · 3last: Build · attempt 2 · passed · 20m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 2passed20m agoOpen conversationCritique · attempt 1failed · fail60m agoOpen conversationBuild · attempt 1passed2h agoOpen conversationAssigned 3m ago3 conversations+ Agent",
+      "cardText": "Show the retry count in the bannerNeeds youThe last review failed, and the fix after it was never reviewed.Build→Critique↺1/1needs review·20m agoStopped after the last fix, as this pipeline asked: the fix is not reviewed.—P1 — the count hides behind the close button1 more findingAccept as isPast attempts · 3last: Build · 2 · passed · 20m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · 2passed20m agoOpen conversationCritiquefailed · fail60m agoOpen conversationBuild · 1passed2h agoOpen conversation3m agoreview budget spent · critique3 conversations Ask+ Agent",
       "chipBox": {
-        "x": 568,
-        "y": 469.28125,
-        "width": 64.9375,
+        "x": 868.421875,
+        "y": 440.96875,
+        "width": 69.09375,
         "height": 15.9375
       },
       "noteBox": {
-        "x": 568,
-        "y": 523.25,
-        "width": 426,
+        "x": 582,
+        "y": 467.9375,
+        "width": 428,
         "height": 15.9375
       },
       "noteClipped": false,
@@ -33,19 +37,20 @@
       "drawn": true,
       "state": "needs_review",
       "chip": "needs review",
-      "note": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
+      "note": "Stopped after the last fix, as this pipeline asked: the fix is not reviewed.",
+      "noteTitle": "last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
       "label": "Show the retry count in the banner: needs review · last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed",
-      "cardText": "Show the retry count in the bannerThe last review failed, and the fix after it was never reviewed.needs review·20m agoBuild→Critique↺1/1last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewedClose the pipelineOne more roundPast attempts · 3last: Build · attempt 2 · passed · 20m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 2passed20m agoOpen conversationCritique · attempt 1failed · fail60m agoOpen conversationBuild · attempt 1passed2h agoOpen conversationAssigned 3m ago3 conversations+ Agent",
+      "cardText": "Show the retry count in the bannerNeeds youThe last review failed, and the fix after it was never reviewed.Build→Critique↺1/1needs review·20m agoStopped after the last fix, as this pipeline asked: the fix is not reviewed.—P1 — the count hides behind the close button1 more findingAccept as isPast attempts · 3last: Build · 2 · passed · 20m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · 2passed20m agoOpen conversationCritiquefailed · fail60m agoOpen conversationBuild · 1passed2h agoOpen conversation3m agoreview budget spent · critique3 conversations Ask+ Agent",
       "chipBox": {
-        "x": 568,
-        "y": 469.28125,
-        "width": 64.9375,
+        "x": 868.421875,
+        "y": 440.96875,
+        "width": 69.09375,
         "height": 15.9375
       },
       "noteBox": {
-        "x": 568,
-        "y": 523.25,
-        "width": 426,
+        "x": 582,
+        "y": 467.9375,
+        "width": 428,
         "height": 15.9375
       },
       "noteClipped": false,

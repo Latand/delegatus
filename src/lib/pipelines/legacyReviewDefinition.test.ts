@@ -318,3 +318,9 @@ test("the loading path never reaches the converter", () => {
   const listRoute = fs.readFileSync(path.join(import.meta.dir, "../../app/api/pipelines/route.ts"), "utf8");
   for (const source of [detailRoute, listRoute]) expect(source).not.toMatch(/(preview|apply|revert)LegacyReviewConversion/);
 });
+
+
+test("legacy conversion accepts the creator's six-round budget", () => {
+  const result = previewLegacyReviewConversion(FIVE_DRAFT(), { reviewLimit: 6 });
+  expect(result.ok).toBe(true);
+});

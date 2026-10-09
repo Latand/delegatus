@@ -4,7 +4,7 @@ import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
-import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
+import { pipelineCompletedUnreviewed, pipelineReviewBudgetSpent } from "@/lib/pipelines/failEdgeBudget";
 import { pipelineTaskFinishState } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { humanizeDuration } from "@/components/turnDuration";
@@ -329,8 +329,12 @@ function AnswerReport({ pipeline, answers, names, nameOf }: {
 /** A completed lane whose last fix no reviewer saw says so, muted, on a line
     of its own under the chain (#1938 kept, #2187 §3.5): in the head the words
     cut the lane's title. */
-function UnreviewedNote({ pipeline }: { pipeline: Pipeline }) {
+function UnreviewedNote({ pipeline, inline = false }: { pipeline: Pipeline; inline?: boolean }) {
   const { t } = useLocale();
+  const spent = pipelineReviewBudgetSpent(pipeline);
+  const Tag = inline ? "span" : "p";
+  if (spent) return <Tag className="pb-unreviewed" data-pipeline-budget-spent={pipeline.id}>{t(spent.followUp ? "pipelineBlock.budgetSpent" : "pipelineBlock.budgetSpentPending", { count: spent.findings, task: spent.followUp?.title ?? "" })}</Tag>;
+  if (inline) return null;
   const unreviewed = pipelineCompletedUnreviewed(pipeline);
   if (!unreviewed) return null;
   return <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p>;
@@ -588,6 +592,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
             <span className="pb-grow" />
             {text}
           </span>
+          <UnreviewedNote pipeline={pipeline} inline />
         </span>
       );
     }
@@ -604,6 +609,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
         ) : reasonLine}
+        <UnreviewedNote pipeline={pipeline} inline />
       </span>
     );
   }

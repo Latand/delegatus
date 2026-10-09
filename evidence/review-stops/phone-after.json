@@ -9,14 +9,9 @@
         [
           "accept-head",
           "Accept as is"
-        ],
-        [
-          "continue-review",
-          "Review again"
         ]
       ],
       "heights": [
-        44,
         44
       ],
       "findings": [
@@ -39,7 +34,7 @@
         "lanes": [
           "lane-stop-fix"
         ],
-        "scrollHeight": 733,
+        "scrollHeight": 812,
         "clientHeight": 690
       }
     },
@@ -82,7 +77,7 @@
         "lanes": [
           "lane-stop-park"
         ],
-        "scrollHeight": 754,
+        "scrollHeight": 817,
         "clientHeight": 690
       }
     },
@@ -125,7 +120,7 @@
         "lanes": [
           "lane-stop-once"
         ],
-        "scrollHeight": 809,
+        "scrollHeight": 920,
         "clientHeight": 690
       }
     },
@@ -168,7 +163,7 @@
         "lanes": [
           "lane-stop-legacy"
         ],
-        "scrollHeight": 709,
+        "scrollHeight": 772,
         "clientHeight": 690
       }
     },
@@ -181,14 +176,9 @@
         [
           "accept-head",
           "Accept as is"
-        ],
-        [
-          "continue-review",
-          "Review again"
         ]
       ],
       "heights": [
-        44,
         44
       ],
       "findings": [
@@ -211,7 +201,7 @@
         "lanes": [
           "lane-stop-fix"
         ],
-        "scrollHeight": 733,
+        "scrollHeight": 812,
         "clientHeight": 690
       }
     },
@@ -254,7 +244,7 @@
         "lanes": [
           "lane-stop-park"
         ],
-        "scrollHeight": 754,
+        "scrollHeight": 817,
         "clientHeight": 690
       }
     },
@@ -297,7 +287,7 @@
         "lanes": [
           "lane-stop-once"
         ],
-        "scrollHeight": 809,
+        "scrollHeight": 920,
         "clientHeight": 690
       }
     },
@@ -340,7 +330,7 @@
         "lanes": [
           "lane-stop-legacy"
         ],
-        "scrollHeight": 709,
+        "scrollHeight": 772,
         "clientHeight": 690
       }
     },
@@ -353,14 +343,9 @@
         [
           "accept-head",
           "Прийняти як є"
-        ],
-        [
-          "continue-review",
-          "Ще одне ревʼю"
         ]
       ],
       "heights": [
-        44,
         44
       ],
       "findings": [
@@ -383,7 +368,7 @@
         "lanes": [
           "lane-stop-fix"
         ],
-        "scrollHeight": 766,
+        "scrollHeight": 829,
         "clientHeight": 690
       }
     },
@@ -426,7 +411,7 @@
         "lanes": [
           "lane-stop-park"
         ],
-        "scrollHeight": 787,
+        "scrollHeight": 850,
         "clientHeight": 690
       }
     },
@@ -469,7 +454,7 @@
         "lanes": [
           "lane-stop-once"
         ],
-        "scrollHeight": 875,
+        "scrollHeight": 986,
         "clientHeight": 690
       }
     },
@@ -512,7 +497,7 @@
         "lanes": [
           "lane-stop-legacy"
         ],
-        "scrollHeight": 709,
+        "scrollHeight": 772,
         "clientHeight": 690
       }
     },
@@ -525,14 +510,9 @@
         [
           "accept-head",
           "Прийняти як є"
-        ],
-        [
-          "continue-review",
-          "Ще одне ревʼю"
         ]
       ],
       "heights": [
-        44,
         44
       ],
       "findings": [
@@ -555,7 +535,7 @@
         "lanes": [
           "lane-stop-fix"
         ],
-        "scrollHeight": 766,
+        "scrollHeight": 829,
         "clientHeight": 690
       }
     },
@@ -598,7 +578,7 @@
         "lanes": [
           "lane-stop-park"
         ],
-        "scrollHeight": 787,
+        "scrollHeight": 850,
         "clientHeight": 690
       }
     },
@@ -641,7 +621,7 @@
         "lanes": [
           "lane-stop-once"
         ],
-        "scrollHeight": 875,
+        "scrollHeight": 986,
         "clientHeight": 690
       }
     },
@@ -684,7 +664,7 @@
         "lanes": [
           "lane-stop-legacy"
         ],
-        "scrollHeight": 709,
+        "scrollHeight": 772,
         "clientHeight": 690
       }
     }

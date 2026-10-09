@@ -4431,7 +4431,7 @@ browserTest("#2190: phone task cards carry the task's icon in the card's colour"
  * drawn; the desktop board's half of the issue is the kanban driver's case.
  */
 const REVIEW_STOPS = [
-  { task: "t-stop-fix", kind: "stop-after-fix", reason: "pipelineBlock.stop.afterFix", answers: [["accept-head", "pipelineBlock.answer.acceptAsIs"], ["continue-review", "pipelineBlock.answer.reviewAgain"]] },
+  { task: "t-stop-fix", kind: "stop-after-fix", reason: "pipelineBlock.stop.afterFix", answers: [["accept-head", "pipelineBlock.answer.acceptAsIs"]] },
   { task: "t-stop-park", kind: "park", reason: "pipelineBlock.stop.park", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
   { task: "t-stop-once", kind: "once", reason: "pipelineBlock.stop.once", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
   { task: "t-stop-legacy", kind: "legacy", reason: "pipelineBlock.stop.legacy", answers: [["skip-stage", "pipelineBlock.answer.acceptWithoutReview"], ["retry-stage", "pipelineBlock.answer.reviewAgain"]] },
@@ -8711,4 +8711,50 @@ describe("prototype review on the phone", () => {
     fs.writeFileSync("evidence/prototype-review-phone/readings.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+});
+
+
+describe("spent review budget", () => {
+  browserTest("spent budget pending and filed render without clipping in both languages", async () => {
+    const out = path.resolve(".artifacts/review-budget-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [390, 430]) for (const filed of [false, true]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-stops`, { width, height: 900 }, "light", lang, "reduce", width < 500);
+        try {
+          const selector = width < 500 ? '[data-phone-card="task:t-stop-once"]' : '[data-kanban-board] .card[data-id="task:t-stop-once"]';
+          await page.waitForSelector(selector);
+          await page.evaluate((filed) => {
+            const evidence = (window as unknown as { evidence: { storedPipeline(id: string): import("@/lib/pipelines/types").Pipeline } }).evidence;
+            const pipeline = evidence.storedPipeline("p-stop-once");
+            pipeline.state = "completed"; pipeline.cursor = null; delete pipeline.reviewPending;
+            pipeline.reviewBudgetSpent = { stageId: "review", attempt: 3, findings: 2, head: pipeline.lastPassedCommit, at: "2026-10-01T00:00:00Z",
+              ...(filed ? { followUp: { taskId: "follow-up", title: "Repair the retained review findings", at: "2026-10-01T00:00:00Z" } } : {}) };
+            window.dispatchEvent(new Event("llv:pipelines-changed"));
+          }, filed);
+          if (width < 500) {
+            await page.locator(selector).click();
+            await page.locator("[data-phone-task-ended]").click();
+          }
+          const surface = page.locator(width < 500 ? '[data-phone-task-lane="p-stop-once"]' : selector);
+          const note = surface.locator('[data-pipeline-budget-spent="p-stop-once"]');
+          await note.waitFor();
+          await note.scrollIntoViewIfNeeded();
+          const reading = await note.evaluate(element => ({ text: element.textContent, clipped: element.scrollWidth > element.clientWidth + 1, measuredWidth: element.getBoundingClientRect().width }));
+          expect(reading.measuredWidth).toBeGreaterThan(0);
+          expect(reading.clipped).toBe(false);
+          expect(reading.text).toContain("2");
+          expect(reading.text).toContain(filed ? "Repair the retained review findings" : lang === "en" ? "after merge" : "після мерджу");
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, width, filed, ...reading });
+          await surface.screenshot({ path: path.join(out, `${lang}-${width}-${filed ? "filed" : "pending"}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    const evidence = path.resolve("evidence/review-budget"); fs.mkdirSync(evidence, { recursive: true });
+    fs.writeFileSync(path.join(evidence, "phone.json"), JSON.stringify(readings, null, 2) + "\n");
+  }, 60_000);
 });

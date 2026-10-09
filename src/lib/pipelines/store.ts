@@ -806,6 +806,19 @@ function isPipeline(value: unknown): value is Pipeline {
   catch { return false; }
 }
 
+function isReviewBudgetSpent(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const follow = record.followUp as Record<string, unknown> | undefined;
+  return typeof record.stageId === "string" && record.stageId.length > 0
+    && Number.isSafeInteger(record.attempt) && (record.attempt as number) >= 1
+    && Number.isSafeInteger(record.findings) && (record.findings as number) >= 0
+    && typeof record.head === "string" && typeof record.at === "string"
+    && (follow === undefined || Boolean(follow && typeof follow === "object" && !Array.isArray(follow)
+      && typeof follow.taskId === "string" && follow.taskId.length > 0
+      && typeof follow.title === "string" && typeof follow.at === "string"));
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
@@ -854,6 +867,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
     (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
     (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
+    (pipeline.reviewBudgetSpent === undefined || isReviewBudgetSpent(pipeline.reviewBudgetSpent)) &&
     (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
     (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
     (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&

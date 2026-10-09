@@ -1,9 +1,13 @@
 import os from "node:os";
+import { agentRegistry } from "@/lib/agent/registry";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import { fileBudgetFollowUp } from "@/lib/pipelines/budgetFollowUp";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { ForgeAppWriteRefused, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
-import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeExhaustion, terminalReviewBudgetSpent } from "@/lib/pipelines/failEdgeBudget";
 import { withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
@@ -66,10 +70,13 @@ export interface AutoMergePorts {
   /** What the forge cache last read for a pull request, for a merge the
       runner no longer polls (blocked or cancelled) that someone merged. */
   cachedState: (repository: string, number: number) => PullRequestState | null;
+  /** Standalone merger custody; a busy merger holds this project’s queue. */
+  mergerBusy?: (project: string) => boolean;
   log?: (message: string, error?: unknown) => void;
   /** Moves a board task to Done for the finish sweep (#2187 §5.3) and says
       what it found. Absent, the finish sweep does not run. */
   finishTask?: (taskId: string, pipelineId: string) => TaskFinishOutcome;
+  fileFollowUp?: (pipeline: Pipeline, mergedHead: string) => { taskId: string; title: string };
 }
 
 export type TaskFinishOutcome = "moved" | "already-done" | "missing" | "refused";
@@ -103,7 +110,10 @@ export function mergeEligible(pipeline: Pipeline): boolean {
     if (!latest) continue;
     reviewed += 1;
     if (latest.state === "passed" || latest.state === "skipped") continue;
+    if (latest.verdict?.status === "fail" && terminalReviewBudgetSpent(latest, true)) continue;
     if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
+    const spent = pipeline.reviewBudgetSpent;
+    if (spent?.stageId === stage.id && spent.attempt === latest.n) continue;
     if (latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
       const fix = pipeline.runs.find((run) => run.stageId === stage.onFail!.to)?.attempts.find((attempt) => !attempt.historical
         && attempt.state === "passed"
@@ -559,18 +569,58 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
  * under a setting turned off, note merges someone else made, and take one step
  * on the head of each repository's queue whose next read is due.
  */
+function mergerOwns(pipeline: Pipeline, pr: { repository: string; number: number }, ports: AutoMergePorts): boolean {
+  if (ports.mergerBusy?.(pipeline.project)) return true;
+  return ports.loadPipelines().some(candidate => candidate.id !== pipeline.id
+    && canonicalProject(candidate.project) === canonicalProject(pipeline.project)
+    && !["completed", "closed", "draft"].includes(candidate.state)
+    && candidate.stages.some(stage => stage.role?.roleId === "merger"
+      && String(stage.role.params?.prs ?? "").split(",").some(pair => Number(pair.trim().split("@")[0]) === pr.number)));
+}
+
+/** Cached merge state prompts a fresh read before recording outside evidence. */
+async function recordOutsideMerge(pipeline: Pipeline, pr: { repository: string; number: number }, ports: AutoMergePorts): Promise<void> {
+  try {
+    const view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
+    if (view?.state !== "MERGED") return;
+    await ports.mutate(pipeline.id, live => {
+      if (!["completed", "closed"].includes(live.state) || live.merge?.mergedHead) return false;
+      const currentPr = live.merge ? { repository: live.merge.repository, number: live.merge.prNumber } : ports.pullRequestOf(live);
+      if (currentPr?.repository !== pr.repository || currentPr.number !== pr.number) return false;
+      const merge = live.merge ?? newMerge(live, pr, ports.setting(live.project), ports.now());
+      merge.state = "merged";
+      merge.by ??= "outside";
+      merge.mergedHead = view.headRefOid;
+      merge.mergeCommit = view.mergeCommit;
+      merge.mergedAt = view.mergedAt ?? iso(ports.now());
+      merge.reason = null;
+      merge.nextReadAt = null;
+      merge.updatedAt = iso(ports.now());
+      live.merge = merge;
+      return true;
+    });
+  } catch (error) {
+    ports.log?.(`[auto merge] ${pipeline.id}: outside merge confirmation failed`, error);
+  }
+}
+
 export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   const now = ports.now();
   for (const pipeline of ports.loadPipelines()) {
     if (pipeline.state !== "completed" || pipeline.hiddenAt) continue;
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
+    const pr = merge ? { repository: merge.repository, number: merge.prNumber } : ports.pullRequestOf(pipeline);
+    if (pr && !merge?.mergedHead && (merge?.state === "merged" || ports.cachedState(pr.repository, pr.number) === "merged")) {
+      await recordOutsideMerge(pipeline, pr, ports);
+      continue;
+    }
     if (!merge) {
       /* Only lanes that complete after the setting went on (§4.1). */
       if (!setting.enabled || !setting.changedAt || !(Date.parse(pipeline.closedAt ?? "") >= Date.parse(setting.changedAt))) continue;
       if (!pipeline.lastPassedCommit || !mergeEligible(pipeline)) continue;
       const pr = ports.pullRequestOf(pipeline);
-      if (!pr) continue;
+      if (!pr || mergerOwns(pipeline, pr, ports)) continue;
       await ports.mutate(pipeline.id, (live) => {
         if (live.state !== "completed" || live.merge) return false;
         live.merge = newMerge(live, pr, setting, now);
@@ -581,14 +631,6 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     if (PIPELINE_MERGE_LIVE_STATES.has(merge.state) && merge.state !== "merging" && !setting.enabled) {
       await commit(ports, pipeline, (live) => { live.state = "cancelled"; live.reason = MERGE_REASONS.settingOff; live.nextReadAt = null; });
       continue;
-    }
-    if ((merge.state === "blocked" || merge.state === "cancelled") && ports.cachedState(merge.repository, merge.prNumber) === "merged") {
-      await commit(ports, pipeline, (live) => {
-        live.state = "merged";
-        live.by = "outside";
-        live.reason = null;
-        live.mergedAt = iso(now);
-      });
     }
   }
   /* One lane at a time per repository, in completion order (§4.4 rule 5). */
@@ -603,6 +645,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   for (const queue of queues.values()) {
     queue.sort((a, b) => a.merge!.requestedAt.localeCompare(b.merge!.requestedAt) || a.id.localeCompare(b.id));
     const head = queue[0]!;
+    if (mergerOwns(head, { repository: head.merge!.repository, number: head.merge!.prNumber }, ports)) continue;
     const due = Date.parse(head.merge!.nextReadAt ?? "");
     if (Number.isFinite(due) && due > now) continue;
     try {
@@ -696,6 +739,49 @@ export async function sweepTaskFinishes(ports: AutoMergePorts): Promise<void> {
   }
 }
 
+/** Files retained findings once the lane's delivery has finished. */
+export async function sweepBudgetFollowUps(ports: AutoMergePorts): Promise<void> {
+  if (!ports.fileFollowUp) return;
+  const pipelines = ports.loadPipelines();
+  for (const pipeline of pipelines) {
+    const spent = pipeline.reviewBudgetSpent;
+    if (!spent || spent.followUp || !(laneFinishedForTasks(pipeline, ports) || pipeline.state === "closed")) continue;
+    // Legacy follow-ups were started as lanes on the same task. Their brief
+    // explicitly names the source lane; unrelated work on that task is ignored.
+    const existing = pipelines.find(candidate => candidate.id !== pipeline.id
+      && canonicalProject(candidate.project) === canonicalProject(pipeline.project)
+      && candidate.taskIds.some(id => pipeline.taskIds.includes(id))
+      && /follow[- ]up/i.test(candidate.task) && candidate.spec?.includes(pipeline.id));
+    let delivery = pipeline;
+    if (!existing) {
+      // Confirm known outside merges at filing even if the merge sweep skips
+      // the lane or merging has been turned off.
+      const pr = pipeline.merge ? { repository: pipeline.merge.repository, number: pipeline.merge.prNumber } : ports.pullRequestOf?.(pipeline);
+      const knownMerged = pipeline.merge?.state === "merged" || Boolean(pr && ports.cachedState?.(pr.repository, pr.number) === "merged");
+      const requiresMergedHead = knownMerged || Boolean(pr && pipeline.state === "completed" && ports.setting(pipeline.project).enabled);
+      if (requiresMergedHead && (pipeline.merge?.state !== "merged" || !pipeline.merge.mergedHead)) {
+        if (!knownMerged || !pr) continue;
+        await recordOutsideMerge(pipeline, pr, ports);
+        const confirmed = ports.loadPipelines().find(candidate => candidate.id === pipeline.id);
+        if (!confirmed || confirmed.merge?.state !== "merged" || !confirmed.merge.mergedHead
+          || confirmed.reviewBudgetSpent?.followUp || confirmed.reviewBudgetSpent?.stageId !== spent.stageId
+          || confirmed.reviewBudgetSpent.attempt !== spent.attempt) continue;
+        delivery = confirmed;
+      }
+    }
+    const followUp = existing
+      ? { taskId: existing.taskIds.find(id => pipeline.taskIds.includes(id))!, title: existing.task.split("\n")[0]! }
+      : ports.fileFollowUp(delivery, delivery.merge?.mergedHead ?? delivery.lastPassedCommit);
+    await ports.mutate(pipeline.id, live => {
+      const current = live.reviewBudgetSpent;
+      if (!current || current.followUp || current.stageId !== spent.stageId || current.attempt !== spent.attempt) return false;
+      current.followUp = { ...followUp, at: iso(ports.now()) };
+      live.stateDetail = `budget spent: ${current.findings} findings → follow-up «${followUp.title}» (${followUp.taskId.slice(0, 8)})`;
+      return true;
+    });
+  }
+}
+
 /** The production move: the task's own store, under its own lock. */
 export function finishBoardTask(taskId: string): TaskFinishOutcome {
   return mutateTasks((tasks) => {
@@ -713,6 +799,7 @@ const scheduleHost = globalThis as typeof globalThis & { __llvAutoMergeRunning?:
 
 export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pick<AutoMergePorts, "loadPipelines">): AutoMergePorts {
   const run = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS);
+  let mergerProjects: Set<string> | undefined;
   return {
     now: Date.now,
     run,
@@ -726,7 +813,20 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     setting: mergeOnReviewSetting,
     pullRequestOf: lanePullRequest,
     cachedState: (repository, number) => forgeCacheView().repository(repository)?.pr(number)?.state ?? null,
+    mergerBusy: project => {
+      if (!mergerProjects) {
+        mergerProjects = new Set();
+        for (const conversation of Object.values(agentRegistry().readOnlySnapshot().conversations)) {
+          if (conversation.agentRole !== "merger" || conversation.supersededBy || conversation.turn.state !== "busy") continue;
+          const generation = conversation.generations.at(-1);
+          const owned = conversationProjectKey(conversation.projectOwnership, generation?.launchProfile);
+          if (owned) mergerProjects.add(canonicalProject(owned));
+        }
+      }
+      return mergerProjects.has(canonicalProject(project));
+    },
     finishTask: finishBoardTask,
+    fileFollowUp: fileBudgetFollowUp,
     log: (message, error) => console.error(message, error ?? ""),
     ...overrides,
   };
@@ -746,6 +846,8 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
     .catch((error) => ports.log?.("[auto merge] sweep failed", error))
     .then(() => sweepTaskFinishes(ports))
     .catch((error) => ports.log?.("[task finish] sweep failed", error))
+    .then(() => sweepBudgetFollowUps(ports))
+    .catch((error) => ports.log?.("[budget follow-up] sweep failed", error))
     .finally(() => { scheduleHost.__llvAutoMergeRunning = null; });
   scheduleHost.__llvAutoMergeRunning = run;
 }
