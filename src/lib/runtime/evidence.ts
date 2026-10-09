@@ -63,6 +63,31 @@ export async function readEvidence<T>(
 }
 
 /**
+ * {@link readEvidence} with a bound on how long the answer may take.
+ *
+ * A read nobody answers is unreadable in the same sense as one that threw: it
+ * established nothing, and its caller may not wait on it forever. An answer
+ * that arrives after the bound is dropped, so nothing acts on it twice.
+ */
+export function readEvidenceWithin<T>(
+  read: () => T | PromiseLike<T>,
+  boundMs: number,
+  fallbackReason = "evidence could not be read",
+): Promise<Evidence<T>> {
+  return new Promise((resolve) => {
+    const bound = setTimeout(
+      () => resolve({ readable: false, reason: `${fallbackReason}: no answer within ${boundMs} ms` }),
+      boundMs,
+    );
+    (bound as { unref?: () => void }).unref?.();
+    void readEvidence(read, fallbackReason).then((evidence) => {
+      clearTimeout(bound);
+      resolve(evidence);
+    });
+  });
+}
+
+/**
  * The same read where the caller cannot await one.
  *
  * A synchronous read is failable in exactly the same way, and letting one throw

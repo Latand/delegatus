@@ -29,7 +29,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, REGISTRY_WRITER_BUSY, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -729,7 +729,7 @@ async function spawnPipelineAgent(
   } catch (error) {
     if ((error instanceof ActivationSuperseded || error instanceof RuntimeSwitchSuperseded) && begun.kind !== "replay") {
       // This adapter has not dispatched; only its own fresh reservation is safe to cancel.
-      registry.failStructuredSpawn(begun.receipt.launchId, "stage activation cancelled before dispatch");
+      await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage activation cancelled before dispatch");
     }
     throw error;
   }
@@ -753,7 +753,7 @@ async function spawnPipelineAgent(
     /* Nothing was dispatched, and the receipt has to say so itself (#1678):
        the engine re-dispatches only on the receipt's own terminal verdict,
        exactly as the spawn layer records one after its transport fails. */
-    registry.failStructuredSpawn(begun.receipt.launchId, unavailable);
+    await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, unavailable);
     throw new Error(unavailable);
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
@@ -1394,7 +1394,10 @@ export function defaultPipelinePorts(
       const recovery = stagedLaunchRecovery(receipt);
       // An uncertain/delivered operation can outlive the controller's budget.
       if (recovery && recovery.phase !== "unpublished") return false;
-      const failed = registry.failSpawn(launchId, reason);
+      /* The engine's tick is synchronous here: a non-waiting write, and a
+         lock held elsewhere answers false, which the next tick asks again
+         (docs/design/delivery-progress-and-drain.md, C5). */
+      const failed = registry.failSpawnNow(launchId, reason);
       invalidateRegistryProjection();
       return failed;
     },
@@ -1665,7 +1668,10 @@ export function defaultPipelinePorts(
       const id = conversationId as ViewerConversationId;
       const migration = registry.conversation(id)?.migration;
       if (migration?.phase === "failed-recoverable" && migration.targetId === targetAccountId) {
-        registry.retryConversationMigration(id, migration.revision);
+        /* Off the loop; refused, the engine waits and asks again (C2). */
+        const retried = await registry.deliveryWrite({ label: "migration.retry", operationId: migration.operationId },
+          () => registry.retryConversationMigration(id, migration.revision));
+        if (!retried.acquired) throw new Error(REGISTRY_WRITER_BUSY);
       } else {
         registry.requestConversationReseat(id, targetAccountId);
       }

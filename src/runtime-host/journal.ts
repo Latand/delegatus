@@ -1,4 +1,5 @@
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { measureBlocking } from "@/lib/blockingWaits";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
@@ -381,6 +382,9 @@ export class RuntimeJournal {
   // Only the full and summary representations are retained. Targeted voice
   // reads must not evict either hot representation or accumulate per-card JSON.
   private snapshotCaches = new Map<string, { changes: number; expiresAt: number | null; json: string }>();
+  /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
+  snapshotCacheHits = 0;
+  snapshotRebuilds = 0;
   private receiptSweepCursor = 0;
 
   private readonly startupOptions: RuntimeJournalOptions;
@@ -1323,8 +1327,15 @@ export class RuntimeJournal {
     const changes = this.totalChanges();
     const now = this.now();
     const cached = this.snapshotCaches.get(scope);
-    if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) return cached.json;
-    const json = JSON.stringify(this.snapshotAt(now, voiceBodiesFor));
+    if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) {
+      this.snapshotCacheHits += 1;
+      return cached.json;
+    }
+    /* Collection and serialization are measured apart: the two have different
+       fixes, and a cache hit above costs neither. */
+    this.snapshotRebuilds += 1;
+    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => this.snapshotAt(now, voiceBodiesFor));
+    const json = measureBlocking("snapshot-serialize", "runtime-journal", () => JSON.stringify(snapshot));
     if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
       this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
     return json;
