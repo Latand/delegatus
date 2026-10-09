@@ -1060,6 +1060,87 @@ test("a seat whose transcript is gone returns the panel to the draft", async () 
   expect(host.querySelector("[data-orchestrator-mandate]")).not.toBeNull();
 });
 
+/* The seat OUTLIVES its conversation: the record stays designated after the
+   operator closes the card, and the server refuses a plain spawn over it
+   unless the body says `replaceIncumbent`. The flag follows the status read
+   (seat record present, conversation gone), never the panel state a failed
+   attempt has moved to. */
+test("a create on a vacated seat carries replaceIncumbent on the first attempt", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  const host = mount();
+  await settle();
+
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(seatPosts).toHaveLength(1);
+  expect(seatPosts[0]!.replaceIncumbent).toBe(true);
+  expect(seatPosts[0]!.expectedIncumbentSeatEpoch).toBe(2);
+});
+
+test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  seatResponses = [{ status: 400, body: { error: "orchestrator cwd could not be resolved", code: "cwd_unresolved" } }];
+  const host = mount();
+  await settle();
+
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(panelState(host)).toBe("intent-error");
+
+  seatResponses = [{ status: 202, body: { ok: true, conversationId: "conversation_orch", launchId: "launch-a", seat: activeSeat() } }];
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(seatPosts).toHaveLength(2);
+  expect(seatPosts[1]!.clientRequestId).not.toBe(seatPosts[0]!.clientRequestId);
+  expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([true, true]);
+  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([2, 2]);
+});
+
+test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  seatResponses = [{ status: 0, body: null, throws: true }];
+  const host = mount();
+  await settle();
+
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(panelState(host)).toBe("intent-error");
+
+  seatResponses = [{ status: 200, body: { ok: true, replayed: true, conversationId: "conversation_orch", seat: activeSeat() } }];
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(seatPosts).toHaveLength(2);
+  expect(seatPosts[1]!.clientRequestId).toBe(seatPosts[0]!.clientRequestId);
+  expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([true, true]);
+  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([2, 2]);
+});
+
+test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {
+  seatStatus = { seat: null, pending: null, exists: true };
+  seatResponses = [{ status: 400, body: { error: "orchestrator cwd could not be resolved", code: "cwd_unresolved" } }];
+  const host = mount();
+  await settle();
+
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(panelState(host)).toBe("intent-error");
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(seatPosts).toHaveLength(2);
+  expect(seatPosts.map((post) => "replaceIncumbent" in post)).toEqual([false, false]);
+  expect(seatPosts.map((post) => "expectedIncumbentSeatEpoch" in post)).toEqual([false, false]);
+});
+
+test("a live seat offers no create form, so nothing can replace it from there", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: true };
+  const host = mount([orchestratorFile]);
+  await settle();
+
+  expect(panelState(host)).not.toBe("draft");
+  expect(host.querySelector("[data-orchestrator-confirm]")).toBeNull();
+  expect(seatPosts).toHaveLength(0);
+});
+
 test("a finished seat says so and offers resume in place — never a green live badge", async () => {
   seatStatus = { seat: activeSeat(), pending: null, exists: true };
   /* No process behind it: the capability matrix classifies this root as
@@ -1644,6 +1725,7 @@ test("the draft a closed conversation returns to can actually create — it says
   flushSync(() => confirmButton(fresh).click());
   await settle();
   expect(seatPosts[0]!.replaceIncumbent).toBeUndefined();
+  expect(seatPosts[0]!.expectedIncumbentSeatEpoch).toBeUndefined();
 }, SEAT_POLL_MS + 4_000);
 
 /* #1166: the seat DELIVERS the mandate, so it lands in the transcript as an

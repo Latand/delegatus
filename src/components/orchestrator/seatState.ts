@@ -670,7 +670,37 @@ export function deriveOrchestratorPanelState(input: {
     };
   }
   if (!status) return input.statusFailed ? { kind: "unavailable" } : { kind: "loading" };
-  return { kind: "draft", vacated: Boolean(status.seat) && !status.exists };
+  return { kind: "draft", vacated: seatVacated(status) };
+}
+
+/**
+ * The seat is vacated: its record still stands, its conversation is gone from
+ * disk. Both create forms (the dock's panel and the phone's sheet) ask this of
+ * the status READ, never of the panel state a failed attempt has moved to, so
+ * they cannot disagree about it and a retry sees the same answer as the first
+ * attempt.
+ */
+export function seatVacated(status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null): boolean {
+  return status !== null && Boolean(status.seat) && !status.exists;
+}
+
+/**
+ * The create body's fragment for a vacated seat. The seat command refuses a
+ * spawn over a designated seat as an accidental rotation unless the body says
+ * `replaceIncumbent`; over a vacated seat that is exactly what the operator
+ * means. The flag is bound to the seat the read showed: the status behind it
+ * can be old (a failed re-read keeps the last answer), and without the epoch
+ * the flag would replace whatever orchestrator is designated when the POST
+ * lands. `expectedIncumbentSeatEpoch` makes the command refuse the replacement
+ * when another seat has been designated since. Empty for a live seat and for no
+ * seat: replacing a live orchestrator is the rotate flow's job, never a create
+ * form's.
+ */
+export function vacatedSeatReplacement(
+  status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null,
+): { replaceIncumbent: true; expectedIncumbentSeatEpoch: number } | Record<string, never> {
+  if (!status || !status.seat || status.exists) return {};
+  return { replaceIncumbent: true, expectedIncumbentSeatEpoch: status.seat.seatEpoch };
 }
 
 /** The warning is eligible only after the mandate has produced a visible

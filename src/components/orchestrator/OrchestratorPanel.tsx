@@ -50,6 +50,7 @@ import {
   seatBindPending,
   seatFailureCopy,
   seatRequestSettled,
+  vacatedSeatReplacement,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   rotationBannerLines,
@@ -457,7 +458,7 @@ export function OrchestratorPanel({
            and wrong here — this draft exists BECAUSE the operator closed that
            conversation (PRD decision 4), so it says what it means and the
            «returns to draft» promise is one the button can keep. */
-        ...(state.kind === "draft" && state.vacated ? { replaceIncumbent: true } : {}),
+        ...vacatedSeatReplacement(status),
       },
       launch: { draft: launch, cwd: projectCwd ?? "", firstMessage: mandate },
     }, replayRequestId);

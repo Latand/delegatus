@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   interruptionContinuationText,
   interruptionObligationStore,
+  restartCutProposal,
   type InterruptionObligationInput,
 } from "./interruptionObligations";
 
@@ -105,4 +106,104 @@ test("a record appended to the pending journal while an import runs is kept for 
   expect(appended).toBe(true);
   expect(interruptionObligationStore(obligations).list().map((obligation) => obligation.id).sort())
     .toEqual([first.id, second.id].sort());
+});
+
+function restartInput(turnRef: string, lastEventAt: number | null, recordedAt: string) {
+  return {
+    conversationId: "conversation_restart-cut" as const,
+    engine: "claude" as const,
+    hostKey: "claude:session-restart-cut",
+    path: "/tmp/session-restart-cut.jsonl",
+    owner: null,
+    claimEpoch: 3,
+    turnRef,
+    boundary: "viewer-restart:turn",
+    reason: "viewer-restart" as const,
+    recordedAt,
+    checkpoint: { lastEventKind: lastEventAt === null ? null : "tool-call", lastEventAt },
+    seat: null,
+    answeredBy: "a pipeline stage: its controller retries the attempt",
+  };
+}
+
+test("a restart record found again with newer work moves its checkpoint and its time, and keeps its state", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-restart-"));
+  try {
+    const store = interruptionObligationStore(path.join(directory, "obligations"));
+    const first = store.record(restartInput("T2", 20, "2026-10-07T00:00:20.000Z"));
+    expect(first.created).toBe(true);
+    const again = store.record(restartInput("T2", 100, "2026-10-07T00:01:40.000Z"));
+    expect(again.created).toBe(false);
+    expect(store.list()).toEqual([{
+      ...first.obligation,
+      checkpoint: { lastEventKind: "tool-call", lastEventAt: 100 },
+      recordedAt: "2026-10-07T00:01:40.000Z",
+    }]);
+    expect(store.list()[0]).toMatchObject({ state: "discharged", resolution: "a pipeline stage: its controller retries the attempt" });
+    /* The same evidence found once more leaves the record as written. */
+    store.record(restartInput("T2", 100, "2026-10-07T00:05:00.000Z"));
+    expect(store.list()[0]!.recordedAt).toBe("2026-10-07T00:01:40.000Z");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("two restart records that differ in turn are two cuts, whatever their times", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-restart-"));
+  try {
+    const store = interruptionObligationStore(path.join(directory, "obligations"));
+    store.record(restartInput("T2", 100, "2026-10-07T00:01:40.000Z"));
+    /* The transcript has not moved: the new turn has echoed nothing yet. */
+    const next = store.record(restartInput("T3", 100, "2026-10-07T00:02:00.000Z"));
+    expect(next.created).toBe(true);
+    expect(store.list().map(({ turnRef }) => turnRef)).toEqual(["T2", "T3"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a withdrawn restart record is gone, and the same cut found again is recorded anew", () => {
+  const store = interruptionObligationStore(directory);
+  const owed = { ...restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z"), answeredBy: undefined };
+  const first = store.record(owed);
+  expect(first.obligation.state).toBe("owed");
+  expect(store.withdraw(first.obligation.id)).toBe(true);
+  expect(store.withdraw(first.obligation.id)).toBe(false);
+  expect(interruptionObligationStore(directory).list()).toEqual([]);
+  const again = store.record(owed);
+  expect(again).toMatchObject({ created: true, obligation: { id: first.obligation.id, state: "owed" } });
+});
+
+test("a withdrawn restart record the directory refused leaves the pending journal, and the other pending records stay", () => {
+  const obligations = path.join(directory, "obligations");
+  fs.mkdirSync(obligations);
+  fs.chmodSync(obligations, 0o500);
+  try {
+    const store = interruptionObligationStore(obligations);
+    const withdrawn = store.record(restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z")).obligation;
+    const kept = store.record(restartInput("T2", 2_000, "2026-10-07T00:00:01.000Z")).obligation;
+    expect(fs.readdirSync(obligations)).toEqual([]);
+    expect(store.withdraw(withdrawn.id)).toBe(true);
+    expect(store.withdraw(withdrawn.id)).toBe(false);
+    expect(store.list().map(({ id }) => id)).toEqual([kept.id]);
+    fs.chmodSync(obligations, 0o700);
+    expect(interruptionObligationStore(obligations).list().map(({ id }) => id)).toEqual([kept.id]);
+    expect(fs.readdirSync(obligations)).toEqual([`${kept.id}.json`]);
+  } finally {
+    fs.chmodSync(obligations, 0o700);
+  }
+});
+
+test("a restart record is a proposal only while its row is unclaimed and nothing has answered it", () => {
+  const store = interruptionObligationStore(directory);
+  const witness = store.record(restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z")).obligation;
+  const owed = store.record({ ...restartInput("T2", 2_000, "2026-10-07T00:00:01.000Z"), answeredBy: undefined }).obligation;
+  const row = { hostKey: witness.hostKey, claimEpoch: 3 };
+  expect(restartCutProposal(witness, row)).toBe(true);
+  expect(restartCutProposal(owed, row)).toBe(true);
+  /* A successor took the row. */
+  expect(restartCutProposal(owed, { ...row, claimEpoch: 4 })).toBe(false);
+  expect(restartCutProposal(store.update(owed.id, { state: "submitted" })!, row)).toBe(false);
+  expect(restartCutProposal(store.update(owed.id, { state: "discharged", resolution: "a newer message already resumed the conversation" })!, row)).toBe(false);
+  expect(restartCutProposal(store.record(releaseCut).obligation, { hostKey: releaseCut.hostKey, claimEpoch: 3 })).toBe(false);
 });

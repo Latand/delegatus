@@ -25,6 +25,7 @@ import {
   newSeatRequestId,
   seatBindPending,
   seatRequestSettled,
+  vacatedSeatReplacement,
   type SeatSubmitFailure,
 } from "../orchestrator/seatState";
 import { onOrchestratorDraftRequest, takePendingSeatOpen } from "../orchestrator/draftPrefill";
@@ -310,6 +311,9 @@ export function MobileSeatCard({
           /* Only an UNEDITED mandate is a version of the approved prompt; an
              edited one is bespoke and records no version. */
           ...(text === ORCHESTRATOR_SYSTEM_PROMPT.trim() ? { promptVersion: ORCHESTRATOR_PROMPT_VERSION } : {}),
+          /* A vacated seat is replaced, not rotated: the same fragment the
+             dock's create form posts, from the same status read. */
+          ...vacatedSeatReplacement(status),
         }),
       });
       const body = (await response.json().catch(() => null)) as (SpawnResponseBody & { code?: string }) | null;
@@ -376,7 +380,7 @@ export function MobileSeatCard({
       setSubmitting(false);
       await refresh();
     }
-  }, [project, projectCwd, refresh, t]);
+  }, [project, projectCwd, status, refresh, t]);
 
   const openConversation = useCallback(() => {
     if (file) onOpenConversation(file);
