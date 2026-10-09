@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { configureAudioPrefsStorage, CUES_ENABLED_KEY } from "@/lib/audio/prefs";
 import { createBrowserCues, CUE_CLOSE_MS, CUE_PEAK_GAIN, CUE_TONES } from "./cues";
 
 /** A recording AudioContext: every oscillator, its frequency and schedule, and every gain value ever set. */
@@ -51,6 +52,33 @@ test("the connect cue is two quiet rising tones and the disconnect cue the same 
     await new Promise((resolve) => setTimeout(resolve, CUE_CLOSE_MS + 50));
     expect(audio.log.closed).toBe(1);
   } finally { globalThis.fetch = realFetch; }
+});
+
+test("the header sound switch governs the cues: muted plays nothing, and unmuting mid-session brings them back", () => {
+  let enabled = false;
+  const audio = fakeAudio();
+  const cues = createBrowserCues(audio.factory, () => enabled);
+  cues.prepare();
+  cues.connect();
+  cues.disconnect();
+  expect(audio.log.oscillators).toEqual([]);
+  enabled = true;
+  cues.connect();
+  expect(audio.log.oscillators.map((row) => row.hz)).toEqual([CUE_TONES.low, CUE_TONES.high]);
+});
+
+test("with no switch handed over, the cues read the device's own sound preference", () => {
+  const stored = new Map<string, string>([[CUES_ENABLED_KEY, "off"]]);
+  configureAudioPrefsStorage({ getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } });
+  try {
+    const audio = fakeAudio();
+    const cues = createBrowserCues(audio.factory);
+    cues.connect();
+    expect(audio.log.oscillators).toEqual([]);
+    stored.set(CUES_ENABLED_KEY, "on");
+    cues.connect();
+    expect(audio.log.oscillators).toHaveLength(2);
+  } finally { configureAudioPrefsStorage(undefined); }
 });
 
 test("a cue is best effort: a browser with no audio, or one that refuses, plays nothing and throws nothing", () => {

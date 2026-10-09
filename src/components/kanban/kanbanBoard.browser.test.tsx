@@ -20608,6 +20608,11 @@ describe("floating voice companion", () => {
               detailsOnPage: view.querySelectorAll("[data-transcript-detail], pre").length,
               messages: messages.length, copyControls: messages.filter((message) => message.querySelector("button")).length,
               lineHeights: toggles.map((toggle) => Math.round(toggle.getBoundingClientRect().height)),
+              answerCopyControls: [...view.querySelectorAll<HTMLElement>("[data-transcript-answer]")].filter((card) => card.querySelector("button")).length,
+              /* The row of a collapsed line spans as wide as a report card under it, its chevron inside the card. */
+              rowWidths: toggles.map((toggle) => Math.round(toggle.getBoundingClientRect().width)),
+              chevronsInside: toggles.every((toggle) => { const chevron = toggle.querySelector(".vc-tr-chev")?.getBoundingClientRect(); const card = toggle.querySelector(".vc-call")?.getBoundingClientRect(); return !!chevron && !!card && chevron.right <= card.right && chevron.left >= card.left; }),
+              answerWidths: [...view.querySelectorAll<HTMLElement>("[data-transcript-answer]")].map((card) => Math.round(card.getBoundingClientRect().width)),
             };
           });
           await page.screenshot({ path: path.join(out, `transcript-${label}-2-collapsed.png`) });
@@ -20620,6 +20625,9 @@ describe("floating voice companion", () => {
           expect(new Set(reading.reports).size, `${label}: each report keeps its own text`).toBe(2);
           expect(reading.copyControls, `${label}: every message has its own copy control`).toBe(reading.messages);
           expect(Math.max(...reading.lineHeights), `${label}: a collapsed call is one line`).toBeLessThan(48);
+          expect(reading.answerCopyControls, `${label}: every report has its own copy control`).toBe(reading.reports.length);
+          expect(reading.chevronsInside, `${label}: each chevron sits inside its card`).toBe(true);
+          expect(Math.max(...reading.rowWidths) - Math.min(...reading.answerWidths), `${label}: a collapsed row is as wide as the report cards under it`).toBeLessThanOrEqual(1);
           /* One read call opens to its arguments and result; the request opens to its instruction and delivery steps. */
           const toggles = page.locator("[data-transcript-toggle]");
           for (const index of [1, 2]) await toggles.nth(index).click();

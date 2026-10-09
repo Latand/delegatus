@@ -1,8 +1,10 @@
 /*
  * The short sounds that mark a voice session connecting and disconnecting (item 5 of
  * docs/design/voice-delegatus-live-feedback.md). Two sine tones through one gain, made by the page itself: no file,
- * no fetch, no decoding. A cue is best effort and never fails a session.
+ * no fetch, no decoding. A cue is best effort and never fails a session, and the header's sound switch governs it.
  */
+
+import { readAudioPrefs } from "@/lib/audio/prefs";
 
 export const CUE_TONES = { low: 660, high: 990 } as const;
 /** Quiet: well under the voice. */
@@ -23,7 +25,10 @@ export interface CompanionCues {
   dispose(): void;
 }
 
-export function createBrowserCues(factory: () => AudioContext = () => new AudioContext()): CompanionCues {
+export function createBrowserCues(
+  factory: () => AudioContext = () => new AudioContext(),
+  enabled: () => boolean = () => readAudioPrefs().cuesEnabled,
+): CompanionCues {
   let context: AudioContext | null = null;
   const open = (): AudioContext | null => {
     try {
@@ -33,6 +38,7 @@ export function createBrowserCues(factory: () => AudioContext = () => new AudioC
   };
   const play = (hz: readonly [number, number]) => {
     try {
+      if (!enabled()) return;
       const audio = open();
       if (!audio) return;
       void audio.resume?.().catch?.(() => undefined);

@@ -14,7 +14,7 @@ import { installOnboardingDom, settle } from "@/test-helpers/onboardingDom";
 installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
-const { CompanionTranscript, transcriptRows } = await import("./CompanionTranscript");
+const { CompanionTranscript, transcriptRows, TRANSCRIPT_CSS } = await import("./CompanionTranscript");
 const { sampleTranscript } = await import("./transcriptSample.fixture");
 
 let mounted: { root: Root; host: HTMLDivElement } | null = null;
@@ -111,6 +111,28 @@ test("each message, the operator's and the companion's, has its own copy control
   /* A long message is copied whole, not as shown. */
   const long = said.find((row) => row.kind === "speech" && row.text.length > 300)!;
   expect(written).toContain((long as { text: string }).text);
+});
+
+test("each report the orchestrator brought back has a copy control of its own that copies exactly that report", async () => {
+  const { view, record } = await open();
+  const answers = [...view.querySelectorAll<HTMLElement>("[data-transcript-answer]")];
+  const reports = record.entries.filter((entry) => entry.kind === "report").map((entry) => String(entry.data.text));
+  expect(answers.length).toBeGreaterThanOrEqual(2);
+  const before = written.length;
+  for (const [index, answer] of answers.entries()) {
+    const button = answer.querySelector<HTMLButtonElement>("button")!;
+    expect(button, `report ${index} has a copy control`).toBeTruthy();
+    expect(button.getAttribute("aria-label")).toBe("Copy message");
+    await click(button);
+    expect(written.at(-1)).toBe(reports[index]!);
+  }
+  expect(written).toHaveLength(before + answers.length);
+});
+
+test("a collapsed call row keeps its chevron inside its card, so the row is as wide as the cards under it", () => {
+  const css = TRANSCRIPT_CSS;
+  expect(css).toMatch(/\.vc-tr-chev\s*\{[^}]*position:\s*absolute/);
+  expect(css).not.toMatch(/\.vc-tr-call > \.vc-tr-toggle\s*\{[^}]*display:\s*flex;\s*align-items:\s*center;\s*gap/);
 });
 
 test("Escape and the close control close it", async () => {

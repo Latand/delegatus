@@ -174,6 +174,7 @@ export function CompanionTranscript({ record, left, top, width, height, onClose 
               <span className="vc-call-icon" aria-hidden><Check size={14} /></span>
               <span className="vc-deleg-title">{t("voiceCompanion.stage.answered")}{answer.status && answer.status in L.reports ? ` · ${L.reports[answer.status as keyof typeof L.reports]}` : ""}</span>
               <span className="vc-tr-time vc-tr-push">{clock(answer.atMs)}</span>
+              <CopyButton text={answer.text} label={L.copyMessage} className="vc-tr-copy" />
             </div>
             <p className="vc-answer">{answer.text}</p>
           </div>
@@ -252,14 +253,12 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-push { margin-left: auto; font-weight: 500; }
 .vc-tr-who { font-weight: 700; font-size: 11.5px; }
 .vc-tr-label { font-size: 10.5px; font-weight: 700; color: var(--color-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.vc-tr-toggle { display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
+.vc-tr-toggle { position: relative; display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
 .vc-tr-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .vc-tr-toggle .vc-call { cursor: pointer; }
-.vc-tr-chev { flex: none; color: var(--color-muted); transition: transform 150ms ease-out; margin-left: 2px; }
+.vc-tr-chev { position: absolute; right: 10px; top: calc(50% - 7px); color: var(--color-muted); transition: transform 150ms ease-out; pointer-events: none; }
 .vc-tr-toggle[aria-expanded="true"] .vc-tr-chev { transform: rotate(90deg); }
-.vc-tr-toggle .vc-call { display: flex; }
-.vc-tr-call > .vc-tr-toggle { display: flex; align-items: center; gap: 4px; }
-.vc-tr-call > .vc-tr-toggle > .vc-call { flex: 1; min-width: 0; }
+.vc-tr-toggle .vc-call { display: flex; padding-right: 30px; }
 .vc-tr-detail { display: flex; flex-direction: column; gap: 3px; padding: 6px 2px 2px; min-width: 0; }
 .vc-tr-reason { margin: 0; font-size: 12px; line-height: 16px; color: var(--color-secondary); }
 .vc-tr-pre {
