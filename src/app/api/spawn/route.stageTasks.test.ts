@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { PipelineStage } from "@/lib/pipelines/types";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import type { McpToolResult, McpToolSuccess } from "@/lib/mcp/server";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-helper-tasks-"));
 const environment = {
@@ -27,7 +28,7 @@ const { rotateOperatorSpawnCapability } = await import("@/lib/agent/operatorCapa
 const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
 const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
 const { projectForCwd } = await import("@/lib/scanner/describe");
-const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, McpToolRefusal } = await import("@/lib/mcp/server");
 const { POST } = await import("./route");
 type Dependencies = NonNullable<Parameters<typeof POST.withDependencies>[1]>;
@@ -50,6 +51,10 @@ function task(id: string): BoardTask {
   return { id, project, status: "inbox", text: "Implement the shared work", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now };
 }
 const holders = (conversationId: string) => loadTasks().filter(t => t.assignments.some(a => a.conversationId === conversationId)).map(t => t.id).sort();
+function accepted(result: McpToolResult): asserts result is McpToolSuccess {
+  expect(result).toMatchObject({ ok: true });
+  if (!result.ok) throw new Error(result.error);
+}
 
 function harness(stageCaller = true) {
   const store = new AgentRegistry(path.join(fs.mkdtempSync(path.join(sandbox, "registry-")), "registry.json"));
@@ -90,6 +95,7 @@ function harness(stageCaller = true) {
     return payload;
   } };
   const bindings = viewerMcpBindings(undefined, control, {
+    ...productionDomainDependencies,
     callerAttribution: () => ({ kind: "agent", conversationId: caller.id, role: "builder" }),
     attentionAuthority: () => ({ kind: "worker", conversationId: caller.id, role: "builder" }),
     registrySnapshot: () => store.snapshot(), loadTasks,
@@ -102,7 +108,7 @@ function harness(stageCaller = true) {
 test("a stage caller's spawn_agent helper joins every pipeline task without a placeholder or a parent selector", async () => {
   const h = harness();
   const result = await h.service.callTool("spawn_agent", h.args);
-  expect(result).toMatchObject({ ok: true });
+  accepted(result);
   expect(holders(result.conversationId as string)).toEqual(["stage-work-a", "stage-work-b"]);
   expect(loadTasks()).toHaveLength(3);
   expect(h.dispatched[0]).not.toHaveProperty("taskId");
@@ -113,7 +119,7 @@ test("a stage caller's spawn_agent helper joins every pipeline task without a pl
 test("an explicit taskId wins over the stage caller's pipeline tasks", async () => {
   const h = harness();
   const result = await h.service.callTool("spawn_agent", { ...h.args, taskId: "explicit-work" });
-  expect(result).toMatchObject({ ok: true });
+  accepted(result);
   expect(holders(result.conversationId as string)).toEqual(["explicit-work"]);
   expect(loadTasks()).toHaveLength(3);
 });
@@ -121,7 +127,7 @@ test("an explicit taskId wins over the stage caller's pipeline tasks", async () 
 test("a non-stage worker without a task target keeps its placeholder launch", async () => {
   const h = harness(false);
   const result = await h.service.callTool("spawn_agent", h.args);
-  expect(result).toMatchObject({ ok: true });
+  accepted(result);
   expect(holders(result.conversationId as string)).toHaveLength(1);
   expect(loadTasks()).toHaveLength(4);
   const placeholder = loadTasks().find(t => t.assignments.some(a => a.conversationId === result.conversationId))!;
@@ -132,7 +138,7 @@ test("a non-stage worker without a task target keeps its placeholder launch", as
 test("replay under the same key retains the original membership after the pipeline disappears", async () => {
   const h = harness();
   const first = await h.service.callTool("spawn_agent", h.args);
-  expect(first).toMatchObject({ ok: true });
+  accepted(first);
   savePipelines([]);
   const replay = await h.service.callTool("spawn_agent", h.args);
   expect(replay).toMatchObject({ ok: true, replayed: true, conversationId: first.conversationId, launchId: first.launchId });
@@ -148,6 +154,7 @@ test("replay under the same key retains the original membership after the pipeli
 test("turn notices may be disabled while a stage helper still joins its task", async () => {
   const h = harness();
   const result = await h.service.callTool("spawn_agent", { ...h.args, notifyLauncher: false });
+  accepted(result);
   expect(result).toMatchObject({ ok: true, launcherNotice: "off" });
   expect(holders(result.conversationId as string)).toEqual(["stage-work-a", "stage-work-b"]);
   expect(loadTasks()).toHaveLength(3);
@@ -159,7 +166,7 @@ test("a historical adopted helper holds no stage task context of its own", async
   lanes[0]!.runs[0]!.attempts[0]!.historical = true;
   savePipelines(lanes);
   const result = await h.service.callTool("spawn_agent", h.args);
-  expect(result).toMatchObject({ ok: true });
+  accepted(result);
   expect(loadTasks()).toHaveLength(4);
   expect(holders(result.conversationId as string)).toHaveLength(1);
 });
