@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, GalleryHorizontalEnd, PanelRight, PictureInPicture2, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, Undo2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
@@ -326,6 +326,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
     choice saved there is what takes it off the list, so it has no «Dismiss». */
 function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, { kind: "prototype" }>; onOpen: () => void }) {
   const { t } = useLocale();
+  const Mark = entry.notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const since = needsYouEntrySince(entry);
   return (
     <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
@@ -333,16 +334,16 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
         type="button"
         className="flex w-full min-w-0 flex-col gap-1 rounded-[8px] px-2.5 py-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         data-attention-prototype={entry.notice.taskId}
-        aria-label={t("proto.notice.openAria", { title: entry.notice.title })}
+        aria-label={t(entry.notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: entry.notice.title })}
         onClick={onOpen}
       >
         <span className="flex w-full min-w-0 items-center gap-1.5 text-[10.5px] font-semibold text-accent">
-          <GalleryHorizontalEnd className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">{t("proto.notice.ready")}</span>
+          <Mark className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">{t(entry.notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <span data-attention-decision className="w-full text-[11px] text-muted">{t("proto.notice.open")}</span>
+        <span data-attention-decision className="w-full text-[11px] text-muted">{t(entry.notice.asks === "questions" ? "proto.notice.answer" : "proto.notice.open")}</span>
       </button>
     </div>
   );

@@ -17,7 +17,7 @@ import { parkedTaskNote } from "@/lib/pipelines/taskStatusNote";
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
-import { browserCase, caseChromium as chromium, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { clipTitle } from "./taskText";
@@ -24366,4 +24366,119 @@ describe("idle seat interval eligibility", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+
+describe("short questionnaire rendered evidence", () => {
+  browserTest("questions only, images, multi-select, long text and answered in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/prototype-review/questions"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
+          try {
+            await page.waitForSelector("[data-attention-count]");
+            if (taskId === "t-search") {
+              await page.locator("[data-attention-count]").click();
+              const notice = page.locator('[data-needs-you-panel] [data-attention-prototype="t-search"]');
+              await notice.waitFor();
+              const rowText = await notice.textContent();
+              expect(rowText).toContain(lang === "uk" ? "Питання до вас" : "Questions for you");
+              expect(await notice.getAttribute("aria-label")).toContain(lang === "uk" ? "Відповісти" : "Answer");
+              readings.push({ lang, scheme, width: 1440, needsYouRow: rowText });
+              await page.screenshot({ path: path.join(out, `${lang}-${scheme}-needs-you.png`) });
+              await notice.click();
+            } else {
+              const opener = page.locator(`[data-prototype-button="${taskId}"]`);
+              await opener.scrollIntoViewIfNeeded();
+              await opener.click();
+            }
+            await page.waitForSelector("[data-prototype-questions]");
+            const reading = await capturePrototypeQuestions(page, false);
+            expect(reading.sideways).toBeLessThanOrEqual(1);
+            expect(reading.pillOverflow).toBe(0);
+            expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
+            expect(reading.heightExcess).toBeLessThanOrEqual(1);
+            expect(reading.markLetters).toBe(0);
+            if (reading.stageWidth === null) expect(reading.title).toContain(lang === "uk" ? "Питання" : "Questions");
+            for (const mark of reading.marks) expect(mark.multiple ? mark.radius < mark.width / 2 : mark.radius >= mark.width / 2).toBe(true);
+            expect(reading.marks.some(m => !m.multiple) || taskId === "t-links").toBe(true);
+            expect(reading.actions.every(a => a.visible)).toBe(true);
+            if (taskId === "t-upload") { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
+            if (taskId === "t-search") { expect(reading.stageWidth).toBeNull(); expect(reading.questionCount).toBe(5); }
+            if (taskId === "t-export") { expect(reading.readonly).toBe(true); expect(reading.skipped).toBe(true); }
+            const label = `${lang}-${scheme}-${taskId}`;
+            await page.screenshot({ path: path.join(out, `${label}.png`) });
+            readings.push({ lang, scheme, taskId, width: 1440, ...reading });
+            if (taskId === "t-search" || taskId === "t-upload") {
+              /* Arrows in a single-choice group move focus and answer together, Other included, and never the gallery. */
+              const checkedOf = (id: string) => page.locator(`[data-prototype-question="${id}"] [role="radio"]`).evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-checked") === "true"));
+              const focusedOption = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-option") ?? (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-other"));
+              const position = () => page.locator("[data-prototype-position]").first().textContent().catch(() => null);
+              const before = taskId === "t-upload" ? await position() : null;
+              await page.locator('[data-prototype-option="place:0"]').focus();
+              const places = (await checkedOf("place")).length;
+              await page.keyboard.press("ArrowRight");
+              expect((await checkedOf("place")).slice(0, 2)).toEqual([false, true]);
+              expect(await focusedOption()).toBe("place:1");
+              await page.keyboard.press("ArrowLeft");
+              expect((await checkedOf("place"))[0]).toBe(true);
+              expect(await focusedOption()).toBe("place:0");
+              await page.keyboard.press("ArrowLeft");
+              expect((await checkedOf("place"))[places - 1]).toBe(true);
+              expect((await checkedOf("place")).filter(Boolean)).toHaveLength(1);
+              expect(await focusedOption()).toBe(`place:${places - 1}`);
+              await page.keyboard.press("ArrowRight");
+              expect((await checkedOf("place"))[0]).toBe(true);
+              await page.locator('[data-prototype-option="timing:0"]').focus();
+              await page.keyboard.press("ArrowLeft");
+              expect(await focusedOption()).toBe("timing");
+              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("true");
+              expect((await checkedOf("timing")).filter(Boolean)).toHaveLength(1);
+              await page.keyboard.press("ArrowRight");
+              expect(await focusedOption()).toBe("timing:0");
+              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("false");
+              expect((await checkedOf("timing"))[0]).toBe(true);
+              if (taskId === "t-upload") expect(await position()).toBe(before);
+            }
+            if (taskId === "t-links") {
+              await page.locator('[data-prototype-option="place:1"]').click();
+              await page.locator('[data-prototype-save]').click();
+              await page.waitForSelector('[data-prototype-decision]');
+              const posted = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[] }> }> }).protoPosts.at(-1));
+              expect(posted?.answers[0]?.options).toEqual([0,1]);
+              const settled = await capturePrototypeQuestions(page, false);
+              expect(settled.hints).toBe(0); expect(settled.unpickedFaded).toBe(true);
+              expect(settled.statusLine).toBe(lang === "uk" ? "Відповіли" : "Answered");
+              expect(settled.decisionText).not.toMatch(/Без коментаря|No comment/);
+              readings.push({ lang, scheme, taskId, width: 1440, state: "answered", ...settled });
+              await page.screenshot({ path: path.join(out, `${label}-answered.png`) });
+            }
+            if (taskId === "t-search") {
+              await page.locator('[data-prototype-skip]').click();
+              await page.waitForSelector('[data-prototype-skipped]');
+              const skipped = await capturePrototypeQuestions(page, false);
+              expect(skipped.readonly).toBe(true); expect(skipped.hints).toBe(0); expect(skipped.unpickedFaded).toBe(true);
+              expect(skipped.statusLine).toBe(lang === "uk" ? "Пропущено, взято рекомендовані" : "Skipped, recommended answers taken");
+              expect(skipped.decisionText).not.toMatch(/Без коментаря|No comment/);
+              readings.push({ lang, scheme, taskId, width: 1440, state: "skipped", ...skipped });
+              await page.screenshot({ path: path.join(out, `${label}-skipped.png`) });
+            }
+            expect(pageErrors).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${taskId}-failure.png`) });
+            throw new Error(`${String(error)}; page errors: ${JSON.stringify(pageErrors)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/prototype-review", { recursive: true });
+      fs.writeFileSync("evidence/prototype-review/questions.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
+  }, 900_000);
 });

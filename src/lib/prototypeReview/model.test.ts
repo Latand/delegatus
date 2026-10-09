@@ -59,6 +59,17 @@ test("a summary an older installation replicated, still naming a round a later d
 });
 
 
+test("questionnaire summaries and notices ask for answers and record an answered decision", () => {
+  const questions = [{ id: "first", text: "Where?", options: [{ label: "Here", recommended: true }, { label: "There" }] }];
+  const questionRound = { ...round("a", "Before work", "2026-10-01T00:00:00Z", false), variants: [], questions };
+  const summary = prototypeReviewSummary([questionRound]);
+  expect(summary?.asks).toBe("questions");
+  expect(prototypeReviewNotices([task([questionRound])])[0]?.asks).toBe("questions");
+  questionRound.decision = { chosen: [], answers: [{ questionId: "first", options: [0] }], comment: "", at: questionRound.createdAt, delivery: { state: "sent", text: "", conversationId: null, clientMessageId: "answer" } };
+  expect(prototypeReviewSummary([questionRound])?.decision).toMatchObject({ answered: true, chosen: [] });
+  expect(prototypeReviewNotices([task([questionRound])])).toEqual([]);
+});
+
 test("a covered waiting round leaves the attention queue, undo and a newer round ask again", () => {
   const held = task([round("review-a", "Layout", "2026-10-02T00:00:00Z", false)]);
   const record = { kind: "prototype" as const, taskId: held.id, subject: "prototype:review-a", conversationId: null, path: null,

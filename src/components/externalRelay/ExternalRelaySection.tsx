@@ -1,8 +1,16 @@
 "use client";
 
+import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Pause, Play, RotateCcw, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
 
 import { effortTierLabel } from "@/components/builderCopy";
+import { EngineRadioGroup } from "@/components/draft/AgentLaunchControls";
+import { EffortScale } from "@/components/EffortPills";
+import { EngineMark } from "@/components/EngineMark";
+import { BAR_MENU_ROW, BarMenuGroup, BarMoreMenu } from "@/components/ProjectBar";
+import { SettingSwitch } from "@/components/ProjectSettingRow";
+import { MeterLine } from "@/components/railFooterDensity";
+import { Select } from "@/components/ui/Select";
 import { accountConnected } from "@/components/onboarding/EnginesStep";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
@@ -15,9 +23,11 @@ import { useLocale, type TFunction } from "@/lib/i18n";
  * The external relay's operator surface (docs/design/relay.md §B.9): pair
  * this install with a relay service, then choose per target the engine,
  * model, effort and concurrency that answer it, and read the poller state,
- * the last outcome and the last progress label. The settings dialog and the
- * setup guide's optional step both render it. Everything the relay service
- * sends (its name, the owner, target names, progress) is shown as plain text.
+ * the last outcome and the last progress. The settings dialog and the setup
+ * guide's optional step both render it, drawn with the board's own rows,
+ * switches, selects and ⋯ menu. It holds settings only: what a relay's chats
+ * said opens from the conversation list. Everything the relay service sends
+ * (its name, the owner, target names, progress) is shown as plain text.
  */
 
 export type RelayEngine = "claude" | "codex";
@@ -112,11 +122,6 @@ const REASON_KEYS: Record<string, Parameters<TFunction>[0]> = {
   install_restarted: "externalRelay.reason.installRestarted",
   member_limit: "externalRelay.reason.memberLimit",
 };
-const DELIVERY_KEYS = {
-  accepted: "externalRelay.answers.delivery.accepted",
-  refused: "externalRelay.answers.delivery.refused",
-  unconfirmed: "externalRelay.answers.delivery.unconfirmed",
-} as const;
 /** `answered`, `declined:<reason>`, `failed:<reason>`, `lease_lost`, `local_error` or `targets:<error code>`, as the poller records it. */
 export function outcomeText(t: TFunction, outcome: string): string {
   const [kind, reason] = outcome.split(":");
@@ -139,15 +144,28 @@ function safeLink(value: string | null): string | null {
   } catch { return null; }
 }
 
-/** Times and dates in the UI's language, as the rest of the interface writes them. */
+/** Times and dates in the UI's language on the board's 24-hour clock, to the minute; a date names its year only outside this one. */
 const localeTag = (locale: string) => locale === "uk" ? "uk-UA" : "en-US";
-const clock = (value: string, locale: string) => new Date(value).toLocaleTimeString(localeTag(locale));
-const stamp = (value: string, locale: string) => new Date(value).toLocaleString(localeTag(locale));
+const clock = (value: string, locale: string) => new Date(value).toLocaleTimeString(localeTag(locale), { hour: "2-digit", minute: "2-digit", hour12: false });
+const stamp = (value: string, locale: string) => {
+  const date = new Date(value);
+  const year = date.getFullYear() === new Date().getFullYear() ? undefined : "numeric";
+  return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+};
 
 const ownerLine = (owner: Owner) => owner.handle ? `${owner.display_name} (${owner.handle})` : owner.display_name;
-const input = "h-11 w-full rounded-[8px] border border-border bg-raised px-3 text-ui text-primary disabled:opacity-50";
-const primary = "min-h-11 rounded-[8px] bg-accent px-4 text-ui font-semibold text-white disabled:opacity-50";
-const bordered = "min-h-11 rounded-[8px] border border-border px-3 text-ui font-semibold text-primary disabled:opacity-50";
+const modelLabel = (engine: RelayEngine | null, model: string | null) => engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
+
+/* The board's own recipes: the seat tick panel's link, quiet action and number
+   field, its uppercase section head, and the primary button. Every control is
+   44 px on the phone. */
+const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+const LINK = `inline-flex items-center gap-0.5 font-semibold text-accent underline-offset-2 hover:underline ${FOCUS}`;
+const QUIET = `inline-flex h-7 items-center gap-1.5 rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent disabled:opacity-50 max-sm:min-h-11 ${FOCUS}`;
+const NUMBER = `h-7 rounded-control border border-border bg-card px-2 text-ui text-primary tabular-nums disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
+const HEAD = "text-label font-semibold uppercase tracking-wide text-muted";
+const PRIMARY = `inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-ui font-semibold text-on-brand shadow-1 hover:opacity-90 disabled:opacity-50 max-sm:h-11 ${FOCUS}`;
+const PHONE_SELECT = "max-sm:h-11 max-sm:text-body";
 
 async function call<T>(url: string, method: string, body?: object): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
   try {
@@ -188,6 +206,32 @@ function useKnownRelays(): KnownRelayInfo[] {
   return known;
 }
 
+/** The status dot of the seat tick panel, with the danger tone a refused pairing needs. */
+function Dot({ tone, className = "" }: { tone: "ok" | "warn" | "danger" | "muted"; className?: string }) {
+  const fill = tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : tone === "danger" ? "bg-danger" : "bg-muted";
+  return <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${fill} ${className}`} />;
+}
+
+const alertLine = (text: string) => <p role="alert" className="rounded-control border border-danger/40 bg-danger/10 px-2 py-1.5 text-ui leading-4 text-danger">{text}</p>;
+
+/** The relay's mark: the service's icon, or the first letter of its name. */
+function RelayMark({ name, icon = null }: { name: string; icon?: string | null }) {
+  return icon
+    // eslint-disable-next-line @next/next/no-img-element
+    ? <img src={icon} alt="" width={32} height={32} referrerPolicy="no-referrer" className="h-8 w-8 shrink-0 rounded-[8px] bg-sunken object-cover" />
+    : <span aria-hidden data-external-relay-monogram="" className="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] bg-accent-soft text-ui font-bold text-accent">{name.slice(0, 1)}</span>;
+}
+
+/** The service's name with its address beside it, cut by the row. */
+function RelayName({ name, origin }: { name: string; origin: string }) {
+  return (
+    <p className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+      <span className="min-w-0 break-words text-ui font-semibold text-primary">{name}</span>
+      <span className="min-w-0 truncate text-caption text-muted">{origin.replace(/^https?:\/\//, "")}</span>
+    </p>
+  );
+}
+
 /**
  * Opens the service's page while the click that asked for it is still running,
  * which is the only moment a browser lets a window open unasked. The window
@@ -205,10 +249,12 @@ function openPairingWindow(text: string): Window | null {
 }
 
 /**
- * Pairing (§A.3): the service's address, then its code and link while the
- * owner acts there, then "the relay service says this is <name>. Is this
- * you?" with Confirm and Cancel. A pending pairing the store still holds when
- * the surface opens is picked up where it stopped.
+ * Pairing (§A.3): the offered relay as one row (its mark, name, one line about
+ * it, Connect), «Other address» as a link opening an address field beside its
+ * button, then the code and the link while the owner acts there, then "the
+ * relay service says this is <name>. Is this you?" with Confirm and Cancel. A
+ * pending pairing the store still holds when the surface opens is picked up
+ * where it stopped.
  */
 export function RelayPairing({ resume, disabled = false, known = [], connected = [], onPaired, onChanged }: {
   resume: PendingView | null;
@@ -288,38 +334,42 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
   };
   const expired = pending !== null && now >= Date.parse(pending.expires_at);
   const link = safeLink(pending?.verify_url ?? null);
-  const errorText = (via: string | null) => error && errorFrom === via ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null;
-  const shownError = error ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null;
+  const errorText = (via: string | null) => error && errorFrom === via ? alertLine(relayErrorText(t, error)) : null;
+  const shownError = error ? alertLine(relayErrorText(t, error)) : null;
   const offered = known.filter((relay) => !connected.includes(relay.origin));
 
   if (!pending) {
     return (
-      <div data-external-relay-connect-area="" className="space-y-3">
+      <div data-external-relay-connect-area="" className="flex min-w-0 flex-col gap-2.5">
         {offered.map((relay) => (
-          <div key={relay.id} data-external-relay-known={relay.id} className="space-y-3 rounded-[8px] border border-border p-3">
-            <div className="flex items-start gap-3">
-              {relay.iconUrl
-                // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={relay.iconUrl} alt="" width={40} height={40} referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-[8px] bg-sunken object-cover" />
-                : <span aria-hidden data-external-relay-monogram="" className="grid h-10 w-10 shrink-0 place-items-center rounded-[8px] bg-accent-soft text-body font-bold text-accent">{relay.name.slice(0, 1)}</span>}
-              <div className="min-w-0">
-                <p className="break-words font-semibold text-primary">{relay.name}</p>
-                {relay.description ? <p className="mt-0.5 line-clamp-3 break-words text-ui text-muted">{relay.description}</p> : null}
+          <div key={relay.id} data-external-relay-known={relay.id} className="flex min-w-0 flex-col gap-1.5">
+            <div className="flex min-w-0 items-center gap-2.5 max-sm:flex-wrap">
+              <RelayMark name={relay.name} icon={relay.iconUrl} />
+              <div className="min-w-0 flex-1">
+                <p className="break-words text-ui font-semibold text-primary">{relay.name}</p>
+                {relay.description ? <p className="line-clamp-2 break-words text-caption leading-4 text-muted">{relay.description}</p> : null}
               </div>
+              <button type="button" data-external-relay-connect-known={relay.id} disabled={busy || disabled} onClick={() => startKnown(relay)} className={`${PRIMARY} max-sm:w-full`}>
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.connectKnown", { name: relay.name })}
+              </button>
             </div>
-            <button type="button" data-external-relay-connect-known={relay.id} disabled={busy || disabled} onClick={() => startKnown(relay)} className={`${primary} w-full sm:w-auto`}>{t("externalRelay.connectKnown", { name: relay.name })}</button>
-            <p className="text-ui text-muted">{t("externalRelay.connectKnownLead", { name: relay.name })}</p>
+            <p className="text-caption leading-4 text-muted">{t("externalRelay.connectKnownLead", { name: relay.name })}</p>
             {errorText(relay.id)}
           </div>
         ))}
-        <button type="button" data-external-relay-other-toggle="" aria-expanded={otherOpen} onClick={() => setOtherOpen((open) => !open)} className="min-h-11 rounded-[8px] text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("externalRelay.otherAddress")}</button>
+        <button type="button" data-external-relay-other-toggle="" aria-expanded={otherOpen} onClick={() => setOtherOpen((open) => !open)} className={`${LINK} h-7 self-start text-ui max-sm:min-h-11`}>
+          {otherOpen ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}{t("externalRelay.otherAddress")}
+        </button>
         {otherOpen ? (
-          <form data-external-relay-connect="" className="space-y-2 rounded-[8px] border border-border p-3" onSubmit={(event) => { event.preventDefault(); if (url.trim() && !busy && !disabled) void start(url.trim(), "manual"); }}>
-            <h4 className="text-ui font-semibold text-primary">{t("externalRelay.connect")}</h4>
-            <p className="text-ui text-muted">{t("externalRelay.connectLead")}</p>
-            <input aria-label={t("externalRelay.address")} type="url" value={url} disabled={disabled} onChange={(event) => setUrl(event.target.value)} placeholder="https://relay.example" className={input} />
+          <form data-external-relay-connect="" className="flex min-w-0 flex-col gap-1.5" onSubmit={(event) => { event.preventDefault(); if (url.trim() && !busy && !disabled) void start(url.trim(), "manual"); }}>
+            <h4 className="sr-only">{t("externalRelay.connect")}</h4>
+            <p className="text-caption leading-4 text-muted">{t("externalRelay.connectLead")}</p>
+            <div className="flex min-w-0 items-center gap-1.5 max-sm:flex-col max-sm:items-stretch">
+              <input aria-label={t("externalRelay.address")} type="url" value={url} disabled={disabled} onChange={(event) => setUrl(event.target.value)} placeholder="https://relay.example"
+                className={`h-8 min-w-0 rounded-control border border-border bg-card px-2 text-ui text-primary disabled:opacity-50 max-sm:h-11 max-sm:text-body sm:flex-1 ${FOCUS}`} />
+              <button type="submit" disabled={busy || disabled || !url.trim()} className={PRIMARY}>{t("externalRelay.connect")}</button>
+            </div>
             {errorText("manual")}
-            <button type="submit" disabled={busy || disabled || !url.trim()} className={primary}>{t("externalRelay.connect")}</button>
           </form>
         ) : null}
       </div>
@@ -327,187 +377,58 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
   }
   const ended = status && finished ? status.status : expired ? "expired" : null;
   return (
-    <div data-external-relay-pairing={ended ?? status?.status ?? "pending"} className="space-y-2 rounded-[8px] border border-border bg-sunken p-3 text-ui">
-      <p className="font-semibold text-primary">{pending.name} · {pending.origin}</p>
-      {pending.description ? <p className="text-muted">{pending.description}</p> : null}
+    <div data-external-relay-pairing={ended ?? status?.status ?? "pending"} className="flex min-w-0 flex-col gap-2 text-ui">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <RelayMark name={pending.name} />
+        <div className="min-w-0 flex-1">
+          <RelayName name={pending.name} origin={pending.origin} />
+          {pending.description ? <p className="line-clamp-2 break-words text-caption leading-4 text-muted">{pending.description}</p> : null}
+        </div>
+      </div>
       {ended ? (
         <>
-          <p role="status" className="text-primary">{t(ended === "denied" ? "externalRelay.pairing.denied" : ended === "cancelled" ? "externalRelay.pairing.cancelled" : ended === "completed" ? "externalRelay.pairing.completedElsewhere" : "externalRelay.pairing.expired")}</p>
-          {status?.reason ? <p className="text-muted">{status.reason}</p> : null}
-          <button type="button" onClick={reset} className={bordered}>{t("externalRelay.pairing.again")}</button>
+          <p role="status" className="flex items-start gap-1.5 text-primary"><Dot tone={ended === "denied" ? "danger" : "muted"} className="mt-[5px]" />{t(ended === "denied" ? "externalRelay.pairing.denied" : ended === "cancelled" ? "externalRelay.pairing.cancelled" : ended === "completed" ? "externalRelay.pairing.completedElsewhere" : "externalRelay.pairing.expired")}</p>
+          {status?.reason ? <p className="pl-3 text-caption leading-4 text-muted">{status.reason}</p> : null}
+          <button type="button" onClick={reset} className={`${QUIET} self-start`}><RotateCcw className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.pairing.again")}</button>
         </>
       ) : status?.status === "awaiting_install" && status.owner ? (
         <>
           <p data-external-relay-owner="" className="text-primary">{t("externalRelay.pairing.ownerPrompt", { owner: ownerLine(status.owner) })}</p>
           {shownError}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy} onClick={() => void confirm()} className={primary}>{t("externalRelay.pairing.confirm")}</button>
-            <button type="button" disabled={busy} onClick={() => void cancel()} className={bordered}>{t("externalRelay.pairing.notMe")}</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" disabled={busy} onClick={() => void confirm()} className={PRIMARY}><Check className="h-3.5 w-3.5" aria-hidden />{t("externalRelay.pairing.confirm")}</button>
+            <button type="button" disabled={busy} onClick={() => void cancel()} className={QUIET}>{t("externalRelay.pairing.notMe")}</button>
           </div>
         </>
       ) : (
         <>
-          <p>{t("externalRelay.pairing.codePrompt")}</p>
-          <code data-external-relay-code="" className="block select-all text-title font-bold tracking-wide text-primary">{pending.code}</code>
-          {link ? <a href={link} target="_blank" rel="noopener noreferrer" data-external-relay-link={opened ? "again" : "open"} className="block break-all text-accent hover:underline">{t(opened ? "externalRelay.pairing.openLinkAgain" : "externalRelay.pairing.openLink")}</a> : null}
-          <p className="text-muted">{t("externalRelay.pairing.expires", { time: clock(pending.expires_at, locale) })}</p>
-          <p role="status" className="text-muted">{t("externalRelay.pairing.waiting")}</p>
+          <p role="status" className="flex items-start gap-1.5 text-primary"><Dot tone="warn" className="mt-[5px]" />{t("externalRelay.pairing.waiting")}</p>
+          <p className="pl-3 text-caption leading-4 text-muted">{t("externalRelay.pairing.codePrompt")}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pl-3">
+            <code data-external-relay-code="" className="select-all font-mono text-title font-bold tracking-wide text-primary">{pending.code}</code>
+            {link ? <a href={link} target="_blank" rel="noopener noreferrer" data-external-relay-link={opened ? "again" : "open"} className={`${LINK} text-ui max-sm:min-h-11`}>{t(opened ? "externalRelay.pairing.openLinkAgain" : "externalRelay.pairing.openLink")}<ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden /></a> : null}
+          </div>
+          <p className="pl-3 text-caption leading-4 text-muted">{t("externalRelay.pairing.expires", { time: clock(pending.expires_at, locale) })}</p>
           {shownError}
-          <button type="button" disabled={busy} onClick={() => void cancel()} className={bordered}>{t("common.cancel")}</button>
+          <button type="button" disabled={busy} onClick={() => void cancel()} className={`${QUIET} self-start`}>{t("common.cancel")}</button>
         </>
       )}
     </div>
   );
 }
 
-type AnswerSummary = {
-  requestId: string;
-  startedAt: string;
-  finishedAt: string | null;
-  durationMs: number | null;
-  state: "running" | "finished";
-  outcome: string | null;
-  delivery: keyof typeof DELIVERY_KEYS | null;
-  request: string;
-  answer: string | null;
+type Actions = {
+  busy: boolean;
+  patchTarget: (target: Target, patch: Partial<Target>) => void;
+  route: (target: Target, answeredBy: "install" | "service") => void;
 };
-type AnswerRecord = Omit<AnswerSummary, "request" | "answer"> & {
-  engine: string | null;
-  model: string | null;
-  answer: { action: string; text: string; reply_to: string | null } | null;
-  input: unknown;
-};
-type ReceivedInput = {
-  conversation?: { id?: unknown; author?: { key?: unknown; name?: unknown }; text?: unknown }[];
-  respond_to?: unknown;
-  request_text?: unknown;
-  requester?: { key?: unknown; is_admin?: unknown; is_owner?: unknown; is_anonymous_admin?: unknown } | null;
-  tools?: unknown[];
-};
-/** The message a received input answers, its author's name, and the request text, all as plain strings. */
-function receivedMessage(input: unknown): { text: string; author: string | null } {
-  const value = (input && typeof input === "object" ? input : {}) as ReceivedInput;
-  const conversation = Array.isArray(value.conversation) ? value.conversation : [];
-  const trigger = conversation.find((message) => message?.id === value.respond_to);
-  const parts = [typeof trigger?.text === "string" ? trigger.text : null, typeof value.request_text === "string" ? value.request_text : null].filter(Boolean);
-  return { text: parts.join("\n\n"), author: typeof trigger?.author?.name === "string" ? trigger.author.name : null };
-}
-const seconds = (ms: number | null) => ms === null ? null : (ms / 1000).toFixed(ms < 10_000 ? 1 : 0);
-
-/**
- * The target's recent answers (relay.md §B.9): a list of the exchanges this
- * install kept, newest first, and one exchange opened read-only in place.
- * Every field the service or a chat participant wrote is shown as plain text.
- */
-function RecentAnswers({ relayId, targetId }: { relayId: string; targetId: string }) {
-  const { t, locale } = useLocale();
-  const [open, setOpen] = useState(false);
-  const [list, setList] = useState<{ answers: AnswerSummary[]; retentionDays: number } | null>(null);
-  const [shown, setShown] = useState<AnswerRecord | "gone" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}/targets/${encodeURIComponent(targetId)}/answers`;
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    void call<{ answers: AnswerSummary[]; retentionDays: number }>(base, "GET").then((result) => {
-      if (!active) return;
-      if (result.ok && Array.isArray(result.value?.answers)) { setList(result.value); setError(null); }
-      else setError(result.ok ? "unavailable" : result.error);
-    });
-    return () => { active = false; };
-  }, [open, base]);
-  const show = async (requestId: string) => {
-    const result = await call<{ answer: AnswerRecord }>(`${base}/${encodeURIComponent(requestId)}`, "GET");
-    if (result.ok) { setShown(result.value.answer); setError(null); }
-    else if (result.error === "not_found") setShown("gone");
-    else setError(result.error);
-  };
-  const days = list?.retentionDays ?? 30;
-  const outcome = (row: { state: string; outcome: string | null }) => row.state === "running" || !row.outcome ? t("externalRelay.answers.running") : outcomeText(t, row.outcome);
-  const record = shown && shown !== "gone" ? shown : null;
-  const received = record ? receivedMessage(record.input) : null;
-  const requester = record ? ((record.input && typeof record.input === "object" ? record.input : {}) as ReceivedInput).requester : null;
-  const tools = record ? ((record.input && typeof record.input === "object" ? record.input : {}) as ReceivedInput).tools : undefined;
-  const term = "text-muted";
-  const detail = "min-w-0 break-words text-primary";
-  return (
-    <div data-external-relay-answers={targetId} className="space-y-2">
-      <button type="button" aria-expanded={open} data-external-relay-answers-toggle="" onClick={() => { setOpen((value) => !value); setShown(null); }}
-        className="min-h-11 rounded-[8px] text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-        {t("externalRelay.answers.open")}
-      </button>
-      {open ? (
-        <div className="space-y-2 rounded-[8px] border border-border bg-sunken p-3">
-          {error ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-danger">{relayErrorText(t, error)}</p> : null}
-          {shown ? (
-            <div data-external-relay-exchange={record?.requestId ?? "gone"} className="space-y-3">
-              <button type="button" onClick={() => setShown(null)} className={bordered}>{t("externalRelay.answers.back")}</button>
-              {record && received ? (
-                <>
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                    <dt className={term}>{t("externalRelay.answers.received")}</dt>
-                    <dd className={detail}>{stamp(record.startedAt, locale)}</dd>
-                    {record.durationMs !== null ? <><dt className={term}>{t("externalRelay.answers.took")}</dt><dd className={detail}>{t("externalRelay.answers.seconds", { seconds: seconds(record.durationMs) ?? "" })}</dd></> : null}
-                    {record.engine ? <><dt className={term}>{t("externalRelay.answers.answeredWith")}</dt><dd className={detail}>{[record.engine === "codex" ? "Codex" : "Claude", (record.engine === "codex" || record.engine === "claude" ? ENGINE_MODELS[record.engine].find((model) => model.id === record.model)?.label : null) ?? record.model].filter(Boolean).join(" · ")}</dd></> : null}
-                    <dt className={term}>{t("externalRelay.answers.outcome")}</dt>
-                    <dd data-external-relay-exchange-outcome={record.outcome ?? "running"} className={detail}>{outcome(record)}</dd>
-                    {record.delivery ? <><dt className={term}>{t("externalRelay.answers.delivery")}</dt><dd className={detail}>{t(DELIVERY_KEYS[record.delivery])}</dd></> : null}
-                    {requester && typeof requester.is_admin === "boolean" ? <><dt className={term}>{t("externalRelay.answers.askedBy")}</dt><dd className={detail}>{[received.author, t(requester.is_admin === true ? "externalRelay.answers.role.admin" : "externalRelay.answers.role.member"), requester.is_owner === true ? t("externalRelay.answers.role.owner") : null, requester.is_anonymous_admin === true ? t("externalRelay.answers.role.anonymous") : null].filter(Boolean).join(" · ")}</dd></> : null}
-                    {Array.isArray(tools) && tools.length ? <><dt className={term}>{t("externalRelay.answers.tools")}</dt><dd className={detail}>{tools.length}</dd></> : null}
-                  </dl>
-                  <section className="space-y-1">
-                    <h5 className="font-semibold text-primary">{t("externalRelay.answers.request")}</h5>
-                    <p data-external-relay-exchange-request="" className="whitespace-pre-wrap break-words rounded-[8px] bg-raised px-3 py-2 text-primary">{received.text || t("externalRelay.none")}</p>
-                  </section>
-                  <section className="space-y-1">
-                    <h5 className="font-semibold text-primary">{t("externalRelay.answers.answer")}</h5>
-                    <p data-external-relay-exchange-answer={record.answer?.action ?? "none"} className="whitespace-pre-wrap break-words rounded-[8px] bg-raised px-3 py-2 text-primary">
-                      {record.answer?.action === "reply" ? record.answer.text : record.answer?.action === "handoff" ? t("externalRelay.answers.handedOff") : record.answer?.action === "ignore" ? t("externalRelay.answers.ignored") : t("externalRelay.answers.noAnswer")}
-                    </p>
-                  </section>
-                  <details className="space-y-1">
-                    <summary className="min-h-11 cursor-pointer content-center font-semibold text-primary">{t("externalRelay.answers.input")}</summary>
-                    <pre data-external-relay-exchange-input="" className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-[8px] bg-raised p-3 font-mono text-[12px] text-primary">{JSON.stringify(record.input, null, 2)}</pre>
-                  </details>
-                </>
-              ) : <p className="text-muted">{t("externalRelay.answers.gone")}</p>}
-            </div>
-          ) : list === null ? (
-            error ? null : <p className="text-muted">{t("common.loading")}</p>
-          ) : (
-            <>
-              <p className="text-muted">{t("externalRelay.answers.kept", { days })}</p>
-              {list.answers.length ? (
-                <ul data-external-relay-answer-list="" className="space-y-2">
-                  {list.answers.map((row) => (
-                    <li key={row.requestId}>
-                      <button type="button" data-external-relay-answer={row.requestId} onClick={() => void show(row.requestId)}
-                        className="block min-h-11 w-full space-y-1 rounded-[8px] border border-border bg-raised px-3 py-2 text-left hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
-                          <span className="font-semibold text-primary">{outcome(row)}</span>
-                          <span className="text-muted">{stamp(row.startedAt, locale)}{row.durationMs !== null ? ` · ${t("externalRelay.answers.seconds", { seconds: seconds(row.durationMs) ?? "" })}` : ""}</span>
-                        </span>
-                        {row.request ? <span className="block break-words text-primary">{row.request}</span> : null}
-                        {row.answer ? <span className="block break-words text-muted">{row.answer}</span> : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : <p data-external-relay-answers-empty="" className="text-muted">{t("externalRelay.answers.empty", { days })}</p>}
-            </>
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 /**
  * Answers per member per hour in each chat (relay.md §B.8). The field shows
  * the default until the operator sets a number; an empty field or 0 is no
  * limit. It is saved when the field loses focus or on Enter.
  */
-function MemberLimitField({ target, busy, onChange }: { target: Target; busy: boolean; onChange: (patch: Partial<Target>) => void }) {
+function MemberLimitField({ target, actions }: { target: Target; actions: Actions }) {
   const { t } = useLocale();
   const stored = target.memberLimitPerHour === undefined ? RELAY_MEMBER_ANSWERS_PER_HOUR : target.memberLimitPerHour;
   const shown = stored ? String(stored) : "";
@@ -518,91 +439,135 @@ function MemberLimitField({ target, busy, onChange }: { target: Target; busy: bo
     const text = draft.trim();
     const value = text === "" ? null : Number(text);
     if (value !== null && (!Number.isInteger(value) || value < 0 || value > 1000)) { setDraft(shown); return; }
-    if ((value || null) !== (stored || null)) onChange({ memberLimitPerHour: value });
+    if ((value || null) !== (stored || null)) actions.patchTarget(target, { memberLimitPerHour: value });
   };
   return (
-    <label className="flex min-w-0 flex-col gap-1 text-ui font-semibold text-primary">
-      {t("externalRelay.target.memberLimit")}
-      <input type="number" inputMode="numeric" min={0} max={1000} step={1} data-external-relay-member-limit="" disabled={busy}
-        aria-label={`${t("externalRelay.target.memberLimit")} · ${target.name}`} placeholder={t("externalRelay.target.memberLimitNone")}
-        value={editing ? draft : shown} className={input}
-        onFocus={() => { setDraft(shown); setEditing(true); }}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={save}
-        onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }} />
-      <span className="text-ui font-normal text-muted">{t("externalRelay.target.memberLimitHint")}</span>
+    <input type="number" inputMode="numeric" min={0} max={1000} step={1} data-external-relay-member-limit="" disabled={actions.busy}
+      aria-label={`${t("externalRelay.target.memberLimit")} · ${target.name}`} placeholder={t("externalRelay.target.memberLimitNone")}
+      value={editing ? draft : shown} className={`${NUMBER} w-24 text-right`}
+      onFocus={() => { setDraft(shown); setEditing(true); }}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={save}
+      onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }} />
+  );
+}
+
+/** One label-value row of an open target, as the seat tick panel lays its settings out. */
+function SettingLine({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex min-h-7 min-w-0 items-center gap-2 text-ui text-primary">
+      <span className="min-w-0 flex-1">{label}</span>
+      {children}
     </label>
   );
 }
 
-function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }: {
+/**
+ * A target as one folded row: its engine's mark, its name, what runs it and
+ * how many are running, its limit, its effort ladder, and «Answered by this
+ * install» as the board's switch. Unfolded in place, the row holds the engine
+ * pills, model and effort of the new-agent form, the concurrency, the member
+ * limit with who it exempts, and what the target still needs.
+ */
+function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: {
   relay: RelayView;
   target: Target;
   running: number;
   signedIn: Record<RelayEngine, boolean>;
-  busy: boolean;
-  onChange: (patch: Partial<Target>) => void;
-  onRoute: (answeredBy: "install" | "service") => void;
+  actions: Actions;
+  open: boolean;
+  onOpen: () => void;
 }) {
   const { t } = useLocale();
   const scale = target.engine ? effortScale(target.engine, target.model) ?? [] : [];
   const noAccount = target.engine !== null && !signedIn[target.engine];
   const canAnswer = target.engine !== null && target.model !== null && !noAccount;
-  const field = (label: string, control: ReactNode) => <label className="flex min-w-0 flex-col gap-1 text-ui font-semibold text-primary">{label}{control}</label>;
+  const limit = target.memberLimitPerHour === undefined ? RELAY_MEMBER_ANSWERS_PER_HOUR : target.memberLimitPerHour;
+  const configured = target.engine !== null && target.model !== null;
+  const load = [t("externalRelay.target.running", { count: running, max: target.concurrency }), limit ? t("externalRelay.target.perHour", { count: limit }) : null].filter(Boolean).join(" · ");
+  const here = target.answered_by === "install";
+  const name = (key: Parameters<TFunction>[0]) => `${t(key)} · ${target.name}`;
   return (
-    <div data-external-relay-target={target.id} className="space-y-3 rounded-[8px] border border-border p-3 text-ui">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="min-w-0 break-words font-semibold text-primary">{target.name}</p>
-        <p className="text-muted" data-external-relay-running={running}>{t("externalRelay.target.running", { count: running, max: target.concurrency })}</p>
+    <div data-external-relay-target={target.id} data-open={open ? "" : undefined} className={`flex min-w-0 flex-col border-t border-border first:border-t-0 ${open ? "pb-2.5" : ""}`}>
+      <div className="flex min-h-9 min-w-0 items-center gap-2 max-sm:min-h-11">
+        <button type="button" aria-expanded={open} onClick={onOpen} data-external-relay-target-fold=""
+          className={`flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-control px-1 text-left hover:bg-sunken max-sm:min-h-11 ${FOCUS}`}>
+          {target.engine ? <EngineMark engine={target.engine} size={14} /> : <Dot tone="muted" className="mx-1" />}
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="line-clamp-2 break-words text-ui font-semibold leading-4 text-primary" title={target.name}>{target.name}</span>
+            <span data-external-relay-running={running} className={`flex min-w-0 items-center gap-1 text-caption ${noAccount ? "text-warning" : "text-muted"}`}>
+              {noAccount ? <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden /> : null}
+              {configured ? (
+                <>
+                  <span className="shrink-0">{modelLabel(target.engine, target.model)}</span>
+                  {target.effort ? <EffortScale effort={target.effort} color={`var(--color-${target.engine}-mark)`} /> : null}
+                  <span className="min-w-0 truncate">{` · ${load}`}</span>
+                </>
+              ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
+            </span>
+          </span>
+          {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
+        </button>
+        <SettingSwitch enabled={here} size="responsive" aria-label={name("externalRelay.target.answeredHere")} title={t("externalRelay.target.answeredHere")}
+          data-external-relay-answered-by={target.answered_by} disabled={actions.busy || relay.paused || (!here && !canAnswer)}
+          onClick={() => actions.route(target, here ? "service" : "install")} />
       </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {field(t("externalRelay.target.engine"), (
-          <select aria-label={`${t("externalRelay.target.engine")} · ${target.name}`} value={target.engine ?? ""} disabled={busy} className={input}
-            onChange={(event) => { const engine = event.target.value as RelayEngine; onChange({ engine, model: defaultModelFor(engine), effort: null }); }}>
-            {target.engine ? null : <option value="" disabled>{t("externalRelay.target.choose")}</option>}
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
-          </select>
-        ))}
-        {field(t("externalRelay.target.model"), (
-          <select aria-label={`${t("externalRelay.target.model")} · ${target.name}`} value={target.model ?? ""} disabled={busy || !target.engine} className={input}
-            onChange={(event) => { const model = event.target.value; onChange({ model, effort: target.effort && target.engine && effortScale(target.engine, model)?.includes(target.effort) ? target.effort : null }); }}>
-            {target.model ? null : <option value="" disabled>{t("externalRelay.target.choose")}</option>}
-            {target.engine ? ENGINE_MODELS[target.engine].map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
-          </select>
-        ))}
-        {field(t("externalRelay.target.effort"), (
-          <select aria-label={`${t("externalRelay.target.effort")} · ${target.name}`} value={target.effort ?? ""} disabled={busy || !target.engine} className={input}
-            onChange={(event) => onChange({ effort: event.target.value || null })}>
-            <option value="">{t("externalRelay.target.effortDefault")}</option>
-            {scale.map((effort) => <option key={effort} value={effort}>{effortTierLabel(t, effort)}</option>)}
-          </select>
-        ))}
-        {field(t("externalRelay.target.concurrency"), (
-          <select aria-label={`${t("externalRelay.target.concurrency")} · ${target.name}`} value={target.concurrency} disabled={busy} className={input}
-            onChange={(event) => onChange({ concurrency: Number(event.target.value) })}>
-            {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
-          </select>
-        ))}
-        <div className="sm:col-span-2"><MemberLimitField target={target} busy={busy} onChange={onChange} /></div>
-      </div>
-      <label className="flex min-h-11 items-center gap-3 text-primary">
-        <input type="checkbox" data-external-relay-answered-by={target.answered_by} checked={target.answered_by === "install"} disabled={busy || relay.paused || (target.answered_by !== "install" && !canAnswer)}
-          onChange={(event) => onRoute(event.target.checked ? "install" : "service")} />
-        {t("externalRelay.target.answeredHere")}
-      </label>
-      {noAccount ? <p data-external-relay-no-account="" className="rounded-[8px] bg-warning-soft px-3 py-2 text-warning">{t("externalRelay.noAccount", { engine: target.engine === "codex" ? "Codex" : "Claude" })}</p> : null}
-      {!target.engine || !target.model ? <p className="text-muted">{t("externalRelay.target.needsEngine")}</p> : null}
-      <RecentAnswers relayId={relay.id} targetId={target.id} />
+      {open ? (
+        <div className="flex min-w-0 flex-col gap-1.5 pl-7 pt-1 max-sm:pl-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 max-sm:flex-col max-sm:items-stretch">
+            <div role="group" data-external-relay-engine="" aria-label={name("externalRelay.target.engine")} className="max-sm:[&_button]:min-h-11 max-sm:[&_button]:px-3 max-sm:[&_button]:text-ui">
+              <EngineRadioGroup engine={(target.engine ?? "") as RelayEngine} disabled={actions.busy}
+                onChange={(next) => { const engine = next as RelayEngine; if (engine !== target.engine) actions.patchTarget(target, { engine, model: defaultModelFor(engine), effort: null }); }} />
+            </div>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <Select aria-label={name("externalRelay.target.model")} title={t("externalRelay.target.model")} value={target.model ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 flex-1 ${PHONE_SELECT}`}
+                onChange={(event) => { const model = event.target.value; actions.patchTarget(target, { model, effort: target.effort && target.engine && effortScale(target.engine, model)?.includes(target.effort) ? target.effort : null }); }}>
+                {target.model ? null : <option value="" disabled>{t("externalRelay.target.choose")}</option>}
+                {target.engine ? ENGINE_MODELS[target.engine].map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
+              </Select>
+              <Select aria-label={name("externalRelay.target.effort")} title={t("externalRelay.target.effort")} value={target.effort ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 max-sm:flex-1 sm:w-28 ${PHONE_SELECT}`}
+                onChange={(event) => actions.patchTarget(target, { effort: event.target.value || null })}>
+                <option value="">{t("externalRelay.target.effortDefault")}</option>
+                {scale.map((effort) => <option key={effort} value={effort}>{effortTierLabel(t, effort)}</option>)}
+              </Select>
+            </div>
+          </div>
+          <SettingLine label={t("externalRelay.target.concurrency")}>
+            <Select aria-label={name("externalRelay.target.concurrency")} value={target.concurrency} disabled={actions.busy} className={`w-14 max-sm:w-20 ${PHONE_SELECT}`}
+              onChange={(event) => actions.patchTarget(target, { concurrency: Number(event.target.value) })}>
+              {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
+            </Select>
+          </SettingLine>
+          <SettingLine label={t("externalRelay.target.memberLimit")}>
+            <MemberLimitField target={target} actions={actions} />
+          </SettingLine>
+          <p className="text-caption leading-4 text-muted">{t("externalRelay.target.memberLimitHint")}</p>
+          {noAccount ? (
+            <p data-external-relay-no-account="" className="flex items-start gap-1.5 text-caption leading-4 text-warning">
+              <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
+              <span className="min-w-0">{t("externalRelay.noAccount", { engine: target.engine === "codex" ? "Codex" : "Claude" })}</span>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
 
+/**
+ * One paired relay (relay.md §B.9): its mark, name, address and who it is
+ * paired as, with pause or resume and disconnect behind its ⋯; the poller's
+ * state as a status line with its dot; the last request and the last progress
+ * as the sidebar's meter lines; then one folded row per target. What the
+ * relay's chats said is never shown here: those conversations are listed with
+ * the others (the sidebar's entry for the service) and open in the agent window.
+ */
 function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; status: StatusRow | null; signedIn: Record<RelayEngine, boolean>; onChanged: () => Promise<void> }) {
   const { t, locale } = useLocale();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warned, setWarned] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
   const act = async (url: string, method: string, body?: object) => {
     setBusy(true); setError(null);
     const result = await call<{ warned?: boolean }>(url, method, body);
@@ -612,35 +577,57 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
     setBusy(false);
   };
   const base = `/api/external-relay/relays/${encodeURIComponent(relay.id)}`;
+  const actions: Actions = {
+    busy,
+    patchTarget: (target, patch) => void act(base, "PATCH", { target: { id: target.id, ...patch } }),
+    route: (target, answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy }),
+  };
   const state = relay.paused ? "paused" : status?.state.state ?? "paused";
-  const tone = state === "credential_rejected" || state === "unsupported_version" ? "bg-danger/10 text-danger" : state === "unreachable" || state === "rate_limited" ? "bg-warning-soft text-warning" : "bg-sunken text-primary";
+  const tone = state === "polling" ? "ok" : state === "credential_rejected" || state === "unsupported_version" ? "danger" : state === "unreachable" || state === "rate_limited" ? "warn" : "muted";
   const progress = status?.state.lastProgress ?? null;
   const progressTarget = progress ? relay.targets.find((target) => target.id === progress.targetId)?.name ?? progress.targetId : null;
+  const outcome = status?.state.lastOutcome ? `${outcomeText(t, status.state.lastOutcome)}${status.state.lastOutcomeAt ? ` · ${clock(status.state.lastOutcomeAt, locale)}` : ""}` : t("externalRelay.none");
   return (
-    <div data-external-relay={relay.id} className="space-y-3 rounded-[8px] border border-border p-3 text-ui">
-      <div>
-        <p className="break-words font-semibold text-primary">{relay.name} · {relay.origin}</p>
-        {relay.description ? <p className="mt-1 text-muted">{relay.description}</p> : null}
-        <p data-external-relay-paired-at="" className="mt-1 text-muted">{t("externalRelay.pairedAs", { owner: ownerLine(relay.owner), date: stamp(relay.pairedAt, locale) })}</p>
+    <div data-external-relay={relay.id} className="flex min-w-0 flex-col gap-2 text-ui">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <RelayMark name={relay.name} />
+        <div className="min-w-0 flex-1">
+          <RelayName name={relay.name} origin={relay.origin} />
+          <p data-external-relay-paired-at="" className="truncate text-caption leading-4 text-muted" title={relay.description || undefined}>{t("externalRelay.pairedAs", { owner: ownerLine(relay.owner), date: stamp(relay.pairedAt, locale) })}</p>
+        </div>
+        <span data-external-relay-menu="" className="max-sm:[&_[data-bar-more]]:h-11 max-sm:[&_[data-bar-more]]:w-11">
+          <BarMoreMenu rows={(close) => (
+            <BarMenuGroup name="relay">
+              <button type="button" data-external-relay-pause="" disabled={busy} onClick={() => { close(); void act(base, "PATCH", { paused: !relay.paused }); }} className={`${BAR_MENU_ROW} max-sm:min-h-11`}>
+                {relay.paused ? <Play className="h-[15px] w-[15px] shrink-0 text-secondary" aria-hidden /> : <Pause className="h-[15px] w-[15px] shrink-0 text-secondary" aria-hidden />}
+                {relay.paused ? t("externalRelay.resume") : t("externalRelay.pause")}
+              </button>
+              <button type="button" data-external-relay-disconnect="" disabled={busy} onClick={() => { close(); void act(base, "DELETE"); }} className={`${BAR_MENU_ROW} max-sm:min-h-11`}>
+                <Unplug className="h-[15px] w-[15px] shrink-0 text-secondary" aria-hidden />{t("externalRelay.disconnect")}
+              </button>
+            </BarMenuGroup>
+          )} />
+        </span>
       </div>
-      <p role="status" data-external-relay-state={state} className={`rounded-[8px] px-3 py-2 ${tone}`}>{t(STATE_KEYS[state] ?? "externalRelay.poller.paused")}</p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        <dt className="text-muted">{t("externalRelay.lastOutcome")}</dt>
-        <dd data-external-relay-last-outcome="" className="min-w-0 break-words text-primary">{status?.state.lastOutcome ? `${outcomeText(t, status.state.lastOutcome)}${status.state.lastOutcomeAt ? ` · ${clock(status.state.lastOutcomeAt, locale)}` : ""}` : t("externalRelay.none")}</dd>
-        <dt className="text-muted">{t("externalRelay.lastProgress")}</dt>
-        <dd data-external-relay-last-progress="" className="min-w-0 break-words text-primary">{progress ? `${progressTarget}: ${progress.label} · ${clock(progress.at, locale)}` : t("externalRelay.none")}</dd>
-      </dl>
-      {relay.targets.length ? relay.targets.map((target) => (
-        <TargetRow key={target.id} relay={relay} target={target} running={status?.running[target.id] ?? 0} signedIn={signedIn} busy={busy}
-          onChange={(patch) => void act(base, "PATCH", { target: { id: target.id, ...patch } })}
-          onRoute={(answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy })} />
-      )) : <p className="text-muted">{t("externalRelay.noTargets")}</p>}
-      {error ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-danger">{relayErrorText(t, error)}</p> : null}
-      {warned ? <p role="status" className="rounded-[8px] bg-warning-soft px-3 py-2 text-warning">{t("externalRelay.removeWarning")}</p> : null}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={busy} onClick={() => void act(base, "PATCH", { paused: !relay.paused })} className={bordered}>{relay.paused ? t("externalRelay.resume") : t("externalRelay.pause")}</button>
-        <button type="button" disabled={busy} onClick={() => void act(base, "DELETE")} className={bordered}>{t("externalRelay.disconnect")}</button>
+      <div className="flex min-w-0 flex-col">
+        {/* The meter line's 22px, kept as padding around each 16px line, so a state that wraps keeps its dot on the first line and its gap to the line below. */}
+        <p role="status" data-external-relay-state={state} className={`flex min-w-0 items-start gap-1.5 py-[3px] text-[11.5px] font-semibold leading-4 ${tone === "danger" ? "text-danger" : tone === "warn" ? "text-warning" : "text-primary"}`}>
+          <Dot tone={tone} className="mt-[5px]" /><span className="min-w-0 break-words">{t(STATE_KEYS[state] ?? "externalRelay.poller.paused")}</span>
+        </p>
+        <MeterLine label={t("externalRelay.lastOutcome")} value={<span data-external-relay-last-outcome="">{outcome}</span>} percent={null} color="" bar={false} />
+        {progress ? <MeterLine label={t("externalRelay.lastProgress")} value={<span data-external-relay-last-progress="" title={progress.label}>{`${progressTarget} · ${clock(progress.at, locale)}`}</span>} percent={null} color="" bar={false} /> : null}
       </div>
+      {relay.targets.length ? (
+        <div className="flex min-w-0 flex-col">
+          <div className="flex items-baseline justify-end pb-0.5"><span className={HEAD}>{t("externalRelay.target.answeredHere")}</span></div>
+          {relay.targets.map((target) => (
+            <TargetRow key={target.id} relay={relay} target={target} running={status?.running[target.id] ?? 0} signedIn={signedIn} actions={actions}
+              open={open === target.id} onOpen={() => setOpen((value) => value === target.id ? null : target.id)} />
+          ))}
+        </div>
+      ) : <p className="text-caption text-muted">{t("externalRelay.noTargets")}</p>}
+      {error ? alertLine(relayErrorText(t, error)) : null}
+      {warned ? <p role="status" className="flex items-start gap-1.5 text-caption leading-4 text-warning"><AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />{t("externalRelay.removeWarning")}</p> : null}
     </div>
   );
 }
@@ -676,7 +663,7 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
   };
   const resume = state?.pending.filter((item) => Date.parse(item.expires_at) > Date.now()).at(-1) ?? null;
   return (
-    <div data-external-relay-section="" className="space-y-3">
+    <div data-external-relay-section="" className="flex flex-col gap-4 [&>[data-external-relay]~[data-external-relay]]:border-t [&>[data-external-relay]~[data-external-relay]]:border-border [&>[data-external-relay]~[data-external-relay]]:pt-4">
       {error && !state ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null}
       {!state && !error ? <p className="text-ui text-muted">{t("common.loading")}</p> : null}
       {state ? (() => {
