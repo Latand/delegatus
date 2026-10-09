@@ -452,3 +452,62 @@ test("Waiting for you lists stale evidence first and keeps the full target ids",
   expect(report.empty).toBe(false);
   expect(composeBoardReport(facts({ needsYou: null, gaps: [{ source: "needs-you", reason: "timed out" }] })).text).toContain("9. Waiting for you: unavailable (timed out).");
 });
+
+test("Waiting for you preserves decisive evidence with a long title and UUID targets", () => {
+  const conversationId = `conversation_${["11111111", "2222", "4333", "8444", "555555555555"].join("-")}`;
+  const taskId = ["aaaaaaaa", "bbbb", "4ccc", "8ddd", "eeeeeeeeeeee"].join("-");
+  const evidence = [
+    "operator-wrote: A later operator message was admitted",
+    "ended: The conversation ended",
+  ];
+  const item = {
+    id: conversationId, kind: "question" as const,
+    title: "Check the deployment readiness and recovery plan for the next application release",
+    line: "May I continue?", since: minutesAgo(60), taskId,
+    subject: { conversationId }, target: { kind: "conversation" as const, conversationId },
+    stale: true, evidence,
+  };
+  const report = composeBoardReport(facts({ needsYou: {
+    project: "project-a", at: minutesAgo(0), count: 1, staleCount: 1,
+    rows: [item], cleared: [], omittedCount: 0,
+  } }));
+  const waiting = report.text.slice(report.text.indexOf("9. Waiting for you"));
+  const rendered = waiting.split("\n").find(line => line.startsWith("- "))!;
+  expect(rendered).toContain(conversationId);
+  expect(rendered).toContain(taskId);
+  for (const reason of evidence) expect(rendered).toContain(reason);
+  expect(rendered).toContain("1 h");
+  expect(rendered.length).toBeLessThanOrEqual(200);
+  expect(report.bytes).toBeLessThanOrEqual(BOARD_REPORT_CAP_BYTES);
+});
+
+test("Waiting for you budgets both structured evidence hints before title context", () => {
+  const conversationId = `conversation_${["11111111", "2222", "4333", "8444", "555555555555"].join("-")}`;
+  const taskId = ["aaaaaaaa", "bbbb", "4ccc", "8ddd", "eeeeeeeeeeee"].join("-");
+  const item = {
+    id: conversationId, kind: "question" as const, title: "перевірити ".repeat(20),
+    line: "Continue?", since: minutesAgo(60), taskId,
+    subject: { conversationId }, target: { kind: "conversation" as const, conversationId }, stale: true,
+    evidence: [
+      { code: "operator-wrote", detail: `A later operator message was admitted ${"with more context ".repeat(20)}`, stale: true, at: minutesAgo(20), source: "admissions" },
+      { code: "ended", detail: "The conversation ended", stale: true, at: null, source: "liveness" },
+    ],
+  };
+  const report = composeBoardReport(facts({ needsYou: {
+    project: "project-a", at: minutesAgo(0), count: 12, staleCount: 12,
+    rows: Array.from({ length: 12 }, () => item), cleared: [], omittedCount: 0,
+  } }));
+  const waiting = report.text.slice(report.text.indexOf("9. Waiting for you"));
+  const rendered = waiting.split("\n").filter(line => line.startsWith("- "));
+  expect(rendered.length).toBe(10);
+  expect(waiting).toContain("(2 more)");
+  for (const line of rendered) {
+    expect(line).toContain(conversationId);
+    expect(line).toContain(taskId);
+    expect(line).toContain("operator-wrote: A later operator message");
+    expect(line).toContain("ended: The conversation ended");
+    expect(line.length).toBeLessThanOrEqual(200);
+  }
+  expect(report.bytes).toBeLessThanOrEqual(BOARD_REPORT_CAP_BYTES);
+  expect(Buffer.byteLength(report.text, "utf8")).toBe(report.bytes);
+});

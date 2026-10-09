@@ -2,6 +2,7 @@ import { redactMonitorText } from "@/lib/monitor/redact";
 import type { IssueRanking, OpenPullRequest, OpenPullRequestsUnavailable, RankedIssue } from "@/lib/monitor/githubEvidence";
 import type { PipelineState } from "@/lib/pipelines/types";
 import type { TaskStatus } from "@/lib/tasks/types";
+import type { NeedsYouRow } from "@/lib/attention/needsYouRead";
 
 /**
  * The board maintenance report (docs/design/board-maintenance-report.md §3, §6).
@@ -180,6 +181,28 @@ function title(text: string): string {
 /** Credentials and paths out first, then the line bound, as a wake does. */
 function row(text: string): string {
   return `- ${clip(redactMonitorText(text), LINE_LIMIT - 2)}`;
+}
+
+/** Full targets and evidence get space before optional title/age context. */
+function waitingRow(item: NeedsYouRow, now: number): string {
+  const subject = item.subject.reviewId ?? item.subject.pipelineId ?? item.subject.reportSeq ?? item.subject.conversationId ?? item.subject.decisionId ?? item.id;
+  const identity = oneLine(redactMonitorText(`${item.kind} ${subject}${item.taskId ? ` on task ${item.taskId}` : ""}`));
+  const hints = item.evidence.slice(0, 2).map(e => oneLine(redactMonitorText(typeof e === "string" ? e : `${e.code}: ${e.detail}`)));
+  const evidenceLimit = Math.min(REASON_LIMIT, LINE_LIMIT - 2 - identity.length - 2);
+  let evidence = hints[0] ?? "no evidence";
+  if (hints.length === 2) {
+    // Share the budget, returning unused space from a short hint to the other.
+    const shared = evidenceLimit - 2;
+    const firstLimit = Math.max(Math.floor(shared / 2), shared - hints[1].length);
+    const secondLimit = shared - Math.min(hints[0].length, firstLimit);
+    evidence = `${clip(hints[0], firstLimit)}; ${clip(hints[1], secondLimit)}`;
+  } else evidence = clip(evidence, evidenceLimit);
+  const remaining = LINE_LIMIT - 2 - identity.length - 2 - evidence.length;
+  const waited = item.since ? `, ${age(now - Date.parse(item.since))}` : "";
+  const ageContext = waited.length <= remaining ? waited : "";
+  const titleLimit = Math.min(TITLE_LIMIT, remaining - ageContext.length - 3);
+  const titleContext = titleLimit >= 8 ? ` «${clip(redactMonitorText(item.title), titleLimit) || "untitled"}»` : "";
+  return row(`${identity}${titleContext}${ageContext}: ${evidence}`);
 }
 
 /** The longest prefix of whole code points within `maxBytes` of UTF-8. */
@@ -450,11 +473,7 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     .map((request) => row(`pull request #${request.number} ${title(request.title)}, updated ${since(now, request.updatedAt ?? request.createdAt) ?? "unknown"} ago`));
 
   const github = githubLines(facts.github, now);
-  const waiting = [...(facts.needsYou?.rows ?? [])].sort((a,b) => Number(b.stale) - Number(a.stale)).map(item => {
-    const subject = item.subject.reviewId ?? item.subject.pipelineId ?? item.subject.reportSeq ?? item.subject.conversationId ?? item.subject.decisionId ?? item.id;
-    const evidence = item.evidence.slice(0,2).map(e => typeof e === "string" ? e : `${e.code}: ${e.detail}`).join("; ") || "no evidence";
-    return row(`${item.kind} ${subject}${item.taskId ? ` on task ${item.taskId}` : ""} ${title(item.title)}${item.since ? `, ${age(now - Date.parse(item.since))}` : ""}: ${evidence}`);
-  });
+  const waiting = [...(facts.needsYou?.rows ?? [])].sort((a,b) => Number(b.stale) - Number(a.stale)).map(item => waitingRow(item, now));
   const counts: BoardReportCounts = {
     waiting: facts.needsYou?.count ?? 0,
     waitingStale: facts.needsYou?.staleCount ?? 0,
