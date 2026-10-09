@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 
+import { resetEngineAccountsStoresForTests } from "@/hooks/useEngineAccounts";
 import { installActEnv } from "@/test-helpers/actEnv";
 import type { LimitsPayload } from "@/lib/types";
 
@@ -85,6 +86,11 @@ afterEach(async () => {
   root = null;
   document.body.replaceChildren();
   accounts.codex.accounts = [baseAccount];
+  accounts.codex.active = "account-a";
+  accounts.claude.accounts = [];
+  accounts.claude.active = "claude-a";
+  // The account stores read /api/accounts once per process; the next case starts from its own roster.
+  resetEngineAccountsStoresForTests();
   limitsUnavailable = false;
   copilotAccountsResponse = { cli: { present: false, reason: null }, active: "", accounts: [] };
   copilotActions.length = 0;
@@ -459,4 +465,140 @@ test("every tier the provider meters gets its own footer line, Fable included (#
   expect(meterLine(block).value).toBe("left 12%"); // Fable is the tightest, so it binds the line
   expect(block.textContent).toContain("37%");
   expect(meterLine(block).windows).toBe("5h left 88% · Week left 60% · Fable · Week left 12% · Opus · Week left 37%");
+});
+
+// ── Compact footer: one line per account, every Claude and Codex account ──
+
+/** An account row as `GET /api/accounts` answers it; `used` null means no reading exists. */
+const roster = (id: string, label: string, used: number | null, extra: Record<string, unknown> = {}) => ({
+  ...baseAccount,
+  id,
+  label,
+  effective: undefined,
+  limits: used === null ? null : {
+    state: "fresh",
+    session: { usedPercent: used, resetsAt: NOW + 3_600, windowMinutes: 300 },
+    weekly: null,
+    checkedAt: new Date((NOW - 60) * 1000).toISOString(),
+  },
+  ...extra,
+});
+
+const rosterLimits = (): LimitsPayload => ({
+  claude: { session: { usedPercent: 10, resetsAt: NOW + 3_600, windowMinutes: 300 }, weekly: null, plan: "max", capturedAt: NOW },
+  codex: { session: { usedPercent: 25, resetsAt: NOW + 3_600, windowMinutes: 300 }, weekly: null, plan: "pro", capturedAt: NOW },
+  claudeAccountId: "claude-a",
+  codexAccountId: "codex-a",
+  provenance: {
+    claude: { source: "live", reason: null, staleSince: null },
+    codex: { source: "live", reason: null, staleSince: null },
+  },
+  staleSince: null,
+});
+
+function seedRoster() {
+  limits = rosterLimits();
+  accounts.claude.active = "claude-a";
+  accounts.claude.accounts = [roster("claude-a", "Claude A", 10), roster("claude-b", "Claude B", 70)] as never;
+  accounts.codex.active = "codex-a";
+  accounts.codex.accounts = [roster("codex-a", "Codex A", 25), roster("codex-b", "Codex B", 40), roster("codex-c", "Codex C", null)] as never;
+}
+
+const accountRows = (block: HTMLElement) => [...block.querySelectorAll<HTMLElement>("[data-footer-account]")];
+const rowReading = (row: HTMLElement) => ({
+  id: row.dataset.footerAccount,
+  name: row.querySelector("[data-meter-name]")?.textContent ?? null,
+  value: row.querySelector("[data-meter-value]")?.textContent ?? row.querySelector("[data-limits-reason]")?.textContent ?? null,
+  active: row.dataset.footerAccountActive === "true",
+});
+
+test("the compact footer draws one line for every account of each engine, the active one marked", async () => {
+  seedRoster();
+  const host = await render("line");
+  const claude = accountRows(engineBlock(host, "claude")).map(rowReading);
+  const codex = accountRows(engineBlock(host, "codex")).map(rowReading);
+  expect(claude).toEqual([
+    { id: "claude-a", name: "Claude A", value: "left 90%", active: true },
+    { id: "claude-b", name: "Claude B", value: "left 30%", active: false },
+  ]);
+  expect(codex).toEqual([
+    { id: "codex-a", name: "Codex A", value: "left 75%", active: true },
+    { id: "codex-b", name: "Codex B", value: "left 60%", active: false },
+    // No reading at all: the existing "no data yet" treatment.
+    { id: "codex-c", name: "Codex C", value: "no data yet", active: false },
+  ]);
+  // Claude first, then Codex, as before.
+  const order = [...host.querySelectorAll("[data-engine-limits]")].map((block) => block.getAttribute("data-engine-limits"));
+  expect(order.slice(0, 2)).toEqual(["claude", "codex"]);
+  // Each line with a reading draws the bar of the share it names.
+  const bars = accountRows(engineBlock(host, "codex")).map((row) => row.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null);
+  expect(bars).toEqual(["75", "60", null]);
+});
+
+test("a non-active account line reads its own windows, never the active account's", async () => {
+  seedRoster();
+  const host = await render("line");
+  const row = accountRows(engineBlock(host, "codex"))[1]!;
+  expect(row.querySelector("button")?.getAttribute("title")).toContain("5h left 60%");
+  expect(row.textContent).not.toContain("75%");
+});
+
+test("a line with an old reading dims and carries the amber dot", async () => {
+  seedRoster();
+  accounts.codex.accounts = [
+    roster("codex-a", "Codex A", 25),
+    roster("codex-b", "Codex B", 40, { limits: { state: "stale", session: { usedPercent: 40, resetsAt: NOW + 3_600, windowMinutes: 300 }, weekly: null, checkedAt: new Date((NOW - 3 * 3_600) * 1000).toISOString() } }),
+  ] as never;
+  const rows = accountRows(engineBlock(await render("line"), "codex"));
+  expect(rows[0]!.querySelector("[data-limits-stale-dot]")).toBeNull();
+  expect(rows[1]!.querySelector("[data-limits-stale-dot]")?.getAttribute("title")).toContain("as of");
+  expect(rows[1]!.className).toContain("opacity-60");
+});
+
+test("a click on an account line opens the accounts panel focused on that account", async () => {
+  seedRoster();
+  const host = await render("line");
+  const row = accountRows(engineBlock(host, "codex"))[1]!;
+  await act(async () => { row.querySelector<HTMLButtonElement>("button")?.click(); });
+  const dialog = host.querySelector('[role="dialog"][aria-label*="Codex"]');
+  expect(dialog).not.toBeNull();
+  const focused = [...(dialog?.querySelectorAll<HTMLElement>("*") ?? [])].filter((node) => node.classList.contains("ring-accent/50"));
+  expect(focused.length).toBe(1);
+  expect(focused[0]!.textContent).toContain("Codex B");
+});
+
+test("the active line opens the panel as it did, and its reading still opens the burndown chart", async () => {
+  seedRoster();
+  const host = await render("line");
+  const block = engineBlock(host, "codex");
+  const active = accountRows(block)[0]!;
+  const buttons = active.querySelectorAll("button");
+  expect(buttons.length).toBe(2);
+  await act(async () => { buttons[0]!.click(); });
+  expect(host.querySelector('[role="dialog"][aria-label*="Codex"]')).not.toBeNull();
+  expect([...host.querySelectorAll("*")].filter((node) => node.classList.contains("ring-accent/50")).length).toBe(0);
+  // Only the active account has a burndown history: its reading is a second control, the others have one.
+  expect(buttons[1]!.getAttribute("aria-label")).toBe("Open Codex burndown chart");
+  expect(accountRows(block).slice(1).every((row) => row.querySelectorAll("button").length === 1)).toBe(true);
+});
+
+test("a single account keeps the one line it always had", async () => {
+  limits = rosterLimits();
+  const block = engineBlock(await render("line"), "codex");
+  expect(accountRows(block).length).toBe(1);
+  expect(block.querySelectorAll("[data-meter-name]").length).toBe(1);
+});
+
+test("All windows stays one account per engine with every window", async () => {
+  seedRoster();
+  const host = await render("detail");
+  for (const engine of ["claude", "codex"] as const) {
+    const block = engineBlock(host, engine);
+    expect(accountRows(block).length).toBe(1);
+    expect(block.querySelectorAll("[data-meter-name]").length).toBe(1);
+    expect(block.querySelector("[data-limits-windows]")).not.toBeNull();
+  }
+  expect(meterLine(engineBlock(host, "codex"))).toMatchObject({ name: "Codex A", value: "left 75%" });
+  expect(host.textContent).not.toContain("Codex B");
+  expect(host.textContent).not.toContain("Claude B");
 });

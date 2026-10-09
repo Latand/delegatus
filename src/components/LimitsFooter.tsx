@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
-import { accountEntryPointVisible, type Engine, useEngineAccounts } from "@/hooks/useEngineAccounts";
+import { accountEntryPointVisible, type AccountOption, type Engine, useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { claudeTierDisplayName } from "@/lib/agent/models";
-import { type Locale, translate, useLocale } from "@/lib/i18n";
-import { effectiveQuota, LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, reconcileQuotaReadings } from "@/lib/rateLimit";
+import { type Locale, type TFunction, translate, useLocale } from "@/lib/i18n";
+import { effectiveQuota, LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, reconcileQuotaReadings, type ReconciledQuota } from "@/lib/rateLimit";
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits, type LimitsPayload, type LimitsProvenance, type LimitWindow } from "@/lib/types";
 
 import { AccountsPanel } from "./AccountsPanel";
@@ -129,6 +129,60 @@ export function createLatestLimitsLoader(fetcher: Fetcher, onPayload: (payload: 
   };
 }
 
+/** Every window of a reading as the line's tooltip names it: "5h left 60% · Week left 90%". */
+function quotaWindowsSummary(t: TFunction, quota: ReconciledQuota, accountLimits: EngineLimits | null): string {
+  if (!accountLimits) return "";
+  return [
+    accountLimits.session ? `${windowLabel(t, "session", accountLimits.session.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.session.usedPercent)}%` : null,
+    accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
+    ...quota.tiers.map((tier) => `${t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} ${t("limits.left")} ${Math.round(100 - tier.value.usedPercent)}%`),
+  ].filter(Boolean).join(" · ");
+}
+
+/** The compact footer's line for an account that is not the active one: its name,
+    what is left of its tightest window and the bar of that share, from the
+    reading its own account row carries. It has no burndown chart (the history
+    belongs to the active account), so the whole line opens the accounts panel
+    focused on it. */
+function InactiveAccountLine({ account, engine, label, now, onOpen }: {
+  account: AccountOption;
+  engine: Engine;
+  label: string;
+  now: number;
+  onOpen: (accountId: string) => void;
+}) {
+  const { locale, t } = useLocale();
+  const tint = engineTintOf(engine);
+  const quota = reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
+  const accountLimits = quotaAsEngineLimits(quota);
+  const effective = effectiveQuota(quota);
+  const windows = quotaWindowsSummary(t, quota, accountLimits);
+  const stale = accountLimits?.capturedAt && now - accountLimits.capturedAt > LIMITS_FRESHNESS_S ? fmtAge(accountLimits.capturedAt) : null;
+  const staleReason = [fmtQuotaStaleHint(Boolean(effective?.stale), effective?.observedAt ?? null, locale), stale ? t("limits.stale", { stale }) : null].filter(Boolean).join(" · ");
+  const anyStale = Boolean(quota.session?.stale || quota.weekly?.stale || quota.tiers.some((tier) => tier.stale));
+  const summary = [label, account.label, account.plan, windows || t("limits.noDataYet"), staleReason].filter(Boolean).join(" · ");
+  const color = effective ? barColor(effective.percent, tint.color) : tint.color;
+  return (
+    <div data-meter-line="" data-footer-account={account.id} data-footer-account-active="false" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`} onClick={() => onOpen(account.id)}>
+      <button type="button" aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: `${label} · ${account.label}` })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${effective ? "flex-1" : "flex-initial"}`} onClick={(event) => { event.stopPropagation(); onOpen(account.id); }}>
+        <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-medium text-secondary">{account.label}</span>
+        <span className="relative flex shrink-0">
+          <EngineMark engine={engine} size={12} label={label} />
+          {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
+        </span>
+      </button>
+      {effective ? (
+        <span className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1.5 px-1.5">
+          <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
+          <ReserveBar percent={effective.percent} color={color} />
+        </span>
+      ) : (
+        <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 cursor-pointer truncate px-1.5 text-right text-[10px] text-muted">{t("limits.noDataYet")}</span>
+      )}
+    </div>
+  );
+}
+
 /** One engine's limits block, doubling as its account switcher: the whole block
     is a button opening the unified {@link AccountsPanel} for that engine, and
     the header carries the active-account chip from the reconciled windows so
@@ -188,6 +242,12 @@ function EngineLimitsBlock({
       if (request.engine === engine) openFocused(request.accountId);
     });
   }, [engine]);
+
+  const openOn = (accountId: string) => {
+    setChartOpen(false);
+    setFocusAccountId(accountId);
+    setOpen(true);
+  };
 
   const closeChart = () => {
     setChartOpen(false);
@@ -263,21 +323,22 @@ function EngineLimitsBlock({
   const failureReason = fmtLimitsFailureReason(provenance, locale);
   const visibleFailureReason = accounts.status === "loading" || identityPending ? null : failureReason;
 
-  const windows = accountLimits ? [
-    accountLimits.session ? `${windowLabel(t, "session", accountLimits.session.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.session.usedPercent)}%` : null,
-    accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
-    ...quota.tiers.map((tier) => `${t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} ${t("limits.left")} ${Math.round(100 - tier.value.usedPercent)}%`),
-  ].filter(Boolean).join(" · ") : "";
+  const windows = quotaWindowsSummary(t, quota, accountLimits);
   /* Why the line is dimmed or carries the amber dot: an old reading, or a read that failed. */
   const staleReason = [effectiveStaleHint, stale ? t("limits.stale", { stale }) : null, visibleFailureReason].filter(Boolean).join(" · ");
   const summary = [label, activeLabel, accountLimits?.plan, windows || (visibleFailureReason ? null : accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), staleReason].filter(Boolean).join(" · ");
   /* The line says what is left of the tightest window, and the bar draws that same share. */
   const left = effective ? effective.percent : null;
   const color = effective ? barColor(effective.percent, tint.color) : tint.color;
-  return (
-    <div ref={containerRef} className="relative" data-engine-limits={engine}>
-      <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
-        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
+  /* The compact footer names every account of the engine, one line each, in the order the account list
+     holds them; the active one stands in its place. "All windows" keeps the active account alone. */
+  const otherAccounts = density === "line" ? accounts.accounts.filter((account) => account.id !== accounts.active) : [];
+  const listsActive = accounts.accounts.some((account) => account.id === accounts.active);
+  const several = otherAccounts.length > 0;
+  const inactiveLine = (account: AccountOption) => <InactiveAccountLine key={account.id} account={account} engine={engine} label={label} now={now} onOpen={openOn} />;
+  const activeLine = (
+      <div data-meter-line="" data-footer-account={accounts.active} data-footer-account-active="true" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
+        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-current={several ? "true" : undefined} aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setFocusAccountId(null); setOpen((value) => !value); }}>
           {/* The account starts on the edge every name in the sidebar starts on, and the mark that names
               the engine follows it, as an icon follows its word in the list above. The amber dot
               stands on the mark's corner, where it takes no width from the name. */}
@@ -298,6 +359,12 @@ function EngineLimitsBlock({
           <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 truncate px-1.5 text-right text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
         )}
       </div>
+  );
+  return (
+    <div ref={containerRef} className="relative" data-engine-limits={engine}>
+      {several && listsActive
+        ? accounts.accounts.map((account) => account.id === accounts.active ? <Fragment key={account.id}>{activeLine}</Fragment> : inactiveLine(account))
+        : <>{activeLine}{otherAccounts.map(inactiveLine)}</>}
       {/* Behind "All windows" a failed read says why in full, under its account. */}
       {density === "detail" && visibleFailureReason ? (
         <div className={`${LINE_EDGE} -mt-0.5 pb-1 ${anyStale ? "opacity-60" : ""}`}>
