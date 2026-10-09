@@ -246,6 +246,7 @@ export async function sendDismissal(
 }
 
 function subjectKey(subject: DismissalSubject): string {
+  if (subject.kind === "prototype") return `prototype:${subject.reviewId}`;
   if (subject.kind === "report") return `report:${subject.seq}`;
   return subject.kind === "pipeline" ? `pipeline:${subject.pipelineId}` : `conversation:${subject.conversationId}`;
 }

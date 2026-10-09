@@ -1,3 +1,4 @@
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -162,7 +163,7 @@ function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason
 
 /** The task's prototype review still waits for the operator's choice. */
 function prototypeWaits(card: KanbanCard): boolean {
-  return Boolean(card.task?.prototypeReview?.waitingReviewId);
+  return prototypeWaitsOnOperator(card.task?.prototypeReview);
 }
 
 /** Whether the card needs the operator, as the ⚠ queue reads it. */

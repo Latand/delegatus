@@ -1,13 +1,19 @@
 import fs from "node:fs";
+import { attentionDismissalIndex, type AttentionDismissalV1 } from "@/lib/attention/dismissals";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import { prototypeRoot, storedMediaPath } from "./store";
 import type { PrototypeReviewRead, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
 import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
-export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[]): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
-  return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => ({ ...task,
-    prototypeReview: currentPrototypeSummary(prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview) }));
+export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
+  return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => {
+    const summary = currentPrototypeSummary(prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview);
+    const record = summary?.waitingReviewId ? index.get(`prototype:${summary.waitingReviewId}`) : undefined;
+    if (!summary) return task;
+    const { waitingDismissal: _held, ...current } = summary;
+    return { ...task, prototypeReview: { ...current, ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
+  });
 }
 /** What a caller that names itself with a capability gets on a shared board
     read: the task, and nothing of its review. The board has no project fence,
@@ -64,4 +70,8 @@ export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
   });
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
   return { taskId: task.id, rounds: withSuperseded(rounds), summary, waitingReviewId: summary?.waitingReviewId ?? null };
+}
+
+function prototypeDismissals(): ReadonlyMap<string, AttentionDismissalV1> {
+  try { return attentionDismissalIndex(); } catch { return new Map(); }
 }

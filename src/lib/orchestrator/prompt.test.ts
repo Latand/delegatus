@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 42, and a v41 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
+test("the default mandate is at version 43, and a v42 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(43);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -123,7 +123,8 @@ test("the default mandate is at version 42, and a v41 seat reads as stale", () =
   expect(orchestratorMandateStale(39)).toBe(true);
   expect(orchestratorMandateStale(40)).toBe(true);
   expect(orchestratorMandateStale(41)).toBe(true);
-  expect(orchestratorMandateStale(42)).toBe(false);
+  expect(orchestratorMandateStale(42)).toBe(true);
+  expect(orchestratorMandateStale(43)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -171,7 +172,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
-  42: "dc731db851dc7e7952aa8b172829563fb7544214198577fdf3e32d28fca6b11d",
+  42: "87da100ab11b67c8309e22764c89bc37c8b81922eb358e4c2adb2eef8ce82688",
+  43: "f65e4489ebca3ad8a2916aab73597b28d13b974f39df3cfa2c21689a1a611c07",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -777,8 +779,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      (#2518) takes 1 100 more: the bug report and other-project section and
      the issue-reporter row. The visual-critic row and the UI-lane step that
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
-     the merged delivered default measures 29 363 bytes. The applyNow
-     pointer on the override-stage line adds 16 more, 29 379 in all.
+     the delivered default, including the applyNow pointer and the combined
+     board and linked-seat directives, measures 29 385 bytes.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
@@ -946,4 +948,13 @@ test("the mandate directs prototype review to the task", () => {
 test("the mandate names linked seats and requires coordination before a shared release", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_orchestrator lists linkedSeats");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
+});
+
+test("the board walk clears only rows that ask nothing and replaces the shipped paragraph exactly", () => {
+  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("clear Waiting-for-you rows that ask nothing with dismiss_attention");
+  const previous = `## Reading the board maintenance report\nEach time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
+  // Use the current heading; only the paragraph has changed between releases.
+  const shipped = previous.replace(previous.split("\n")[0]!, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE.split("\n")[0]!);
+  expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
+  expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
 });

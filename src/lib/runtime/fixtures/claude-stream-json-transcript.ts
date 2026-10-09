@@ -1,3 +1,4 @@
+import "@/lib/testing/fixtureLifetime";
 /**
  * A stand-in for the `claude` binary a structured host launches, for tests
  * that drive the production launch path end to end: the host's auth and

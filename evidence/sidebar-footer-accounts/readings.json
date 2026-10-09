@@ -1,0 +1,1513 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "block": "the compact footer: one line per account of each engine",
+  "values": "invented",
+  "readings": [
+    {
+      "frame": "built-accounts-1-1440x900-light-en",
+      "state": "accounts-1",
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-1-1440x900-light-uk",
+      "state": "accounts-1",
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-1-1440x900-dark-en",
+      "state": "accounts-1",
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-1-1440x900-dark-uk",
+      "state": "accounts-1",
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-1440x900-light-en",
+      "state": "accounts-3",
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-1440x900-light-uk",
+      "state": "accounts-3",
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-1440x900-dark-en",
+      "state": "accounts-3",
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-1440x900-dark-uk",
+      "state": "accounts-3",
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-8-1440x900-light-en",
+      "state": "accounts-8",
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 285,
+        "footerHeight": 533,
+        "rows": 6,
+        "rowsInView": 5,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-3",
+          "name": "Account G",
+          "active": false,
+          "value": "left 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-4",
+          "name": "Account I",
+          "active": false,
+          "value": "left 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-5",
+          "name": "Account J",
+          "active": false,
+          "value": "left 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-6",
+          "name": "Account K",
+          "active": false,
+          "value": "left 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-7",
+          "name": "Account M",
+          "active": false,
+          "value": "left 70%",
+          "bar": 70,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-3",
+          "name": "Account H",
+          "active": false,
+          "value": "left 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-4",
+          "name": "Account L",
+          "active": false,
+          "value": "left 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-5",
+          "name": "Account N",
+          "active": false,
+          "value": "left 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-6",
+          "name": "Account P",
+          "active": false,
+          "value": "left 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-7",
+          "name": "Account Q",
+          "active": false,
+          "value": "left 70%",
+          "bar": 70,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-8-1440x900-light-uk",
+      "state": "accounts-8",
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 285,
+        "footerHeight": 533,
+        "rows": 6,
+        "rowsInView": 5,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-3",
+          "name": "Account G",
+          "active": false,
+          "value": "лишилось 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-4",
+          "name": "Account I",
+          "active": false,
+          "value": "лишилось 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-5",
+          "name": "Account J",
+          "active": false,
+          "value": "лишилось 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-6",
+          "name": "Account K",
+          "active": false,
+          "value": "лишилось 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-7",
+          "name": "Account M",
+          "active": false,
+          "value": "лишилось 70%",
+          "bar": 70,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-3",
+          "name": "Account H",
+          "active": false,
+          "value": "лишилось 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-4",
+          "name": "Account L",
+          "active": false,
+          "value": "лишилось 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-5",
+          "name": "Account N",
+          "active": false,
+          "value": "лишилось 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-6",
+          "name": "Account P",
+          "active": false,
+          "value": "лишилось 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-7",
+          "name": "Account Q",
+          "active": false,
+          "value": "лишилось 70%",
+          "bar": 70,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-8-1440x900-dark-en",
+      "state": "accounts-8",
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 285,
+        "footerHeight": 533,
+        "rows": 6,
+        "rowsInView": 5,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-3",
+          "name": "Account G",
+          "active": false,
+          "value": "left 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-4",
+          "name": "Account I",
+          "active": false,
+          "value": "left 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-5",
+          "name": "Account J",
+          "active": false,
+          "value": "left 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-6",
+          "name": "Account K",
+          "active": false,
+          "value": "left 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-7",
+          "name": "Account M",
+          "active": false,
+          "value": "left 70%",
+          "bar": 70,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-3",
+          "name": "Account H",
+          "active": false,
+          "value": "left 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-4",
+          "name": "Account L",
+          "active": false,
+          "value": "left 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-5",
+          "name": "Account N",
+          "active": false,
+          "value": "left 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-6",
+          "name": "Account P",
+          "active": false,
+          "value": "left 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-7",
+          "name": "Account Q",
+          "active": false,
+          "value": "left 70%",
+          "bar": 70,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-8-1440x900-dark-uk",
+      "state": "accounts-8",
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 285,
+        "footerHeight": 533,
+        "rows": 6,
+        "rowsInView": 5,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-3",
+          "name": "Account G",
+          "active": false,
+          "value": "лишилось 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-4",
+          "name": "Account I",
+          "active": false,
+          "value": "лишилось 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-5",
+          "name": "Account J",
+          "active": false,
+          "value": "лишилось 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-6",
+          "name": "Account K",
+          "active": false,
+          "value": "лишилось 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-7",
+          "name": "Account M",
+          "active": false,
+          "value": "лишилось 70%",
+          "bar": 70,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-3",
+          "name": "Account H",
+          "active": false,
+          "value": "лишилось 0%",
+          "bar": 0,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-4",
+          "name": "Account L",
+          "active": false,
+          "value": "лишилось 45%",
+          "bar": 45,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-5",
+          "name": "Account N",
+          "active": false,
+          "value": "лишилось 92%",
+          "bar": 92,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-6",
+          "name": "Account P",
+          "active": false,
+          "value": "лишилось 36%",
+          "bar": 36,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-7",
+          "name": "Account Q",
+          "active": false,
+          "value": "лишилось 70%",
+          "bar": 70,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-focus-1440x900-light-en",
+      "state": "accounts-3-focus",
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": {
+        "width": 400,
+        "height": 539,
+        "inside": true
+      },
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-focus-1440x900-light-uk",
+      "state": "accounts-3-focus",
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": {
+        "width": 400,
+        "height": 539,
+        "inside": true
+      },
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-focus-1440x900-dark-en",
+      "state": "accounts-3-focus",
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": {
+        "width": 400,
+        "height": 539,
+        "inside": true
+      },
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "left 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "no data yet",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-focus-1440x900-dark-uk",
+      "state": "accounts-3-focus",
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 545,
+        "footerHeight": 273,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": {
+        "width": 400,
+        "height": 539,
+        "inside": true
+      },
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "лишилось 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "claude",
+          "id": "account-1",
+          "name": "Account C",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "claude",
+          "id": "account-2",
+          "name": "Account E",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "лишилось 28%",
+          "bar": 28,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "account-1",
+          "name": "Account D",
+          "active": false,
+          "value": "лишилось 82%",
+          "bar": 82,
+          "dimmed": true
+        },
+        {
+          "engine": "codex",
+          "id": "account-2",
+          "name": "Account F",
+          "active": false,
+          "value": "поки немає даних",
+          "bar": null,
+          "dimmed": false
+        }
+      ]
+    },
+    {
+      "frame": "built-accounts-3-detail-1440x900-light-en",
+      "state": "accounts-3-detail",
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 438,
+        "footerHeight": 380,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "fit": {
+        "pageScrolls": false,
+        "footerBottom": 900,
+        "windowHeight": 900
+      },
+      "panel": null,
+      "lines": [
+        {
+          "engine": "claude",
+          "id": "default",
+          "name": "Account A",
+          "active": true,
+          "value": "left 12%",
+          "bar": 12,
+          "dimmed": false
+        },
+        {
+          "engine": "codex",
+          "id": "default",
+          "name": "Account B",
+          "active": true,
+          "value": "left 28%",
+          "bar": 28,
+          "dimmed": false
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

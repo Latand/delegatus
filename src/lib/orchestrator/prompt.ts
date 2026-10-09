@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 42;
+export const ORCHESTRATOR_PROMPT_VERSION = 43;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -250,7 +250,10 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
  * a missing priority is stated, never turned into a request to label (D2).
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
-Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
+Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues with suggest_replies and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+
+const SHIPPED_BOARD_REPORT_DIRECTIVES = [`${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`];
 
 /** The heading of the required reporting and cross-project rules. */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
@@ -277,7 +280,7 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}
 When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
 Other projects: send_message_to_orchestrator; tasks, pipelines, spawns and worker messages need an explicit operator request quoted in crossProjectRequest.
-Shared projects: get_orchestrator lists linkedSeats. Coordinate production and shared locks via send_message_to_orchestrator with machine named.`;
+get_orchestrator lists linkedSeats. Coordinate production and shared locks via send_message_to_orchestrator with machine named.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
@@ -619,7 +622,7 @@ export function orchestratorMandateWithRoleTable(mandate: string, roleTable: str
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
     SHIPPED_GREETING_OFFERS.reduce(
       (text, shipped) => text.split(shipped).join(ORCHESTRATOR_GREETING_OFFER),
-      mandate
+      SHIPPED_BOARD_REPORT_DIRECTIVES.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE), mandate)
         .split(`\n\n${SHIPPED_DEPLOYS_SECTION}`).join("")
         .split(SHIPPED_DEPLOYS_SECTION).join(""),
     ),

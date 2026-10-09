@@ -1,3 +1,6 @@
+import { translate } from "@/lib/i18n/core";
+import { reasonLine } from "./decision";
+import { needsYouRowText } from "./needsYouPanel";
 import { expect, test } from "bun:test";
 
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -145,4 +148,19 @@ test("an agent that asked the operator in prose («Asks you») is a row of its p
     kind: "conversation", conversationId: "conversation_delta-architect", path: "/delta-architect", reasonId: "ask:conversation_delta-architect:claude:msg-1", reason: "ask",
   });
   expect(needsYouCounts(queue).get("delta")).toBe(1);
+});
+
+
+test("the read and desktop row share their title and localized line in both languages", () => {
+  for (const locale of ["en", "uk"] as const) {
+    const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(locale, key, params);
+    for (const entry of QUEUE) {
+      const text = needsYouRowText(t, entry);
+      if (entry.kind === "conversation") {
+        expect(text.title).toBe(entry.item.reason.report?.body ?? entry.item.file.title);
+        expect(text.line).toBe(reasonLine(t, entry.item.reason));
+      }
+    }
+    expect(needsYouRowText(t, { kind: "prototype", id: "prototype:r", notice: { title: "Layout" } as never })).toEqual({ title: "Layout", line: t("proto.notice.open") });
+  }
 });

@@ -2,6 +2,54 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
+import { stop, signalRuntimeHost } from "./npm-package-smoke.mjs";
+import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
+import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+
+test("package smoke stop refuses an exited child without signalling its old group", async () => {
+  const signals: unknown[] = [];
+  for (const ended of [{ exitCode: 0, signalCode: null }, { exitCode: null, signalCode: "SIGTERM" }]) {
+    await stop({ ...ended, pid: 999, kill: (signal: unknown) => signals.push(signal) } as unknown as ChildProcess);
+  }
+  expect(signals).toEqual([]);
+});
+
+test("package smoke restart refuses a reused or missing runtime-host identity", () => {
+  const signals: unknown[] = [];
+  const send = (pid: number, signal?: string | number): true => { signals.push([pid, signal]); return true; };
+  const original = { pid: 999, startIdentity: "999:original" };
+  expect(signalRuntimeHost(original, "SIGTERM", () => "999:reused", send)).toBe(false);
+  expect(signalRuntimeHost(original, "SIGTERM", () => null, send)).toBe(false);
+  expect(signalRuntimeHost({ ...original, startIdentity: null }, "SIGTERM", () => null, send)).toBe(false);
+  expect(signals).toEqual([]);
+  expect(signalRuntimeHost(original, "SIGTERM", () => original.startIdentity, send)).toBe(true);
+  expect(signals).toEqual([[999, "SIGTERM"]]);
+});
+
+test("package smoke stop escalates only its original handle and preserves a same-argv bystander", async () => {
+  const argv = ["-e", "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"];
+  const child = spawn(process.execPath, argv, { stdio: ["ignore", "pipe", "ignore"], detached: true });
+  const identity = captureProcessIdentity(child.pid!);
+  const bystander = spawn(process.execPath, argv, { stdio: ["ignore", "pipe", "ignore"], detached: true });
+  const other = captureProcessIdentity(bystander.pid!);
+  const ready = (handle: ChildProcess) => new Promise<void>((resolve, reject) => {
+    handle.once("error", reject);
+    handle.stdout!.once("data", () => resolve());
+  });
+  try {
+    await Promise.all([ready(child), ready(bystander)]);
+    await stop(child, 50, 1_000);
+    expect(child.signalCode).toBe("SIGKILL");
+    expect(processIdentityStatus(identity)).toBe("dead");
+    expect(processIdentityStatus(other)).toBe("alive");
+    await stop(child);
+    expect(processIdentityStatus(other)).toBe("alive");
+  } finally {
+    await stopFixtureProcess(child, 50);
+    await stopFixtureProcess(bystander, 50);
+  }
+}, 5_000);
 
 test("the packed standalone server starts with every worker available", async () => {
   const nodeSearchPath = (process.env.PATH ?? "")

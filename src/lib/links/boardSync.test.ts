@@ -31,6 +31,34 @@ afterAll(async () => {
   await fixtures.cleanup();
 });
 
+test("a conflicting finding reopen converges back to Done over the peer routes", async () => {
+  const a = await install("finding-A");
+  const b = await install("finding-B");
+  const peerId = await link(a, b);
+  const body = { project: key, text: "Recurring socket failure", placement: "unplaced", findingKey: "socket:recurrence" };
+  const first = (await request(a, "/api/tasks", "POST", body)).body.task as BoardTask;
+  expect(first.id).toBeTruthy();
+  await sync(a, peerId);
+  expect((await request(a, `/api/tasks/${first.id}`, "PATCH", { status: "done" })).status).toBe(200);
+  const successor = (await request(a, "/api/tasks", "POST", body)).body.task as BoardTask;
+  expect(successor.finding?.previousTaskId).toBe(first.id);
+  await sync(a, peerId);
+  expect((await request(b, `/api/tasks/${first.id}`, "PATCH", { status: "inbox" })).status).toBe(200);
+  for (let round = 0; round < 3; round++) await sync(a, peerId);
+  for (const side of [a, b]) {
+    const tasks = (await request(side, "/test/tasks")).body as unknown as BoardTask[];
+    expect(tasks.find(task => task.id === first.id)?.status).toBe("done");
+    expect(tasks.find(task => task.id === successor.id)?.status).toBe("inbox");
+  }
+  expect((await request(a, `/api/tasks/${successor.id}`, "PATCH", { status: "done" })).status).toBe(200);
+  await sync(a, peerId);
+  expect((await request(b, `/api/tasks/${first.id}`, "PATCH", { status: "inbox" })).status).toBe(200);
+  for (let round = 0; round < 3; round++) await sync(a, peerId);
+  const reopened = (await request(a, "/test/tasks")).body as unknown as BoardTask[];
+  expect(reopened.find(task => task.id === first.id)?.status).toBe("inbox");
+  expect(reopened.filter(task => task.findingKey === body.findingKey && task.status !== "done")).toHaveLength(1);
+}, 30_000);
+
 /** Merge-base processes used to seed state as it existed before this fix. */
 function mergeBaseSource(revision = "4baabbec88d86b5a9a69d178e2be9881d12fa7fe"): string {
   const source = path.join(root, `source-merge-base-${revision}`);
