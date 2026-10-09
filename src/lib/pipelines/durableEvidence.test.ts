@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { readStableTailRecords } from "@/lib/scanner/activity";
-import { oauthFailureWithRecoveryTail } from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
+import {
+  continuationPromptRecord,
+  oauthFailureWithRecoveryTail,
+  shutdownInterruptRecord,
+  syntheticNoOpRecord,
+  workingAssistantRecord,
+} from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
 
 import { durableStageTurnEvidence, MAX_REPORT_EVIDENCE_BYTES } from "./durableEvidence";
 
@@ -18,6 +24,28 @@ function writeTranscript(name: string, records: Record<string, unknown>[]): stri
 }
 
 const PASS_TEXT = "done\n\n```json\n{\"status\":\"pass\"}\n```";
+
+test("Codex unavailable prompt metadata stays external without losing terminal evidence", async () => {
+  const cut = Date.parse("2026-10-05T10:00:00Z");
+  const file = writeTranscript("codex-unavailable-prompt.jsonl", [
+    { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete",
+      error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
+    { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message",
+      message: `<!-- llv:structured-user ctx=a.${"A".repeat(43)}.${"B".repeat(16)} -->\nWait for my review` } },
+    { type: "event_msg", timestamp: new Date(cut + 2000).toISOString(), payload: { type: "agent_message", message: PASS_TEXT } },
+    { type: "event_msg", timestamp: new Date(cut + 3000).toISOString(), payload: { type: "task_complete" } },
+  ]);
+  for (const afterCut of [undefined, cut]) {
+    const evidence = await durableStageTurnEvidence("codex", file, undefined, undefined, undefined, afterCut);
+    // The agent's answer closed the cut chain: no cut is open, and the saved cut is not in one.
+    expect(evidence).toMatchObject({
+      turn: "terminal", message: { text: PASS_TEXT },
+      prompts: [{ ts: cut + 1000, origin: "external" }], firstProviderCutAt: null,
+      ...(afterCut ? { requestedCutOpen: false } : {}),
+    });
+    expect(evidence?.externalPromptAfterCut).toBeUndefined();
+  }
+});
 
 for (const engine of ["claude", "codex"] as const) {
   test(`${engine} reads the full assistant brief before stage_report and the later closing message`, async () => {
@@ -636,6 +664,8 @@ for (const engine of ["codex", "claude"] as const) {
     ]);
     const evidence = await durableStageTurnEvidence(engine, file);
     expect(evidence).toMatchObject({ turn: "terminal", terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-10-02T10:02:00Z") } });
+    expect(evidence!.message).toBeNull();
+    expect(evidence!.cutProse).toBe("unfinished edit");
   });
 }
 
@@ -664,6 +694,262 @@ test("a real Claude continuation cut is newer than an earlier provider failure",
     terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-07-24T08:01:00Z") } });
 });
 
+/* A restart cut is judged by the agent's own last event, so what a CLI writes
+   as it exits or resumes must not move it. */
+test("the agent's last event ignores the bookkeeping a Claude CLI writes as it exits and resumes", async () => {
+  const file = writeTranscript("claude-cut-bookkeeping.jsonl", [
+    { type: "user", timestamp: "2026-10-06T10:00:00.000Z", message: { role: "user", content: "prompt" } },
+    workingAssistantRecord("2026-10-06T10:01:00.000Z"),
+    shutdownInterruptRecord("2026-10-06T10:02:00.000Z"),
+    continuationPromptRecord("2026-10-06T10:03:00.000Z"),
+    syntheticNoOpRecord("2026-10-06T10:03:01.000Z"),
+    { type: "system", subtype: "local_command", timestamp: "2026-10-06T10:04:00.000Z" },
+  ]);
+  const evidence = await durableStageTurnEvidence("claude", file);
+  expect(evidence!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:01:00.000Z"));
+  expect(evidence!.lastRecordAt).toBe(Date.parse("2026-10-06T10:04:00.000Z"));
+});
+
+test("the agent's last event ignores Codex token counts and a shutdown abort, and moves on a tool result", async () => {
+  const cut = writeTranscript("codex-cut-bookkeeping.jsonl", [
+    { timestamp: "2026-10-06T10:00:00.000Z", type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: "2026-10-06T10:01:00.000Z", type: "response_item", payload: { type: "function_call", name: "shell", call_id: "c1" } },
+    { timestamp: "2026-10-06T10:02:00.000Z", type: "event_msg", payload: { type: "token_count" } },
+    { timestamp: "2026-10-06T10:03:00.000Z", type: "event_msg", payload: { type: "turn_aborted" } },
+    { timestamp: "2026-10-06T10:04:00.000Z", type: "turn_context", payload: { cwd: "/repo" } },
+  ]);
+  expect((await durableStageTurnEvidence("codex", cut))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:01:00.000Z"));
+  const worked = writeTranscript("codex-worked-after.jsonl", [
+    { timestamp: "2026-10-06T10:00:00.000Z", type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: "2026-10-06T10:01:00.000Z", type: "response_item", payload: { type: "function_call", name: "shell", call_id: "c1" } },
+    { timestamp: "2026-10-06T10:05:00.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "ok" } },
+  ]);
+  expect((await durableStageTurnEvidence("codex", worked))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:05:00.000Z"));
+});
+
+test("quota prompt provenance keeps human overrides and excludes tool results", async () => {
+  const file = writeTranscript("quota-prompt-provenance.jsonl", [
+    { type: "user", timestamp: "2026-10-05T16:56:00Z", origin: { kind: "task-notification" }, promptSource: "system", message: { content: "<task-notification>done</task-notification>" } },
+    { type: "user", timestamp: "2026-10-05T16:56:01Z", origin: { kind: "human" }, turnOrigin: "task_notification", promptSource: "typed", message: { content: "<task-notification>human words</task-notification>" } },
+    { type: "user", timestamp: "2026-10-05T16:56:02Z", message: { content: [{ type: "tool_result", content: "Tool finished" }] } },
+    { type: "user", timestamp: "2026-10-05T16:56:03Z", origin: "task", message: { content: "Task finished" } },
+    { type: "user", timestamp: "2026-10-05T16:56:04Z", origin: { kind: "task" }, message: { content: "Task finished" } },
+    { type: "user", timestamp: "2026-10-05T16:56:05Z", origin: "task", promptSource: "typed", message: { content: "Wait for my review" } },
+  ]);
+  expect((await durableStageTurnEvidence("claude", file))?.prompts).toEqual([
+    { ts: Date.parse("2026-10-05T16:56:00Z"), origin: "harness" },
+    { ts: Date.parse("2026-10-05T16:56:01Z"), origin: "external" },
+    { ts: Date.parse("2026-10-05T16:56:03Z"), origin: "harness" },
+    { ts: Date.parse("2026-10-05T16:56:04Z"), origin: "harness" },
+    { ts: Date.parse("2026-10-05T16:56:05Z"), origin: "external" },
+  ]);
+});
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["before", "after"] as const)(`${engine} prompt order survives clock skew %s the cut`, async position => {
+    const cut = Date.parse("2026-10-05T16:56:00Z");
+    const promptAt = cut + (position === "before" ? 1 : -1);
+    const prompt = engine === "claude" ? { type: "user", timestamp: new Date(promptAt).toISOString(), message: { content: "Please wait" } }
+      : { type: "event_msg", timestamp: new Date(promptAt).toISOString(), payload: { type: "user_message", message: "Please wait" } };
+    const notice = engine === "claude" ? { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+      : { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+    const file = writeTranscript(`skewed-cut-${engine}-${position}.jsonl`, position === "before" ? [prompt, notice] : [notice, prompt, notice]);
+    const evidence = await durableStageTurnEvidence(engine, file, undefined, new Date(cut - 1000).toISOString(), undefined, cut);
+    expect(evidence?.externalPromptAfterCut).toBe(position === "after");
+  });
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  for (const size of [150_000, 9 * 1024 * 1024]) {
+    for (const firstTick of [false, true]) {
+      test(`${engine} backdated context cannot hide a human reply (size=${size}, first=${firstTick})`, async () => {
+        const cut = Date.parse("2026-10-05T16:56:00Z");
+        const notice = (at: number) => engine === "claude" ? { type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+          message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+          : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+        const prompt = engine === "claude" ? { type: "user", timestamp: new Date(cut + 1000).toISOString(), message: { content: "Wait for my review" } }
+          : { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message", message: "Wait for my review" } };
+        const file = writeTranscript(`backdated-${engine}-${size}-${firstTick}.jsonl`, [notice(cut), prompt,
+          { type: "queue-operation", timestamp: new Date(cut + 1500).toISOString(), padding: "x".repeat(size) },
+          { type: "turn_context", timestamp: new Date(cut - 500).toISOString() }, notice(cut + 2000)]);
+        const evidence = await durableStageTurnEvidence(engine, file, undefined, new Date(cut - 1000).toISOString(), undefined, firstTick ? undefined : cut);
+        if (size < 8 * 1024 * 1024) expect(evidence).toMatchObject({ promptHistoryComplete: true, externalPromptAfterCut: true, firstProviderCutAt: cut });
+        else expect(evidence?.promptHistoryComplete).toBe(false);
+      });
+    }
+  }
+  test(`${engine} first provider cut follows native order when timestamps run backward`, async () => {
+    const cut = Date.parse("2026-10-05T16:56:00Z");
+    const notice = (at: number) => engine === "claude" ? { type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+      : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+    const prompt = engine === "claude" ? { type: "user", timestamp: new Date(cut - 10).toISOString(), message: { content: "Wait for me" } }
+      : { type: "event_msg", timestamp: new Date(cut - 10).toISOString(), payload: { type: "user_message", message: "Wait for me" } };
+    const file = writeTranscript(`backward-cuts-${engine}.jsonl`, [notice(cut), prompt, notice(cut - 20)]);
+    expect(await durableStageTurnEvidence(engine, file, undefined, new Date(cut - 1000).toISOString()))
+      .toMatchObject({ firstProviderCutAt: cut, externalPromptAfterCut: true });
+  });
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} a native append between verified evidence and authorship join remains uncertain`, async () => {
+    const cut = Date.parse("2026-10-05T16:56:00Z");
+    const text = "Continue the same stage";
+    const notice = engine === "claude" ? { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+      : { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+    const prompt = engine === "claude" ? { type: "user", uuid: "raced-pipeline-prompt", timestamp: new Date(cut + 1000).toISOString(), message: { content: text } }
+      : { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message", message: (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } };
+    const file = writeTranscript(`raced-authorship-${engine}.jsonl`, [notice]);
+    fs.appendFileSync(file, JSON.stringify(prompt) + "\n");
+    if (engine === "claude") {
+      const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+      const ledger = new FileClaudeDeliveryLedger();
+      const session = path.basename(file, ".jsonl");
+      ledger.recordQueued(session, { id: "raced-send", text, origin: { kind: "agent", role: "pipeline" } }, "turn-started");
+      ledger.confirmDelivered(session, "raced-send", "raced-pipeline-prompt");
+    }
+    const raced: typeof readStableTailRecords = async (pathname, bytes) => {
+      const snapshot = await readStableTailRecords(pathname, bytes);
+      fs.appendFileSync(file, JSON.stringify({ type: "turn_context", timestamp: new Date(cut + 2000).toISOString() }) + "\n");
+      return snapshot;
+    };
+    expect(await durableStageTurnEvidence(engine, file, undefined, undefined, raced, cut)).toBeNull();
+    expect((await durableStageTurnEvidence(engine, file, undefined, undefined, undefined, cut))?.prompts)
+      .toEqual([{ ts: cut + 1000, origin: "pipeline" }]);
+  });
+}
+for (const engine of ["claude", "codex"] as const) {
+  test.each([false, true])(`${engine} large historical prefix preserves a recent named cut (human=%s)`, async human => {
+    const cut = Date.parse("2026-10-05T10:00:00Z");
+    const reset = cut / 1000 + 3600;
+    const notice = engine === "claude" ? { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit · resets 11am (UTC)" }] } }
+      : { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete",
+        error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+    const prompt = engine === "claude" ? { type: "user", timestamp: new Date(cut - 1).toISOString(), message: { content: "Wait for my review" } }
+      : { type: "event_msg", timestamp: new Date(cut - 1).toISOString(), payload: { type: "user_message", message: "Wait for my review" } };
+    const observation = { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "token_count",
+      rate_limits: { primary: { used_percent: 100, resets_at: reset } } } };
+    const records = engine === "claude" ? human ? [notice, prompt, notice] : [notice]
+      : human ? [observation, notice, prompt, observation, notice] : [observation, notice];
+    const file = writeTranscript(`large-prefix-${engine}-${human}.jsonl`, records);
+    const recent = fs.readFileSync(file);
+    const old = JSON.stringify({ type: "turn_context", timestamp: new Date(cut - 86400000).toISOString(), padding: "x".repeat(1100) }) + "\n";
+    fs.writeFileSync(file, old.repeat(8500));
+    fs.appendFileSync(file, recent);
+    const first = await durableStageTurnEvidence(engine, file, undefined, new Date(cut - 1000).toISOString());
+    expect(first?.promptHistoryComplete).toBe(true);
+    expect(first?.externalPromptAfterCut).toBe(human);
+    expect(first?.terminalProviderMessage?.usageLimit?.resetsAt).toBe(reset);
+    const again = await durableStageTurnEvidence(engine, file, undefined, new Date(cut - 1000).toISOString(), undefined,
+      first!.terminalProviderMessage!.ts);
+    expect(again?.promptHistoryComplete).toBe(true);
+  });
+  test(`${engine} large relevant history with backdated rows remains incomplete`, async () => {
+    const cut = Date.parse("2026-10-05T10:00:00Z");
+    const notice = engine === "claude" ? { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+      message: { stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+      : { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+    const prompt = engine === "claude" ? { type: "user", timestamp: new Date(cut - 1).toISOString(), message: { content: "Wait for my review" } }
+      : { type: "event_msg", timestamp: new Date(cut - 1).toISOString(), payload: { type: "user_message", message: "Wait for my review" } };
+    const file = writeTranscript(`large-relevant-${engine}.jsonl`, [notice, prompt]);
+    const old = JSON.stringify({ type: "turn_context", timestamp: new Date(cut - 86400000).toISOString(), padding: "x".repeat(1100) }) + "\n";
+    fs.appendFileSync(file, old.repeat(8500) + JSON.stringify(notice) + "\n");
+    expect((await durableStageTurnEvidence(engine, file, undefined, new Date(cut - 1000).toISOString()))?.promptHistoryComplete).toBe(false);
+  });
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  const cut = Date.parse("2026-10-05T17:22:09Z");
+  const notice = (at: number) => engine === "claude" ? { type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+    message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+    : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
+  const prompt = (at: number, text: string) => engine === "claude" ? { type: "user", timestamp: new Date(at).toISOString(), message: { content: text } }
+    : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "user_message", message: text } };
+  const output = (at: number) => engine === "claude" ? { type: "assistant", timestamp: new Date(at).toISOString(), message: { model: "claude-opus", stop_reason: "end_turn", content: [{ type: "text", text: "Reviewed" }] } }
+    : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "agent_message", message: "Reviewed" } };
+  const later = cut + 4 * 3600_000;
+  const startedAt = new Date(cut - 1000).toISOString();
+
+  test(`${engine} agent output closes a cut chain and the next cut opens its own`, async () => {
+    const closed = writeTranscript(`chain-closed-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000), notice(later)]);
+    expect(await durableStageTurnEvidence(engine, closed, undefined, startedAt, undefined, cut))
+      .toMatchObject({ firstProviderCutAt: later, externalPromptAfterCut: false, requestedCutOpen: false, promptHistoryComplete: true });
+    const open = writeTranscript(`chain-open-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Wait for my answer"), notice(cut + 1500)]);
+    expect(await durableStageTurnEvidence(engine, open, undefined, startedAt, undefined, cut + 1500))
+      .toMatchObject({ firstProviderCutAt: cut, externalPromptAfterCut: true, requestedCutOpen: true, promptHistoryComplete: true });
+  });
+
+  test(`${engine} a zero-time request names the chain open since the attempt start`, async () => {
+    const inherited = writeTranscript(`chain-zero-open-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue"), notice(cut + 1500)]);
+    expect(await durableStageTurnEvidence(engine, inherited, undefined, startedAt, undefined, 0))
+      .toMatchObject({ firstProviderCutAt: cut, requestedCutOpen: true });
+    const worked = writeTranscript(`chain-zero-closed-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue"), output(cut + 2000), notice(later)]);
+    expect(await durableStageTurnEvidence(engine, worked, undefined, startedAt, undefined, 0))
+      .toMatchObject({ firstProviderCutAt: later, externalPromptAfterCut: false, requestedCutOpen: false });
+  });
+
+  test(`${engine} the verified window measures from the open chain past a large closed history`, async () => {
+    const filler = { type: "queue-operation", timestamp: new Date(cut + 3000).toISOString(), padding: "x".repeat(1100) };
+    const records = [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
+      ...Array.from({ length: 8500 }, () => filler), notice(later), prompt(later + 1000, "Wait for my review"), notice(later + 1500)];
+    const file = writeTranscript(`chain-window-${engine}.jsonl`, records);
+    expect(fs.statSync(file).size).toBeGreaterThan(MAX_REPORT_EVIDENCE_BYTES);
+    expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))
+      .toMatchObject({ firstProviderCutAt: later, externalPromptAfterCut: true, requestedCutOpen: false, promptHistoryComplete: true });
+    expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, later + 1500))
+      .toMatchObject({ firstProviderCutAt: later, externalPromptAfterCut: true, requestedCutOpen: true, promptHistoryComplete: true });
+  });
+
+  const toolResult = (at: number, bytes: number) => engine === "claude"
+    ? { type: "user", timestamp: new Date(at).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "large-tool", content: "x".repeat(bytes) }] } }
+    : { type: "response_item", timestamp: new Date(at).toISOString(), payload: { type: "function_call_output", call_id: "large-call", output: "x".repeat(bytes) } };
+
+  test(`${engine} one record over the bound in closed history leaves the next chain verified`, async () => {
+    const file = writeTranscript(`chain-large-record-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
+      toolResult(cut + 3000, 9 * 1024 * 1024), output(cut + 4000), notice(later)]);
+    for (const requested of [cut, undefined]) {
+      expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, requested))
+        .toMatchObject({ firstProviderCutAt: later, promptHistoryComplete: true, ...(requested ? { requestedCutOpen: false } : {}) });
+    }
+    const open = writeTranscript(`chain-large-record-open-${engine}.jsonl`, [output(cut - 500), notice(cut),
+      toolResult(cut + 3000, 9 * 1024 * 1024), notice(later)]);
+    expect((await durableStageTurnEvidence(engine, open, undefined, startedAt, undefined, cut))?.promptHistoryComplete).toBe(false);
+  });
+
+  test(`${engine} an open chain over the bound keeps its prompts unknown and still places the closed request`, async () => {
+    const filler = { type: "queue-operation", timestamp: new Date(later + 500).toISOString(), padding: "x".repeat(1100) };
+    const file = writeTranscript(`chain-open-over-bound-${engine}.jsonl`, [notice(cut), prompt(cut + 1000, "Continue reviewing"), output(cut + 2000),
+      notice(later), ...Array.from({ length: 8500 }, () => filler), notice(later + 1000)]);
+    expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))
+      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: false, promptHistoryComplete: false });
+    expect(await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, later))
+      .toMatchObject({ firstProviderCutAt: later, requestedCutOpen: true, promptHistoryComplete: false });
+  });
+
+  test(`${engine} a torn historical record keeps the recovery window unverified`, async () => {
+    const filler = JSON.stringify({ type: "queue-operation", timestamp: new Date(cut + 3000).toISOString(), padding: "x".repeat(1100) }) + "\n";
+    const file = writeTranscript(`chain-torn-history-${engine}.jsonl`, [notice(cut)]);
+    fs.appendFileSync(file, "{\"type\":\"user\",\"timestamp\":\n" + JSON.stringify(output(cut + 2000)) + "\n" + filler.repeat(8500) + JSON.stringify(notice(later)) + "\n");
+    expect((await durableStageTurnEvidence(engine, file, undefined, startedAt, undefined, cut))?.promptHistoryComplete).toBe(false);
+  });
+}
+
+test.each(["end_turn", null] as const)("a Claude API error closing with %s after large work reads its own window", async stop => {
+  const start = Date.parse("2026-10-05T17:00:00Z");
+  const file = writeTranscript(`claude-closing-api-error-${stop}.jsonl`, [
+    { type: "user", timestamp: new Date(start + 1000).toISOString(), message: { role: "user", content: "run the stage" } },
+    { type: "assistant", timestamp: new Date(start + 2000).toISOString(), message: { model: "claude-opus", stop_reason: "tool_use", content: [{ type: "tool_use", id: "large-tool", name: "Read", input: {} }] } },
+    { type: "user", timestamp: new Date(start + 3000).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "large-tool", content: "x".repeat(150_000) }] } },
+    { type: "assistant", timestamp: new Date(start + 4000).toISOString(), isApiErrorMessage: true, error: "overloaded",
+      message: { model: "<synthetic>", stop_reason: stop, content: [{ type: "text", text: "API Error: Repeated 529 Overloaded errors" }] } },
+  ]);
+  const evidence = await durableStageTurnEvidence("claude", file, undefined, new Date(start).toISOString());
+  if (stop) expect(evidence).toMatchObject({ turn: "terminal", firstProviderCutAt: start + 4000, promptHistoryComplete: true, terminalProviderMessage: { errorClass: "overloaded" } });
+  else expect(evidence).toMatchObject({ turn: "busy", terminalProviderMessage: null, firstProviderCutAt: null });
+});
 
 for (const engine of ["claude", "codex"] as const) {
   test(`${engine} exposes the native turn start before an early final answer`, async () => {

@@ -126,7 +126,13 @@ The interface imports client-safe contracts from
 
 - `usePrototypeReviewSummary(task)` reads the card state from the existing board
   poll without a request per card. No summary means no review; `waitingReviewId`
-  identifies the newest undecided round; `decision` describes the latest choice.
+  names the latest round while it is undecided and is null once it is decided:
+  a decision retires every older undecided round, and a newer round replaces
+  them. `decision` describes the latest choice. The rule is derived on every
+  read, so stored rounds and summaries replicated by an older installation need
+  no migration. `read_prototype_review` and the review read mark each undecided
+  round a later decision retired with `supersededBy`, the id of that decided
+  round; nothing is removed, and such a round can still be decided by hand.
 - `usePrototypeReview(taskId, enabled)` returns `data`, `loading`, `error`,
   `saving`, `refresh`, `save({reviewId, chosen, comment})` and `retry(reviewId)`.
   It polls while open, cancels reads on close and discards stale task responses.

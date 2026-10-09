@@ -506,7 +506,7 @@ class FakeAppServer extends EventEmitter {
       }
       this.respond(message.id, { turn: { id: turnId } });
       this.notify("turn/started", { threadId: this.threadId, turn: { id: turnId } });
-      this.persistUserMessage(message);
+      this.persistUserMessage(message, turnId);
       this.completeUserMessage(message, turnId);
       return;
     }
@@ -518,7 +518,7 @@ class FakeAppServer extends EventEmitter {
       }
       const turnId = (message.params as { expectedTurnId: string }).expectedTurnId;
       this.respond(message.id, { turnId });
-      this.persistUserMessage(message);
+      this.persistUserMessage(message, turnId);
       this.completeUserMessage(message, turnId);
       return;
     }
@@ -627,7 +627,7 @@ class FakeAppServer extends EventEmitter {
     });
   }
 
-  private persistUserMessage(message: Record<string, unknown>): void {
+  private persistUserMessage(message: Record<string, unknown>, turnId: string): void {
     if (!this.persistUserMessages || !this.threadPath) return;
     const input = (message.params as { input?: unknown } | undefined)?.input;
     if (!Array.isArray(input)) return;
@@ -5881,3 +5881,45 @@ for (const mechanism of ["scope", "watchdog"] as const) for (const platform of [
     expect(child.stderr.destroyed).toBe(true);
   } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });
+
+
+test("Codex transport confirmation waits for delayed native provenance before restart", async () => {
+  const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
+  const file = path.join(metadataState, "delayed-native-prompt.jsonl");
+  fs.writeFileSync(file, "");
+  const server = new FakeAppServer();
+  server.threadPath = file;
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
+  const nativeAppend = new Promise<void>(resolve => setTimeout(() => {
+    const request = server.requests.find(row => row.method === "turn/start")!;
+    const wire = (request.params as { input: Array<{ text: string }> }).input[0]!.text;
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:01:00Z",
+      payload: { type: "user_message", message: wire } }) + "\n");
+    resolve();
+  }, 20));
+  try {
+    await host.send({ id: "late-native-write", text: "Continue interrupted work", origin: { kind: "agent", role: "startup-recovery" } });
+    await nativeAppend;
+  } finally { await host.release(); }
+  expect((await durableStageTurnEvidence("codex", file))?.prompts).toEqual([{ ts: Date.parse("2026-10-05T16:01:00Z"), origin: "pipeline" }]);
+});
+
+
+for (const transport of ["send", "steer"] as const) {
+  test(`Codex automatic ${transport} into an active turn binds its own native row`, async () => {
+    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
+    const file = path.join(metadataState, `steered-${transport}.jsonl`);
+    fs.writeFileSync(file, "");
+    const server = new FakeAppServer();
+    server.threadPath = file;
+    server.persistUserMessages = true;
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "initial-send", text: "Initial operator input", origin: { kind: "operator" } });
+      const entry = { id: "automatic-steer", text: "Continue this turn", origin: { kind: "agent" as const, role: "pipeline" } };
+      if (transport === "send") expect(await host.send(entry)).toMatchObject({ outcome: "steered", turnId: "turn-1" });
+      else expect(await (await host.steer(entry)).observe()).toBe("landed");
+      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external", "pipeline"]);
+    } finally { await host.release(); }
+  });
+}

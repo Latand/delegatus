@@ -3,10 +3,14 @@ import os from "node:os";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { AgentRegistry, ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
+import { BACKGROUND_TASK_WAIT_LIMIT_MS, isTaskNotificationRecord, verifiedBackgroundWork, type VerifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
+import { claudeTurnClosedByProviderFailure, lastAgentWorkIndex, withoutExitBookkeeping } from "@/lib/pipelines/durableEvidence";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
-import { readStableTailRecords } from "@/lib/scanner/activity";
+import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
 import { recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
+
+import type { HostTurnRecord } from "./eventStore";
 
 /**
  * Whether a turn is being worked on, decided from evidence rather than from a
@@ -355,6 +359,273 @@ export async function readTranscriptEvidence(
   /* An unparseable tail supplies no turn evidence; retain mtime for diagnostics. */
   if (tail.integrity !== "complete") return { lastEventAt: null, kind: null, lastWriteAt, turn: "unknown" };
   return transcriptEvidenceFromRecords(tail.records, engine, lastWriteAt);
+}
+
+/**
+ * What a transcript proves about a turn a release or a restart may have cut.
+ *
+ * A cut is named by the newest record the agent's own work wrote. The records
+ * a CLI writes as it exits or resumes (Codex token counts and turn aborts, a
+ * shutdown interrupt, a replayed meta prompt, a synthetic no-response) land
+ * after the cut and move the transcript's newest event under a turn nobody
+ * resumed, so a cut named by that event would be recorded again on every boot.
+ */
+export interface TranscriptCutEvidence {
+  /** False when the artifact exists and its tail could not be read whole:
+      corrupt, truncated mid-record, or growing under the read. Nothing may be
+      claimed from it. A file that does not exist yet is verified and empty. */
+  verified: boolean;
+  /** The turn as the agent's own records leave it: the exit bookkeeping a
+      shutdown appends neither opens nor closes it. */
+  turn: TranscriptLivenessEvidence["turn"];
+  /** The newest record of the agent's work, or null when it wrote none. */
+  lastWork: { at: number; kind: TranscriptEventKind | null } | null;
+}
+
+export function transcriptCutEvidenceFromRecords(
+  records: RecordLike[],
+  engine: "claude" | "codex",
+): TranscriptCutEvidence {
+  const end = lastAgentWorkIndex(records, engine === "codex");
+  const work = end < 0 ? null : transcriptEvidenceFromRecords(records.slice(0, end + 1), engine, null);
+  /* The shared projection keeps a Claude turn the provider failed open, since
+     the CLI may retry it (#1811). One the CLI gave up on had ended before any
+     restart, and its recovery is the provider's. */
+  return {
+    verified: true,
+    turn: engine === "claude" && claudeTurnClosedByProviderFailure(records)
+      ? "terminal"
+      : transcriptEvidenceFromRecords(withoutExitBookkeeping(records, engine === "codex"), engine, null).turn,
+    lastWork: work?.lastEventAt != null ? { at: work.lastEventAt, kind: work.kind } : null,
+  };
+}
+
+export async function readTranscriptCutEvidence(
+  engine: "claude" | "codex",
+  transcriptPath: string,
+  read: typeof readStableTailRecords = readStableTailRecords,
+): Promise<TranscriptCutEvidence> {
+  const unverified: TranscriptCutEvidence = { verified: false, turn: "unknown", lastWork: null };
+  if (!transcriptPath) return unverified;
+  if (!fs.existsSync(transcriptPath)) return { ...unverified, verified: true };
+  const tail = await read(transcriptPath);
+  return tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, engine) : unverified;
+}
+
+/** B: the harness background work a Claude turn that has ended still waits
+    on, named for its continuation. The work is a child of the engine process,
+    so whatever ends that process ends the work and its completion notice. The
+    turn ended when its host closed it, or when the agent's own records end
+    it; a shutdown marker after them changes neither. Work a continuation
+    already reported as ended is held no longer. `unreadable` when the
+    transcript's background records cannot be read whole: a prefix of them can
+    hold a task whose end was lost, and nothing may be claimed from it. */
+export async function backgroundWorkAwaitedAtCut(
+  engine: "claude" | "codex",
+  transcriptPath: string,
+  evidence: TranscriptCutEvidence,
+  now: number,
+  hostClosedTurn = false,
+  read: typeof verifiedBackgroundWork = verifiedBackgroundWork,
+): Promise<VerifiedBackgroundWork> {
+  if (engine !== "claude" || (evidence.turn !== "terminal" && !hostClosedTurn) || !evidence.lastWork
+    || now - evidence.lastWork.at > BACKGROUND_TASK_WAIT_LIMIT_MS) return { state: "read", names: [] };
+  return read(transcriptPath, now);
+}
+
+/**
+ * The restart cut decision (docs/design/restart-cut-recognition.md).
+ *
+ * H is the host's own record of its newest turn, read from its ledger. R is
+ * the engine's own record since that turn's boundary, found in the transcript
+ * by identity: a Claude frame's `uuid`, a Codex lifecycle record's `turn_id`.
+ * No clock orders a start against an end, and the marks a dying CLI writes
+ * are never read as an end.
+ */
+export type HostTurnReading =
+  | { state: "open" | "closed"; turnId: string }
+  | { state: "none" }
+  | { state: "unreadable" };
+
+export function hostTurnReading(record: HostTurnRecord): HostTurnReading {
+  if (record.state === "unreadable") return { state: "unreadable" };
+  if (record.state === "absent" || record.turn === null) return { state: "none" };
+  return { state: record.turn.closed ? "closed" : "open", turnId: record.turn.turnId };
+}
+
+/** `unreadable`: the stable tail read is uncertain. `undelimited`: the slice
+    that belongs to the host's newest turn cannot be found. `unknown`: work
+    records and no turn boundary. `empty`: no work record. */
+export type EngineRecordState = "open" | "closed" | "empty" | "unknown" | "unreadable" | "undelimited";
+
+function projectEngineRecords(records: RecordLike[], engine: "claude" | "codex"): EngineRecordState {
+  /* The shared projection keeps a Claude turn the provider failed open, since
+     the CLI may retry it (#1811). One the CLI gave up on had ended before any
+     restart, and its recovery is the provider's. */
+  if (engine === "claude" && claudeTurnClosedByProviderFailure(records)) return "closed";
+  const work = withoutExitBookkeeping(records, engine === "codex");
+  const turn = turnStateFromRecords(work, engine).state;
+  if (turn === "busy") return "open";
+  if (turn === "terminal") return "closed";
+  return work.some((record) => engine === "claude"
+    ? record.type === "user" || record.type === "assistant"
+    : typeof recordValue(record.payload)?.type === "string") ? "unknown" : "empty";
+}
+
+const CODEX_LIFECYCLE_TYPES = new Set([
+  "task_started", "turn_started", "task_complete", "turn_complete", "turn_completed", "turn_aborted",
+]);
+
+function codexTurnId(record: RecordLike): string | null {
+  const payload = recordValue(record.payload);
+  return stringValue(payload?.turn_id) ?? stringValue(payload?.turnId) ?? null;
+}
+
+function codexRecordSince(turnId: string, closed: boolean, tail: Extract<StableTailRead, { integrity: "complete" }>): EngineRecordState {
+  /* A turn the app-server starts is a host turn while its host records, and
+     Codex holds no background work. */
+  if (closed) return "empty";
+  const lifecycle = (record: RecordLike) => CODEX_LIFECYCLE_TYPES.has(stringValue(recordValue(record.payload)?.type) ?? "");
+  const started = tail.records.findLastIndex((record) => {
+    const type = stringValue(recordValue(record.payload)?.type);
+    return (type === "task_started" || type === "turn_started") && codexTurnId(record) === turnId;
+  });
+  let slice: RecordLike[];
+  if (started >= 0) slice = tail.records.slice(started);
+  /* A lifecycle record that names no turn is placed by file order after the
+     turn's start record, which this tail does not hold. */
+  else if (tail.records.some((record) => lifecycle(record) && codexTurnId(record) === null)) return "undelimited";
+  else if (!tail.records.some((record) => codexTurnId(record) === turnId)) return "empty";
+  else if (!tail.prefixTruncated) return "undelimited";
+  else slice = tail.records;
+  return projectEngineRecords(slice.filter((record) => {
+    const named = lifecycle(record) ? codexTurnId(record) : null;
+    return named === null || named === turnId;
+  }), "codex");
+}
+
+function providerWroteAssistant(record: RecordLike): boolean {
+  return record.type === "assistant" && record.isApiErrorMessage !== true
+    && stringValue(recordValue(record.message)?.model) !== "<synthetic>";
+}
+
+function claudeRecordSince(
+  host: Extract<HostTurnRecord, { state: "read" }>,
+  closed: boolean,
+  tail: Extract<StableTailRead, { integrity: "complete" }>,
+): EngineRecordState {
+  const records = tail.records;
+  const uuidOf = (record: RecordLike) => typeof record.uuid === "string" ? record.uuid : null;
+  const before = new Set(host.framesBefore.map((frame) => frame.uuid));
+  const anchor = records.findLastIndex((record) => {
+    const uuid = uuidOf(record);
+    return uuid !== null && before.has(uuid);
+  });
+  let slice: RecordLike[];
+  if (anchor >= 0) slice = records.slice(anchor + 1);
+  /* The anchor lies above a tail that starts mid-file, so all of the tail is
+     after it. A whole transcript that holds none of the assistant frames the
+     host recorded disagrees with the ledger. */
+  else if (host.framesBefore.length > 0 && tail.prefixTruncated) slice = records;
+  else if (host.framesBefore.some((frame) => frame.type === "assistant")) return "undelimited";
+  else {
+    const after = new Set(host.framesAfter.map((frame) => frame.uuid));
+    const first = records.findIndex((record) => {
+      const uuid = uuidOf(record);
+      return uuid !== null && after.has(uuid);
+    });
+    if (first >= 0) slice = records.slice(first);
+    else {
+      /* The host recorded nothing of this transcript. This is the one place a
+         clock is read: the records dated after the ledger file's last write,
+         both clocks being this machine's. */
+      const work = withoutExitBookkeeping(records, false).filter((record) => record.type === "user" || record.type === "assistant");
+      if (work.some((record) => !Number.isFinite(Date.parse(String(record.timestamp ?? ""))))) return "undelimited";
+      slice = records.filter((record) => Date.parse(String(record.timestamp ?? "")) > host.mtimeMs);
+    }
+  }
+  if (!closed) return projectEngineRecords(slice, "claude");
+  /* A frame the host recorded under no turn after the close, missing from a
+     tail that reaches back to the anchor: the CLI was killed between its two
+     writes, the engine had begun again and nothing closed it. */
+  const begun = host.framesAfter.findLast((frame) => frame.type === "assistant" && frame.turnId === null);
+  if (begun && anchor >= 0 && !records.some((record) => uuidOf(record) === begun.uuid)) return "open";
+  /* After a closed turn, only what follows the first sign that the engine
+     began again: a task notification, or an assistant record the provider
+     wrote. */
+  const work = withoutExitBookkeeping(slice, false);
+  const again = work.findIndex((record) => isTaskNotificationRecord(record) || providerWroteAssistant(record));
+  return again < 0 ? "empty" : projectEngineRecords(work.slice(again), "claude");
+}
+
+/** R: the engine's own record since the host's newest boundary. With no host
+    turn on record the whole tail is read. */
+export function engineRecordSince(
+  engine: "claude" | "codex",
+  host: HostTurnRecord,
+  tail: StableTailRead,
+): EngineRecordState {
+  if (tail.integrity !== "complete") return "unreadable";
+  if (host.state !== "read" || host.turn === null) return projectEngineRecords(tail.records, engine);
+  return engine === "codex"
+    ? codexRecordSince(host.turn.turnId, host.turn.closed !== null, tail)
+    : claudeRecordSince(host, host.turn.closed !== null, tail);
+}
+
+export interface RestartCutInput {
+  host: HostTurnReading;
+  record: EngineRecordState;
+  row: {
+    status: "live" | "idle";
+    /** The turn the row names as active. */
+    turnRef: string | null;
+    /** No record of the transcript was ever observed by the registry. */
+    neverObserved: boolean;
+  };
+  /** The conversation runs a launched pipeline stage attempt. */
+  stage: boolean;
+  /** Harness background work a Claude turn that ended still waits on;
+      `unreadable` when its records could not be read whole. */
+  backgroundWork: boolean | "unreadable";
+}
+
+export type RestartCutDecision =
+  /** `turn`: named by the turn the host started. `row`: named by the row's
+      turn word and the transcript's newest work. */
+  | { decision: "cut"; row: number; namedBy: "turn"; turnId: string }
+  | { decision: "cut"; row: number; namedBy: "row" }
+  | { decision: "no-cut"; row: number }
+  | { decision: "undecided"; row: number };
+
+/** The decision table, read top to bottom; every combination lands on a row. */
+export function restartCutDecision(input: RestartCutInput): RestartCutDecision {
+  const { host, record, row } = input;
+  if (host.state === "unreadable") return { decision: "undecided", row: 1 };
+  if (record === "unreadable" || record === "undelimited" || input.backgroundWork === "unreadable") return { decision: "undecided", row: 2 };
+  const backgroundWork = input.backgroundWork;
+  const iff = (cut: boolean, number: number, named: { namedBy: "turn"; turnId: string } | { namedBy: "row" }): RestartCutDecision =>
+    cut ? { decision: "cut", row: number, ...named } : { decision: "no-cut", row: number };
+  if (host.state === "open") {
+    const named = { namedBy: "turn" as const, turnId: host.turnId };
+    /* The host started the turn and nothing ended it; or it ended by itself
+       after its host stopped recording. */
+    return record === "closed" ? iff(backgroundWork, 4, named) : iff(true, 3, named);
+  }
+  if (host.state === "closed") {
+    const named = { namedBy: "turn" as const, turnId: host.turnId };
+    /* The engine began work by itself and nothing ended it. */
+    return record === "open" ? iff(true, 5, named) : iff(backgroundWork, 6, named);
+  }
+  const named = { namedBy: "row" as const };
+  if (row.status === "idle") return iff(backgroundWork, 8, named);
+  /* The first prompt reached the engine and nothing ended it. */
+  if (row.turnRef !== null && row.neverObserved && record !== "closed") return iff(true, 7, named);
+  if (record === "open") return iff(true, 9, named);
+  if (record === "closed") return iff(backgroundWork, 10, named);
+  /* The launch started the attempt and nothing ended it. A live row's turn
+     word over a transcript the registry has observed can lag it (#1281), so
+     by itself it is no evidence of a start. */
+  return iff(input.stage, input.stage ? 11 : 12, named);
 }
 
 /**

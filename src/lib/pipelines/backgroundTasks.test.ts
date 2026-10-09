@@ -6,9 +6,11 @@ import path from "node:path";
 import {
   foldBackgroundTaskRecords,
   emptyBackgroundTaskLedger,
+  killedBackgroundWorkNotice,
   pendingBackgroundTasks,
   readBackgroundTaskLedger,
   runningBackgroundTasks,
+  verifiedBackgroundWork,
 } from "./backgroundTasks";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "llv-background-tasks-"));
@@ -292,4 +294,63 @@ test("the transcript reader applies a text-only TaskStop miss incrementally to o
 
   fs.appendFileSync(file, `${JSON.stringify(miss)}\n`);
   expect(pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 10).map((task) => task.id)).toEqual(["bm-live"]);
+});
+
+/* The restart cut decision's reading (docs/design/restart-cut-recognition.md, B). */
+
+function monitorStart(ts: number, taskId: string) {
+  return {
+    type: "user",
+    timestamp: iso(ts),
+    message: { role: "user", content: [{ tool_use_id: `toolu_${taskId}`, type: "tool_result", content: "Monitor started." }] },
+    toolUseResult: { taskId, timeoutMs: 3_600_000, persistent: true },
+  };
+}
+
+test("a continuation that names the work a restart killed ends that work and no other", () => {
+  const told = `Viewer restarted and severed your structured host mid-turn. ${killedBackgroundWorkNotice(["background task bq1", "monitor mon1"])} Inspect your transcript.`;
+  const records = [
+    bashStart(T0, "bq1"),
+    monitorStart(T0 + 1_000, "mon1"),
+    bashStart(T0 + 2_000, "bq2"),
+    { type: "user", timestamp: iso(T0 + 60_000), message: { role: "user", content: told } },
+  ];
+  expect(runningBackgroundTasks(records, "claude", T0 + 120_000).map((task) => task.id)).toEqual(["bq2"]);
+  /* The report dates the moment the agent last heard work had ended. */
+  expect(foldBackgroundTaskRecords(emptyBackgroundTaskLedger(), records).lastReportedAt).toBe(T0 + 60_000);
+  /* A record that quotes the sentence in a tool result reports nothing. */
+  const quoted = { type: "user", timestamp: iso(T0 + 60_000), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read", content: told }] } };
+  expect(runningBackgroundTasks([bashStart(T0, "bq1"), quoted], "claude", T0 + 120_000).map((task) => task.id)).toEqual(["bq1"]);
+});
+
+test("the verified reading names pending work, and reads a repaired transcript as repaired", async () => {
+  const file = path.join(ROOT, "verified.jsonl");
+  const lines = [bashStart(T0, "bq1"), bashStart(T0 + 1_000, "bq2"), delivered(T0 + 2_000, "bq1", "completed")].map((record) => JSON.stringify(record));
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  expect(await verifiedBackgroundWork(file, T0 + 60_000)).toEqual({ state: "read", names: ["background task bq2"] });
+
+  /* The record that ended bq1 is broken: its prefix would still hold bq1. */
+  fs.writeFileSync(file, `${[lines[0], lines[1], `${lines[2]!.slice(0, -1)},BROKEN}`].join("\n")}\n`);
+  expect((await readBackgroundTaskLedger(file)) && pendingBackgroundTasks((await readBackgroundTaskLedger(file))!, T0 + 60_000).map((task) => task.id))
+    .toEqual(["bq1", "bq2"]);
+  expect(await verifiedBackgroundWork(file, T0 + 60_000)).toMatchObject({ state: "unreadable" });
+  expect(await verifiedBackgroundWork(file, T0 + 60_000)).toMatchObject({ state: "unreadable" });
+
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  expect(await verifiedBackgroundWork(file, T0 + 60_000)).toEqual({ state: "read", names: ["background task bq2"] });
+});
+
+test.each([
+  { shape: "an unterminated final record", content: `${JSON.stringify(bashStart(T0, "bq1"))}\n{"type":"user","toolUseResult":{"backgroundTaskId"` },
+  { shape: "a background record that is no object", content: `${JSON.stringify(bashStart(T0, "bq1"))}\n"task-notification"\n` },
+] as const)("the verified reading of a transcript with $shape is unreadable", async ({ content }) => {
+  const file = path.join(ROOT, "verified-unreadable.jsonl");
+  fs.writeFileSync(file, content);
+  expect(await verifiedBackgroundWork(file, T0 + 60_000)).toMatchObject({ state: "unreadable" });
+});
+
+test("the verified reading skips a broken record that could move no background work", async () => {
+  const file = path.join(ROOT, "verified-foreign.jsonl");
+  fs.writeFileSync(file, `${JSON.stringify(bashStart(T0, "bq1"))}\n{"type":"progress",BROKEN}\n`);
+  expect(await verifiedBackgroundWork(file, T0 + 60_000)).toEqual({ state: "read", names: ["background task bq1"] });
 });

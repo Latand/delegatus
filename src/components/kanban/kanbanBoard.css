@@ -1203,9 +1203,32 @@
 /* ── Readers (K3): conversations in the agent window and the Stages panes,
    and the forms a card holds: a waiting stage's first message, an agent draft ── */
 .kb .card.has-reader { content-visibility: visible; }
-/* An agent draft on a card (K9a): the draft pane at reading width, as tall as a reader. */
+/* An agent draft on a card (K9a) is the conversation composer and nothing else: as tall as the composer
+   until Send. From the press it is the conversation opening, laid out as the launched card will be: the
+   window is a reader's box at a reader's height, and a card that holds nothing but the draft also keeps the
+   room of the title, status and description rows its task gains, so the launch reply moves nothing. */
 .kb .agent-drafts { display: flex; flex-direction: column; gap: 8px; }
 .kb .agent-draft { display: flex; width: 100%; max-width: 780px; height: var(--conv-in-card-h); min-width: 0; }
+.kb .agent-draft:has([data-draft-pane]) { height: auto; }
+.kb [data-draft-pane] { gap: 6px; }
+.kb [data-draft-pane="opening"] .draft-window {
+  flex: none; height: var(--conv-in-card-h); gap: 8px; padding: 8px var(--inset-conversation) 10px; overflow: hidden;
+  border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
+}
+.kb .draft-opening-head { height: 50px; }
+.kb .draft-opening { padding-top: 12px; }
+/* A card that exists only to hold the draft is the draft: no title and no foot of its own. On a task's card
+   the draft is one more row of that card. */
+.kb .card[data-id^="draft:"]:has([data-draft-pane]) > :is(.head, .foot) { display: none; }
+/* The rows stand at the card's own rhythm: 8 px under the head, 12 px over the description, 8 px over the window. */
+.kb .card[data-id^="draft:"] .draft-card-rows { display: flex; flex-direction: column; gap: 8px; padding-bottom: 2px; }
+.kb .card[data-id^="draft:"] [data-draft-pane="opening"] { padding-bottom: 22px; }
+.kb .card:not([data-id^="draft:"]) [data-draft-pane="composer"] { border-top: 1px solid var(--border-default); padding-top: 8px; }
+/* A task with no agent at work has no status line; the launch gives it one («Working · 1»), above the
+   conversations. The opening keeps that line's room. */
+.kb .card:not([data-id^="draft:"]):not(:has(> .motion-line)) [data-draft-pane="opening"] { padding-top: 28px; }
+/* The card's first conversation brings the conversations block, which stands 2 px lower than a draft does. */
+.kb .card:not([data-id^="draft:"]):not(:has(> .members)) .agent-drafts:has([data-draft-pane="opening"]) { margin-top: 2px; }
 /* `+ Task`'s inline card at the top of Inbox. */
 .kb .card.new-task { content-visibility: visible; gap: 6px; }
 .kb .readers { display: flex; flex-direction: column; gap: 8px; }

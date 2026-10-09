@@ -20,6 +20,9 @@ export const monitorClientRequestId = (ref: string): string => `monitor-741:${re
 
 const CARD_TEXT_LIMIT = 5_000;
 
+export const SEAT_TICK_INTERVAL_ELIGIBILITY = "Interval wakes need an eligible agenda: open lanes, readable running workers parented to the seat, or actionable signals. Unparented workers and inbox cards alone provide no eligible interval agenda.";
+const INTERVAL_ELIGIBILITY_UK = "Періодичні пробудження потребують відкритих пайплайнів, активних працівників із доступним журналом і батьківським зв’язком з оркестратором або сигналів, що потребують дії. Працівники без батьківського зв’язку й самі картки вхідних не створюють порядку денного для пробудження.";
+
 const STATE_LABEL: Record<RequestState, string> = {
   completed: "completed",
   "in-flight": "in flight",
@@ -265,6 +268,7 @@ export function seatTickSettingsCardText(input: {
       input.schedule.enabled
         ? `Пробудження цього проєкту йдуть ${schedule}, а не за типовим розкладом.`
         : "Тікер цього проєкту вимкнено: жодне пробудження не надійде, доки його не ввімкнуть знову.",
+      INTERVAL_ELIGIBILITY_UK,
       `Вказівки на кожне пробудження: ${input.reason ?? "не записані"}.`,
       validUntil ? `Повернеться до типових налаштувань ${clock(validUntil, true)}.` : "Діє, доки хтось не поверне типові налаштування.",
       who,
@@ -275,6 +279,7 @@ export function seatTickSettingsCardText(input: {
       title,
       "",
       `${input.detail.charAt(0).toUpperCase()}${input.detail.slice(1)}.`,
+      SEAT_TICK_INTERVAL_ELIGIBILITY,
       `Instructions for every wake: ${input.reason ?? "none recorded"}.`,
       validUntil ? `It returns to the default at ${clock(validUntil, true)}.` : "It stands until someone changes it back.",
       who,

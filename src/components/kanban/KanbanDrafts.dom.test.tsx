@@ -252,8 +252,11 @@ test("a draft is drawn inside the card that holds it, is never sent to Conversat
   /* A draft is not an open agent until it launches: no pill for it in the header. */
   expect(host.querySelector("[data-open-agents-pill]")).toBeNull();
 
-  click(onA!.querySelector(`button[aria-label="${translate("en", "draft.dismiss")}"]`));
-  expect(closed).toEqual(["draft-on-a"]);
+  /* The draft is the composer alone, with no close button of its own: Escape in its empty field puts it away. */
+  expect(onA!.querySelectorAll("select, [role=radio]")).toHaveLength(0);
+  const field = alone!.querySelector("textarea")!;
+  flushSync(() => field.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(closed).toEqual(["draft-alone"]);
 });
 
 test("crossing a width breakpoint keeps a card's draft pane mounted", async () => {
