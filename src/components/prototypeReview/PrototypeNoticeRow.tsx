@@ -1,6 +1,6 @@
 "use client";
 
-import { GalleryHorizontalEnd } from "lucide-react";
+import { MessageCircleQuestionMark, GalleryHorizontalEnd } from "lucide-react";
 import { useState } from "react";
 
 import { ArrowRight } from "@/components/icons";
@@ -38,9 +38,9 @@ export function PrototypeNoticeRow({ project }: { project: string }) {
           data-prototype-notice={notice.taskId}
           className="flex min-w-0 items-center gap-1.5 rounded-control border border-accent/30 bg-accent-soft py-0.5 pl-2 pr-0.5 text-label text-accent"
         >
-          <GalleryHorizontalEnd className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <NoticeMark questions={notice.asks === "questions"} className="h-3.5 w-3.5 shrink-0" aria-hidden />
           {/* The phone gives the line to the task's name; the mark and the action already say what waits. */}
-          <span className={mobile ? "sr-only" : "shrink-0 font-semibold"}>{t("proto.notice.ready")}</span>
+          <span className={mobile ? "sr-only" : "shrink-0 font-semibold"}>{t(notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
           <span className="min-w-0 flex-1 truncate font-medium text-primary" title={notice.roundTitle ? `${notice.title} · ${notice.roundTitle}` : notice.title}>
             {notice.title}
             {notice.roundTitle ? <span data-prototype-notice-round="" className="font-normal text-muted"> · {notice.roundTitle}</span> : null}
@@ -48,11 +48,11 @@ export function PrototypeNoticeRow({ project }: { project: string }) {
           <button
             type="button"
             data-prototype-notice-open={notice.taskId}
-            aria-label={t("proto.notice.openAria", { title: notice.title })}
+            aria-label={t(notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title })}
             className="inline-flex min-h-7 shrink-0 items-center gap-1 rounded-control px-2 font-semibold text-accent hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
             onClick={() => openPrototypeReview({ ...notice.target, from: "notice" })}
           >
-            {t("proto.notice.open")}
+            {t(notice.asks === "questions" ? "proto.notice.answer" : "proto.notice.open")}
             <ArrowRight className="h-3.5 w-3.5" aria-hidden />
           </button>
         </li>
@@ -86,7 +86,7 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
   const first = notices[0];
   if (!first) return null;
   const open = () => openPrototypeReview({ ...first.target, from: "notice" });
-  const label = `${t("proto.notice.ready")}: ${first.title}. ${t("proto.notice.open")}`;
+  const label = `${t(first.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}: ${first.title}. ${t(first.asks === "questions" ? "proto.notice.answer" : "proto.notice.open")}`;
   if (compact) {
     return (
       <div data-prototype-notice-chip-line="" className="order-last -mt-1 flex basis-full pl-10">
@@ -98,8 +98,8 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
           onClick={open}
         >
           <span className="inline-flex h-8 items-center gap-1 rounded-full bg-accent-soft px-2 text-label font-semibold tabular-nums text-accent">
-            <GalleryHorizontalEnd className="h-4 w-4 shrink-0" aria-hidden />
-            <span data-prototype-notice-chip-word="" className="whitespace-nowrap">{t("proto.button.word")}</span>
+            <NoticeMark questions={first.asks === "questions"} className="h-4 w-4 shrink-0" aria-hidden />
+            <span data-prototype-notice-chip-word="" className="whitespace-nowrap">{t(first.asks === "questions" ? "proto.questions" : "proto.button.word")}</span>
             <span>{notices.length}</span>
           </span>
         </button>
@@ -115,9 +115,14 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
       className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-accent/30 bg-accent-soft px-2 text-label font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       onClick={open}
     >
-      <GalleryHorizontalEnd className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      <span className="whitespace-nowrap">{t("proto.notice.ready")}</span>
+      <NoticeMark questions={first.asks === "questions"} className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="whitespace-nowrap">{t(first.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
       {notices.length > 1 ? <span className="tabular-nums opacity-80">{notices.length}</span> : null}
     </button>
   );
+}
+
+function NoticeMark({ questions, ...props }: { questions: boolean; className?: string; "aria-hidden"?: boolean }) {
+  const Mark = questions ? MessageCircleQuestionMark : GalleryHorizontalEnd;
+  return <Mark {...props} />;
 }

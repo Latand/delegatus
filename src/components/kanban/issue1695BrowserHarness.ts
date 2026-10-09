@@ -653,3 +653,44 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
   fs.mkdirSync("evidence/first-message", { recursive: true });
   fs.writeFileSync(`evidence/first-message/${surface}-handover.json`, JSON.stringify({ surface, width: mobile ? 390 : 1440, frames }, null, 2) + "\n");
 }
+
+
+/** Shared questionnaire readings for the board and phone evidence drivers. */
+export async function capturePrototypeQuestions(page: Page, phone: boolean) {
+  return page.evaluate((phone) => {
+    const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
+    const questions = document.querySelector<HTMLElement>("[data-prototype-questions]")!;
+    const stage = document.querySelector<HTMLElement>("[data-prototype-stage]");
+    const bounds = frame.getBoundingClientRect();
+    const options = [...document.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
+    const pillOverflow = [...document.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
+      const box = pill.getBoundingClientRect(); const row = pill.closest("button")!.getBoundingClientRect();
+      return box.left < row.left || box.right > row.right + 0.5;
+    }).length;
+    const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
+      const b = button.getBoundingClientRect(); return { text: button.textContent, visible: b.top >= bounds.top && b.bottom <= bounds.bottom + 0.5, x: b.x, y: b.y, width: b.width };
+    });
+    const marks = [...document.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
+      const box = mark.getBoundingClientRect();
+      return { multiple: mark.closest("button")!.getAttribute("role") === "checkbox", radius: parseFloat(getComputedStyle(mark).borderTopLeftRadius), width: box.width };
+    });
+    /* A button is as tall as its words need (44 at least): the recommended pill adds nothing. */
+    const heightExcess = Math.max(...options.map(button => {
+      const style = getComputedStyle(button); const words = button.querySelector<HTMLElement>("span:not([data-prototype-mark])")!.getBoundingClientRect().height;
+      const need = words + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      return button.getBoundingClientRect().height - Math.max(44, need);
+    }));
+    const unpicked = options.filter(o => o.getAttribute("aria-checked") === "false");
+    const decision = document.querySelector<HTMLElement>("[data-prototype-decision]");
+    return { heightExcess, markLetters: [...document.querySelectorAll("[data-prototype-mark]")].filter(m => (m.textContent ?? "").trim() !== "").length,
+      hints: document.querySelectorAll("[data-prototype-hint]").length,
+      unpickedFaded: unpicked.length > 0 && unpicked.every(o => parseFloat(getComputedStyle(o).opacity) < 1),
+      statusLine: decision ? decision.querySelector("span")?.textContent ?? null : null, decisionText: decision?.textContent ?? null,
+      title: document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] h2" : "[role=dialog] header p")?.textContent ?? null,
+      sideways: frame.scrollWidth - frame.clientWidth, questionWidth: questions.getBoundingClientRect().width,
+      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: document.querySelectorAll("[data-prototype-question]").length,
+      optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, marks, actions,
+      actionsWidth: document.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
+      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(document.querySelector("[data-prototype-skipped]")) };
+  }, phone);
+}

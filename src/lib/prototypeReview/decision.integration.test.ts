@@ -10,6 +10,7 @@ import { publishPOST, reviewGET, reviewPOST } from "./http";
 import { prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery } from "./decision";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { stateDir } from "@/lib/configDir";
+import { questions } from "./questionnaire.fixture";
 import type { PrototypeReviewRead } from "./types";
 
 let runtime: ComposerPayloadRuntime;
@@ -116,4 +117,22 @@ test("a Viewer stopped between the saved decision and its admission offers a ret
   expect(runtime.delivered).toHaveLength(before + 1);
   expect(runtime.delivered.at(-1)!.text).toBe(stored().delivery.text);
   expect(runtime.delivered.at(-1)!.text).toContain(`Chosen: 1 — Compact, 2 — Roomy\n\nComment:\n${comment}\n\n`);
+});
+
+
+test("questionnaire answers use the production runtime delivery and persist across reload", async () => {
+  const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ clientRequestId: "runtime-questions", taskId: "task-prototype", title: "Before work", questions }) }), world);
+  expect(published.status).toBe(200);
+  const id = (await published.json()).reviewId;
+  const before = runtime.delivered.length;
+  const answer = { reviewId: id, chosen: [], answers: questions.map(q => ({ questionId: q.id, options: [0] })), comment };
+  expect((await reviewPOST(request(answer), "task-prototype", world, delivery)).status).toBe(200);
+  await until(() => runtime.delivered.length === before + 1);
+  resetLegacyDocumentStoresForTests();
+  const readBack = (await read()).rounds.find(r => r.id === id)!;
+  expect(readBack.decision?.answers).toEqual(answer.answers);
+  expect(runtime.delivered.at(-1)!.text).toContain("Existing review (recommended)");
+  expect(runtime.delivered.at(-1)!.text).toContain(`Comment:\n${comment}\n\n`);
+  expect((await reviewPOST(request(answer), "task-prototype", world, delivery)).status).toBe(200);
+  expect(runtime.delivered).toHaveLength(before + 1);
 });
