@@ -1,0 +1,13 @@
+{
+  "sampleRequest": "1c77316ba8dc2e56e32948e05ee5a7da7a7e2eefcdb396e3ebd3a112a81a21b8",
+  "contextRequest": "e066a5d86ed8defa37e4d66b5a804e658967107ac168d0929f5639713c371ab2",
+  "claimed_legacy_claim_without_feature.json": "9dddca83e5822d57f48fa76d9ef891cf8727743b694697da6d97c8f84cab4fcf",
+  "claimed_rc_admin.json": "b3c89595a5c9da0a4b12ff9fbd9ea75e66ec8fc72914ae0f2793d5a767061135",
+  "claimed_rc_anonymous_admin.json": "d74bd000f70cd332ccfdd076c8bf718cfd120f8987260ef614603a66c25b852a",
+  "claimed_rc_byte_bound.json": "313a0e71c72f8bcd9d3b8122fd7891440e1543333b9761fdabc72e88cd40a435",
+  "claimed_rc_emoji_memory_16000.json": "62e8814819f559bc4cc0d81019390f3a212e277a435b729ad2cef5548b08823d",
+  "claimed_rc_emoji_transcript_12000.json": "13c397cf1a547c507d7b8a618d707c75d3e821b2132aecfe781eec625b805fbd",
+  "claimed_rc_member.json": "4145db290ad0127c396d48d34b982af5c264c9a3ef10bfc548d81cba10dd409c",
+  "claimed_rc_memory_16000.json": "6df59cdb6a8c87f584ad1171f854ae92e6b76b0c7de70a0e0b9e579e64d71dcf",
+  "claimed_rc_owner.json": "ebb9c725a10e8a49c86370b2146f0b20a76f1d3ff1af491a224d8527ddc1cdbf"
+}
