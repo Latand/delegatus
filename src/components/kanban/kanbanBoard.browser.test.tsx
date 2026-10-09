@@ -23691,3 +23691,45 @@ describe("orchestrator wire routing across the board's layouts", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 1_800_000);
 });
+
+
+describe("idle seat interval eligibility", () => {
+  browserTest("the board explains excluded workers and inbox-only agendas in both languages", async () => {
+    const out = path.resolve(".artifacts/seat-idle-wakes/browser");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const notice = seatTickSettingsCardText({ project: "atlas", detail: "wakes every five minutes",
+          reason: "check open work", until: null, updatedAt: "2026-10-09T00:00:00Z", setBy: null,
+          schedule: { enabled: true, wakeIntervalMinutes: 5 }, locale: lang, timeZone: "UTC" });
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          if (width === 390) {
+            await node.click();
+            await page.locator('[data-phone-task-description]').click();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+            await node.waitFor();
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+            await node.waitFor();
+          }
+          const text = await node.inputValue();
+          expect(text).toContain(lang === "en" ? "Unparented workers and inbox cards alone" : "Працівники без батьківського зв’язку");
+          expect(pageErrors).toEqual([]);
+          await node.screenshot({ path: path.join(out, `${lang}-${width}.png`) });
+          readings.push({ lang, width, text, errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
