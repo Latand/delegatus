@@ -25,11 +25,11 @@ need.
 | 3 Delivery | All four sends were refused by the server's pattern gate with `not_requested`: it admits a send only when a sentence contains the word «оркестратор» or "orchestrator" and opens with a listed English or Ukrainian verb (`gate.ts:123-124`, `liveGate.ts:42-53`). The operator spoke Russian and said «отошли», «отправь ему», «передай». The tool then said only "This request was refused" (`tools.ts:40`), so the voice invented a reason («ти відкликав прохання»). | In a live session the backend model's judgment decides a send, and the pattern readings leave that decision; structural refusals stay. Every refusal and failure carries its own plain sentence, and a refusal from the orchestrator route becomes `failed` with its reason. | A Russian "отправь ему" turn through the local fake provider reaches the orchestrator send path once; a missing seat says "no designated orchestrator". |
 | 4 Speech breaks | The browser mutes the companion's own audio whenever the microphone reads above 0.035 RMS and unmutes on the next quiet frame (`media.ts:95-101,111-115`, `liveAdapter.ts:196-205`). Residual echo, a breath or a cough cuts the voice until the next pause. The provider's output timeline for the same lines runs on with no hole longer than 1.4 s. | Remove the microphone-level barge-in; GPT-Live handles interruption itself. An explicit interrupt unmutes only after 1,500 ms of quiet. | A realistic speech envelope with 0.04 RMS residual echo never mutes the audio and never cuts the line (today: muted 10.3 s of 14 s, 14 switches). |
 | 5 Sounds | None exist. | Two short oscillator cues in the browser, played by the adapter once per connect and once per disconnect. | One connect cue and one disconnect cue per session across every way a session ends; none for a start that never connected. |
-| 6 Transcript | The record keeps the last 512 events (`admission.ts:42`), almost all of them per-fragment transcript snapshots, so the first 112 s of a 6-minute session are gone; tool calls keep their name only. | Requirements below; the look comes as numbered variants in a later stage. | The transcript record holds every tool call with its arguments and result, and a session longer than the event ring is whole. |
+| 6 Transcript | The record keeps the last 512 events (`admission.ts:42`), almost all of them per-fragment transcript snapshots, so the first 112 s of a 6-minute session are gone; tool calls keep their name only. | Requirements below; the look is the operator's pick, variant 2 "Glass panel" (see item 6). | The transcript record holds every tool call with its arguments and result, and a session longer than the event ring is whole. |
 
 Verdict: pass. Item 2 was observed on the provider's own documentation; nothing
-in this note waits on the operator. Item 6's look is the operator's pick in the
-variants stage.
+in this note waits on the operator. Item 6's look is the operator's pick of the
+numbered variants: variant 2, built.
 
 ## Step one: evidence from the stage
 
@@ -604,8 +604,16 @@ network or decode call.
 
 ## Item 6. The whole conversation on demand: requirements
 
-The look is the operator's pick among numbered variants in the next stage. One
-control on the companion opens it; no other new chrome.
+The look is the operator's pick among three numbered variants: variant 2, the
+glass panel. The character itself opens it (a tap that does not move it, or
+Enter), so the companion gains no control. A 360 px glass panel stands beside
+the character, speaker and time over each line. Two additions came with the
+pick: every tool call is one collapsed line (the tool and its outcome) that
+opens on a click to its arguments and result, and a request to the orchestrator
+collapses the same way over its delivery steps; and every message, the
+operator's and the companion's, has a copy control of its own that copies
+exactly that message's text and confirms briefly. Selection still copies
+anything else.
 
 ### What the record holds
 
@@ -684,7 +692,7 @@ it for the session on screen, and the record does not depend on it.
 | «не смог отправить и говорит… «не було надіслано»… хотя я… сказал «отсылай»» | Item 3: the pattern gate that refused four real requests leaves the send decision; every refusal says its real reason. |
 | «найди, почитай, что там было» | Step one above. |
 | «его голос прерывается… и потом продолжается… какой-то баг» | Item 4: the page's own microphone-level mute is removed. |
-| «нажать кнопочку и посмотреть весь транскрипт… скопировать… эти все вызовы смотреть» | Item 6: the record and its requirements; the look comes as variants. |
+| «нажать кнопочку и посмотреть весь транскрипт… скопировать… эти все вызовы смотреть» | Item 6: the record and its requirements; the glass panel, calls collapsed, each message copyable. |
 | «чтобы он знал… что его зовут делегатус… промпт… как в мандате… характеру» | Item 1: name, purpose, project, the mandate's character verbatim. |
 | «Мужской голос» | Item 2: `meridian`, and masculine self-reference in item 1. |
 
@@ -722,8 +730,8 @@ it for the session on screen, and the record does not depend on it.
   mutes directly; with the mechanism removed, nothing needs watching.
 - Earlier sessions' transcripts in the interface. They stay on disk for
   investigation; the operator asked for the conversation in progress.
-- A copy-all button or an export file. Selection copies; the variants stage
-  can show whether anything more is wanted.
+- A copy-all button or an export file. Selection copies and each message
+  has its own copy control; nothing more was asked.
 - Extending the pattern grammar to Russian. It is the growing-list approach the
   operator rejected on 2026-10-06, and it still could not read «отправь ему».
 - Moving the character sentences into a shared constant in the orchestrator
@@ -762,8 +770,9 @@ session JSONL; late finals or masking corrections replace their settled entry.
 The record is independent of the replay ring, UI history and backend context.
 At the 4 MB limit, `truncated` becomes true and the end entry is retained.
 The next mint prunes closed files after 30 days from closure and keeps at most
-50 closed records. The transcript control, its variants and rendered evidence,
-and the connection cues belong to the subsequent stages.
+50 closed records. The transcript view and the connection cues are built in the
+subsequent stage, with rendered evidence from the kanban driver's
+`floating voice companion transcript view` case.
 
 Regression coverage exercises the mint HTTP body; Russian send requests,
 missing seats and a coded 409 through the fake provider; Russian confirmation

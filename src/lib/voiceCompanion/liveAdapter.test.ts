@@ -15,7 +15,7 @@ process.env.XDG_CONFIG_HOME = path.join(root, "config");
 process.env.OPENAI_API_KEY = "";
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-function fixture() {
+function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapter>[0] = {}) {
   let callbacks!: MediaCallbacks;
   let opens = 0, closes = 0, muted = false, interrupts = 0;
   const requests: Record<string, unknown>[] = [];
@@ -25,7 +25,7 @@ function fixture() {
   const media: CompanionMedia = { open: async () => { opens++; return "v=0"; }, answer: async () => {}, mute: value => { muted = value; },
     interrupt: () => { interrupts++; }, close: async () => { closes++; } };
   let clock = 0;
-  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; },
+  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; }, ...extra,
     fetch: (async (_url, init) => {
       if (!init?.body) return Response.json({ events: serverEvents });
       const body = JSON.parse(String(init.body)); requests.push(body);
@@ -115,6 +115,61 @@ test("a confirmed delivery receives its correlated card after hangup without ope
   expect(f.opens).toBe(1);
   expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
   await f.adapter.dispose();
+});
+
+/** Every cue the adapter asked for, in order. */
+function countingCues() {
+  const played: string[] = [];
+  return { played, cues: { prepare: () => { played.push("prepare"); }, connect: () => { played.push("connect"); }, disconnect: () => { played.push("disconnect"); }, dispose: () => { played.push("dispose"); } } };
+}
+const heard = (played: string[]) => played.filter(name => name === "connect" || name === "disconnect");
+
+test("a connected session plays one connect cue and one disconnect cue, whichever way it ends", async () => {
+  const endings: Array<[string, (f: ReturnType<typeof fixture>) => Promise<void>]> = [
+    ["the operator hangs up", f => f.adapter.close()],
+    ["the model ends it", async f => { f.push(f.event({ type: "session.closed", reason: "tool", incomplete: false })); await f.adapter.refresh(); }],
+    ["the cap ends it", async f => { f.push(f.event({ type: "session.closed", reason: "cap", incomplete: false })); await f.adapter.refresh(); }],
+    ["the provider errors", async f => { f.push(f.event({ type: "session.closed", reason: "error", incomplete: false })); await f.adapter.refresh(); }],
+    ["the transport drops", async f => { f.push(f.event({ type: "session.closed", reason: "transport", incomplete: false })); await f.adapter.refresh(); }],
+    ["the media is lost", async f => { f.callbacks.lost("PROVIDER_ERROR"); await f.adapter.close(); }],
+    ["the server closes it and then the operator hangs up", async f => { f.push(f.event({ type: "session.closed", reason: "tool", incomplete: false })); await f.adapter.refresh(); await f.adapter.close(); }],
+    ["the page leaves", f => f.adapter.dispose()],
+  ];
+  for (const [label, end] of endings) {
+    const { played, cues } = countingCues();
+    const f = fixture({ cues });
+    await f.adapter.start({ project: "fixture", locale: "en" });
+    expect(heard(played), `${label}: connected`).toEqual(["connect"]);
+    await end(f);
+    await f.adapter.close();
+    expect(heard(played), label).toEqual(["connect", "disconnect"]);
+  }
+});
+
+test("a start that never connects plays no cue, and two sessions in a row play two and two", async () => {
+  const refused = countingCues();
+  const f = fixture({ cues: refused.cues });
+  f.media.open = async () => { throw new Error("MICROPHONE_REFUSED"); };
+  await expect(f.adapter.start({ project: "fixture", locale: "en" })).rejects.toThrow("MICROPHONE_REFUSED");
+  await f.adapter.close();
+  expect(heard(refused.played)).toEqual([]);
+  expect(refused.played).toContain("prepare");
+
+  const twice = countingCues();
+  const g = fixture({ cues: twice.cues });
+  await g.adapter.start({ project: "fixture", locale: "en" });
+  await g.adapter.close();
+  await g.adapter.start({ project: "fixture", locale: "en" });
+  await g.adapter.close();
+  expect(heard(twice.played)).toEqual(["connect", "disconnect", "connect", "disconnect"]);
+  /* A new Talk while one is live ends the first before the second connects. */
+  const over = countingCues();
+  const h = fixture({ cues: over.cues });
+  await h.adapter.start({ project: "fixture", locale: "en" });
+  await h.adapter.start({ project: "fixture", locale: "en" });
+  expect(heard(over.played)).toEqual(["connect", "disconnect", "connect"]);
+  await h.adapter.close();
+  expect(heard(over.played)).toEqual(["connect", "disconnect", "connect", "disconnect"]);
 });
 
 /** The production adapter against the production session service, with fake media and a fake provider. */

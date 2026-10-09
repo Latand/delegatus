@@ -20560,73 +20560,91 @@ describe("floating voice companion", () => {
      Each runs twice: once measured (no recording, no screenshot,
      no sampler, so the frame clock reads the page alone) and once recorded as a video with screenshots and the
      geometry sampler. Every measured run comes before the first recording. */
-  /* PROTOTYPE, item 6 of docs/design/voice-delegatus-live-feedback.md: the three numbered variants of the whole
-     conversation's view, over one session's transcript record (`transcriptSample.fixture.ts`), opened by a tap on the
-     character. Each run plays the `delegation` scenario, then frames the companion as the operator finds it (the
-     character focused), the view at its newest line, and the view scrolled back with its calls open. Images go to
-     `<hand-off>/transcript-variants`, never into the tree. The interface stage keeps the picked variant's case. */
-  browserTest("transcript view variants: the character opens the whole conversation, 1440 and 1000, en and uk, light and dark", async () => {
-    const out = path.join(HANDOFF, "transcript-variants");
+  /* Item 6 of docs/design/voice-delegatus-live-feedback.md, the operator's pick "Glass panel": the character opens the
+     whole conversation over one session's transcript record (`transcriptSample.fixture.ts`), a 360 px panel with the
+     speaker and the time over each line. Every tool call and the request to the orchestrator are one collapsed line
+     that opens to its arguments and result; every message has its own copy control. Each run plays the `delegation`
+     scenario, then frames the companion as the operator finds it (the character focused), the panel at its newest
+     line with everything collapsed, one call opened, and a message copied. `LLV_VOICE_COMPANION_ONLY` runs it only
+     when it names `transcript` (or is unset). Images go to `<hand-off>/transcript`, never into the tree. */
+  browserTest("transcript view: the character opens the whole conversation, calls collapsed, each message copyable, 1440 and 1000, en and uk, light and dark", async () => {
+    if (ONLY && !ONLY.includes("transcript")) return;
+    const out = path.join(HANDOFF, "transcript");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
-    const variants = (process.env.LLV_VOICE_TRANSCRIPT_VARIANTS?.split(",").map(Number) ?? [1, 2, 3]).filter((variant) => [1, 2, 3].includes(variant));
     const readings: unknown[] = [];
     try {
-      await Promise.all(variants.map(async (variant) => {
-        for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
-          const label = `v${variant}-${viewport.width}-${lang}-${scheme}`;
-          const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=delegation&transcript=${variant}`, { viewport, scheme, lang, motion: "reduce" });
-          try {
-            await page.locator("[data-companion-talk]").click();
-            await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 60_000, polling: 100 });
-            await page.waitForTimeout(400);
-            expect(await page.locator("[data-companion-variant-number]").innerText(), `${label}: the number is printed`).toBe(String(variant));
-            const grip = page.locator("[data-voice-companion] [data-grip]");
-            expect(await grip.getAttribute("aria-expanded"), `${label}: the character is the control`).toBe("false");
-            /* Focused from the keyboard, so the frame shows the control the way a keyboard reaches it. */
-            await page.keyboard.press("Tab");
-            await grip.focus();
-            await page.screenshot({ path: path.join(out, `transcript-v${variant}-${viewport.width}-${lang}-${scheme}-1-control.png`) });
-            await page.keyboard.press("Enter");
-            await page.waitForSelector("[data-companion-transcript-view]", { timeout: 5_000 });
-            await page.waitForTimeout(250);
-            const reading = await page.evaluate(() => {
-              const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
-              const box = view.getBoundingClientRect();
-              const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
-              const selection = getSelection()!;
-              selection.selectAllChildren(body);
-              const copied = selection.toString();
-              selection.removeAllRanges();
-              const lane = document.querySelector<HTMLElement>("[data-companion-lane]");
-              return {
-                box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
-                inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
-                scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
-                laneHidden: !lane || getComputedStyle(lane).visibility === "hidden",
-                copied: copied.length, calls: view.querySelectorAll("[data-tool]").length,
-                hasArgs: copied.includes("task_retry_banner") || view.querySelector("[data-transcript-call]") !== null,
-                speakers: ["Delegatus", document.documentElement.lang === "uk" ? "Ви" : "You"].map((name) => copied.includes(name)),
-              };
-            });
-            expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
-            expect(reading.laneHidden, `${label}: the lane gives way`).toBe(true);
-            expect(reading.atEnd, `${label}: opens at the newest line`).toBe(true);
-            expect(reading.calls, `${label}: both read calls are listed`).toBe(2);
-            await page.screenshot({ path: path.join(out, `transcript-v${variant}-${viewport.width}-${lang}-${scheme}-2-open.png`) });
-            for (const summary of await page.locator("[data-transcript-call] > summary").all()) await summary.click();
-            await page.locator("[data-transcript-body]").evaluate((body) => { body.scrollTop = 0; });
-            await page.waitForTimeout(150);
-            await page.screenshot({ path: path.join(out, `transcript-v${variant}-${viewport.width}-${lang}-${scheme}-3-calls.png`) });
-            await page.keyboard.press("Escape");
-            await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
-            expect(await grip.getAttribute("aria-expanded"), `${label}: Escape closes it`).toBe("false");
-            expect(pageErrors, label).toEqual([]);
-            readings.push({ variant, viewport: viewport.width, lang, scheme, ...reading });
-          } finally { await context.close(); }
-        }
-      }));
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=delegation&transcript=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 60_000, polling: 100 });
+          await page.waitForTimeout(400);
+          const grip = page.locator("[data-voice-companion] [data-grip]");
+          expect(await grip.getAttribute("aria-expanded"), `${label}: the character is the control`).toBe("false");
+          /* Focused from the keyboard, so the frame shows the control the way a keyboard reaches it. */
+          await page.keyboard.press("Tab");
+          await grip.focus();
+          await page.screenshot({ path: path.join(out, `transcript-${label}-1-control.png`) });
+          await page.keyboard.press("Enter");
+          await page.waitForSelector("[data-companion-transcript-view]", { timeout: 5_000 });
+          await page.waitForTimeout(250);
+          const reading = await page.evaluate(() => {
+            const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+            const box = view.getBoundingClientRect();
+            const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+            const lane = document.querySelector<HTMLElement>("[data-companion-lane]");
+            const toggles = [...view.querySelectorAll<HTMLElement>("[data-transcript-toggle]")];
+            const messages = [...view.querySelectorAll<HTMLElement>('[data-kind="speech"]')];
+            return {
+              box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+              inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+              scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
+              laneHidden: !lane || getComputedStyle(lane).visibility === "hidden",
+              lines: toggles.length, expanded: toggles.filter((toggle) => toggle.getAttribute("aria-expanded") === "true").length,
+              detailsOnPage: view.querySelectorAll("[data-transcript-detail], pre").length,
+              messages: messages.length, copyControls: messages.filter((message) => message.querySelector("button")).length,
+              lineHeights: toggles.map((toggle) => Math.round(toggle.getBoundingClientRect().height)),
+            };
+          });
+          await page.screenshot({ path: path.join(out, `transcript-${label}-2-collapsed.png`) });
+          expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
+          expect(reading.laneHidden, `${label}: the lane gives way`).toBe(true);
+          expect(reading.atEnd, `${label}: opens at the newest line`).toBe(true);
+          expect(reading.lines, `${label}: both read calls and the request are listed`).toBe(3);
+          expect([reading.expanded, reading.detailsOnPage], `${label}: every call is collapsed by default`).toEqual([0, 0]);
+          expect(reading.copyControls, `${label}: every message has its own copy control`).toBe(reading.messages);
+          expect(Math.max(...reading.lineHeights), `${label}: a collapsed call is one line`).toBeLessThan(48);
+          /* One read call opens to its arguments and result; the request opens to its instruction and delivery steps. */
+          const toggles = page.locator("[data-transcript-toggle]");
+          for (const index of [1, 2]) await toggles.nth(index).click();
+          await page.waitForTimeout(150);
+          const opened = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-transcript-detail]")].map((detail) => detail.textContent ?? ""));
+          expect(opened.length, `${label}: the two opened lines show their detail`).toBe(2);
+          expect(opened[0], `${label}: the refused call shows its arguments`).toContain("task_retry_banner");
+          await page.locator("[data-transcript-body]").evaluate((body) => { const node = body.querySelector('[data-transcript-call="get_task"]'); node?.scrollIntoView({ block: "start" }); });
+          await page.waitForTimeout(150);
+          await page.screenshot({ path: path.join(out, `transcript-${label}-3-opened.png`) });
+          /* One message copies: what reaches the clipboard is that message's text, and the control confirms. */
+          await page.evaluate(() => { const clipboard = navigator.clipboard; const written: string[] = []; (window as unknown as { copied: string[] }).copied = written; const real = clipboard.writeText.bind(clipboard); clipboard.writeText = (text: string) => { written.push(text); return real(text); }; });
+          const operator = page.locator('[data-kind="speech"][data-speaker="operator"]').nth(2);
+          await operator.scrollIntoViewIfNeeded();
+          const wanted = await operator.locator("[data-transcript-text]").innerText();
+          await operator.locator("button").click();
+          await page.waitForTimeout(150);
+          const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+          expect(copied, `${label}: the message's own text was copied`).toEqual([wanted]);
+          expect(await operator.locator("button").getAttribute("aria-label"), `${label}: the control confirms`).toBe(lang === "uk" ? "скопійовано" : "copied");
+          await page.screenshot({ path: path.join(out, `transcript-${label}-4-copied.png`) });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
+          expect(await grip.getAttribute("aria-expanded"), `${label}: Escape closes it`).toBe("false");
+          expect(pageErrors, label).toEqual([]);
+          readings.push({ viewport: viewport.width, lang, scheme, ...reading, opened: opened.length, copied: copied.length });
+        } finally { await context.close(); }
+      }
     } finally {
       fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
       server.stop();

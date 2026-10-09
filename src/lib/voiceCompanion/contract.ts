@@ -14,6 +14,8 @@
  * Pure and dependency-free: the reducer runs in the browser and in tests.
  */
 
+import type { SessionTranscriptRecord } from "./transcriptRecord";
+
 export type Id = string;
 export type Locale = "en" | "uk";
 
@@ -110,6 +112,8 @@ export interface VoiceCompanionAdapter {
   close(): Promise<void>;
   /** Optional read-only delivery observation, including after media hangup. */
   refresh?(): Promise<void>;
+  /** The whole conversation of the latest session, still readable after it ended; null before the first. */
+  transcript?(): Promise<SessionTranscriptRecord | null>;
   /** Unmount also releases delivery observation. */
   dispose?(): Promise<void>;
 }

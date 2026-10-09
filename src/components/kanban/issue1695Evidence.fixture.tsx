@@ -137,9 +137,9 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
    `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
    memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
-   driver turns the companion on through the settings dialog. `&transcript=<1|2|3>` (PROTOTYPE, item 6 of
-   docs/design/voice-delegatus-live-feedback.md) hands the companion a whole session's transcript record and that
-   variant of its view, which a tap on the character opens, and prints the variant number on the page. Desktop only. */
+   driver turns the companion on through the settings dialog. `&transcript=1` (item 6 of
+   docs/design/voice-delegatus-live-feedback.md) lets the companion read a whole session's transcript record, as the
+   live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
 const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
 const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
@@ -3681,7 +3681,7 @@ function voiceCompanionScene() {
   const params = new URLSearchParams(location.search);
   const script = params.get("script");
   const failure = params.get("failure");
-  const transcriptVariant = (["1", "2", "3"].includes(params.get("transcript") ?? "") ? Number(params.get("transcript")) : null) as 1 | 2 | 3 | null;
+  const readsTranscript = params.get("transcript") === "1";
   const adapter = createSimulatedCompanion({
     script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
     recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
@@ -3694,12 +3694,13 @@ function voiceCompanionScene() {
   void adapter.finished.then(() => { voice.finished = true; });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
-  const shown: VoiceCompanionAdapter = !sendLost ? adapter : {
+  const shown: VoiceCompanionAdapter = !sendLost && !readsTranscript ? adapter : {
     mode: adapter.mode, start: (options) => adapter.start(options), subscribe: (emit) => adapter.subscribe(emit), close: () => adapter.close(),
     command: async (command) => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
     },
+    ...(readsTranscript ? { transcript: async () => sampleTranscript(UK ? "uk" : "en", PROJECT) } : {}),
   };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
      the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
@@ -3722,13 +3723,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady}
-        transcript={transcriptVariant ? { variant: transcriptVariant, record: sampleTranscript(UK ? "uk" : "en", PROJECT) } : undefined} />}
-      {transcriptVariant ? (
-        <div data-companion-variant-number style={{ position: "fixed", right: 12, bottom: 12, zIndex: 2147483647, padding: "4px 12px", borderRadius: 10, font: "700 22px/1.2 var(--font-sans)", background: "var(--color-primary)", color: "var(--color-raised)", pointerEvents: "none" }}>
-          {transcriptVariant}
-        </div>
-      ) : null}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
     </>
   );
 }

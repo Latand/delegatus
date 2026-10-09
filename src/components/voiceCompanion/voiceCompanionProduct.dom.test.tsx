@@ -313,6 +313,8 @@ async function liveHarness() {
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => FAKE_KEY, timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(service);
   const track = { enabled: true, stops: 0, stop() { this.stops += 1; } };
+  /* The cues' tones: every oscillator any AudioContext was asked for, by the frequency it was given. */
+  const tones: number[] = [];
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   const stand: Record<string, unknown> = {
     RTCPeerConnection: class extends EventTarget {
@@ -320,7 +322,12 @@ async function liveHarness() {
       addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
       async createOffer() { return {}; } async setLocalDescription() {} async setRemoteDescription() {} close() {}
     },
-    AudioContext: class { state = "running"; async resume() {} async close() {} createAnalyser() { return { fftSize: 512, getFloatTimeDomainData() {} }; } createMediaStreamSource() { return { connect() {} }; } },
+    AudioContext: class {
+      state = "running"; currentTime = 0; destination = {}; async resume() {} async close() {}
+      createAnalyser() { return { fftSize: 512, getFloatTimeDomainData() {} }; } createMediaStreamSource() { return { connect() {} }; }
+      createGain() { const param = { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }; return { gain: param, connect() {} }; }
+      createOscillator() { return { type: "", frequency: { set value(hz: number) { tones.push(hz); } }, connect() {}, start() {}, stop() {} }; }
+    },
     Audio: class { autoplay = false; paused = true; muted = false; srcObject: unknown = null; pause() {} async play() {} },
     MediaStream: class {},
     /* The media samples its levels once and is not called back: no audio plays here. */
@@ -366,7 +373,7 @@ async function liveHarness() {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
   };
   return {
-    storage, provider, sent, failing, propose, answer, service, trackStops: () => track.stops,
+    storage, provider, sent, failing, propose, answer, service, trackStops: () => track.stops, tones,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -617,4 +624,60 @@ test("no settings path reaches a simulator: a demo an earlier server still repor
     .filter((file) => !own.has(file) && !/\.(test|fixture)\.tsx?$/u.test(file) && !/\.browser\.test\.tsx?$/u.test(file))
     .filter((file) => /from\s+["'](?:@\/lib\/voiceCompanion|\.{1,2}(?:\/[\w.]+)*)\/(?:simulator|scenarios)["']|import\(\s*["'][^"']*voiceCompanion\/(?:simulator|scenarios)["']/u.test(fs.readFileSync(file, "utf8")));
   expect(importers.map((file) => path.relative(process.cwd(), file))).toEqual([]);
+});
+
+test("a tap on the character opens the whole conversation from the session record, with each call collapsed, and the connect and disconnect sounds play once each", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    const grip = () => document.querySelector<HTMLElement>("[data-voice-companion] [data-grip]")!;
+    /* Before any conversation there is nothing to open. */
+    expect(grip().hasAttribute("aria-expanded")).toBe(false);
+    expect(live.tones).toEqual([]);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    /* Connected: one rising pair, once. */
+    expect(live.tones).toEqual([660, 990]);
+    await live.propose(live.provider.sessions[0].id, "Review the plan");
+    expect(live.tones).toEqual([660, 990]);
+
+    expect(grip().getAttribute("aria-expanded")).toBe("false");
+    await click(grip());
+    await pause();
+    const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+    expect(grip().getAttribute("aria-expanded")).toBe("true");
+    expect(view).toBeTruthy();
+    const calls = [...view.querySelectorAll<HTMLElement>("[data-transcript-call]")];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call.querySelector("[data-transcript-toggle]")?.getAttribute("aria-expanded")).toBe("false");
+      expect(call.querySelector("[data-transcript-detail]")).toBeNull();
+    }
+    /* The request the model raised is listed, and opens to the instruction it sent. */
+    const request = view.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+    expect(request.textContent).not.toContain("Review the plan");
+    await click(request.querySelector("[data-transcript-toggle]"));
+    expect(request.querySelector("[data-transcript-detail]")?.textContent).toContain("Review the plan");
+    /* The tap that opened it closes it, and so does Escape. */
+    await click(grip());
+    expect(document.querySelector("[data-companion-transcript-view]")).toBeNull();
+    await click(grip());
+    await pause();
+    await act(async () => { document.querySelector("[data-companion-transcript-view]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(document.querySelector("[data-companion-transcript-view]")).toBeNull();
+
+    /* Hanging up: one falling pair, once, and the record stays readable. */
+    await click(document.querySelector("[data-companion-end]"));
+    await pause(200);
+    expect(live.tones).toEqual([660, 990, 990, 660]);
+    await click(grip());
+    await pause();
+    expect(document.querySelector("[data-companion-transcript-view] [data-transcript-call]")).toBeTruthy();
+    expect(live.tones).toEqual([660, 990, 990, 660]);
+    /* The next Talk closes the old record and sounds its own connect. */
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    expect(document.querySelector("[data-companion-transcript-view]")).toBeNull();
+    expect(live.tones).toEqual([660, 990, 990, 660, 660, 990]);
+  } finally { await unmountNow(); await live.release(); }
 });

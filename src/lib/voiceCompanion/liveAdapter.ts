@@ -1,6 +1,8 @@
 "use client";
 
 import type { CompanionCommand, CompanionEvent, Locale, Payload, VoiceCompanionAdapter } from "./contract";
+import { createBrowserCues, type CompanionCues } from "./cues";
+import type { SessionTranscriptRecord } from "./transcriptRecord";
 import { BrowserCompanionMedia, type CompanionMedia, type MediaCallbacks } from "./media";
 
 interface AdapterOptions {
@@ -9,6 +11,8 @@ interface AdapterOptions {
   pollMs?: number;
   /** The clock playback pauses are measured on. */
   now?(): number;
+  /** The sounds that mark a connect and a disconnect; the browser's own unless a test replaces them. */
+  cues?: CompanionCues;
 }
 type StopReason = Extract<Payload, { type: "playback.stopped" }>["reason"];
 /** A pause in played audio shorter than the transcript's display pause continues the same line. */
@@ -50,7 +54,10 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private closing: Promise<void> | null = null;
   private starting: Promise<void> | null = null;
   private poll: Promise<void> | null = null;
-  constructor(private readonly options: AdapterOptions = {}) {}
+  private readonly cues: CompanionCues;
+  /** Set by the connect cue, so a session that never connected has no disconnect to mark, and each end sounds once. */
+  private connected = false;
+  constructor(private readonly options: AdapterOptions = {}) { this.cues = options.cues ?? createBrowserCues(); }
   subscribe(emit: (event: CompanionEvent) => void): () => void { this.listeners.add(emit); return () => { this.listeners.delete(emit); }; }
   private emit(payload: Payload, original?: CompanionEvent): void {
     const event = { ...payload, version: 1 as const, sessionId: original?.sessionId ?? this.sessionId ?? this.observedId ?? this.localSession, generation: 1,
@@ -68,6 +75,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   }
   start(options: { locale: Locale; project: string }): Promise<void> {
     if (this.starting) return this.starting;
+    /* The tap is the user activation the sounds need. */
+    this.cues.prepare();
     const promise = this.begin(options);
     this.starting = promise;
     return promise.finally(() => { if (this.starting === promise) this.starting = null; });
@@ -95,6 +104,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
       await this.readEvents();
       this.schedule(epoch);
+      if (epoch === this.epoch && this.sessionId && !this.connected) { this.connected = true; this.cues.connect(); }
     } catch (error) {
       if (epoch !== this.epoch) { await media.close(); return; }
       // Publish readiness for a failed local attempt so hooks can display its
@@ -134,6 +144,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         this.emit(value, value);
         if (value.type === "transcript.snapshot" && value.speaker === "companion") this.arrived(value.itemId);
         if (value.type === "session.closed") {
+          this.disconnected();
           this.stopPlayback("closed");
           await this.media?.close(); this.media = null;
           this.sessionId = null; this.requestId = null;
@@ -206,9 +217,21 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     await this.request({ action: "command", sessionId: this.sessionId, command });
     await this.readEvents();
   }
+  /** The one place the disconnect cue sounds: whichever end comes first, the others find it spent. */
+  private disconnected(): void {
+    if (!this.connected) return;
+    this.connected = false;
+    this.cues.disconnect();
+  }
   private lost(code: string): void {
     this.emit({ type: "error", code, recoverable: false });
     void this.close().catch(() => undefined);
+  }
+  async transcript(): Promise<SessionTranscriptRecord | null> {
+    const sessionId = this.observedId;
+    if (!sessionId) return null;
+    const result = await this.request(undefined, `?sessionId=${encodeURIComponent(sessionId)}&view=transcript`);
+    return Array.isArray(result.entries) ? result as unknown as SessionTranscriptRecord : null;
   }
   async refresh(): Promise<void> { await this.readEvents(); this.schedule(this.epoch); }
   private stopObserver(): void {
@@ -219,11 +242,13 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     const observedId = this.observedId;
     await this.close();
     if (this.observedId === observedId) { ++this.epoch; this.stopObserver(); await this.poll; }
+    this.cues.dispose();
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;
     ++this.epoch;
     if (this.timer) clearTimeout(this.timer); this.timer = null;
+    this.disconnected();
     this.stopPlayback("closed");
     const sessionId = this.sessionId; const requestId = this.requestId;
     const media = this.media;

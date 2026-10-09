@@ -1,41 +1,34 @@
 "use client";
 
-import { Check, ChevronRight, CircleAlert, Copy, LoaderCircle, SendHorizontal, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronRight, CircleAlert, LoaderCircle, SendHorizontal, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
+import { CopyButton } from "@/components/feed/CopyButton";
 import { useLocale } from "@/lib/i18n";
 import { laneLayout, type Rect, type Size } from "@/lib/voiceCompanion/placement";
 import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 
 /*
- * The whole conversation on demand (item 6 of docs/design/voice-delegatus-live-feedback.md), PROTOTYPE: three
- * numbered variants for the operator to pick from. The character itself opens it (a tap that does not move it,
- * or Enter), so the companion gains no control. It reads the session's transcript record and shows every
- * utterance, reply, tool call with its arguments and result, and the request to the orchestrator with its
- * delivery and answer, as text that selects and copies with its speaker. The interface stage keeps the variant
- * the operator picks and deletes the others.
- *
- * 1 · The lane, scrolled back: the floating lane's own bubbles and cards, every one of them, in the lane's column.
- * 2 · A glass sheet: a wider panel beside the character, speech as bubbles, a call opens to its arguments and result.
- * 3 · A reader: a wide panel set as a document, times in a gutter, every call's arguments and result shown, Copy all.
+ * The whole conversation on demand (item 6 of docs/design/voice-delegatus-live-feedback.md). The character itself
+ * opens it (a tap that does not move it, or Enter), so the companion gains no control. A 360 px glass panel beside
+ * the character reads the session's transcript record: speech as bubbles with the speaker and the time over each
+ * line and a copy control of its own, and every tool call and every request to the orchestrator as ONE line (the
+ * tool and its outcome) that opens to its arguments, its result and its delivery steps. Text selects and copies.
  */
 
-export type TranscriptVariant = 1 | 2 | 3;
-
 const LABELS = {
-  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", copyAll: "Copy all", copied: "Copied", open: "Show the conversation", empty: "Nothing said yet.", truncated: "The earliest part is not kept: the record reached its size limit.", sent: "Sent to the orchestrator", answer: "Orchestrator's answer" },
-  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", copyAll: "Скопіювати все", copied: "Скопійовано", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Найраніша частина не збереглася: запис досяг межі розміру.", sent: "Надіслано оркестратору", answer: "Відповідь оркестратора" },
+  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "The earliest part is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details" },
+  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Найраніша частина не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці" },
 } as const;
 export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk" : "en"];
 
-/* Each variant's box beside the character: its width and the tallest it grows to. */
-const SIZE: Record<TranscriptVariant, { width: number; height: number }> = { 1: { width: 280, height: 520 }, 2: { width: 360, height: 560 }, 3: { width: 460, height: 640 } };
+/* The panel's box beside the character. */
+const SIZE = { width: 360, height: 560 };
 
-/** The view's box in the viewport: placed as the lane is, facing the middle of the screen, flipping at an edge. */
-export function transcriptRect(variant: TranscriptVariant, viewport: Size, block: Rect): Rect {
-  const { width, height } = SIZE[variant];
-  return laneLayout(viewport, block, Math.min(height, viewport.height - 16), Math.min(width, viewport.width - 16)).rect;
+/** The panel's box in the viewport: placed as the lane is, facing the middle of the screen, flipping at an edge. */
+export function transcriptRect(viewport: Size, block: Rect): Rect {
+  return laneLayout(viewport, block, Math.min(SIZE.height, viewport.height - 16), Math.min(SIZE.width, viewport.width - 16)).rect;
 }
 
 type Status = "running" | "done" | "failed";
@@ -90,8 +83,21 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
 
 export const clock = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
-export function CompanionTranscript({ variant, record, left, top, width, height, onClose }: {
-  variant: TranscriptVariant;
+/** A line that opens: one row with a chevron, the detail under it only while open. Closed by default. */
+function Disclosure({ summary, children, name, label }: { summary: ReactNode; children: ReactNode; name: string; label: { show: string; hide: string } }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="vc-tr-call" data-transcript-call={name} data-open={open ? "" : undefined}>
+      <button type="button" className="vc-tr-toggle" data-transcript-toggle aria-expanded={open} title={open ? label.hide : label.show} onClick={() => setOpen((value) => !value)}>
+        {summary}
+        <ChevronRight size={14} className="vc-tr-chev" aria-hidden />
+      </button>
+      {open ? <div className="vc-tr-detail" data-transcript-detail>{children}</div> : null}
+    </div>
+  );
+}
+
+export function CompanionTranscript({ record, left, top, width, height, onClose }: {
   record: SessionTranscriptRecord;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
@@ -104,76 +110,67 @@ export function CompanionTranscript({ variant, record, left, top, width, height,
   const last = record.entries.reduce((max, entry) => Math.max(max, entry.atMs, typeof entry.data.endMs === "number" ? entry.data.endMs : 0), 0);
   const body = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
-  /* Opened at its newest line, as the lane shows it; scrolled back from there. */
-  useLayoutEffect(() => { if (body.current) body.current.scrollTop = body.current.scrollHeight; }, []);
+  /* Opened at its newest line, as the lane shows it, and following new lines until the reader scrolls back. */
+  const following = useRef(true);
+  useLayoutEffect(() => { if (following.current && body.current) body.current.scrollTop = body.current.scrollHeight; }, [rows]);
   useEffect(() => { panel.current?.focus({ preventScroll: true }); }, []);
 
   const who = (speaker: "operator" | "companion") => (speaker === "operator" ? t("voiceCompanion.you") : "Delegatus");
   const stageLine = (stage: string) => t(`voiceCompanion.stage.${stage}` as "voiceCompanion.stage.delivered");
-  const plain = () => rows.map((row) => {
-    if (row.kind === "speech") return `[${clock(row.atMs)}] ${who(row.speaker)}: ${row.text}`;
-    if (row.kind === "call") return `[${clock(row.atMs)}] ${row.name} (${t(`voiceCompanion.call.${row.status}`)})\n${L.args}: ${row.args}${row.result ? `\n${L.result}: ${row.result}` : ""}`;
-    return `[${clock(row.atMs)}] ${L.sent}: ${row.instruction} (${stageLine(row.stage)})${row.answer ? `\n[${clock(row.answer.atMs)}] ${t("voiceCompanion.orchestrator")}: ${row.answer.text}` : ""}`;
-  }).join("\n\n");
+  const label = { show: L.showDetails, hide: L.hideDetails };
 
   const icon = (status: Status) => (status === "running" ? <LoaderCircle size={14} className="vc-spin" /> : status === "done" ? <Check size={14} /> : <X size={14} />);
-  /* A call: its card, and under it what it was asked and what it answered. 1 and 2 open it on a tap; 3 shows it. */
-  const call = (row: Extract<Row, { kind: "call" }>) => {
-    const card = (
-      <span className="vc-call" data-status={row.status} data-tool={row.name}>
-        <span className="vc-call-icon" aria-hidden>{icon(row.status)}</span>
-        <span className="vc-call-body">
-          <span className="vc-call-name">{row.name}</span>
-          {row.status === "failed" && row.reason ? <span className="vc-call-line">{row.reason}</span> : null}
+  /* A call: one line, the tool and its outcome; opened, what it was asked and what it answered. */
+  const call = (row: Extract<Row, { kind: "call" }>) => (
+    <Disclosure
+      name={row.name}
+      label={label}
+      summary={(
+        <span className="vc-call" data-status={row.status} data-tool={row.name}>
+          <span className="vc-call-icon" aria-hidden>{icon(row.status)}</span>
+          <span className="vc-call-body"><span className="vc-call-name">{row.name}</span></span>
+          <span className="vc-call-state">{t(`voiceCompanion.call.${row.status}`)}</span>
         </span>
-        <span className="vc-call-state">{t(`voiceCompanion.call.${row.status}`)}</span>
-        {variant !== 3 ? <ChevronRight size={14} className="vc-tr-chev" aria-hidden /> : null}
-      </span>
-    );
-    const detail = (
-      <div className="vc-tr-detail">
-        <span className="vc-tr-label">{L.args}</span>
-        <pre className="vc-tr-pre">{row.args}</pre>
-        {row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre" data-status={row.status}>{row.result}</pre></> : null}
-        {variant === 3 ? row.handoffs.map((text, index) => <p key={index} className="vc-tr-handoff"><span className="vc-tr-label">{L.toVoice}</span> {text}</p>) : null}
-      </div>
-    );
-    if (variant === 3) return <div className="vc-tr-callrow">{card}{detail}</div>;
-    return <details className="vc-tr-call" data-transcript-call={row.name}><summary>{card}</summary>{detail}</details>;
-  };
+      )}
+    >
+      {row.reason ? <p className="vc-tr-reason" data-status={row.status}>{row.reason}</p> : null}
+      <span className="vc-tr-label">{L.args}</span>
+      <pre className="vc-tr-pre">{row.args}</pre>
+      {row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre" data-status={row.status}>{row.result}</pre></> : null}
+      {row.handoffs.map((text, index) => <p key={index} className="vc-tr-handoff"><span className="vc-tr-label">{L.toVoice}</span> {text}</p>)}
+    </Disclosure>
+  );
+  /* A request to the orchestrator: one line with its delivery outcome; opened, the instruction, each delivery step and the raw call. */
   const request = (row: Extract<Row, { kind: "request" }>) => {
     const failed = row.stage === "failed" || row.stage === "refused" || row.stage === "unknown";
-    const head = (
-      <div className="vc-deleg-head">
-        <span className="vc-call-icon" aria-hidden>{failed ? <CircleAlert size={14} /> : row.stage === "delivered" || row.stage === "queued" ? <Check size={14} /> : <SendHorizontal size={14} />}</span>
-        <span className="vc-deleg-title">{stageLine(row.stage)}</span>
-        {row.engine ? <span className="vc-deleg-engine"><EngineMark engine={row.engine} size={14} />{row.engine === "codex" ? "Codex" : "Claude"}</span> : null}
-      </div>
-    );
-    const states = <ol className="vc-tr-states">{row.states.map((state, index) => <li key={index}><span className="vc-tr-time">{clock(state.atMs)}</span>{stageLine(STAGE[state.status] ?? state.status)}</li>)}</ol>;
-    const raw = row.args ? (
-      <div className="vc-tr-detail">
-        <span className="vc-tr-label">{L.args}</span><pre className="vc-tr-pre">{row.args}</pre>
-        {row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre">{row.result}</pre></> : null}
-      </div>
-    ) : null;
     return (
       <>
-        <div className="vc-call vc-deleg" data-stage={row.stage} data-transcript-request>
-          {head}
-          <span className="vc-call-name">request_orchestrator_delegation</span>
+        <Disclosure
+          name="request_orchestrator_delegation"
+          label={label}
+          summary={(
+            <span className="vc-call" data-status={failed ? "failed" : row.stage === "delivered" || row.stage === "queued" ? "done" : "running"} data-stage={row.stage} data-transcript-request>
+              <span className="vc-call-icon" aria-hidden>{failed ? <CircleAlert size={14} /> : row.stage === "delivered" || row.stage === "queued" ? <Check size={14} /> : <SendHorizontal size={14} />}</span>
+              <span className="vc-call-body"><span className="vc-call-name">{L.request}</span></span>
+              {row.engine ? <span className="vc-deleg-engine"><EngineMark engine={row.engine} size={14} /></span> : null}
+              <span className="vc-call-state">{stageLine(row.stage)}</span>
+            </span>
+          )}
+        >
+          <span className="vc-tr-label">{L.instruction}</span>
           <p className="vc-instruction">{row.instruction}</p>
           {row.reason ? <p className="vc-deleg-note">{row.reason}</p> : null}
-          {variant === 1 ? null : states}
-          {variant === 3 ? raw : raw ? <details className="vc-tr-call vc-tr-raw"><summary><span className="vc-tr-label">{L.args} · {L.result}</span><ChevronRight size={13} className="vc-tr-chev" aria-hidden /></summary>{raw}</details> : null}
-        </div>
+          <span className="vc-tr-label">{L.steps}</span>
+          <ol className="vc-tr-states">{row.states.map((state, index) => <li key={index}><span className="vc-tr-time">{clock(state.atMs)}</span>{stageLine(STAGE[state.status] ?? state.status)}</li>)}</ol>
+          {row.args ? <><span className="vc-tr-label">{L.args}</span><pre className="vc-tr-pre">{row.args}</pre></> : null}
+          {row.args && row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre">{row.result}</pre></> : null}
+        </Disclosure>
         {row.answer ? (
           <div className="vc-call vc-deleg vc-reply" data-stage="answered" data-transcript-answer>
             <div className="vc-deleg-head">
               <span className="vc-call-icon" aria-hidden><Check size={14} /></span>
               <span className="vc-deleg-title">{t("voiceCompanion.stage.answered")}</span>
-              {variant !== 1 ? <span className="vc-tr-time vc-tr-push">{clock(row.answer.atMs)}</span> : null}
+              <span className="vc-tr-time vc-tr-push">{clock(row.answer.atMs)}</span>
             </div>
             <p className="vc-answer">{row.answer.text}</p>
           </div>
@@ -183,40 +180,21 @@ export function CompanionTranscript({ variant, record, left, top, width, height,
   };
 
   const item = (row: Row) => {
-    if (variant === 3) {
-      const label = row.kind === "speech" ? who(row.speaker) : row.kind === "call" ? row.name : L.sent;
-      return (
-        <li key={row.key} className="vc-tr-doc" data-kind={row.kind} data-speaker={row.kind === "speech" ? row.speaker : undefined}>
-          <span className="vc-tr-time">{clock(row.atMs)}</span>
-          <div className="vc-tr-entry">
-            {row.kind === "speech" ? <p className="vc-tr-said"><span className="vc-tr-who">{label}</span>{row.text}</p> : row.kind === "call" ? call(row) : request(row)}
-          </div>
-        </li>
-      );
-    }
     if (row.kind === "speech") {
       return (
         <li key={row.key} className="vc-tr-row" data-kind="speech" data-speaker={row.speaker}>
-          {variant === 2 ? <span className="vc-tr-meta"><span className="vc-tr-who">{who(row.speaker)}</span><span className="vc-tr-time">{clock(row.atMs)}</span></span> : null}
-          <p className="vc-bubble" data-speaker={row.speaker}>
-            {variant === 1 ? <span className={row.speaker === "operator" ? "vc-who" : "vc-sr"}>{who(row.speaker)}{row.speaker === "operator" ? "" : ": "}</span> : null}
-            <span className="vc-text">{row.text}</span>
-          </p>
+          <span className="vc-tr-meta"><span className="vc-tr-who">{who(row.speaker)}</span><span className="vc-tr-time">{clock(row.atMs)}</span><CopyButton text={row.text} label={L.copyMessage} className="vc-tr-copy" /></span>
+          <p className="vc-bubble" data-speaker={row.speaker}><span className="vc-text" data-transcript-text>{row.text}</span></p>
         </li>
       );
     }
     return <li key={row.key} className="vc-tr-row" data-kind={row.kind}>{row.kind === "call" ? call(row) : request(row)}</li>;
   };
 
-  const copyAll = async () => {
-    try { await navigator.clipboard.writeText(plain()); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch { /* selection still copies */ }
-  };
-
   return (
     <div
       ref={panel}
       className="vc-tr"
-      data-variant={variant}
       data-companion-transcript-view
       role="dialog"
       aria-label={L.title}
@@ -227,10 +205,9 @@ export function CompanionTranscript({ variant, record, left, top, width, height,
       <div className="vc-tr-head">
         <span className="vc-tr-title">{L.title}</span>
         <span className="vc-tr-sub">{ended ? L.ended : L.live} · {clock(last)}</span>
-        {variant === 3 ? <button type="button" className="vc-act vc-tr-copy" data-transcript-copy onClick={copyAll}><Copy size={13} aria-hidden />{copied ? L.copied : L.copyAll}</button> : null}
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
-      <div ref={body} className="vc-tr-body" data-transcript-body>
+      <div ref={body} className="vc-tr-body" data-transcript-body onScroll={(event) => { const node = event.currentTarget; following.current = node.scrollTop + node.clientHeight >= node.scrollHeight - 40; }}>
         {record.truncated ? <p className="vc-deleg-note vc-deleg-wait">{L.truncated}</p> : null}
         {rows.length ? <ol className="vc-tr-list">{rows.map(item)}</ol> : <p className="vc-deleg-note vc-deleg-wait">{L.empty}</p>}
       </div>
@@ -238,7 +215,7 @@ export function CompanionTranscript({ variant, record, left, top, width, height,
   );
 }
 
-/* Every colour a product token, as in the companion's own sheet; 1 keeps the lane's open glass, 2 a glass sheet, 3 a solid page. */
+/* Every colour a product token, as in the companion's own sheet: the bubbles' glass as one panel. */
 export const TRANSCRIPT_CSS = `
 /* While the conversation is open, it stands where the lane was; the lane comes back as it closes. */
 .vc-lane[data-reading] { visibility: hidden; }
@@ -246,81 +223,48 @@ export const TRANSCRIPT_CSS = `
 .vc-tr {
   position: absolute; display: flex; flex-direction: column; pointer-events: auto; outline: none; color: var(--color-primary);
   animation: vc-in 160ms var(--vc-ease);
+  border-radius: 16px; box-shadow: var(--shadow-2); overflow: hidden;
+  background: color-mix(in srgb, var(--color-raised) 94%, transparent); border: 1px solid color-mix(in srgb, var(--color-warning) 34%, var(--color-border));
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
-.vc-tr-head { display: flex; align-items: center; gap: 8px; flex: none; }
+.vc-tr-head { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--color-border); }
 .vc-tr-title { font-size: 13px; font-weight: 700; }
 .vc-tr-sub { font-size: 11.5px; color: var(--color-secondary); white-space: nowrap; }
 .vc-tr-close { margin-left: auto; width: 26px; height: 26px; box-shadow: none; }
-.vc-tr-copy + .vc-tr-close { margin-left: 0; }
-.vc-tr-copy { margin-left: auto; height: 26px; padding: 0 10px; font-size: 12px; }
-.vc-tr-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; user-select: text; }
-.vc-tr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.vc-tr-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; user-select: text; padding: 10px 12px 12px; }
+.vc-tr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .vc-tr-row { display: flex; flex-direction: column; min-width: 0; }
-.vc-tr .vc-bubble { max-width: 100%; cursor: text; }
+.vc-tr-row[data-speaker="operator"] { align-items: flex-end; }
+.vc-tr-row[data-speaker="companion"] { align-items: flex-start; }
+.vc-tr .vc-bubble { max-width: 88%; cursor: text; }
+.vc-tr .vc-bubble[data-speaker="companion"] { box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .vc-tr .vc-call { cursor: default; }
 .vc-tr .vc-deleg, .vc-tr .vc-call.vc-deleg { width: auto; max-height: none; }
 .vc-tr .vc-instruction, .vc-tr .vc-answer, .vc-tr .vc-deleg-note { max-height: none; overflow: visible; }
+.vc-tr-meta { display: flex; align-items: center; gap: 6px; margin: 0 4px 3px; }
+.vc-tr-row[data-speaker="operator"] .vc-tr-meta { flex-direction: row-reverse; }
+.vc-tr-copy { opacity: 0.7; }
+.vc-tr-copy:hover, .vc-tr-copy:focus-visible { opacity: 1; }
 .vc-tr-time { font-family: var(--font-mono); font-size: 10.5px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .vc-tr-push { margin-left: auto; font-weight: 500; }
 .vc-tr-who { font-weight: 700; font-size: 11.5px; }
 .vc-tr-label { font-size: 10.5px; font-weight: 700; color: var(--color-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.vc-tr-call > summary { list-style: none; cursor: pointer; display: block; border-radius: 12px; }
-.vc-tr-call > summary::-webkit-details-marker { display: none; }
-.vc-tr-call > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.vc-tr-call > summary .vc-call { cursor: pointer; }
-.vc-tr-chev { flex: none; color: var(--color-muted); transition: transform 150ms ease-out; }
-.vc-tr-call[open] > summary .vc-tr-chev { transform: rotate(90deg); }
+.vc-tr-toggle { display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
+.vc-tr-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.vc-tr-toggle .vc-call { cursor: pointer; }
+.vc-tr-chev { flex: none; color: var(--color-muted); transition: transform 150ms ease-out; margin-left: 2px; }
+.vc-tr-toggle[aria-expanded="true"] .vc-tr-chev { transform: rotate(90deg); }
+.vc-tr-toggle .vc-call { display: flex; }
+.vc-tr-call > .vc-tr-toggle { display: flex; align-items: center; gap: 4px; }
+.vc-tr-call > .vc-tr-toggle > .vc-call { flex: 1; min-width: 0; }
 .vc-tr-detail { display: flex; flex-direction: column; gap: 3px; padding: 6px 2px 2px; min-width: 0; }
+.vc-tr-reason { margin: 0; font-size: 12px; line-height: 16px; color: var(--color-secondary); }
 .vc-tr-pre {
   margin: 0 0 4px; padding: 6px 8px; font: 11px/15px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
   background: var(--color-sunken); border: 1px solid var(--color-border); border-radius: 8px; color: var(--color-primary);
 }
 .vc-tr-pre[data-status="failed"] { border-color: color-mix(in srgb, var(--color-danger) 40%, transparent); background: color-mix(in srgb, var(--color-danger-soft) 60%, var(--color-sunken)); }
 .vc-tr-handoff { margin: 0; font-size: 12px; line-height: 16px; color: var(--color-secondary); }
-.vc-tr-states { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11.5px; color: var(--color-secondary); }
+.vc-tr-states { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11.5px; color: var(--color-secondary); }
 .vc-tr-states li { display: inline-flex; align-items: baseline; gap: 4px; }
-.vc-tr-raw > summary { display: flex; align-items: center; gap: 4px; padding: 2px 0; }
-
-/* 1 · the lane, scrolled back: no surface of its own, the lane's bubbles on the page as they floated */
-.vc-tr[data-variant="1"] { gap: 6px; }
-.vc-tr[data-variant="1"] .vc-tr-head {
-  align-self: stretch; padding: 4px 4px 4px 12px; border-radius: 14px; box-shadow: var(--shadow-2);
-  background: color-mix(in srgb, var(--color-raised) 92%, transparent); border: 1px solid color-mix(in srgb, var(--color-warning) 34%, var(--color-border));
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-}
-.vc-tr[data-variant="1"] .vc-tr-body { padding: 2px 2px 6px; mask-image: linear-gradient(to bottom, transparent 0, black 6px); }
-.vc-tr[data-variant="1"] .vc-tr-row[data-speaker="operator"] { align-items: flex-end; }
-.vc-tr[data-variant="1"] .vc-tr-row[data-speaker="companion"] { align-items: flex-start; }
-.vc-tr[data-variant="1"] .vc-tr-detail { margin-top: 4px; padding: 6px 8px; border-radius: 12px; background: var(--color-raised); border: 1px solid var(--color-border); box-shadow: var(--shadow-1); }
-
-/* 2 · a glass sheet: the bubbles' glass as one panel, speaker and time over each line */
-.vc-tr[data-variant="2"], .vc-tr[data-variant="3"] { border-radius: 16px; box-shadow: var(--shadow-2); overflow: hidden; }
-.vc-tr[data-variant="2"] {
-  background: color-mix(in srgb, var(--color-raised) 94%, transparent); border: 1px solid color-mix(in srgb, var(--color-warning) 34%, var(--color-border));
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-}
-.vc-tr[data-variant="2"] .vc-tr-head, .vc-tr[data-variant="3"] .vc-tr-head { padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--color-border); }
-.vc-tr[data-variant="2"] .vc-tr-body { padding: 10px 12px 12px; }
-.vc-tr[data-variant="2"] .vc-tr-list { gap: 10px; }
-.vc-tr-meta { display: flex; align-items: baseline; gap: 6px; margin: 0 4px 3px; }
-.vc-tr[data-variant="2"] .vc-tr-row[data-speaker="operator"] { align-items: flex-end; }
-.vc-tr[data-variant="2"] .vc-tr-row[data-speaker="operator"] .vc-tr-meta { flex-direction: row-reverse; }
-.vc-tr[data-variant="2"] .vc-tr-row[data-speaker] .vc-bubble { max-width: 88%; }
-.vc-tr[data-variant="2"] .vc-bubble[data-speaker="companion"] { box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
-
-/* 3 · a reader: a solid page, the time in a gutter, every call open */
-.vc-tr[data-variant="3"] { background: var(--color-raised); border: 1px solid var(--color-border); }
-.vc-tr[data-variant="3"] .vc-tr-body { padding: 10px 14px 14px 10px; }
-.vc-tr[data-variant="3"] .vc-tr-list { gap: 12px; }
-.vc-tr-doc { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 8px; align-items: start; }
-.vc-tr-doc > .vc-tr-time { padding-top: 3px; text-align: right; }
-.vc-tr-entry { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.vc-tr-said { margin: 0; font-size: 13.5px; line-height: 20px; overflow-wrap: anywhere; }
-.vc-tr-said .vc-tr-who { display: block; font-size: 11.5px; line-height: 16px; }
-.vc-tr-doc[data-speaker="operator"] .vc-tr-said { color: var(--color-secondary); }
-.vc-tr-doc[data-speaker="operator"] .vc-tr-who { color: var(--color-primary); }
-.vc-tr-doc[data-speaker="companion"] .vc-tr-said { font-weight: 500; }
-.vc-tr-doc[data-speaker="companion"] .vc-tr-who { color: color-mix(in srgb, var(--color-warning) 70%, var(--color-primary)); }
-.vc-tr-callrow { display: flex; flex-direction: column; gap: 0; min-width: 0; }
-.vc-tr-callrow > .vc-call { align-self: flex-start; box-shadow: none; }
 `;
