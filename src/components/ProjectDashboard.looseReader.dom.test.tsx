@@ -10,15 +10,17 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 /*
- * The reader of a conversation no card holds (#1695, round 2 of the review of
- * #1712) takes the whole window. It belongs to the project it was opened in and
- * to the moment it was opened for:
+ * The agent window (docs/design/agent-window.md), opened on a conversation no
+ * card holds (#1695, round 2 of the review of #1712). Every conversation opens
+ * there, and the window belongs to the project it was opened in:
  *   - a switch to another project whose files the Viewer already holds keeps
- *     the Board mounted, and the reader must not stay over that project, nor
+ *     the Board mounted, and the window must not stay over that project, nor
  *     come back when the operator returns;
- *   - an attention jump, a `#c=` landing, a focus handoff or a pipeline link to
- *     something a card holds leaves the window first, so the target is not
- *     covered, and a handoff does not report arrival while the window is up.
+ *   - an attention jump or a `#c=` landing on a conversation a card holds
+ *     brings it into the same window, never into its card;
+ *   - a focus handoff `show` or a pipeline link to a card leaves the window
+ *     first, so the target is not covered, and a handoff does not report
+ *     arrival while the window is up.
  * The real ProjectDashboard is mounted over invented records; a project switch
  * is the dashboard rendered with the other project's loaded files, as the
  * Viewer renders it; the board route is a scripted fetch.
@@ -212,14 +214,15 @@ function mount() {
 }
 
 const holdsPath = (element: Element, file: FileEntry) => element.matches(`[data-link-path="${file.path}"]`) || element.querySelector(`[data-link-path="${file.path}"]`) !== null;
-/** Its reader with the transcript and the composer: in the window, in a card, or none. */
+/** Its reader with the transcript and the composer: in the window, in a card (never), or none on screen. */
 const readerOf = (host: HTMLElement, file: FileEntry): "window" | "card" | null => {
   const reader = Array.from(host.querySelectorAll("[data-kanban-reader]"))
     .find((element) => holdsPath(element, file) && element.querySelector("textarea"));
   if (!reader) return null;
-  return reader.closest(".reader-full") ? "window" : reader.closest("[data-kanban-card]") ? "card" : null;
+  /* Shown in the window: not the agent it is still bringing in. */
+  return reader.closest("[data-agent-window] .reader-slot:not([data-incoming])") ? "window" : reader.closest("[data-kanban-card]") ? "card" : null;
 };
-const windowUp = () => dom.document.querySelector(".reader-full") !== null;
+const windowUp = () => dom.document.querySelector("[data-agent-window]") !== null;
 const cardOf = (host: HTMLElement, id: string) => host.querySelector(`[data-kanban-card="${id}"]`);
 const focusedCard = () => (dom.document.activeElement as unknown as HTMLElement | null)?.closest?.("[data-kanban-card]")?.getAttribute("data-kanban-card") ?? null;
 const navigate = (id: string) => dom.dispatchEvent(new dom.CustomEvent("llv:mcp-navigate", { detail: { kind: "pipeline", id } }));
@@ -266,33 +269,37 @@ test("a switch to a project the Board is already showing files for leaves the re
   expect(presentationWrites).toEqual([]);
 });
 
-test("an attention jump to a conversation a card holds leaves the window and opens it in its card", async () => {
+const listed = () => Array.from(dom.document.querySelectorAll("[data-agent-window] [data-open-agent]")).map((row) => row.getAttribute("data-open-agent"));
+
+test("an attention jump to a conversation a card holds brings it into the same window, never into its card", async () => {
   const { host, land } = await openReviewer();
   land(implementer);
-  expect(await waitFor(() => readerOf(host, implementer) === "card")).toBe(true);
-  expect(windowUp()).toBe(false);
+  expect(await waitFor(() => readerOf(host, implementer) === "window")).toBe(true);
   expect(readerOf(host, reviewer)).toBeNull();
+  expect(listed()).toHaveLength(2);
+  expect(dom.document.querySelectorAll("[data-agent-window]").length).toBe(1);
   expect(presentationWrites).toEqual([]);
 });
 
-test("a `#c=` landing on a conversation a card holds leaves the window and opens it in its card", async () => {
+test("a `#c=` landing on a conversation a card holds brings it into the same window, never into its card", async () => {
   const { host, land } = await openReviewer();
   land(implementer, true);
-  expect(await waitFor(() => readerOf(host, implementer) === "card")).toBe(true);
-  expect(windowUp()).toBe(false);
+  expect(await waitFor(() => readerOf(host, implementer) === "window")).toBe(true);
+  expect(host.querySelector("[data-kanban-card] [data-kanban-reader]")).toBeNull();
   expect(presentationWrites).toEqual([]);
 });
 
-test("another conversation no card holds takes the window from the first", async () => {
+test("another conversation no card holds comes into the window after the first, which stays in its list", async () => {
   const { host, land } = await openReviewer();
   land(earlierReviewer);
   expect(await waitFor(() => readerOf(host, earlierReviewer) === "window")).toBe(true);
   expect(readerOf(host, reviewer)).toBeNull();
-  expect(dom.document.querySelectorAll(".reader-full").length).toBe(1);
+  expect(listed()).toHaveLength(2);
+  expect(dom.document.querySelectorAll("[data-agent-window]").length).toBe(1);
 });
 
 for (const intent of ["show", "open"] as const) {
-  test(`a focus handoff \`${intent}\` to a card leaves the window, and does not report arrival while the window is up`, async () => {
+  test(`a focus handoff \`${intent}\` to a card does not report arrival under the window, and ${intent === "show" ? "leaves the window" : "brings the conversation into it"}`, async () => {
     const { host } = await openReviewer();
     /* Laid out: every box is the window, so only what covers the target decides arrival. */
     const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect(): unknown };
@@ -310,12 +317,18 @@ for (const intent of ["show", "open"] as const) {
       let moved = false;
       flushSync(() => { moved = board.moveTo(destination); });
       expect(moved).toBe(true);
-      expect(await waitFor(() => !windowUp())).toBe(true);
-      expect(readerOf(host, reviewer)).toBeNull();
-      if (intent === "open") expect(await waitFor(() => readerOf(host, implementer) === "card")).toBe(true);
-      /* Arrived once nothing covers it. This harness streams no transcript, so an opened reader's feed never
-         settles here and its card is what is on screen. */
-      expect(await waitFor(() => focusHandoffBus.board()!.arrival!(destination) === "visible")).toBe(true);
+      if (intent === "open") {
+        /* The window stays and shows it. This harness streams no transcript, so the reader's feed never
+           settles here: the conversation is seen, and not arrived. */
+        expect(await waitFor(() => readerOf(host, implementer) === "window")).toBe(true);
+        expect(readerOf(host, reviewer)).toBeNull();
+        expect(board.arrival!(destination)).toBe("visible");
+      } else {
+        expect(await waitFor(() => !windowUp())).toBe(true);
+        expect(readerOf(host, reviewer)).toBeNull();
+        /* Arrived once nothing covers it. */
+        expect(await waitFor(() => focusHandoffBus.board()!.arrival!(destination) === "visible")).toBe(true);
+      }
     } finally {
       prototype.getBoundingClientRect = measured;
     }

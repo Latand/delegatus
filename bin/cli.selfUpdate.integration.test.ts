@@ -559,6 +559,68 @@ test("a checkout records both children, and a restart request moves each one ont
    picks for itself from the key file, which the launcher never handed it. */
 const KEY_SOURCES = ["LLV_TOKEN", "DELEGATUS_TOKEN", "generated", "links-grants", "links-public-address", "phone-access-after-start"] as const;
 
+test("LLV_TOKEN web restart probes a protected page and its chunk while the supervisor and host stay up", async () => {
+  const fixture = install();
+  const token = randomBytes(16).toString("hex");
+  fixture.env.LLV_TOKEN = token;
+  delete fixture.env.DELEGATUS_TOKEN;
+  fixture.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
+  const log = path.join(fixture.state, "fixture-readiness.jsonl");
+  // Match the Viewer perimeter: GET / requires the key; static chunks are public.
+  writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"), `
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
+  fetch(request) {
+    const pathname = new URL(request.url).pathname;
+    const authenticated = request.headers.get("authorization") === "Bearer " + process.env.LLV_TOKEN;
+    appendFileSync(join(process.env.LLV_STATE_DIR, "fixture-readiness.jsonl"), JSON.stringify({ pathname, authenticated, pid: process.pid }) + "\\n");
+    if (pathname === "/") {
+      if (!authenticated) return new Response("Forbidden", { status: 403 });
+      return new Response('<script src="/_next/static/chunks/app.js"></script>', { headers: { "content-type": "text/html" } });
+    }
+    if (pathname === "/_next/static/chunks/app.js") return new Response("// ready");
+    return new Response("missing", { status: 404 });
+  },
+});
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+`);
+  git(fixture.checkout, "add", "-f", ".");
+  git(fixture.checkout, "commit", "--quiet", "-m", "protected page with a static chunk");
+  fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  const running = await start(fixture);
+  const before = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
+  });
+  expect((await fetch(`http://127.0.0.1:${running.port}/`)).status).toBe(403);
+  const next = release(fixture, "protected-page-update");
+  writeFileSync(log, "");
+  writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+  request(before, "web", "restart-protected-page");
+  const after = await until(() => {
+    const record = readRecord(fixture.state);
+    return record.web.requestId === "restart-protected-page" && record.web.pid !== before.web.pid
+      && ["healthy", "failed"].includes(record.web.state) ? record : null;
+  });
+  expect(after.web).toMatchObject({ state: "healthy", revision: next.sha.slice(0, 7), error: null });
+  const probes = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(probes).toContainEqual({ pathname: "/", authenticated: true, pid: after.web.pid });
+  expect(probes).toContainEqual({ pathname: "/_next/static/chunks/app.js", authenticated: false, pid: after.web.pid });
+  expect((await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(200);
+  expect(after.launcher.pid).toBe(before.launcher.pid);
+  expect(after.runtimeHost).toMatchObject({ state: "healthy", pid: before.runtimeHost.pid });
+  expect(await socketAnswers(before.socket)).toBe(true);
+  expect(running.child.exitCode).toBeNull();
+  expect(running.child.signalCode).toBeNull();
+  expect(stateText(fixture.state)).not.toContain(token);
+  expect(running.output()).not.toContain(token);
+}, 60_000);
+
 for (const tokenSource of KEY_SOURCES) {
   for (const { broken, automatic } of [
     { broken: false, automatic: false },
@@ -735,8 +797,14 @@ test("a release whose web does not start gives way to the one it replaced, and s
   expect(child.exitCode).toBeNull();
 }, 60_000);
 
-test("a web restart whose new and previous releases both fail leaves the web failed and the runtime host serving", async () => {
-  const fixture = install();
+for (const tokenProtected of [false, true]) {
+test(`a web restart whose new and previous releases both fail leaves the web failed and the runtime host serving, LLV_TOKEN=${tokenProtected}`, async () => {
+  const fixture = install({ tokenProtected });
+  const token = randomBytes(16).toString("hex");
+  delete fixture.env.DELEGATUS_TOKEN;
+  if (tokenProtected) fixture.env.LLV_TOKEN = token;
+  else delete fixture.env.LLV_TOKEN;
+  fixture.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
   const { port, child } = await start(fixture);
   const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null; });
   expect(await socketAnswers(before.socket)).toBe(true);
@@ -760,6 +828,7 @@ test("a web restart whose new and previous releases both fail leaves the web fai
   expect(child.signalCode).toBeNull();
   const stillFailed = readRecord(fixture.state);
   expect(stillFailed.web.state).toBe("failed");
+  expect(stillFailed.launcher.pid).toBe(before.launcher.pid);
   expect(stillFailed.runtimeHost).toMatchObject({ state: "healthy", pid: before.runtimeHost.pid });
   expect(existsSync(`/proc/${before.runtimeHost.pid}`)).toBe(true);
   expect(await socketAnswers(before.socket)).toBe(true);
@@ -773,11 +842,17 @@ test("a web restart whose new and previous releases both fail leaves the web fai
   });
   expect(recovered.web.error).toBeNull();
   expect(recovered.web.revision).toBe(healthy.sha.slice(0, 7));
-  expect(await served(port)).toBe(healthy.dir);
+  const response = await fetch(`http://127.0.0.1:${port}/`, { headers: tokenProtected ? { authorization: `Bearer ${token}` } : {} });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe(healthy.dir);
+  expect(recovered.launcher.pid).toBe(before.launcher.pid);
   expect(recovered.runtimeHost.pid).toBe(before.runtimeHost.pid);
   expect(await socketAnswers(before.socket)).toBe(true);
   expect(child.exitCode).toBeNull();
+  expect(child.signalCode).toBeNull();
+  expect(stateText(fixture.state)).not.toContain(token);
 }, 60_000);
+}
 
 test("the serving web is recovered with backoff after an unexpected exit", async () => {
   const fixture = install();

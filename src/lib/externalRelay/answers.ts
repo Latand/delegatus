@@ -24,6 +24,7 @@ export type RelayAnswerDelivery = "accepted" | "refused" | "unconfirmed";
 /** Who asked, as the service's requester block says. Recorded, never trusted for access. */
 export type RelayAnswerRequester = ExternalRelayRequester;
 export type RelayToolCallRecord = {
+  effect?: "action";
   round: number; tool: string; page: boolean; status: string; code: string | null;
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };

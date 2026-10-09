@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates the local faster-whisper venv the viewer's dictation uses and
-# pre-downloads the model so the first dictation is not the slow one.
+# verifies transcription and pre-downloads the model for the first dictation.
 set -euo pipefail
 
 # DELEGATUS_X is the documented spelling of LLV_X and wins when both are set
@@ -34,16 +34,30 @@ MODEL="${LLV_WHISPER_MODEL:-small}"
 DEVICE="${LLV_WHISPER_DEVICE:-cpu}"
 
 python3 -m venv "$VENV"
-"$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet faster-whisper
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+"$VENV/bin/python" -m pip install --quiet -r "$SCRIPT_DIR/whisper-requirements.txt"
 
 COMPUTE=int8
 [ "$DEVICE" = "cuda" ] && COMPUTE=int8_float16
 "$VENV/bin/python" - "$MODEL" "$DEVICE" "$COMPUTE" <<'PY'
 import sys
+import tempfile
+import wave
+from pathlib import Path
 from faster_whisper import WhisperModel
-WhisperModel(sys.argv[1], device=sys.argv[2], compute_type=sys.argv[3])
-print("model ready:", sys.argv[1], sys.argv[2])
+model = WhisperModel(sys.argv[1], device=sys.argv[2], compute_type=sys.argv[3])
+with tempfile.TemporaryDirectory(prefix="whisper-smoke-") as directory:
+    audio = Path(directory) / "silence.wav"
+    with wave.open(str(audio), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 16000)
+    # Consume the lazy iterator so inference errors also fail setup. Silence
+    # can yield an empty transcript; decoding and inference must still finish.
+    segments, _ = model.transcribe(str(audio), language="en", vad_filter=False)
+    list(segments)
+print("transcription smoke passed:", sys.argv[1], sys.argv[2])
 PY
 
 echo "whisper venv ready at $VENV"
