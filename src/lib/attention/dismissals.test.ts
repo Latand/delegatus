@@ -69,9 +69,21 @@ test("rule 3: hide removes a review from both waiting lists, keeps history and u
   await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports });
   expect(readPrototypeReviews(task).waitingReviewId).toBeNull();
   expect(readPrototypeReviews(task).rounds[0]!.hidden?.by).toEqual(OPERATOR);
-  await dismissAttention(target, SEAT, { ports: h.ports, undo: true });
+  for (let batch = 0; batch < Math.ceil(DISMISSAL_CAPACITY / 200) + 1; batch++) {
+    const subjects = Array.from({ length: 200 }, (_, index) => ({ kind: "conversation" as const, path: `/fixture/overflow-${batch}-${index}.jsonl` }));
+    await dismissAttention(parseDismissalTarget({ kind: "subjects", subjects }, { allowSubjects: true }), OPERATOR, { ports: h.ports });
+  }
+  expect(readAttentionDismissals().records.filter(record => record.kind !== "prototype")).toHaveLength(DISMISSAL_CAPACITY);
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toEqual([]);
+  expect(readPrototypeReviews(task).rounds[0]!.hidden?.by).toEqual(OPERATOR);
+  const undone = await dismissAttention(target, SEAT, { ports: h.ports, undo: true });
+  expect(undone.alreadyClear).toEqual([]);
   expect(readPrototypeReviews(task).waitingReviewId).toBe("review-hide");
   expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toHaveLength(1);
+  await dismissAttention(target, OPERATOR, { ports: h.ports });
+  task.prototypeReviews!.push({ ...task.prototypeReviews![0]!, id: "review-next", createdAt: h.clock.now.toISOString() });
+  expect(readPrototypeReviews(task).waitingReviewId).toBe("review-next");
+  expect(readPrototypeReviews(task).rounds.find(round => round.id === "review-hide")?.hidden?.by).toEqual(OPERATOR);
 });
 
 function lane(id: string, state: Pipeline["state"], over: Partial<Pipeline> = {}): Pipeline {

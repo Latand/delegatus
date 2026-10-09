@@ -12934,7 +12934,19 @@ async function driveLegacyTerminalRecheck(
 ) {
   const prior = await driveWithController(h, failing);
   seedLegacyTerminalRecheck();
-  return driveWithController(h, failing, prior.reviews);
+  // Preserve the historical park until it is written, then restore its
+  // default policy so the next owner tick exercises restart reconciliation.
+  const seeded = loadPipelines()[0]!;
+  const review = seeded.stages.find(stage => stage.id === seeded.cursor!.stageId)!;
+  const exhaustion = review.onFail!.onExhausted;
+  review.onFail!.onExhausted = "stop-after-fix";
+  savePipelines([seeded]);
+  const result = await driveWithController(h, failing, prior.reviews);
+  const restored = result.pipeline.stages.find(stage => stage.id === review.id)!;
+  if (exhaustion === undefined) delete restored.onFail!.onExhausted;
+  else restored.onFail!.onExhausted = exhaustion;
+  savePipelines([result.pipeline]);
+  return result;
 }
 
 test("another gate's fail loop gives a spent gate a fresh bounded check cycle (#2247)", async () => {
@@ -23741,4 +23753,71 @@ test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandb
     expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
     expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
   }
+});
+
+
+test.each([false, true])("stored default-advance terminal budget park fixes retained findings once across restart (metadata: %s)", async (metadata) => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveLegacyTerminalRecheck(h)).pipeline;
+  const { needsYouEntries } = await import("@/lib/attention/needsYouRead");
+  expect(needsYouEntries({ files: [], pipelines: [parked], tasks: [] }, null, Date.now() / 1000, parked.project)).toHaveLength(1);
+  if (!metadata) delete parked.reviewPending;
+  if (metadata) parked.reviewGrants = [{ clientRequestId: "historical-grant", expectedRevision: pipelineRevision(parked), stageId: "critique", terminalAttempt: 1,
+    rounds: 1, reviewedHead: REVIEW_HEADS[0], currentHead: parked.lastPassedCommit, actor: { kind: "operator" }, at: parked.createdAt }];
+  const task = { ...boardTask("task-budget-restart"), project: parked.project,
+    note: { text: "Budget wait", author: { kind: "orchestrator" as const }, updatedAt: parked.createdAt } };
+  saveTasks([task]);
+  parked.taskIds = [task.id];
+  savePipelines([parked]);
+  await tickPipelines([], h.ports);
+  expect(loadTasks().find(row => row.id === task.id)?.note ?? null).toBeNull();
+  const resumed = loadPipelines()[0]!;
+  expect(resumed.state).toBe("running");
+  expect(resumed.reviewPending).toBeUndefined();
+  expect(needsYouEntries({ files: [], pipelines: [resumed], tasks: loadTasks() }, null, Date.now() / 1000, resumed.project)).toEqual([]);
+  const { pipeline } = await driveWithController(h);
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(2);
+  const fixes = pipeline.runs.find(run => run.stageId === "build")!.attempts;
+  expect(fixes).toHaveLength(3);
+  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 2");
+  expect(pipelineCompletedUnreviewed(pipeline)?.findings).toBe(1);
+  expect(needsYouEntries({ files: [], pipelines: [pipeline], tasks: loadTasks() }, null, Date.now() / 1000, pipeline.project)).toEqual([]);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("completed");
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(3);
+});
+
+
+test.each(["park", "stop-after-fix", "operator-choice"])("stored terminal budget recovery preserves %s", async (policy) => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveLegacyTerminalRecheck(h)).pipeline;
+  if (policy === "operator-choice") {
+    const attempt = parked.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+    attempt.state = "needs_decision";
+    attempt.verdict = { status: "needs_decision", findings: [] };
+    attempt.output = "Select the release window";
+    delete parked.reviewPending;
+  } else parked.stages.find(stage => stage.id === "critique")!.onFail!.onExhausted = policy as "park" | "stop-after-fix";
+  savePipelines([parked]);
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
+});
+
+test("stored default-advance needs_review resumes after its already passed final fix", async () => {
+  const h = movingHeadHarness();
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1, onExhausted: "stop-after-fix" }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.state).toBe("needs_review");
+  delete parked.stages.find(stage => stage.id === "critique")!.onFail!.onExhausted;
+  savePipelines([parked]);
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("completed");
+  expect(current.reviewPending).toBeUndefined();
+  expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
 });

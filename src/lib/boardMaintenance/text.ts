@@ -2,12 +2,8 @@ import { redactMonitorText } from "@/lib/monitor/redact";
 import { detectedVerdict } from "@/lib/spawnNotice/sweep";
 import type { MaintenanceRun, MaintenanceRunLog, MaintenanceAttention, MaintenanceLeftAlone, MaintenanceFailureKind } from "./types";
 import { workEvidenceLines, type TaskWorkEvidence } from "./evidence";
-
-/** An alternatives list alone can be routine backlog advice. A decision names
-    the next step actually waiting for the answer; old log rows remain history. */
-export function maintenanceDecision(row: MaintenanceAttention): boolean {
-  return Boolean(row.nextStep?.trim() && row.options.filter(option => option.trim()).length >= 2);
-}
+import { maintenanceDecision } from "./decision";
+export { maintenanceDecision } from "./decision";
 
 export function parseMaintenanceReport(text: string): Pick<MaintenanceRunLog, "attention" | "leftAlone" | "verdict"> {
   const attention: MaintenanceAttention[] = [];

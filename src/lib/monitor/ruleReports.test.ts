@@ -24,6 +24,12 @@ test("rule 1: a resolved rule writes one completed row with card links and never
   expect(reports[0]!.class).toBe("completed");
   expect(reports[0]!.body).toContain("#42");
   expect(reportCardRefs(reports[0]!.body!, new Map([["aabbccdd", "task"]]))).toEqual([{ id: "aabbccdd", kind: "task" }]);
+  const ready = ruleReports({ ...base, pipelines: [{ ...lane, merge: undefined, closedAt: at }] });
+  expect(ready).toHaveLength(1);
+  expect(ready[0]).toMatchObject({ key: "rule:budget-ready:pipeline-fixed", class: "completed", at });
+  expect(reportCardRefs(ready[0]!.body!, new Map([["aabbccdd", "task"]]))).toEqual([{ id: "aabbccdd", kind: "task" }]);
+  appendBridgeReports(ready);
+  expect(appendBridgeReports(ready).skipped).toBe(1);
   appendBridgeReports(reports);
   expect(appendBridgeReports(reports).skipped).toBe(1);
   appendBridgeReports([{ key: "real-choice", at, class: "question", body: "Коли переносити домен?", project: base.project,

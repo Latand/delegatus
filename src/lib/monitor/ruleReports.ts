@@ -1,6 +1,6 @@
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import type { AttentionDismissalV1 } from "@/lib/attention/dismissals";
-import { maintenanceDecision } from "@/lib/boardMaintenance/text";
+import { maintenanceDecision } from "@/lib/boardMaintenance/decision";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import type { BridgeReportLogV1, BridgeReportInput } from "@/lib/bridge/types";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
@@ -38,7 +38,13 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
         ? `${lane.taskIds.join(" ")} ${lane.id}: оркестратор прибрав вирішене очікування зі списку.`
         : `${lane.taskIds.join(" ")} ${lane.id}: the orchestrator cleared the resolved wait.`);
     }
-    if (lane.merge?.state !== "merged" || !pipelineCompletedUnreviewed(lane)) continue;
+    if (!pipelineCompletedUnreviewed(lane)) continue;
+    if (lane.merge?.state !== "merged") {
+      add(`rule:budget-ready:${lane.id}`, lane.closedAt ?? lane.createdAt, uk
+        ? `${lane.taskIds.join(" ")} «${lane.task.split("\n")[0]}»: бюджет рев’ю вичерпано; останні зауваження виправлено, PR готовий до злиття.`
+        : `${lane.taskIds.join(" ")} “${lane.task.split("\n")[0]}”: review budget completed; final findings fixed, PR ready to merge.`);
+      continue;
+    }
     const at = lane.merge.mergedAt ?? lane.merge.updatedAt;
     const cards = lane.taskIds.join(" ");
     add(`rule:budget-fixed:${lane.id}`, at, uk

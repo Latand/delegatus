@@ -3302,6 +3302,12 @@ function terminalReviewGrantForAttempt(
   const fulfilledReviews = new Set<string>(attempt.state === "passed" ? [stage.id] : []);
   while (current?.activatedBy) {
     const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+    // A recovered advance re-check hands its findings to a final fix. Its
+    // older grant is history and must not send that fix through another review.
+    const sourceStage = pipeline.stages.find(candidate => candidate.id === activation.stageId);
+    const sourceAttempt = runFor(pipeline, activation.stageId)?.attempts.find(candidate => candidate.n === activation.attempt && !candidate.historical);
+    if (activation.edge === "fail" && activation.budgetSpent && sourceAttempt?.activatedBy?.budgetRecheck
+      && sourceStage?.onFail && failEdgeExhaustion(sourceStage.onFail) === "advance") return null;
     // The nearest continuation root owns this work. Never trace through it
     // into an older grant whose rounds are already exhausted.
     const grant = activation.edge === "fail"
@@ -3429,6 +3435,39 @@ function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
     pipeline.stateDetail = reviewPendingDetail(pending);
     writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
   }
+  return true;
+}
+
+/** Stored automatic budget stops belong to the owner. A retained failed
+    re-check owes one final fix; an already passed final fix owes its successor.
+    Explicit stops, blocked reviews and operator questions retain their wait. */
+function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: PipelinePorts): boolean {
+  if (pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") return false;
+  const pending = pipeline.reviewPending;
+  if (!pending) return false;
+  const reviewStage = pipeline.stages.find(stage => stage.id === pending.stageId);
+  if (!reviewStage?.onFail || failEdgeExhaustion(reviewStage.onFail) !== "advance") return false;
+  const review = runFor(pipeline, reviewStage.id)?.attempts.find(attempt => attempt.n === pending.attempt && !attempt.historical);
+  const fixStage = pipeline.stages.find(stage => stage.id === pending.fixStageId);
+  const fix = fixStage && runFor(pipeline, fixStage.id)?.attempts.find(attempt => attempt.n === pending.fixAttempt && !attempt.historical);
+  if (!review?.verdict || review.verdict.blocked || !review.completedAt || fix?.state !== "passed"
+    || !fixStage || pending.currentHead !== pipeline.lastPassedCommit || pipelineSurvivorRefusal(pipeline)) return false;
+  if (pending.terminalRecheck) {
+    if (!currentTerminalReviewPending(pipeline, pending) || !terminalReviewPendingFromAttempt(pipeline, reviewStage, review)) return false;
+    review.budgetSpent = true;
+    review.reviewedHead = pending.reviewedHead;
+    pipeline.cursor = { stageId: reviewStage.onFail.to, state: "pending", input: failEdgeInput({ verdict: review.verdict, output: review.output ?? "" }),
+      activatedBy: { stageId: reviewStage.id, attempt: review.n, edge: "fail", budgetSpent: true } };
+    pipeline.state = "running";
+    pipeline.stateDetail = null;
+    pipeline.pausedState = null;
+  } else {
+    if (pipeline.state !== "needs_review" || !review.budgetSpent || fix.activatedBy?.stageId !== reviewStage.id
+      || fix.activatedBy.attempt !== review.n || !fix.activatedBy.budgetSpent) return false;
+    advancePipeline(pipeline, fixStage, ports, fix, true);
+  }
+  delete pipeline.reviewPending;
+  clearEngineTaskNote(pipeline);
   return true;
 }
 
@@ -8741,6 +8780,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, controllerPorts) || pipelineChanged;
         pipelineChanged = rebindPipelineAttemptPaths(pipeline, controllerPorts) || pipelineChanged;
         pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
+        pipelineChanged = reconcileDefaultAdvanceBudgetPark(pipeline, controllerPorts) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
