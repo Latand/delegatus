@@ -29,6 +29,11 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
   const uk = locale === "uk";
   const reports: BridgeReportInput[] = [];
   const title = (id: string) => input.tasks.find(t => t.id === id)?.text.split("\n")[0] ?? id;
+  const withConversationCards = (conversationId: string | null | undefined, body: string) => {
+    const ids = conversationId ? input.tasks.filter(task => task.project === project &&
+      task.assignments.some(assignment => assignment.conversationId === conversationId)).map(task => task.id) : [];
+    return ids.length ? `${ids.join(" ")}: ${body}` : body;
+  };
   const add = (key: string, at: string, body: string) => reports.push({ key, at, body, class: "completed", project,
     origin: { kind: "manager", conversationId: input.seatConversationId, role: "orchestrator" }, targetSeatConversationId: input.seatConversationId });
   for (const lane of input.pipelines) {
@@ -56,9 +61,9 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
     // A failed record may still carry an unverified execution. Only proven
     // non-execution is a final non-delivery outcome.
     if (!input.deliveryLost(delivery)) continue;
-    add(`rule:delivery-unsent:${delivery.id}`, input.at, uk
+    add(`rule:delivery-unsent:${delivery.id}`, input.at, withConversationCards(delivery.conversationId, uk
       ? `Повідомлення агента не доставлено: ${delivery.error ?? delivery.id}`
-      : `Agent message was not delivered: ${delivery.error ?? delivery.id}`);
+      : `Agent message was not delivered: ${delivery.error ?? delivery.id}`));
   }
   for (const run of input.maintenance) {
     if (run.project !== project || run.state !== "succeeded" || !run.endedAt) continue;
@@ -87,9 +92,10 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
     if (resolved.by.kind !== "manager") continue;
     const question = input.bridgeLog?.reports.find(row => row.seq === resolved.seq && row.project === project);
     if (!question) continue;
-    add(`rule:question-resolved:${resolved.seq}:${resolved.at}`, resolved.at, uk
+    add(`rule:question-resolved:${resolved.seq}:${resolved.at}`, resolved.at,
+      withConversationCards(question.origin?.conversationId ?? question.targetSeatConversationId, uk
       ? `Оркестратор зняв вирішене питання: ${question.body ?? ""}${resolved.note ? ` — ${resolved.note}` : ""}`
-      : `The orchestrator cleared the resolved question: ${question.body ?? ""}${resolved.note ? ` — ${resolved.note}` : ""}`);
+      : `The orchestrator cleared the resolved question: ${question.body ?? ""}${resolved.note ? ` — ${resolved.note}` : ""}`));
   }
   return reports;
 }

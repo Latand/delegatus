@@ -15,6 +15,7 @@
 import { createRoot } from "react-dom/client";
 
 import { ruleReports } from "@/lib/monitor/ruleReports";
+import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import type { BoardTask } from "@/lib/tasks/types";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
@@ -209,8 +210,13 @@ if (RULES) {
     tasks.find(task => task.id === lane.taskIds[0])!.status = "done";
   }
   files.find(file => file.path === owed)!.stuckDelivery!.origin = { kind: "agent", conversationId: "conversation_seat", role: "orchestrator", project: B };
+  const by = { kind: "manager" as const, conversationId: seatFile.conversationId!, role: "orchestrator" };
+  const question = REPORTS.find(row => row.seq === 1201)!;
   const rows = ruleReports({ project: D, seatConversationId: seatFile.conversationId!, tasks: tasks as unknown as BoardTask[], pipelines,
-    deliveries: [], maintenance: [], dismissals: [], locale: LANG, at: iso(0), deliveryProject: () => null, deliveryLost: () => false });
+    deliveries: [{ id: "fixture-final-non-delivery", conversationId: idOf(voice), state: "failed", command: { origin: { kind: "agent" } }, error: "target retired" } as HeldDelivery],
+    bridgeLog: { reports: [{ ...question, id: "fixture-resolved-question", project: D, origin: by, targetSeatConversationId: seatFile.conversationId! }],
+      resolvedAsks: [{ seq: question.seq, at: iso(64 * MIN), by }] },
+    maintenance: [], dismissals: [], locale: LANG, at: iso(0), deliveryProject: () => D, deliveryLost: () => true });
   REPORTS.unshift(...rows.map((row, index) => ({ seq: 1205 + index, at: row.at!, class: row.class!, body: row.body! })));
 }
 const resolvedQuestions = new Map<number, string>([[1_201, iso(64 * MIN)]]);

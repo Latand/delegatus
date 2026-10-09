@@ -24403,12 +24403,44 @@ describe("operator-selected needs-you rules", () => {
           await report.page.locator("[data-report-entry]").first().waitFor();
           await report.page.waitForTimeout(300);
           const completed = report.page.locator('[data-report-entry][data-report-class="completed"]');
+          const completedCount = await completed.count();
           // The existing renderer carries the outcome's card and PR links.
           const reports = await report.page.locator("[data-report-log]").innerText();
           expect(reports).toContain("останні зауваження виправлено");
           expect(reports).toContain("Нічний дайджест завершено");
+          const links: unknown[] = [];
           await report.page.screenshot({ path: path.join(out, `reports-${width}.png`) });
-          readings.push({ width, waits, reports, completed: await completed.count(), errors: report.pageErrors });
+          for (const [text, cardId] of [["Повідомлення агента не доставлено", "t-voice"], ["Оркестратор зняв вирішене питання", "t-seat"]]) {
+            // Opening a card leaves the log; restore it before the next link.
+            if (links.length) {
+              await report.page.reload();
+              await report.page.locator(counter).waitFor({ timeout: 30_000 });
+              if (phone) await report.page.evaluate(() => { location.hash = "reports"; });
+              else await report.page.locator("[data-report-log-toggle]").click();
+              await report.page.locator("[data-report-entry]").first().waitFor();
+            }
+            const outcome = completed.filter({ hasText: text });
+            expect(await outcome.count()).toBe(1);
+            const link = outcome.locator(`[data-report-card="${cardId}"]`);
+            await link.scrollIntoViewIfNeeded();
+            const geometry = await link.boundingBox();
+            expect(geometry).not.toBeNull();
+            expect(geometry!.x).toBeGreaterThanOrEqual(0);
+            expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+            expect(await link.isEnabled()).toBe(true);
+            await report.page.screenshot({ path: path.join(out, `report-card-${cardId}-${width}.png`) });
+            await report.page.evaluate(() => {
+              (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = null;
+              window.addEventListener("llv:mcp-navigate", event => {
+                (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = (event as CustomEvent).detail;
+              }, { once: true });
+            });
+            await link.click();
+            const navigation = await report.page.evaluate(() => (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation);
+            expect(navigation).toEqual({ kind: "task", id: cardId });
+            links.push({ cardId, geometry, navigation });
+          }
+          readings.push({ width, waits, reports, links, completed: completedCount, errors: report.pageErrors });
           expect(report.pageErrors).toEqual([]);
         } finally { await report.context.close(); }
 
