@@ -195,14 +195,14 @@ describe("preview", () => {
 
   test("a finite flow limit N becomes N reviewer activations under advance, never a clamp", () => {
     const pipeline = FIVE_DRAFT();
-    for (const limit of [1, 2, 3, 5]) {
+    for (const limit of [1, 2, 3, 5, 9]) {
       const preview = ok(previewLegacyReviewConversion(pipeline, {}, { flowRoundLimit: limit }));
       expect(preview).toMatchObject({ reviewLimit: limit, reviewLimitSource: "flow", reviewerActivations: limit });
       expect(preview.stages.find((stage) => stage.id === "reviewer")!.onFail).toEqual({ to: "reviewer-fix", maxRounds: limit, onExhausted: "advance" });
     }
     /* An explicit limit is the caller's edit and wins over the recorded one. */
     expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 2 }, { flowRoundLimit: 7 }))).toMatchObject({ reviewLimit: 2, reviewLimitSource: "request" });
-    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 5 }, { flowRoundLimit: 2 }))).toMatchObject({ reviewLimit: 5, reviewLimitSource: "request", reviewerActivations: 5 });
+    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 7 }, { flowRoundLimit: 2 }))).toMatchObject({ reviewLimit: 7, reviewLimitSource: "request", reviewerActivations: 7 });
     /* The counters differ: advance runs the reviewer maxRounds times, park once more. */
     expect(reviewerActivationsForLimit(4, "advance")).toBe(4);
     expect(reviewerActivationsForLimit(4, "park")).toBe(5);
