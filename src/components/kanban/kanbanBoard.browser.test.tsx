@@ -51,6 +51,98 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("finding recurrence (#2648)", () => {
+  browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
+    const out = path.resolve(".artifacts/finding-recurrence");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=finding-recurrence`, { width, height: width === 1000 ? 700 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          for (const [id, count] of [["t-finding", 3], ["t-finding-held", 12]] as const) {
+            const status = id === "t-finding" ? "inbox" : "blocked";
+            if (width === 390) await page.locator(`[data-phone-kanban-tab="${status}"]`).click();
+            else {
+              await page.locator("[data-kanban-board]").waitFor();
+              const tab = page.locator(`.tabs-nav [data-tab="${status}"]`);
+              if (await tab.isVisible()) await tab.click();
+            }
+            const selector = width === 390 ? `[data-phone-card="task:${id}"]` : card(id);
+            const target = page.locator(selector);
+            const line = target.locator("[data-finding-recurrence]");
+            await line.waitFor();
+            await target.scrollIntoViewIfNeeded();
+            const reading = await line.evaluate((element, lang) => {
+              const container = element.closest(".motion-line")!;
+              const box = container.getBoundingClientRect();
+              // Text-node ranges include every rendered fragment, including
+              // fragments hidden by the container's two-line clamp.
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const fragments = [...range.getClientRects()];
+              const holdReason = element.nextElementSibling;
+              const holdRange = document.createRange();
+              if (holdReason) holdRange.selectNodeContents(holdReason);
+              const holdFragments = holdReason ? [...holdRange.getClientRects()] : [];
+              const time = element.querySelector("time")!;
+              const dateTime = time.getAttribute("datetime")!;
+              const expectedDate = new Date(dateTime).toLocaleString(lang === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+              return { text: element.textContent, dateTime: element.querySelector("time")?.getAttribute("datetime"),
+                timeText: time.textContent, timeTitle: time.getAttribute("title"), expectedDate,
+                holdReason: holdReason?.textContent ?? null,
+                holdReasonVisible: holdFragments.length > 0 && holdFragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
+                title: container.getAttribute("title"),
+                horizontalClipped: container.scrollWidth > container.clientWidth + 1,
+                verticalClipped: container.scrollHeight > container.clientHeight + 1,
+                scrollHeight: container.scrollHeight, clientHeight: container.clientHeight,
+                recurrenceVisible: fragments.length > 0 && fragments.every(rect => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1),
+                left: Math.min(...fragments.map(rect => rect.left)), right: Math.max(...fragments.map(rect => rect.right)) };
+            }, lang);
+            expect(reading.text).toContain(translate(lang, "kanban.finding.count", { count }));
+            expect(reading.text).toContain(translate(lang, "kanban.finding.lastSeen"));
+            const lastSeenAt = await page.evaluate(id => (window as unknown as { evidence: { storedTask(id: string): { finding: { lastSeenAt: string } } } }).evidence.storedTask(id).finding.lastSeenAt, id);
+            expect(reading.dateTime).toBe(lastSeenAt);
+            expect(reading.timeText).toBe(translate(lang, "time.agoMin", { n: 20 }));
+            expect(reading.timeTitle).toBe(reading.expectedDate);
+            expect(reading.timeTitle).not.toBe(lastSeenAt);
+            expect(reading.horizontalClipped).toBe(false);
+            expect(reading.recurrenceVisible).toBe(true);
+            if (id === "t-finding") expect(reading.verticalClipped).toBe(false);
+            else {
+              expect(reading.title).toContain(reading.text!.trim());
+              expect(reading.title).toContain(translate(lang, "kanban.hold.worker"));
+              expect(reading.holdReason).toContain(translate(lang, "kanban.hold.worker"));
+              if (width === 1440) expect(reading.holdReasonVisible).toBe(true);
+            }
+            if (lang === "en") expect(reading.text).not.toContain("last seen");
+            expect(reading.left).toBeGreaterThanOrEqual(0);
+            expect(reading.right).toBeLessThanOrEqual(width);
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, width, id, ...reading });
+            await target.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}-${id}.png`) });
+            // A first observation adds no visible line to a quiet inbox card;
+            // the held card still keeps its existing hold state.
+            await page.evaluate((id) => {
+              const evidence = (window as unknown as { evidence: { storedTask(id: string): { status: "inbox" | "blocked"; finding: { count: number } }; setTaskStatus(id: string, status: "inbox" | "blocked"): void } }).evidence;
+              const task = evidence.storedTask(id);
+              task.finding.count = 1;
+              evidence.setTaskStatus(id, task.status);
+            }, id);
+            await line.waitFor({ state: "detached" });
+            expect(await line.count()).toBe(0);
+            expect(await target.locator(".motion-line").count()).toBe(id === "t-finding" ? 0 : 1);
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/finding-recurrence", { recursive: true });
+      fs.writeFileSync("evidence/finding-recurrence/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("terminal review budget continuation", () => {
   browserTest("fresh and recovered parks show the bounded grant on desktop and phone in both languages", async () => {
     const out = path.resolve(".artifacts/terminal-review-continuation");
@@ -10175,6 +10267,181 @@ describe("the agent window: a click on the board opens the agent in one window, 
     }
     fs.mkdirSync("evidence/agent-window", { recursive: true });
     fs.writeFileSync("evidence/agent-window/edges.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("the orchestrator's expand button opens it in the agent window, like any agent", () => {
+  /* The `stages` scenario at 1440×900 and 1000×900 (the seat unfolded) and
+     1000×700 (the seat folded to its strip), in English and Ukrainian, light
+     and dark. One
+     run per face opens the build stage's agent and leaves its window, so an
+     agent is already open, then presses the seat's expand button: the window
+     shows the orchestrator, its list holds both agents with the orchestrator
+     named and framed as the seat names it, and the conversation's one
+     composer is in the window's reader while the seat holds none. Closing the
+     window from the reader's corner leaves the seat where and as it was, with
+     its composer, and hands the keyboard back to the button without a focus
+     ring. Gated as well: the button stands in the seat head's first row,
+     beside its icon buttons and as tall as they are. Frames go to ORCHESTRATOR_WINDOW_PNG_DIR,
+     the readings to evidence/orchestrator-agent-window/built.json. */
+  const BUILD = `${card("t-rounds")} .pb-pills [data-stage="build"]`;
+  const KEY = { build: "conversation_rounds-build", seat: "conversation_orchestrator" } as const;
+  const showing = (page: Page, key: string) => page.waitForFunction((wanted) => document.querySelector(`[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="${wanted}"]`) !== null, key, { timeout: 15_000 });
+  const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 350)))));
+  const read = (page: Page) => page.evaluate(() => {
+    const rect = (element: Element | null | undefined) => {
+      const box = element?.getBoundingClientRect();
+      return box ? { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) } : null;
+    };
+    const seat = document.querySelector<HTMLElement>("[data-kanban-seat]");
+    const head = seat?.querySelector<HTMLElement>("[data-seat-head]") ?? null;
+    const button = head?.querySelector<HTMLElement>("[data-seat-window]") ?? null;
+    const reader = document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]");
+    const active = document.activeElement as HTMLElement | null;
+    const drawn = (scope: Element | null | undefined) => [...(scope?.querySelectorAll<HTMLElement>("form textarea") ?? [])].filter((field) => field.getBoundingClientRect().width > 0).length;
+    return {
+      seat: rect(seat),
+      head: head?.dataset.seatHead ?? null,
+      headHeight: Math.round(head?.getBoundingClientRect().height ?? 0),
+      button: button ? {
+        box: rect(button),
+        label: button.getAttribute("aria-label"),
+        glyph: button.querySelector("svg")?.getAttribute("class") ?? null,
+        next: button.nextElementSibling?.hasAttribute("data-seat-collapse") ?? false,
+        /* In the head's first row, with the title. */
+        firstRow: (() => { const title = head?.querySelector(".seat-title"); return title ? Math.abs(button.getBoundingClientRect().top + button.getBoundingClientRect().height / 2 - (title.getBoundingClientRect().top + title.getBoundingClientRect().height / 2)) < 4 : false; })(),
+        focused: active === button,
+        ring: button.matches(":focus-visible"),
+      } : null,
+      /* The head's other icon buttons, the row the expand button joins. */
+      iconButtons: [...(head?.querySelectorAll<HTMLElement>(".icon-btn") ?? [])].filter((other) => other !== button).map((other) => rect(other)),
+      seatComposers: drawn(seat?.querySelector("[data-orchestrator-conversation]")),
+      window: rect(document.querySelector("[data-agent-window-frame]")),
+      /* The agent each composer's selected-context line names. */
+      badges: [...document.querySelectorAll<HTMLElement>("[data-selected-context]")].map((badge) => badge.textContent ?? ""),
+      shown: reader?.dataset.kanbanReader ?? null,
+      readerRole: reader?.dataset.role ?? null,
+      readerTitle: reader?.querySelector(".ch-title")?.textContent ?? null,
+      readerComposers: drawn(reader),
+      readerPlaceholder: reader?.querySelector("form textarea")?.getAttribute("placeholder") ?? null,
+      skeleton: reader?.closest(".reader-slot")?.querySelector('[role="status"][aria-busy="true"]') != null,
+      rows: [...document.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent]")].map((row) => ({ key: row.dataset.openAgent!, role: row.dataset.role ?? null, name: row.querySelector(".or-name")?.textContent ?? "", current: row.querySelector("[data-open-agent-jump]")?.getAttribute("aria-current") === "true" })),
+      pill: document.querySelector("[data-open-agents-pill] .pill-words")?.textContent ?? null,
+      cards: Object.fromEntries(["t-rounds", "t-export"].map((id) => [id, rect(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))])),
+    };
+  });
+
+  browserTest("the seat's expand button opens the orchestrator in the agent window and closing returns to the seat, at 1440 and 1000, en and uk, light and dark", async () => {
+    const pngDir = process.env.ORCHESTRATOR_WINDOW_PNG_DIR ?? "/var/tmp/llv-orchestrator-window-evidence";
+    const out = path.resolve(".artifacts/orchestrator-agent-window");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 900 }, { width: 1000, height: 700 }] as const) {
+            const label = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+            if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+            const fail = (message: string) => failures.push(`${label}: ${message}`);
+            const shot = (name: string, clip?: { x: number; y: number; width: number; height: number }) => page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`), ...(clip ? { clip } : {}) });
+            const title = translate(lang, "orchPanel.title");
+            try {
+              await page.waitForSelector("[data-kanban-seat] [data-seat-window]", { timeout: 30_000 });
+              await page.waitForSelector(`${BUILD} >> visible=true`, { timeout: 30_000 });
+              const steps: Record<string, unknown> = {};
+
+              /* Another agent is open: the build stage's, opened from its chip and left behind the pill. */
+              await page.locator(BUILD).click();
+              await showing(page, KEY.build);
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              /* Back to the seat: the chip's click scrolled the page down to the card. The fixture's
+                 attention toast sits over the seat's right edge (#1643), so it is dismissed first, as
+                 the operator would. */
+              await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
+              await page.locator("[data-attention-toast-dismiss]").click({ timeout: 5_000 }).catch(() => { /* No toast on this face. */ });
+              await page.mouse.move(viewport.width / 2, viewport.height - 4);
+              await settle(page);
+
+              const before = await read(page);
+              steps["01-seat"] = before;
+              await shot("01-board");
+              if (before.seat) await shot("01-seat-head", { x: Math.max(0, before.seat.x - 8), y: Math.max(0, before.seat.y - 8), width: Math.min(viewport.width - Math.max(0, before.seat.x - 8), before.seat.width + 16), height: Math.min(96, viewport.height) });
+              const expectedHead = viewport.height < 800 ? "strip" : "full";
+              if (before.head !== expectedHead) fail(`the seat's head is «${before.head}», «${expectedHead}» expected in a ${viewport.height} px window`);
+              if (!before.button) fail("no expand button in the seat's head");
+              else {
+                if (before.button.label !== translate(lang, "orchPanel.seatOpenWindow")) fail(`the button reads «${before.button.label}»`);
+                if (!before.button.glyph?.includes("lucide-maximize")) fail(`the button wears «${before.button.glyph}»`);
+                if (!before.button.next) fail("the button does not stand right before the fold");
+                if (!before.button.firstRow) fail("the button left the head's first row");
+                for (const other of before.iconButtons) {
+                  if (other && before.button.box && (other.height !== before.button.box.height || other.y !== before.button.box.y)) fail(`the button (${JSON.stringify(before.button.box)}) is out of the head's icon row (${JSON.stringify(other)})`);
+                }
+              }
+              if (before.pill === null) fail("the build agent is not open behind the pill");
+              if (!before.badges.length) fail("no composer names the agent the operator selected before the window opens");
+              if (expectedHead === "full" && before.seatComposers !== 1) fail(`the seat shows ${before.seatComposers} composers before the window opens`);
+
+              await page.locator("[data-kanban-seat] [data-seat-window]").click();
+              await showing(page, KEY.seat);
+              await page.mouse.move(viewport.width / 2, viewport.height / 2);
+              await settle(page);
+              const open = await read(page);
+              steps["02-window"] = open;
+              await shot("02-window");
+              if (open.shown !== KEY.seat) fail(`the window shows ${open.shown}`);
+              if (open.skeleton) fail("the window shows the orchestrator as a skeleton");
+              if (open.readerRole !== "orchestrator") fail(`the reader wears the ${open.readerRole} role`);
+              if (open.readerTitle !== title) fail(`the reader is titled «${open.readerTitle}»`);
+              if (open.rows.map((row) => row.key).join(",") !== [KEY.build, KEY.seat].join(",")) fail(`the window lists ${open.rows.map((row) => row.key).join(",")}`);
+              const row = open.rows.find((entry) => entry.key === KEY.seat);
+              if (!row?.current || row.role !== "orchestrator" || row.name !== title) fail(`the orchestrator's row reads ${JSON.stringify(row)}`);
+              if (open.readerComposers !== 1) fail(`the window's reader shows ${open.readerComposers} composers`);
+              if (open.seatComposers !== 0) fail(`the seat under the window still shows ${open.seatComposers} composers`);
+              /* The orchestrator's composer never points at the orchestrator, and the selection stays where it was. */
+              if (open.badges.some((text) => text.includes(title))) fail(`a composer in the window names the orchestrator: ${JSON.stringify(open.badges)}`);
+              if (JSON.stringify(open.badges) !== JSON.stringify(before.badges)) fail(`the selected context changed with the window open: ${JSON.stringify(before.badges)} → ${JSON.stringify(open.badges)}`);
+              const placeholder = translate(lang, "composer.placeholderOrchestrator", { project: "atlas" });
+              if (open.readerPlaceholder !== placeholder) fail(`the window's composer says «${open.readerPlaceholder}», the seat's «${placeholder}»`);
+              for (const [id, box] of Object.entries(open.cards)) if (JSON.stringify(box) !== JSON.stringify(before.cards[id])) fail(`card ${id} moved under the window: ${JSON.stringify(before.cards[id])} → ${JSON.stringify(box)}`);
+
+              await page.locator(`[data-agent-window] [data-reader-close="${KEY.seat}"]`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              await page.mouse.move(viewport.width / 2, viewport.height - 4);
+              await settle(page);
+              const closed = await read(page);
+              steps["03-closed"] = closed;
+              await shot("03-closed");
+              if (JSON.stringify(closed.seat) !== JSON.stringify(before.seat)) fail(`the seat moved: ${JSON.stringify(before.seat)} → ${JSON.stringify(closed.seat)}`);
+              if (closed.head !== before.head) fail(`the seat's head came back «${closed.head}»`);
+              if (closed.seatComposers !== before.seatComposers) fail(`the seat shows ${closed.seatComposers} composers after the window, ${before.seatComposers} before`);
+              if (JSON.stringify(closed.badges) !== JSON.stringify(before.badges)) fail(`the selected context changed with the window: ${JSON.stringify(before.badges)} → ${JSON.stringify(closed.badges)}`);
+              if (!closed.button?.focused) fail("closing the window did not hand the keyboard back to the expand button");
+              if (closed.button?.ring) fail("a mouse close drew a focus ring on the expand button");
+              if (!/2/.test(closed.pill ?? "")) fail(`the pill reads «${closed.pill}», both agents stay open`);
+              for (const [id, box] of Object.entries(closed.cards)) if (JSON.stringify(box) !== JSON.stringify(before.cards[id])) fail(`card ${id} moved: ${JSON.stringify(before.cards[id])} → ${JSON.stringify(box)}`);
+              if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
+              readings[label] = steps;
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/orchestrator-agent-window", { recursive: true });
+    fs.writeFileSync("evidence/orchestrator-agent-window/built.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
@@ -21221,6 +21488,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     shows?: string;
     /** A row's crown control, reached by the pointer or by the keyboard. */
     crown?: "hover" | "focus";
+    /** Accounts per engine the fixture was given: the footer's lines are counted against it. */
+    accounts?: number;
   }
   const langsOf = (state: State): readonly ("en" | "uk")[] => state.lang === "both" ? ["uk", "en"] : [state.lang ?? "en"];
   const ACCOUNT = '[data-engine-limits="claude"] button[aria-haspopup="dialog"]';
@@ -21241,6 +21510,10 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     { name: "copilot", query: "rail=few&railstate=copilot", everywhere: false, lang: "both" },
     { name: "copilot-accounts", query: "rail=few&railstate=copilot", click: '[data-engine-limits="copilot"] button', first: true, everywhere: false, lang: "uk" },
     { name: "stale", query: "rail=few&railstate=stale", everywhere: false, lang: "both" },
+    /* The compact footer names every account of each engine, one line each: one, three and eight accounts per engine, and a click on a non-active line. */
+    ...([1, 3, 8] as const).map((count): State => ({ name: `accounts-${count}`, query: `rail=few&railaccounts=${count}`, everywhere: false, lang: "both", dark: true, shows: "[data-footer-account]", accounts: count })),
+    { name: "accounts-3-focus", query: "rail=few&railaccounts=3", click: '[data-engine-limits="codex"] [data-footer-account-active="false"] button', first: true, everywhere: false, lang: "both", dark: true, shows: '[data-engine-limits="codex"] [class*="ring-accent/50"]', accounts: 3 },
+    { name: "accounts-3-detail", query: "rail=few&railaccounts=3", detail: true, everywhere: false, lang: "en", shows: "[data-rail-footer] [data-meter-window]", accounts: 3 },
     { name: "detail", query: "rail=few", detail: true, everywhere: false, lang: "both", shows: "[data-rail-footer] [data-meter-window]" },
     { name: "detail-copilot", query: "rail=few&railstate=copilot", detail: true, everywhere: false, lang: "uk", shows: '[data-engine-limits="copilot"] [data-meter-window]' },
     { name: "detail-stale", query: "rail=few&railstate=stale", detail: true, everywhere: false, lang: "uk" },
@@ -21283,6 +21556,10 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     notes: string[];
     /** The account named on each engine line, and whether the line cuts it. */
     accounts: { name: string; cut: boolean }[];
+    /** Every account line of the limits footer, in the order drawn: the engine, whether it is the active account, its reading and the share its bar draws. */
+    lines: { engine: string; id: string; name: string; active: boolean; value: string; bar: number | null; dimmed: boolean }[];
+    /** Whether the page itself scrolls, and whether the footer is taller than the sidebar's list. */
+    fit: { pageScrolls: boolean; footerBottom: number; windowHeight: number };
     /** A footer line: the share its bar draws, and the reading beside the bar. */
     meters: { label: string; value: string; bar: number | null }[];
     /** The archive: where its label starts, whether it is unfolded, and the archived rows inside the list's box. */
@@ -21339,6 +21616,20 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       notes: [...rail.querySelectorAll<HTMLElement>("[data-rail-footer] [data-meter-note]")].map((note) => (note.textContent ?? "").trim()),
       reasons: [...rail.querySelectorAll<HTMLElement>("[data-limits-reason]")].map((reason) => ({ text: (reason.textContent ?? "").trim(), cut: reason.scrollWidth > reason.clientWidth + 1, inTooltip: (reason.title || reason.closest("[data-engine-limits]")?.querySelector("button")?.title || "").includes((reason.textContent ?? "").trim()) })),
       accounts: [...rail.querySelectorAll<HTMLElement>("[data-meter-line] [data-meter-name]")].map((name) => ({ name: name.textContent ?? "", cut: name.scrollWidth > name.clientWidth + 1 })),
+      lines: [...rail.querySelectorAll<HTMLElement>("[data-footer-account]")].map((line) => {
+        const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+        const fill = track?.firstElementChild as HTMLElement | null;
+        return {
+          engine: line.closest<HTMLElement>("[data-engine-limits]")?.dataset.engineLimits ?? "",
+          id: line.dataset.footerAccount ?? "",
+          name: line.querySelector("[data-meter-name]")?.textContent ?? "",
+          active: line.dataset.footerAccountActive === "true",
+          value: (line.querySelector("[data-meter-value]") ?? line.querySelector("[data-limits-reason]"))?.textContent?.trim() ?? "",
+          bar: track && fill ? Math.round((1000 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width) / 10 : null,
+          dimmed: line.className.includes("opacity-60"),
+        };
+      }),
+      fit: { pageScrolls: document.documentElement.scrollHeight > innerHeight + 1, footerBottom: Math.round(footer?.getBoundingClientRect().bottom ?? 0), windowHeight: innerHeight },
       meters: [...rail.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
         const track = line.querySelector<HTMLElement>("[data-meter-bar]");
         const fill = track?.firstElementChild as HTMLElement | null;
@@ -21550,6 +21841,27 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
           /* The list has the height the old footer took, and shows no fewer rows than the replaced sidebar did. */
           if (reading.today && !state.folded && reading.rail.listHeight <= reading.today.listHeight) fail(`the list is ${reading.rail.listHeight} px, ${reading.today.listHeight} px in the replaced sidebar`);
           if (reading.today && reading.rail.rowsInView < reading.today.rowsInView) fail(`${reading.rail.rowsInView} rows in view, ${reading.today.rowsInView} in the replaced sidebar`);
+          if (state.accounts) {
+            /* One line per account of each engine, Claude first, the active account marked once per engine; "All windows" keeps one account per engine. */
+            const expected = state.detail ? 1 : state.accounts;
+            for (const engine of ["claude", "codex"]) {
+              const lines = reading.lines.filter((line) => line.engine === engine);
+              if (lines.length !== expected) fail(`${engine} draws ${lines.length} account line(s) for ${state.accounts} account(s)`);
+              if (lines.filter((line) => line.active).length !== 1) fail(`${engine} marks ${lines.filter((line) => line.active).length} lines as the active account`);
+              if (lines[0] && !lines[0].active) fail(`${engine} does not start with its active account`);
+            }
+            if (reading.lines.length && reading.lines[0]!.engine !== "claude") fail("the first account line is not Claude's");
+            /* A line with no reading says so and draws no bar; a line with one draws the bar of the share it names (the shared check above). */
+            if (!state.detail && state.accounts > 2) {
+              const empty = reading.lines.filter((line) => line.bar === null);
+              if (empty.length !== 2) fail(`${empty.length} lines without a reading, 2 expected`);
+              if (reading.lines.filter((line) => line.dimmed).length < 2) fail("the aged readings are not dimmed");
+            }
+            /* The footer stays inside the window: the page does not scroll, and the project list keeps room. */
+            if (reading.fit.pageScrolls) fail("the page scrolls");
+            if (reading.fit.footerBottom > reading.fit.windowHeight + 1) fail(`the footer ends at ${reading.fit.footerBottom} px in a window of ${reading.fit.windowHeight} px`);
+            if (reading.rail.listHeight < 120) fail(`the project list is ${reading.rail.listHeight} px high`);
+          }
           if (state.crown) {
             /* The control stands in the age's place: while it shows, the age of its row does not, and no mark is under it. */
             const crown = reading.crown;
@@ -21606,6 +21918,18 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       fs.writeFileSync(path.join(OUT, "browser.pid"), `${closed.join("\n")}\n`);
     }
 
+    /* The footer's account lines, as drawn: one record per frame, kept whether the run was narrowed or not. */
+    const accountFrames = readings.filter((reading) => reading.state.startsWith("accounts-"));
+    if (accountFrames.length) {
+      fs.mkdirSync(path.resolve("evidence/sidebar-footer-accounts"), { recursive: true });
+      fs.writeFileSync(path.resolve("evidence/sidebar-footer-accounts/readings.json"), `${JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        block: "the compact footer: one line per account of each engine",
+        values: "invented",
+        readings: accountFrames.map(({ frame, state, scheme, lang, lines, rail, fit, panel }) => ({ frame, state, scheme, lang, rail, fit, panel, lines })),
+        failures: failures.filter((failure) => failure.includes("-accounts-")),
+      }, null, 2)}\n`);
+    }
     if (!ONLY) {
       /* The left part of a frame at full size, or the whole frame scaled; a frame of the replaced sidebar loses the design lane's strip. */
       const picture = async (file: string, strip: number, width: number | null, scale: number) => {

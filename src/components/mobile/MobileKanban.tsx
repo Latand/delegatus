@@ -549,7 +549,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         ) : null}
         <NeedBadge item={item} />
       </span>
-      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
+      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
       <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
