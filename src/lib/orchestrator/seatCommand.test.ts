@@ -12,6 +12,7 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { procBackend } from "@/lib/proc";
+import { drainFile, writeDrain } from "@/lib/selfUpdate/drain";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
@@ -62,6 +63,24 @@ afterEach(() => {
 const AT = "2026-07-29T00:00:00.000Z";
 const NEW_ID = "conversation_33333333-3333-4333-8333-333333333333";
 const OLD_ID = "conversation_44444444-4444-4444-8444-444444444444";
+
+test("seat command publishes pre-admission evidence for validation and target refusals", async () => {
+  for (const input of [
+    { project: "", mandate: "own the board", clientRequestId: "refusal_01" },
+    { project: "proj-a", mandate: "", clientRequestId: "refusal_01" },
+    { project: "proj-a", mandate: "own the board", clientRequestId: "invalid" },
+    { project: "proj-a", mandate: "own the board", clientRequestId: "refusal_01", conversationId: "invalid" },
+    { project: "proj-a", mandate: "own the board", clientRequestId: "refusal_01", conversationId: NEW_ID },
+  ]) {
+    const { deps, recorded } = dependencies({ conversationTarget: () => null });
+    const result = await executeOrchestratorSeatRequest(input, deps);
+    expect(result.status).toBe(input.conversationId === NEW_ID ? 404 : 400);
+    expect(result.body).toMatchObject({ admission: "refused" });
+    expect(recorded.spawns).toEqual([]);
+    expect(recorded.deliveries).toEqual([]);
+    expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });
+  }
+});
 
 interface Recorded {
   spawns: Record<string, unknown>[];
@@ -1435,9 +1454,22 @@ test("an unsettled accepted launch still returns 409 seat_intent_in_progress for
 
   const blocked = await executeOrchestratorSeatRequest(spawnRequest("req_00000053"), deps);
 
-  expect(blocked).toMatchObject({ status: 409, body: { code: "seat_intent_in_progress" } });
+  expect(blocked).toMatchObject({ status: 409, body: { code: "seat_intent_in_progress", admission: "refused" } });
   expect(recorded.spawns).toEqual([]);
   expect(orchestratorSeatFor("proj-a").pending?.intent.clientRequestId).toBe("req_00000050");
+});
+
+test("a launch hold supplies refusal evidence for a fresh key while an admitted replay stays inconclusive", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_admitted_hold", launchId: "accepted-launch", engine: "claude", model: "opus" });
+  writeDrain(drainFile(), { id: "fixture-hold", target: "fixture-release", since: AT, until: Date.now() + 60_000 });
+  const { deps, recorded } = dependencies();
+  const replay = await executeOrchestratorSeatRequest(spawnRequest("req_admitted_hold"), deps, null, { autonomous: true });
+  expect(replay).toMatchObject({ status: 409, body: { code: "launch_held_for_update" } });
+  expect(replay.body).not.toHaveProperty("admission");
+  const fresh = await executeOrchestratorSeatRequest(spawnRequest("req_fresh_hold"), deps, null, { autonomous: true });
+  expect(fresh).toMatchObject({ status: 409, body: { code: "launch_held_for_update", admission: "refused" } });
+  expect(recorded.spawns).toEqual([]);
+  expect(orchestratorSeatFor("proj-a").pending?.intent.launchId).toBe("accepted-launch");
 });
 
 test("validation refuses a missing project, empty mandate, and malformed request id", async () => {
@@ -1457,7 +1489,7 @@ test("spawn-mode seat creation rejects an explicit model outside the engine cata
 
   expect(result).toEqual({
     status: 400,
-    body: { error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna" },
+    body: { error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna", admission: "refused" },
   });
   expect(recorded.spawns).toEqual([]);
   expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });
@@ -1476,6 +1508,7 @@ test("spawn mode without a cwd fails closed instead of inheriting the server pro
     const result = await executeOrchestratorSeatRequest(request, deps);
     expect(result.status).toBe(400);
     expect(result.body.code).toBe("cwd_unresolved");
+    expect(result.body.admission).toBe("refused");
     /* A newcomer reads this in the panel; an environment variable of the
        server process is not something they can set (#2167). */
     expect(String(result.body.error)).not.toContain("LLV_ORCHESTRATOR_CWD");
@@ -1566,7 +1599,7 @@ test("a signed-out engine is reported before an unresolvable cwd, and nothing is
     const result = await executeOrchestratorSeatRequest(request, deps);
 
     expect(result.status).toBe(409);
-    expect(result.body).toMatchObject({ code: "ENGINE_NOT_CONNECTED", details: { engine: "claude", role: "orchestrator", reason: "signed-out" } });
+    expect(result.body).toMatchObject({ code: "ENGINE_NOT_CONNECTED", admission: "refused", details: { engine: "claude", role: "orchestrator", reason: "signed-out" } });
     expect(String(result.body.error)).toContain("no Claude account is signed in");
     expect(asked).toEqual(["claude:proj-a"]);
     expect(recorded.spawns).toHaveLength(0);

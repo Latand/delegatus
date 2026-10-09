@@ -349,6 +349,9 @@ export interface McpDispatchTracker {
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
   authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  /** Fresh admission checks, after authority and existing-receipt lookup,
+      before any claim. Mutable names must not conceal a recorded result. */
+  prepareAdmission?: (args: McpToolArgs) => void | Promise<void>;
   /** Who the receipt belongs to, as the Viewer decides it for this call (the
       caller and the target it is allowed to reach). Asked before every receipt
       read, claim or in-process join, and part of the receipt's key, so one
@@ -2326,9 +2329,12 @@ export interface McpRecoveryEvidence {
 }
 
 export interface McpRecoverableTool {
-  /** Resolve the server-derived caller and target for these arguments. Runs
-      before the receipt store is touched; may throw {@link McpToolRefusal}. */
+  /** Resolve the server-derived caller and target for fresh admission. Runs
+      before receipt access unless bindForRecovery authenticates that access first. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Authenticate recovery without resolving a mutable target name. Existing
+      receipts supply their own target; absent receipts still run bind before admission. */
+  bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
   /** Read-only: what the downstream durable records say about this binding.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
   recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
@@ -2374,6 +2380,21 @@ export class McpDispatchVerdictError extends McpToolRefusal {
   constructor(message: string, details: McpToolPayload & { status: number }) {
     super(message, details);
     this.name = "McpDispatchVerdictError";
+  }
+}
+
+/** A final dispatch was affirmatively refused after an earlier effect was
+    confirmed. The binding preserves that effect separately; the composite
+    request closes with a refusal and cannot authorize another creation. */
+export class McpDispatchSettledRefusalError extends McpToolRefusal {
+  constructor(message: string, details: McpToolPayload) {
+    super(message, {
+      ...details,
+      outcome: "settled",
+      evidence: "dispatch-refused",
+      nextAction: "follow-disposition",
+    });
+    this.name = "McpDispatchSettledRefusalError";
   }
 }
 
@@ -2587,7 +2608,11 @@ export function createMcpToolService(
         const authorize = bindings[typedTool].authorizeReceipt;
         if (authorize) await authorize(effectiveArgs);
       } catch (error) {
-        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
+        return finish(failure(typedTool, requestId,
+          error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+          error instanceof Error ? error.message : String(error),
+          error instanceof McpToolRefusal && error.details.retryable === true, false,
+          error instanceof McpToolRefusal ? error.details : undefined), "failure");
       }
       let scope: string | null;
       try {
@@ -2628,7 +2653,7 @@ export function createMcpToolService(
         let bound: McpRequestBindingInput;
         const callerStartedAt = performance.now();
         try {
-          bound = await tool.bind(digestArgs);
+          bound = await (tool.bindForRecovery ?? tool.bind)(digestArgs);
         } catch (error) {
           outcome = "failure";
           return failure(
@@ -2643,7 +2668,7 @@ export function createMcpToolService(
         } finally {
           phaseDurations.caller = (phaseDurations.caller ?? 0) + performance.now() - callerStartedAt;
         }
-        const binding: McpRequestBinding = {
+        let binding: McpRequestBinding = {
           version: 1,
           toolName: typedTool,
           clientRequestId: requestId,
@@ -2838,6 +2863,29 @@ export function createMcpToolService(
           return answerFromEvidence(evidence, true, record.result);
         };
         const claimStartedAt = performance.now();
+        if (tool.bindForRecovery) {
+          let record: McpReceiptRecord | null;
+          try {
+            record = await store.lookup(key);
+          } catch (cause) {
+            return unreadableReceipt(cause, false);
+          }
+          if (record) return recoverRecord(record);
+          // An absent lookup is no admission verdict: the original may still
+          // arrive. Resolve current names only when this call can admit work.
+          if (!recoveryOnly) {
+            try {
+              const fresh = await tool.bind(digestArgs);
+              if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+              binding = { ...binding, ...fresh };
+            } catch (error) {
+              return failure(typedTool, requestId,
+                error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof McpToolRefusal ? error.details : undefined);
+            }
+          }
+        }
         if (recoveryOnly) {
           let record: McpReceiptRecord | null;
           try {
@@ -2953,10 +3001,11 @@ export function createMcpToolService(
           outcome = error instanceof DeadlineExceededError ? "deadline" : "failure";
           const refusal = error instanceof McpToolRefusal || error instanceof McpDispatchNotExecutedError ? error.details : {};
           const admitted = typeof refusal.operationId === "string" || typeof refusal.launchId === "string";
-          const proven = !admitted && (
+          const terminalRefusal = error instanceof McpDispatchSettledRefusalError;
+          const proven = terminalRefusal || (!admitted && (
             error instanceof McpDispatchNotExecutedError
             || !dispatch.attempted
-          );
+          ));
           if (!proven) {
             outcome = context.signal?.aborted ? "cancelled" : "failure";
             const message = error instanceof Error ? error.message : String(error);
@@ -2968,16 +3017,16 @@ export function createMcpToolService(
           }
           const details: McpToolPayload = {
             ...refusal,
-            outcome: "not-executed",
+            outcome: terminalRefusal ? "settled" : "not-executed",
             evidence: "dispatch-refused",
-            nextAction: "new-request-permitted",
+            nextAction: terminalRefusal ? "follow-disposition" : "new-request-permitted",
           };
           settled = failure(
             typedTool,
             requestId,
-            "tool_failed",
+            terminalRefusal && typeof refusal.code === "string" ? refusal.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            true,
+            !terminalRefusal,
             false,
             details,
           );
@@ -3009,6 +3058,29 @@ export function createMcpToolService(
       };
       const result = (async (): Promise<McpToolResult> => {
         if (recoverable && recoveryStore) return recoverableCall(recoverable, recoveryStore);
+        const prepare = bindings[typedTool].prepareAdmission;
+        if (prepare) {
+          let existing: McpReceiptRecord | null = null;
+          if (supportsMcpRecovery(receipts)) {
+            try {
+              existing = await measure("replay", () => receipts.lookup(key));
+            } catch {
+              return recoveryAnswer(typedTool, requestId, {
+                outcome: "unknown", evidence: "mcp-receipt", reason: "the receipt store could not be read", ids: {},
+              }, false);
+            }
+          }
+          if (!existing) {
+            try {
+              await measure("caller", () => prepare(effectiveArgs));
+            } catch (error) {
+              return failure(typedTool, requestId,
+                error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof McpToolRefusal ? error.details : undefined);
+            }
+          }
+        }
         const claim = await measure("claim", () => receipts.claim(key, digest, retention));
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3059,10 +3131,11 @@ export function createMcpToolService(
           const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
-          /* #2518: issue_report's refusals and the cross-project refusal name
-             their code too, and say whether the same call can succeed later. */
+          /* Named issue, cross-project and orchestrator refusals preserve the
+             server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (typedTool === "issue_report" || error.details.code === "cross_project_refused")
+            && (typedTool === "issue_report" || error.details.code === "cross_project_refused"
+              || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool))
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an

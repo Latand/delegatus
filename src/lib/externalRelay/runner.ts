@@ -12,6 +12,7 @@ import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
 import { relayCall, ExternalRelayError } from "./client";
 import {
   answerSchema,
+  replyAnswerSchema,
   checkedAnswer,
   checkedRound,
   roundSchema,
@@ -22,7 +23,7 @@ import {
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
 } from "./protocol";
-import { callableReads, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
+import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { answerPrompt, toolRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
@@ -133,6 +134,10 @@ async function complete(
     } catch (error) {
       if (error instanceof ExternalRelayError) {
         if (error.status === 413 && body.outcome === "answered") {
+          body = failed(body.lease_id, "invalid_answer");
+          continue;
+        }
+        if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
           body = failed(body.lease_id, "invalid_answer");
           continue;
         }
@@ -348,7 +353,7 @@ export async function runClaimedRequest(
       }
     };
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
-    if (callableReads(request).length) loop = createToolLoop(relay, request, {
+    if (callableTools(request).length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -379,8 +384,8 @@ export async function runClaimedRequest(
           model: target.model,
           effort: target.effort,
           account: selection.account,
-          ["prompt"]: loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final }) : answerPrompt(request),
-          schema: loop ? (final ? handoffAnswerSchema : roundSchema(loop.tools)) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
+          ["prompt"]: loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request),
+          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,
           webSearch: profile.webSearch,
@@ -437,7 +442,7 @@ export async function runClaimedRequest(
       cancelStalledRun();
       if (leaseUnavailable) return null;
       const decision = result?.status === "done"
-        ? loop && !final ? checkedRound(result.answer, request) : checkedAnswer(result.answer, request)
+        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
         : null;
       if (!decision || !("kind" in decision)) { completion = decision; break; }
       await loop!.runCalls(decision.calls, rounds);

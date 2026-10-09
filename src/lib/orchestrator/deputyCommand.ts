@@ -56,7 +56,7 @@ export type AskInParallelResult =
         the record stays pending and the sweep settles it from runtime facts. */
     deliveryUncertain?: true;
   }
-  | { ok: false; code: AskInParallelRefusal; error: string; status: number; askId?: string };
+  | { ok: false; code: AskInParallelRefusal; error: string; status: number; askId?: string; admission?: "refused" };
 
 export interface AskInParallelInput {
   project: string;
@@ -127,8 +127,8 @@ export function deputyDeliveryOrigin(origin: DeputyAskOrigin): MessageOrigin {
   return { kind: "agent", ...(role ? { role } : {}) };
 }
 
-function refusal(code: AskInParallelRefusal, error: string, status: number, askId?: string): AskInParallelResult {
-  return { ok: false, code, error, status, ...(askId ? { askId } : {}) };
+function refusal(code: AskInParallelRefusal, error: string, status: number, askId?: string, admissionRefused = false): AskInParallelResult {
+  return { ok: false, code, error, status, ...(askId ? { askId } : {}), ...(admissionRefused ? { admission: "refused" as const } : {}) };
 }
 
 /* Overlapping calls under one key join the call already running, so one ask
@@ -159,24 +159,28 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
   const text = typeof input.text === "string" ? input.text.trim() : "";
   const images = input.images ?? [];
   const clientRequestId = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
-  if (!clientRequestId) return refusal("invalid_request", "clientRequestId is required", 400);
-  if (!text && !images.length) return refusal("invalid_request", "the ask is empty", 400);
-  if (text.length > DEPUTY_ASK_LIMIT) return refusal("invalid_request", `the ask exceeds ${DEPUTY_ASK_LIMIT} characters`, 400);
+  const replay = clientRequestId ? store.read().find((deputy) => deputy.clientRequestId === clientRequestId) ?? null : null;
+  // A replay can already own a fork or delivery. Only a fresh ask refused
+  // before begin supplies affirmative evidence that it admitted no work.
+  const refuseAdmission = (code: AskInParallelRefusal, error: string, status: number, askId?: string) =>
+    refusal(code, error, status, replay?.askId ?? askId, replay === null);
+  if (!clientRequestId) return refuseAdmission("invalid_request", "clientRequestId is required", 400);
+  if (!text && !images.length) return refuseAdmission("invalid_request", "the ask is empty", 400);
+  if (text.length > DEPUTY_ASK_LIMIT) return refuseAdmission("invalid_request", `the ask exceeds ${DEPUTY_ASK_LIMIT} characters`, 400);
   const project = canonicalOrchestratorProject(input.project ?? "");
-  if (!project) return refusal("invalid_request", "project is required", 400);
+  if (!project) return refuseAdmission("invalid_request", "project is required", 400);
 
   /* Step 1. A replay skips the busy check: the seat was busy when the record
      was written, and finishing what was started is the retry's whole job. */
-  const replay = store.read().find((deputy) => deputy.clientRequestId === clientRequestId) ?? null;
   const seat = ports.activeSeat(project);
-  if (!seat?.conversationId) return refusal("seat_not_found", `no orchestrator seat is active for ${project}`, 404);
+  if (!seat?.conversationId) return refuseAdmission("seat_not_found", `no orchestrator seat is active for ${project}`, 404);
   const seatConversationId = seat.conversationId;
   if (input.seatConversationId && input.seatConversationId !== seat.conversationId) {
-    return refusal("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
+    return refuseAdmission("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
   }
   const generation = ports.seatGeneration(seat.conversationId);
   if (!generation || generation.engine !== "claude") {
-    return refusal("seat_not_claude", "asking in parallel works for a Claude seat only in this version", 409);
+    return refuseAdmission("seat_not_claude", "asking in parallel works for a Claude seat only in this version", 409);
   }
   let deputy: OrchestratorDeputy;
   let replayed = replay !== null;
@@ -186,10 +190,10 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
     const busy = await ports.seatBusy(project);
     const currentSeat = ports.activeSeat(project);
     if (currentSeat?.conversationId !== seat.conversationId || currentSeat.seatEpoch !== seat.seatEpoch) {
-      return refusal("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
+      return refuseAdmission("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
     }
     if (!busy) {
-      return refusal("seat_not_busy", "the orchestrator is not working on anything now; send the message to it directly", 409);
+      return refuseAdmission("seat_not_busy", "the orchestrator is not working on anything now; send the message to it directly", 409);
     }
     /* Step 2. */
     const begun = await withAccountMutationLockAsync(() => {
@@ -206,9 +210,9 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
         now: ports.now(),
       });
     }, { caller: "deputy begin" });
-    if (!begun) return refusal("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
+    if (!begun) return refuseAdmission("seat_not_found", "the orchestrator seat changed; reopen its conversation", 409);
     if (begun.kind === "limit") {
-      return refusal("deputy_limit", "the orchestrator's parallel self is already working on another message; wait for it to finish", 409, begun.deputy.askId);
+      return refuseAdmission("deputy_limit", "the orchestrator's parallel self is already working on another message; wait for it to finish", 409, begun.deputy.askId);
     }
     /* A record written under this key after the pre-read (another process)
        is the same ask: finished from the step it reached, like any replay. */

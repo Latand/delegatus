@@ -129,7 +129,7 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -214,6 +214,7 @@ import {
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpDispatchVerdictError,
+  McpDispatchSettledRefusalError,
   McpToolRefusal,
   McpUnadmittedRefusal,
   type McpRecoverableTool,
@@ -223,6 +224,7 @@ import {
   type McpRequestCaller,
   type McpToolArgs,
   type McpToolBindings,
+  type McpToolBinding,
   type McpToolCallContext,
   type McpToolName,
   type McpToolPayload,
@@ -3936,6 +3938,103 @@ function reportFields(project: string, dependencies: ViewerMcpDomainDependencies
   };
 }
 
+/** Only affirmative admission refusals prove that a request admitted no work.
+    A bare 4xx can follow an accepted spawn whose activation was superseded. */
+function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedError | null {
+  if (!(error instanceof McpDispatchVerdictError)) return null;
+  const details = error.details;
+  if (typeof details.operationId === "string" || typeof details.launchId === "string" || details.actuation === "started") return null;
+  if (details.admission !== "refused") return null;
+  return new McpDispatchNotExecutedError(error.message, details);
+}
+
+/** Resolve tool input before any seat lookup, request claim or control write. */
+async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+  const aliases = projectAliasSnapshot({ strict: true });
+  const keys = new Set<string>();
+  const names = new Map<string, Set<string>>();
+  const add = (key: string, name?: string) => {
+    const canonical = canonicalOrchestratorProject(key);
+    keys.add(canonical);
+    const display = projectDisplayName(canonical, name ?? aliases.displayNames[canonical]);
+    const candidates = names.get(display) ?? new Set<string>();
+    candidates.add(canonical);
+    names.set(display, candidates);
+  };
+  for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
+  for (const key of Object.values(aliases.aliases)) add(key);
+  for (const key of Object.keys(readOrchestratorSeatFileOrNull()?.seats ?? {})) add(key);
+  for (const seat of dependencies.authorizedSeats?.() ?? []) if (seat.project) add(seat.project);
+  const callerProject = dependencies.callerProject?.();
+  if (callerProject) add(callerProject);
+  const canonical = canonicalOrchestratorProject(named);
+  if (keys.has(canonical)) return canonical;
+  for (const conversation of Object.values(dependencies.registrySnapshot().conversations)) {
+    const project = conversationProject(conversation);
+    if (project) add(project);
+  }
+  if (keys.has(canonical)) return canonical;
+  const scan = await dependencies.completedFileScan();
+  for (const entry of scan.snapshot.projectCatalog) add(entry.project, entry.displayName);
+  for (const entry of scan.snapshot.files) add(entry.project, entry.projectName);
+  if (keys.has(canonical)) return canonical;
+  const candidates = [...(names.get(named.trim()) ?? [])].sort();
+  const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
+  if (candidates.length > 1) {
+    throw new McpToolRefusal(`ambiguous project "${named}": ${candidates.join(", ")}; pass one of these project keys`, {
+      ...details, code: "ambiguous_project", candidates,
+    });
+  }
+  if (candidates.length === 1) return candidates[0]!;
+  throw new McpToolRefusal(`unknown project "${named}"; pass a known project key or an unambiguous display name from board_snapshot`, {
+    ...details, code: "unknown_project",
+  });
+}
+
+/** Fresh admission resolves the name before claiming; replay retains the recorded result. */
+function orchestratorProjectBinding(
+  dependencies: ViewerMcpDomainDependencies,
+  run: (resolved: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>,
+  optionalProject = false,
+): McpToolBinding {
+  const resolved = new WeakMap<McpToolArgs, McpToolArgs>();
+  const resolve = async (args: McpToolArgs) => {
+    if (optionalProject && !text(args.project)) return args;
+    return { ...args, project: await resolveOrchestratorToolProject(required(args, "project"), dependencies) };
+  };
+  return Object.assign(
+    async (args: McpToolArgs, context?: McpToolCallContext) => {
+      try {
+        return await run(resolved.get(args) ?? await resolve(args), context);
+      } catch (error) {
+        const refusal = orchestratorDispatchRefusal(error);
+        if (refusal) throw new McpToolRefusal(refusal.message, {
+          ...refusal.details,
+          code: text(refusal.details.code) || "orchestrator_refused",
+          retryable: false,
+          outcome: "not-executed",
+          evidence: "dispatch-refused",
+          nextAction: "new-request-permitted",
+        });
+        // These tools do not have send's recovery binding. Preserve an
+        // inconclusive dispatch as unknown instead of a retryable plain error.
+        if (error instanceof McpDispatchVerdictError || error instanceof McpDispatchUncertainError) {
+          throw new McpToolRefusal(error.message, {
+            ...error.details,
+            code: text(error.details.code) || "outcome_unknown",
+            retryable: false,
+            outcome: "unknown",
+            evidence: "dispatch-verdict",
+            nextAction: "original-key-lookup",
+          });
+        }
+        throw error;
+      }
+    },
+    { prepareAdmission: async (args: McpToolArgs) => { resolved.set(args, await resolve(args)); } },
+  );
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -4136,7 +4235,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
  * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
  * and nothing else. A verbose read carries the note once.
  */
-function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const attribution = attributionOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const callerSeat = attribution.conversationId
@@ -4148,7 +4247,8 @@ function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   if (!requested) {
     throw new Error("project is required: this session's own project could not be resolved, so name the project whose tick to read or change");
   }
-  const project = canonicalOrchestratorProject(requested);
+  // Explicit input was resolved by the binding before its receipt was claimed.
+  const project = text(args.project) || await resolveOrchestratorToolProject(requested, dependencies);
 
   const readSettings = dependencies.readTickSettings ?? readSeatTickSettings;
   const writeSettings = dependencies.writeTickSettings ?? writeSeatTickSettings;
@@ -4757,7 +4857,7 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
 async function createOrchestrator(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   if (!text(args.conversationId)) validateExplicitMcpLaunchModel(args, "orchestrator");
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const result = await control.post("/api/orchestrator/seat", {
+  const result = await dispatchControl(control)("/api/orchestrator/seat", {
     project,
     mandate: text(args.mandate) || ORCHESTRATOR_SYSTEM_PROMPT,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
@@ -4783,7 +4883,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
 /** Resolve once at claim time and dispatch through the shared send receipt path.
     An existing claim always recovers its recorded recipient, including after
     the project's seat rotates. Creating a missing seat is a separate effect;
-    any failure after that dispatch stays uncertain. */
+    a definite message refusal records that creation alongside the refusal. */
 async function sendMessageToOrchestrator(
   args: McpToolArgs,
   control: ViewerControlDependencies,
@@ -4791,7 +4891,7 @@ async function sendMessageToOrchestrator(
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = canonicalOrchestratorProject(required(args, "project"));
+  const project = context?.binding?.target.project ?? await resolveOrchestratorToolProject(required(args, "project"), dependencies);
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
@@ -4836,7 +4936,11 @@ async function sendMessageToOrchestrator(
         await context.bindCreatedTarget(recipient);
       }
     } catch (error) {
-      if (error instanceof McpDispatchNotExecutedError && !created) throw error;
+      if (!created) {
+        const refusal = orchestratorDispatchRefusal(error);
+        if (refusal) throw refusal;
+        if (error instanceof McpDispatchNotExecutedError || error instanceof McpDispatchVerdictError) throw error;
+      }
       throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -4856,8 +4960,13 @@ async function sendMessageToOrchestrator(
       } : {}),
     });
   } catch (error) {
-    // A refused second POST cannot prove the preceding creation had no effect.
+    const refusal = error instanceof McpDispatchNotExecutedError ? error : orchestratorDispatchRefusal(error);
+    if (created && refusal && typeof refusal.details.status === "number") throw new McpDispatchSettledRefusalError(refusal.message, {
+      ...refusal.details, project, created: true, conversationId: recipient,
+      messageOutcome: "not-executed",
+    });
     if (created) throw new McpDispatchUncertainError(error instanceof Error ? error.message : String(error));
+    if (refusal) throw refusal;
     throw error;
   }
 }
@@ -4893,7 +5002,7 @@ async function rotateOrchestrator(
   /* Omitting mandate preserves the incumbent's core and handoff history;
      sending one explicitly replaces the core. */
   const fields = allowedSeatFields(args, ["mandate", "handoffNotes", "cwd", "engine", "model", "effort", "accountId", "keepIncumbentMandate"]);
-  const result = await control.post("/api/orchestrator/rotate", {
+  const result = await dispatchControl(control)("/api/orchestrator/rotate", {
     project,
     clientRequestId: spawnAttemptId(requestId(args)),
     ...fields,
@@ -4920,7 +5029,7 @@ async function rotateOrchestrator(
     every other agent. */
 async function askOrchestratorInParallelTool(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const project = canonicalOrchestratorProject(required(args, "project"));
-  const result = await control.post("/api/orchestrator/ghost", {
+  const result = await dispatchControl(control)("/api/orchestrator/ghost", {
     project,
     text: required(args, "text"),
     clientRequestId: `mcp_${requestId(args)}`,
@@ -6664,11 +6773,10 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
-function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = canonicalOrchestratorProject(required(args, "project"));
+  const named = required(args, "project");
   const message = requiredMessageText(args);
-  const link = text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
   // Match HTTP admission: a designated seat takes precedence even when the
@@ -6680,10 +6788,12 @@ function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDe
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
+  const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
+  const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
-    target: { project, identity: link ? `machine:${link.install}` : orchestratorSeatFor(project).active?.conversationId ?? null },
+    target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
     sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
@@ -7027,6 +7137,7 @@ export function viewerMcpRecoverableTools(
     },
     send_message_to_orchestrator: {
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
+      bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
@@ -7110,21 +7221,18 @@ export function viewerMcpBindings(
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
     dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
-    bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),
-    get_orchestrator: (args) => getOrchestrator(args, domainDependencies),
-    /* `async` rather than `Promise.resolve(...)`: this binding refuses by
-       throwing, and a synchronous throw out of a binding call is not the
-       rejected promise every caller here handles. */
-    seat_tick_settings: async (args) => seatTickSettingsTool(args, domainDependencies),
-    /* Same reason as above: this binding refuses by throwing. */
+    bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
+    get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
+    seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
+    /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     role_presets: async (args) => rolePresetsTool(args, domainDependencies),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
-    create_orchestrator: (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)),
+    create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context))),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
-    ask_orchestrator_in_parallel: (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context)),
-    rotate_orchestrator: (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    ask_orchestrator_in_parallel: orchestratorProjectBinding(domainDependencies, (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context))),
+    rotate_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies)),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
