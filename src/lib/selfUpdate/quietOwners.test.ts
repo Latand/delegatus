@@ -1918,3 +1918,83 @@ test("safety comparison: own idle can attribute a retained terminal after the pr
   await exit(worker);
   expect((await probe()).quiet).toBe(true);
 });
+
+async function retainedCompletion(retention: string) {
+  const c = conversation(transcript("settled")), worker = spawn();
+  const claim = claimHost(c.key, c.path, worker.identity, "live", null);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "current-turn", seq: 20 } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  await fallback();
+  if (retention === "production") {
+    for (let i = 0; i < 19_998; i++) f.journal.append({ scope: { type: "session", id: "noise" }, kind: "delta",
+      producer: { kind: "codex-app-server", eventKey: `noise:${i}` }, payload: { text: "output" } });
+  } else f.journal.compact(2);
+  expect(f.journal.replay(0)).toMatchObject({ reset: true, floorSeq: 2 });
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "current-turn", seq: 30, status: "completed" } as never)!);
+  return { c, worker, claim };
+}
+
+test.each(["minimal", "production"])("retention ordering: a start acknowledged after replay holds under %s retention", async (retention) => {
+  const { c, worker, claim } = await retainedCompletion(retention);
+  publish(c.id, c.key, c.path, claim.fence, null, 30);
+  await fallback();
+  let injected = false;
+  const p = ports({ owners: ownerCensusReader(productionLivenessSources, {
+    readEvents: async (after) => {
+      const page = f.journal.replay(after);
+      if (!page.reset && !page.events.length && !injected) {
+        injected = true;
+        f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "new-turn", seq: 40 } as never)!);
+      }
+      return page;
+    },
+    readProducerCursor: async (kind, prefix) => f.journal.producerCursor(kind, prefix),
+    readSession: (query) => f.client.readSession!(query),
+  }) });
+  const version = p.dispatchVersion?.();
+  expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  expect(injected).toBe(true);
+  expect(p.dispatchVersion?.()).toBe(version);
+  expect(row(c.id)).toMatchObject({ turn: "running", activeTurnId: "new-turn" });
+  expect((await probe(p, Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe(p)).quiet).toBe(true);
+}, 120_000);
+
+test.each(["minimal", "production"])("retention ordering: a queued older busy publisher preserves completion under %s retention", async (retention) => {
+  const { c, worker, claim } = await retainedCompletion(retention);
+  const held = heldHost(worker.child.pid, { status: "active", activeTurnRef: "current-turn", eventCursor: 20 });
+  await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+  expect((await probe()).quiet).toBe(false);
+  await held.fire({ status: "idle", activeTurnRef: null, eventCursor: 30 });
+  expect(await held.host.health()).toMatchObject({ status: "idle", activeTurnRef: null, eventCursor: 30 });
+  expect(row(c.id).writerStatus).toMatchObject({ writerClaim: claim.fence, turn: "idle", activeTurnId: null });
+  for (const at of [Date.now(), Date.now() + TWELVE_HOURS]) {
+    expect(await probe(ports(), at)).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
+  }
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "delta", turnId: "current-turn", seq: 31, text: "final output" } as never)!);
+  expect((await probe()).quiet).toBe(true);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "new-turn", seq: 40 } as never)!);
+  expect((await probe()).quiet).toBe(false);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+}, 120_000);
+
+test.each([30, 40, null])("retention ordering: busy source cursor %s cannot reuse earlier terminal proof", async (cursor) => {
+  const { c, worker, claim } = await retainedCompletion("minimal");
+  if (cursor === null) {
+    f.journal.append({ scope: { type: "session", id: c.id }, kind: "session-status",
+      producer: { kind: "codex-app-server", eventKey: `unordered-busy:${randomUUID()}` },
+      payload: { conversationId: c.id, sessionKey: c.key, writerClaim: claim.fence, host: "hosted", turn: "running", activeTurnId: "new-turn" } });
+  } else publish(c.id, c.key, c.path, claim.fence, "new-turn", cursor);
+  // Output advances the high-water mark without supplying a new terminal.
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "delta", turnId: "new-turn", seq: 50, text: "output" } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, (cursor ?? 40) + 1);
+  expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+});

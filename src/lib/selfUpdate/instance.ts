@@ -129,7 +129,7 @@ export function journalStatement(
     to an earlier writer stays that writer's. An unfamiliar turn under the
     current key can be current work, so it holds until a later own idle/end.
     Missing history supplies no release proof for an answering process. */
-function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null): OwnerReading["journal"] {
+function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null, replayCursor: number): OwnerReading["journal"] {
   const statement = journalStatement(rows, owner);
   const turns = new Map<string, number>();
   const turnOwners = new Map<string, { key: string; epoch: number }>();
@@ -165,7 +165,10 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
         const claims = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
         if (busy) {
           checkpoints.delete(event.scope.id);
-          terminals.delete(event.scope.id);
+          // A queued health sample can precede a retained completion in source
+          // order. Only strictly older samples preserve that completion proof.
+          const terminal = terminals.get(event.scope.id);
+          if (cursor === null || terminal === undefined || cursor >= terminal) terminals.delete(event.scope.id);
           const previous = claims.get(active);
           claims.set(active, previous === undefined || previous === null ? cursor : cursor === null ? null : Math.max(previous, cursor));
         } else {
@@ -174,10 +177,12 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
           for (const [turn, started] of claims) if (cursor !== null && started !== null && cursor > started) claims.delete(turn);
           // Equality at a missing start proves nothing. An own idle that
           // includes a retained own terminal covers the lost prefix. Later
-          // output adds no claim; a retained new start clears this proof.
+          // output adds no claim; a retained new start clears this proof. The
+          // replay must cover the durable engine cursor: an event acknowledged
+          // after the last replay page could be a start, whatever the row says.
           const terminal = terminals.get(event.scope.id);
           if (cursor !== null && engineCursor !== null && engineCursor > 0
-            && (cursor > engineCursor || (terminal !== undefined && cursor >= terminal))) checkpoints.add(event.scope.id);
+            && (cursor > engineCursor || (terminal !== undefined && cursor >= terminal && replayCursor >= engineCursor))) checkpoints.add(event.scope.id);
         }
         statements.set(event.scope.id, claims);
       }
@@ -309,17 +314,26 @@ export function ownerCensusReader(
     const held = heldHosts();
     // One replay per probe, only when an own journal statement needs ordering.
     // Keep only deciding events; payloads from live output are never retained.
-    let history: Promise<{ events: RuntimeEvent[]; incomplete: boolean }> | null = null;
+    let history: Promise<{ events: RuntimeEvent[]; incomplete: boolean; engineCursors: Map<string, number> }> | null = null;
     const events = () => (history ??= (async () => {
       const result: RuntimeEvent[] = [];
+      const engineCursors = new Map<string, number>();
       let cursor = 0;
       let page = await readEvents(cursor);
       const incomplete = page.reset;
       if (page.reset) { cursor = page.floorSeq; page = await readEvents(cursor); }
       while (true) {
         if (page.reset) throw new Error("runtime turn history changed during drain probe");
-        for (const event of page.events) if (["session-status", "turn-started", "turn-ended"].includes(event.kind)) result.push(event);
-        if (!page.events.length) return { events: result, incomplete };
+        for (const event of page.events) {
+          if (["session-status", "turn-started", "turn-ended"].includes(event.kind)) result.push(event);
+          // Include output in replay coverage without retaining its payload.
+          const engine = /^(engine-host:.+:)(\d+)$/.exec(event.producer.eventKey ?? "");
+          if (event.scope.type === "session" && engine) {
+            const key = `${event.producer.kind}\0${engine[1]}`;
+            engineCursors.set(key, Math.max(engineCursors.get(key) ?? 0, Number(engine[2])));
+          }
+        }
+        if (!page.events.length) return { events: result, incomplete, engineCursors };
         const next = page.events.at(-1)!.seq;
         if (next <= cursor) throw new Error("runtime turn history did not advance");
         cursor = next;
@@ -431,7 +445,8 @@ export function ownerCensusReader(
             // Only these engine producers retain their cursor across pruning.
             const kind = owner.engine === "codex" ? "codex-app-server" : owner.engine === "claude" ? "claude-broker" : null;
             const cursor = history.incomplete && kind ? await readProducerCursor(kind, `engine-host:${owner.entryKey}:`) : null;
-            reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor);
+            const replayCursor = history.engineCursors.get(`${kind}\0engine-host:${owner.entryKey}:`) ?? 0;
+            reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor, replayCursor);
           } else if (owner.entry && ["starting", "live", "handoff"].includes(owner.entry.status)) {
             // Another prompt can be accepted without changing updatedAt or
             // the tail. Only this owner's idle state or death ends ambiguity.
