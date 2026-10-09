@@ -8592,13 +8592,14 @@ describe("seat auto-rotation through production seams", () => {
     seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: account.id, project: PROJECT, createdAt: AT }] });
     const transcript = path.join(account.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true }); fs.writeFileSync(transcript, "");
-    function appendUsage(count: number) {
-      fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: AT, message: { role: "assistant", model: "opus", stop_reason: "end_turn",
+    function appendUsage(count: number, target = transcript) {
+      fs.appendFileSync(target, JSON.stringify({ type: "assistant", timestamp: AT, message: { role: "assistant", model: "opus", stop_reason: "end_turn",
         usage: { input_tokens: count, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 }, content: [{ type: "text", text: "Work is complete." }] } }) + "\n");
     }
     if (tokens !== null) { fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: AT, message: { role: "user", content: "Report the board" } }) + "\n"); appendUsage(tokens); }
     else fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: AT, message: { role: "user", content: "x".repeat(6 * 1024 * 1024) } }) + "\n");
-    const registry = new AgentRegistry(path.join(dir, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    const registryPath = path.join(dir, "registry.json");
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "sqlite" });
     registry.setEngineRouting("claude", account.id);
     const now = Date.now();
     registry.recordQuotaObservation({ engine: "claude", accountId: account.id, authenticated: true, authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "rotation-fixture",
@@ -8607,10 +8608,10 @@ describe("seat auto-rotation through production seams", () => {
     let clock = TS;
     let busy = false;
     const profile = emptyLaunchProfile({ cwd: dir, model: "opus" });
-    function turn(value: boolean) {
-      busy = value;
+    function turn(value: boolean | "unknown") {
+      busy = value === true;
       registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: account.id, launchProfile: profile,
-        turn: { state: value ? "busy" : "idle", source: value ? "tool" : "assistant", terminalAt: value ? null : new Date(clock).toISOString() }, observedAt: new Date(clock).toISOString() }]);
+        turn: { state: value === "unknown" ? "unknown" : value ? "busy" : "idle", source: value ? "tool" : "assistant", terminalAt: value ? null : new Date(clock).toISOString() }, observedAt: new Date(clock).toISOString() }]);
     }
     turn(false); setAgentRegistryForTests(registry);
     beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results." + (history ? "\n\n## Rotation history\nPrior decisions" : ""), engine: "claude", model: "opus", clientRequestId: "seed_rotation_fixture", mode: "spawn", now: AT });
@@ -8649,7 +8650,7 @@ describe("seat auto-rotation through production seams", () => {
     rig.deps.seatAutoRotation = { rotate: (body, _deps, actor, admission) => executeOrchestratorRotation(body, command, actor, admission) };
     const cards = () => loadTasks(statePath("tasks.json")).filter(t => t.text.includes("monitor-ref: seat-auto-rotation"));
     const reports = () => readBridgeReportLog().reports;
-    return { rig, original, spawns, command, settingsBefore, appendUsage, turn, cards, reports, registry,
+    return { rig, original, spawns, command, settingsBefore, appendUsage, turn, cards, reports, registry, registryPath,
       active: () => orchestratorSeatFor(PROJECT).active!, settings: () => readSeatTickSettings(PROJECT), state: () => readSeatTickState(PROJECT),
       advance: (minutes: number) => { clock += minutes * MINUTE; }, refuse: (status: number) => { spawnStatus = status; },
       check: () => runSeatTickCheck(PROJECT, rig.deps), rotate: executeOrchestratorRotation };
@@ -8824,5 +8825,116 @@ describe("seat auto-rotation through production seams", () => {
     expect(f.state().autoRotation?.lastAttempt?.state).toBe("failed");
     expect(f.reports()).toHaveLength(1);
     await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+  }));
+  test("panel reconciliation during spawn preserves a predecessor that started a turn", () => fixture(async f => {
+    const { reconcileOrchestratorSeatLaunch } = await import("@/lib/orchestrator/seatCommand");
+    const spawn = f.command.spawn;
+    f.command.spawn = async (...args) => {
+      const result = await spawn(...args);
+      f.turn(true);
+      f.command.launchSettlement = () => ({ kind: "settled", conversationId: String(result.body.conversationId), path: String(result.body.path) });
+      await reconcileOrchestratorSeatLaunch(PROJECT, f.command);
+      expect(f.active().conversationId).toBe(f.original.conversationId);
+      return result;
+    };
+    await f.check();
+    expect(f.active().conversationId).toBe(f.original.conversationId);
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe("failed");
+    expect(f.reports()).toHaveLength(1);
+    await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+  }));
+  test.each(["busy", "unknown", "idle"] as const)("a fresh process reconciles a lost automatic request with a %s predecessor", state => fixture(async f => {
+    const spawnSuccessor = f.command.spawn;
+    let settled!: Record<string, unknown>;
+    let resume!: () => void;
+    let ready!: () => void;
+    const launched = new Promise<void>(resolve => { ready = resolve; });
+    const lostAnswer = new Promise<void>(resolve => { resume = resolve; });
+    f.command.spawn = async (...args) => {
+      const result = await spawnSuccessor(...args);
+      settled = result.body;
+      ready();
+      await lostAnswer;
+      return result;
+    };
+    // Leave only the pending checkpoint on disk, as with a request lost at launch.
+    let loseOutcome = state !== "idle";
+    f.rig.deps.writeState = (project, row) => {
+      if (loseOutcome && row.autoRotation?.lastAttempt?.state === "failed") { loseOutcome = false; throw new Error("fixture lost outcome checkpoint"); }
+      writeSeatTickState(project, row);
+    };
+    const checking = f.check();
+    await launched;
+    try {
+      f.turn(state === "unknown" ? "unknown" : state === "busy");
+      const child = spawn(process.execPath, ["-e", `
+        const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry");
+        const { reconcileOrchestratorSeatLaunch, productionSeatCommandDependencies } = await import("./src/lib/orchestrator/seatCommand");
+        setAgentRegistryForTests(new AgentRegistry(process.env.FIXTURE_REGISTRY, undefined, undefined, { sqliteMode: "sqlite" }));
+        const result = JSON.parse(process.env.FIXTURE_SETTLEMENT);
+        await reconcileOrchestratorSeatLaunch("viewer", { ...productionSeatCommandDependencies,
+          now: () => process.env.FIXTURE_AT,
+          launchSettlement: () => ({ kind: "settled", conversationId: result.conversationId, path: result.path }) });
+      `], { cwd: process.cwd(), env: { ...process.env, FIXTURE_REGISTRY: f.registryPath, FIXTURE_SETTLEMENT: JSON.stringify(settled), FIXTURE_AT: AT }, stdio: ["ignore", "pipe", "pipe"] });
+      const errors: Buffer[] = [];
+      child.stdout!.resume(); child.stderr!.on("data", data => errors.push(data));
+      const exitCode = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
+      expect({ exitCode, stderr: Buffer.concat(errors).toString() }).toEqual({ exitCode: 0, stderr: "" });
+      expect(f.active().conversationId).toBe(state === "idle" ? settled.conversationId : f.original.conversationId);
+    } finally { resume(); await checking; }
+    await runSeatTickCheck(PROJECT, { ...f.rig.deps, sources: { ...f.rig.deps.sources! } });
+    expect(f.spawns).toHaveLength(1);
+    expect(f.state().autoRotation?.lastAttempt?.state).toBe(state === "idle" ? "rotated" : "failed");
+    expect(f.reports()).toHaveLength(1);
+    await f.check(); expect(f.reports()).toHaveLength(1);
+  }));
+  test.each([
+    ["turn", "rotated"], ["turn", "failed"], ["update", "rotated"], ["update", "failed"],
+  ] as const)("a %s-held attempt executed after an hour keeps a full cooldown after %s, including restart", (hold, outcome) => fixture(async f => {
+    const read = f.rig.deps.sources!.seatContextUsage!;
+    const spawnSuccessor = f.command.spawn;
+    if (hold === "turn") f.rig.deps.sources!.seatContextUsage = id => { f.turn(true); return read(id); };
+    else f.command.spawn = async () => ({ status: 409, body: { code: "AUTO_UPDATE_DRAIN", error: "fixture update hold" } });
+    await f.check();
+    const attemptId = f.state().autoRotation!.lastAttempt!.id;
+    expect(f.spawns).toHaveLength(0);
+    f.rig.deps.sources!.seatContextUsage = read;
+    f.command.spawn = spawnSuccessor;
+    f.advance(65); f.turn(false);
+    if (outcome === "failed") f.refuse(500);
+    await f.check();
+    expect(f.spawns).toHaveLength(1);
+    expect(f.state().autoRotation?.lastAttempt).toMatchObject({ id: attemptId, state: outcome, startedAt: new Date(TS + 65 * MINUTE).toISOString() });
+    if (outcome === "rotated") f.appendUsage(720_000, f.active().path!);
+    f.advance(5);
+    await runSeatTickCheck(PROJECT, { ...f.rig.deps, sources: { ...f.rig.deps.sources! } });
+    expect(f.spawns).toHaveLength(1);
+    const retryAt = new Date(TS + 125 * MINUTE).toISOString();
+    if (outcome === "failed") {
+      expect(f.reports()[0]!.body).toContain(retryAt);
+      const { seatTickSettingsAnswer, autoRotationFailureAnswer } = await import("./seatTickSettingsAnswer");
+      expect(seatTickSettingsAnswer(PROJECT, false, { kind: "gateway", conversationId: null, project: null, seatEpoch: null }).autoRotate.lastAttempt?.nextAttemptAt).toBe(retryAt);
+      expect(autoRotationFailureAnswer(PROJECT).lastAttempt?.nextAttemptAt).toBe(retryAt);
+    }
+    const child = spawn(process.execPath, ["-e", `
+      const { readSeatTickState } = await import("./src/lib/monitor/seatTickState");
+      const { autoRotationStep } = await import("./src/lib/monitor/seatAutoRotation");
+      const { orchestratorSeatFor } = await import("./src/lib/orchestrator/seats");
+      const { readSeatTickSettings, effectiveSeatTickSettings } = await import("./src/lib/monitor/seatTickSettings");
+      const now = Number(process.env.FIXTURE_NOW);
+      const seat = orchestratorSeatFor("viewer").active;
+      const decision = autoRotationStep({ settings: effectiveSeatTickSettings(readSeatTickSettings("viewer"), now, 3600000),
+        seat: { ...seat, turn: "idle" }, pendingSeat: false, state: readSeatTickState("viewer"),
+        usage: { engine: "claude", model: "opus", tokens: 720000, windowTokens: 1000000, estimated: false },
+        now, drainHeld: false, authIncidentOpen: false });
+      console.log(JSON.stringify({ kind: decision.kind, detail: decision.detail }));
+    `], { cwd: process.cwd(), env: { ...process.env, FIXTURE_NOW: String(TS + 70 * MINUTE) }, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [], stderr: Buffer[] = [];
+    child.stdout!.on("data", data => stdout.push(data)); child.stderr!.on("data", data => stderr.push(data));
+    const code = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
+    expect({ code, stderr: Buffer.concat(stderr).toString() }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(Buffer.concat(stdout).toString())).toEqual({ kind: "wait", detail: `cooldown until ${retryAt}` });
+    f.advance(54); await f.check(); expect(f.spawns).toHaveLength(1);
+    f.advance(1); await f.check(); expect(f.spawns).toHaveLength(2);
   }));
 });

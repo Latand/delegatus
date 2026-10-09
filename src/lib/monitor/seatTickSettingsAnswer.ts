@@ -2,8 +2,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { AUTO_ROTATE_DEFAULT_PERCENT } from "./seatTickSettings";
-import { AUTO_ROTATE_COOLDOWN_MS } from "./seatTick";
-import type { AutoRotationAttempt } from "./seatAutoRotation";
+import { autoRotationRetryAt, type AutoRotationAttempt } from "./seatAutoRotation";
 import { boardMaintenanceAnswer, type BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { seatTickSettingsCardText } from "./cards";
@@ -261,7 +260,7 @@ export function seatTickSettingsAnswer(
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,
       defaultPercent: AUTO_ROTATE_DEFAULT_PERCENT, minPercent: 50, maxPercent: 90,
       windowKnown: active ? contextWindowPolicyFor(conversation?.engine ?? active.engine ?? null, conversation?.generations.at(-1)?.launchProfile?.model ?? active.model ?? null) !== null : null,
-      lastAttempt: autoAttempt?.state === "failed" ? { ...autoAttempt, nextAttemptAt: new Date(Date.parse(autoAttempt.startedAt) + AUTO_ROTATE_COOLDOWN_MS).toISOString() } : null,
+      lastAttempt: autoAttempt?.state === "failed" ? { ...autoAttempt, nextAttemptAt: autoRotationRetryAt(autoAttempt) } : null,
       setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null },
     maintenance: boardMaintenanceAnswer(project, effective, { now, lastCheckAt: state?.lastCheckAt ?? null, checkIntervalMs: policy?.checkIntervalMs ?? null }),
     project,
@@ -316,5 +315,5 @@ export function seatTickSettingsAnswer(
 export function autoRotationFailureAnswer(project: string): { lastAttempt?: { startedAt: string; error: string | null; nextAttemptAt: string } } {
   const attempt = peekSeatTickState(project).autoRotation?.lastAttempt;
   return attempt?.state === "failed" ? { lastAttempt: { startedAt: attempt.startedAt, error: attempt.error ?? null,
-    nextAttemptAt: new Date(Date.parse(attempt.startedAt) + AUTO_ROTATE_COOLDOWN_MS).toISOString() } } : {};
+    nextAttemptAt: autoRotationRetryAt(attempt) } } : {};
 }

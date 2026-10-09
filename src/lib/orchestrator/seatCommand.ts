@@ -33,6 +33,7 @@ import { derivedSpawnTitle } from "@/lib/title";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
+import { automaticReplacementHold } from "./seatTurnFence";
 
 import {
   boundHistoryBody,
@@ -110,6 +111,7 @@ import {
 /** Trusted in-process restrictions; request JSON cannot supply admission. */
 export interface SeatLaunchAdmission {
   autonomous?: boolean;
+  automaticReplacement?: { conversationId: string; seatEpoch: number };
   assertAccount?(accountId: string): void;
   /** Automatic rotation's fresh turn fence. Checked before handoff work and
    * after reconciliation, immediately before admitting a replacement. */
@@ -117,6 +119,8 @@ export interface SeatLaunchAdmission {
 }
 
 export interface SeatCommandDependencies {
+  /** Reconstruct the durable automatic fence for polling and request recovery. */
+  automaticReplacementHold?(conversationId: string): SeatCommandResult | null | Promise<SeatCommandResult | null>;
   /** POST /api/spawn in-process, on the operator's own authority. */
   spawn(body: Record<string, unknown>, autonomous?: boolean, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }>;
   /** Deliver the mandate to an existing conversation, idempotent on
@@ -309,6 +313,7 @@ async function deliverMandateInProcess(input: { conversationId: string; path: st
 }
 
 export const productionSeatCommandDependencies: SeatCommandDependencies = {
+  automaticReplacementHold: (conversationId) => automaticReplacementHold(conversationId, { registry: agentRegistry }),
   spawn: postSpawnInProcess,
   deliver: deliverMandateInProcess,
   conversationTarget: (conversationId) => {
@@ -510,7 +515,19 @@ async function activate(
      a writer that holds it for a few milliseconds must not cost the project
      the seat its launch was accepted for. */
   const completed = await withAccountMutationLockAsync(async () => {
-    const replacementCheck = admission?.replacementHold?.();
+    const snapshot = orchestratorSeatFor(input.project);
+    const pending = snapshot.pending?.intent.clientRequestId === input.clientRequestId ? snapshot.pending : null;
+    const fence = pending?.intent.automaticReplacement;
+    if (fence && (snapshot.active?.seatEpoch !== fence.seatEpoch || snapshot.active?.conversationId !== fence.conversationId)) {
+      const error = "automatic replacement refused because the incumbent changed after successor launch";
+      failOrchestratorSeatIntent(input.project, input.clientRequestId, error, dependencies.now());
+      refused = { status: 409, body: { code: "incumbent_changed", error } };
+      return { kind: "missing" } as const;
+    }
+    const replacementCheck = pending
+      ? admission?.replacementHold ? admission.replacementHold()
+        : fence ? (dependencies.automaticReplacementHold ?? productionSeatCommandDependencies.automaticReplacementHold!)(fence.conversationId) : null
+      : null;
     const hold = replacementCheck instanceof Promise ? await replacementCheck : replacementCheck;
     if (hold) {
       // The launch has already been admitted. Terminalize its seat intent so
@@ -1157,6 +1174,7 @@ async function runOrchestratorSeatRequest(
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
     telegramGrant,
+    automaticReplacement: admission?.automaticReplacement,
     promptVersion,
     triggeredBy,
     now: dependencies.now(),

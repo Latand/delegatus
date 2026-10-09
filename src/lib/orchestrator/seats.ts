@@ -49,6 +49,8 @@ export interface OrchestratorSeatIntent {
   launchId: string | null;
   /** Terminal error of the last completion attempt; null while none failed. */
   error: string | null;
+  /** Trusted automatic-rotation fence, retained when the launching request dies. */
+  automaticReplacement?: { conversationId: string; seatEpoch: number };
 }
 
 /**
@@ -272,6 +274,9 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
       mode: intent.mode,
       launchId: typeof intent.launchId === "string" ? intent.launchId : null,
       error: typeof intent.error === "string" ? intent.error : null,
+      ...(intent.automaticReplacement && typeof intent.automaticReplacement.conversationId === "string"
+        && Number.isSafeInteger(intent.automaticReplacement.seatEpoch) && intent.automaticReplacement.seatEpoch > 0
+        ? { automaticReplacement: { conversationId: intent.automaticReplacement.conversationId, seatEpoch: intent.automaticReplacement.seatEpoch } } : {}),
     },
     designatedAt: seat.designatedAt,
     activatedAt: seat.activatedAt ?? null,
@@ -776,6 +781,7 @@ export function beginOrchestratorSeatIntent(input: {
   engine?: string | null;
   model?: string | null;
   telegramGrant?: boolean;
+  automaticReplacement?: OrchestratorSeatIntent["automaticReplacement"];
   promptVersion?: number | null;
   /** Who triggered this designation, resolved from the request by the caller —
       never read off a caller-supplied body, so attribution cannot be dictated. */
@@ -829,7 +835,8 @@ export function beginOrchestratorSeatIntent(input: {
       predecessorConversationId: null,
       triggeredBy: input.triggeredBy ?? null,
       state: "pending",
-      intent: { clientRequestId: input.clientRequestId, mode: input.mode, launchId: null, error: null },
+      intent: { clientRequestId: input.clientRequestId, mode: input.mode, launchId: null, error: null,
+        ...(input.automaticReplacement ? { automaticReplacement: { ...input.automaticReplacement } } : {}) },
       designatedAt: input.now ?? new Date().toISOString(),
       activatedAt: null,
     };
