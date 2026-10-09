@@ -621,9 +621,10 @@ root and `LLV_VIEWER_CONTROL_URL` on a closed port.
 
 ## 13. Reconciliation with main after batch D
 
-Main `9e9d395b6` includes the working-agent counter from #2604 and the agent
-window from #2612. The five reviewed kanban assertions all fail against native
-main with the cleanup changes absent. Each failure comes from #2604's count
+Main `9e9d395b6` includes the working-agent counter from #2604. Subsequent
+merges bring in main `7065a4f8c` and `78cab7405`, preserving the agent window
+from #2612. The five reviewed kanban assertions all fail against native main
+with the cleanup changes absent. Each failure comes from #2604's count
 semantics; the cleanup's prototype-dismissal behavior remains covered separately.
 
 | Reviewed case | Current behavior and retained check |
