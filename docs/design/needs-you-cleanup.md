@@ -646,6 +646,12 @@ explicit launch intent ahead of cwd. The regression takes the target from a
 real failed receipt's projection, refuses the cwd project's seat without a
 write, and checks the owning seat's clear and undo.
 
+The shared role-copy helpers also remain outside the Next client boundary.
+They take the caller's translator and read static dictionaries, so both server
+reads and browser labels can call them. A boundary check guards this contract;
+the read fixture covers named and legacy roles on lane and conversation rows
+in English and Ukrainian, and the compiled server path is checked separately.
+
 ## Notes
 
 - Risk: `operatorBoardRepresentation` must not run the task-board migration or

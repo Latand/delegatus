@@ -39,6 +39,22 @@ test("the project read equals the panel projection in order, covering every row 
   expect(answer.rows.filter(r => r.kind === "decision").map(r => r.target)).toEqual([{ kind: "report", seq: 1 }, { kind: "report", seq: 2 }]);
 });
 
+test("role-bearing rows retain localized lane labels and the conversation's question text", () => {
+  for (const [role, labels] of [["builder", { en: "Builder", uk: "Білдер" }], ["legacy-fixture", { en: "legacy-fixture", uk: "legacy-fixture" }]] as const) {
+    const pipeline = lane("named-role", "needs_decision");
+    pipeline.stages = [{ id: "run", kind: "run", role: { roleId: role } }] as Pipeline["stages"];
+    pipeline.cursor = { stageId: "run" } as Pipeline["cursor"];
+    const question = file("named-question", { pendingQuestion: { kind: "question", toolUseId: "named-question", askedAt: at, questions: [{ header: "Choose" }] }, durableLineage: { role, memberships: [] } });
+    const body = { files: [question], pipelines: [pipeline], tasks: [] };
+    for (const locale of ["en", "uk"] as const) {
+      const answer = needsYouAnswer(body, null, now, "project-a", { ...ports(), tasks: [], pipelines: [pipeline] }, { locale });
+      expect(answer.count).toBe(2);
+      expect(answer.rows.find(row => row.kind === "lane-decision")!.line).toContain(labels[locale]);
+      expect(answer.rows.find(row => row.kind === "question")!.line).toBe("Choose");
+    }
+  }
+});
+
 
 test("later messages, turns, settled hosts, task and lane evidence are facts; missing sources imply nothing", () => {
   const body = fixture();

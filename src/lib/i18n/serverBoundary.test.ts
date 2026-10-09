@@ -6,6 +6,15 @@ import ts from "typescript";
 const root = path.resolve(import.meta.dir, "../../..");
 const clientI18n = path.join(root, "src/lib/i18n");
 
+test("role-copy functions used by server attention reads remain outside the client boundary", () => {
+  const file = path.join(root, "src/components/builderCopy.ts");
+  const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+  // Bun leaves these functions callable even when Next turns them into client
+  // references. The shared row-text path must be callable in both graphs.
+  expect(source.statements.some(statement => ts.isExpressionStatement(statement)
+    && ts.isStringLiteral(statement.expression) && statement.expression.text === "use client")).toBe(false);
+});
+
 function importsClientI18n(specifier: string, file: string): boolean {
   const resolved = specifier.startsWith("@/")
     ? path.join(root, "src", specifier.slice(2))
