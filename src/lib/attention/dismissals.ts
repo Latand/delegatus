@@ -228,14 +228,14 @@ export function overlayAttentionDismissals(files: readonly FileEntry[], read: ()
 }
 
 /** One serialized read-modify-write. A mutation that returns no records
-    changed nothing and writes nothing. Old records and the overflow go on
-    every write. */
+    changed nothing and writes nothing. Prototype hides remain undoable;
+    other old records and the overflow go on every write. */
 function mutate<R>(mutation: (records: AttentionDismissalV1[]) => { records?: AttentionDismissalV1[]; result: R }, now: Date): R {
   return dismissalsStore.mutate(attentionDismissalsFile(), (current) => {
     const outcome = mutation(current.records);
     if (!outcome.records) return { next: undefined, result: outcome.result };
     const floor = now.getTime() - DISMISSAL_RETENTION_MS;
-    const kept = outcome.records.filter((record) => Date.parse(record.at) >= floor).slice(-DISMISSAL_CAPACITY);
+    const kept = outcome.records.filter((record) => record.kind === "prototype" || Date.parse(record.at) >= floor).slice(-DISMISSAL_CAPACITY);
     return {
       next: {
         schemaVersion: ATTENTION_DISMISSALS_SCHEMA_VERSION,

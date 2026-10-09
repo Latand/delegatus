@@ -644,12 +644,12 @@ export async function settleRecordFromJournal(
 export function defaultSeatTickSources(): SeatTickSources {
   return {
     recordRuleReports(project, at) {
-      const seat = orchestratorSeatFor(project).active;
+      const seat = orchestratorSeatForCurrentProject(project).active;
       if (!seat?.conversationId) return;
       const registry = agentRegistry().readOnlySnapshot();
       const log = readBridgeReportLog();
       appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
-        tasks: loadTasks(), pipelines: loadPipelinesForList(), deliveries: Object.values(registry.heldDeliveries),
+        tasks: loadTasks(), pipelines: loadPipelinesForList().map(lane => ({ ...lane, project: canonicalOrchestratorProject(lane.project) })), deliveries: Object.values(registry.heldDeliveries),
         maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
         deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
         deliveryProject: delivery => {

@@ -65,6 +65,10 @@ test("rule 3: hide removes a review from both waiting lists, keeps history and u
   expect(read.rounds).toHaveLength(1);
   expect(read.rounds[0]!.hidden?.by).toEqual(OPERATOR);
   expect(read.rounds[0]!.decision).toBeUndefined();
+  h.clock.now = new Date(h.clock.now.getTime() + DISMISSAL_RETENTION_MS + 1);
+  await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports });
+  expect(readPrototypeReviews(task).waitingReviewId).toBeNull();
+  expect(readPrototypeReviews(task).rounds[0]!.hidden?.by).toEqual(OPERATOR);
   await dismissAttention(target, SEAT, { ports: h.ports, undo: true });
   expect(readPrototypeReviews(task).waitingReviewId).toBe("review-hide");
   expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toHaveLength(1);
