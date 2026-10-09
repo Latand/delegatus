@@ -2931,9 +2931,9 @@ export const en = {
   "dictation.noMic": "no microphone access",
 
   // OverviewBoard
-  "overview.branchesLiveIn": {
-    one: "{count} branch running in {projects}",
-    other: "{count} branches running in {projects}",
+  "overview.agentsWorkingIn": {
+    one: "{count} agent working in {projects}",
+    other: "{count} agents working in {projects}",
   },
   "overview.projects": { one: "{count} project", other: "{count} projects" },
   "overview.archived": "· {count} archived",
@@ -3681,7 +3681,7 @@ export const en = {
   "mobile2.projects.title": "Projects",
   "mobile2.projects.overview": "Overview",
   "mobile2.projects.count": { one: "{count} project", other: "{count} projects" },
-  "mobile2.projects.live": { one: "{count} live", other: "{count} live" },
+  "mobile2.projects.live": { one: "{count} working", other: "{count} working" },
   "mobile2.projects.quiet": "quiet",
   "mobile2.projects.quietSince": "quiet · {age}",
   "mobile2.projects.archive": "Archive",
@@ -4159,7 +4159,7 @@ export const en = {
   "kanban.columns": "Columns",
   "kanban.scrollTo": "Scroll to {column}",
   "kanban.columnCount": "{shown} of {total}",
-  "kanban.columnWorking": "{count} working",
+  "kanban.columnWorking": { one: "{count} working", other: "{count} working" },
   "kanban.columnNeeds": { one: "{count} needs you", other: "{count} need you" },
   "kanban.columnStopped": "{count} stopped",
   "kanban.columnNoReason": "{count} no reason",
