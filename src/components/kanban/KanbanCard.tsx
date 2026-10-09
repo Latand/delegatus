@@ -43,7 +43,6 @@ import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, Kanba
 import { PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
-import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { StageDraftPanel } from "./StageDraft";
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { HostChip, RemoteLanes } from "./RemoteLanes";
@@ -98,9 +97,9 @@ export function statusLabel(t: TFunction, status: TaskStatus): string {
   return t(`kanban.status.${status}`);
 }
 
-/** The stages whose latest own attempt's conversation is open as a reader on
-    the card (the attempt a node opens, never a lineage-adopted helper), or
-    whose first message is open in a panel. */
+/** The stages whose latest own attempt's conversation is open in the agent
+    window's list (the attempt a node opens, never a lineage-adopted helper),
+    or whose first message is open in a panel. */
 function selectedStages(pipeline: Pipeline, readerKeys: readonly string[], panels: readonly StagePanelLine[]): Set<string> {
   const open = new Set(readerKeys);
   const selected = new Set<string>(panels.filter((panel) => panel.pipelineId === pipeline.id).map((panel) => panel.stageId));
@@ -137,7 +136,7 @@ function memberRole(t: TFunction, member: KanbanMember): string {
   return cleanTitle(member.file.title ?? "", 80) || t("kanban.untitledConversation");
 }
 
-const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { member: KanbanMember; workspace: boolean; onOpen: (file: FileEntry) => void }) {
+const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }: { member: KanbanMember; workspace: boolean; open: boolean; onOpen: (file: FileEntry) => void }) {
   const { t } = useLocale();
   const role = memberRole(t, member);
   /* A tile that needs the operator names why in its title. */
@@ -154,8 +153,9 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
     <button
       type="button"
       role="listitem"
-      className={`tile${workspace ? "" : " fill"}${member.working ? " working" : ""}${member.needsYou ? " needs" : ""}`}
+      className={`tile${workspace ? "" : " fill"}${member.working ? " working" : ""}${member.needsYou ? " needs" : ""}${open ? " open" : ""}`}
       data-member={member.file.path}
+      data-member-open={open ? "" : undefined}
       title={reason}
       aria-label={t("kanban.openMember", { role, state })}
       onClick={() => onOpen(member.file)}
@@ -219,10 +219,10 @@ export interface KanbanCardProps {
   /** Dismiss launches of this task that did not start: one row's, or all of
       them. Absent, the rows still say so and offer nothing. */
   onDismissLaunch?: (card: KanbanCardModel, launches: readonly KanbanUnstartedLaunch[]) => void;
-  /** Open readers this card shows, by conversation identity, one per line —
-      a string so an unchanged set never re-renders the card. */
+  /** This card's conversations open in the agent window's list, by
+      conversation identity, one per line — a string so an unchanged set never
+      re-renders the card. The card only marks them; it never hosts one. */
   readerKeys: string;
-  placement: ReaderPlacement;
   /** Waiting stages open on this card, one per line (see `StagePanelLine`). */
   stagePanels: string;
   /** Pipeline actions this page sent and the server has not answered: `pipelineId\taction` per line. */
@@ -405,12 +405,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const readerKeys = props.readerKeys ? props.readerKeys.split("\n") : [];
   const panels = parsePanels(props.stagePanels);
   const acting = parseActing(props.acting);
-  const reading = !collapsed && (readerKeys.length > 0 || panels.length > 0 || card.drafts.length > 0);
-  const tileKeys = new Set(tiles.map((member) => conversationIdentity(member.file)));
-  /* A stage's reader opens under the card's pipeline; a tile's reader takes
-     the tile's place. */
-  const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
-  const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
+  /* An agent opened from the card opens in the agent window and leaves the
+     card as it was: only a waiting stage's first message and an agent draft,
+     which are forms with no agent yet, stand in the card. */
+  const reading = !collapsed && (panels.length > 0 || card.drafts.length > 0);
+  const openKeys = new Set(readerKeys);
   /* A card that waits with no reason of its own waits on its prototype
      review: its review button says so in words, and the card's label names
      it for assistive tech. The choice clears it, so there is no dismissal. */
@@ -779,7 +778,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </>
       ) : null}
 
-      {!collapsed && (stageReaders.length || panels.length) ? (
+      {!collapsed && panels.length ? (
         <div className="readers">
           {panels.map((panel) => {
             const summary = card.pipelines.find((entry) => entry.pipeline.id === panel.pipelineId);
@@ -806,22 +805,14 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               />
             );
           })}
-          {stageReaders.map((key) => <ReaderSlot key={key} placement={props.placement} readerKey={key} />)}
         </div>
       ) : null}
 
       {!collapsed && tiles.length ? (
         <div className="members" role="list" aria-label={t("kanban.conversations")}>
-          {tiles.map((member) => {
-            const key = conversationIdentity(member.file);
-            return openTiles.has(key) ? (
-              <div key={member.key} role="listitem" className="member-reader">
-                <ReaderSlot placement={props.placement} readerKey={key} />
-              </div>
-            ) : (
-              <MemberTile key={member.key} member={member} workspace={workspace} onOpen={props.onOpenMember} />
-            );
-          })}
+          {tiles.map((member) => (
+            <MemberTile key={member.key} member={member} workspace={workspace} open={openKeys.has(conversationIdentity(member.file))} onOpen={props.onOpenMember} />
+          ))}
         </div>
       ) : null}
       {!collapsed && props.remoteAgents?.length ? <RemoteAgents rows={props.remoteAgents} nowMs={nowMs} /> : null}

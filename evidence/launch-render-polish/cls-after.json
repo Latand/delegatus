@@ -4,11 +4,31 @@
   "readings": [
     {
       "viewport": "desktop-1440",
-      "cls": 0.0001,
-      "shifts": 3,
+      "cls": 0.0064,
+      "shifts": 4,
       "largest": [
         {
-          "at": 7909,
+          "at": 910,
+          "value": 0.0061,
+          "sources": [
+            "ARTICLE.card.work",
+            "DIV.",
+            "ARTICLE.card.work"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 7754,
+          "value": 0.0002,
+          "sources": [
+            "SPAN.or-names",
+            "SPAN.relative.inline-flex",
+            "SPAN.relative.inline-flex"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 7779,
           "value": 0.0001,
           "sources": [
             "SPAN.inline-flex.max-w-full"
@@ -16,19 +36,10 @@
           "mandate": false
         },
         {
-          "at": 864,
+          "at": 805,
           "value": 0,
           "sources": [
-            "BUTTON.or-close-all"
-          ],
-          "mandate": false
-        },
-        {
-          "at": 7896,
-          "value": 0,
-          "sources": [
-            "BUTTON.or-close-all",
-            "SPAN.or-names"
+            "?"
           ],
           "mandate": false
         }
@@ -37,32 +48,45 @@
         "scrollFrom": 4,
         "scrollDrift": 0,
         "headTop": 179,
-        "headBottom": 207,
+        "headBottom": 215,
         "columnTop": 166,
         "columnBottom": 900,
         "headVisible": true
       },
       "secondDraft": {
-        "top": 245,
-        "left": 962,
-        "width": 524,
-        "visibleShare": 0.83,
-        "viewportHeight": 900
+        "visibleShare": 1,
+        "pill": "1 agent"
       },
       "pageErrors": []
     },
     {
       "viewport": "phone-390",
-      "cls": 0.0112,
-      "shifts": 1,
+      "cls": 0.0166,
+      "shifts": 3,
       "largest": [
         {
-          "at": 809,
-          "value": 0.0112,
+          "at": 9063,
+          "value": 0.0087,
           "sources": [
-            "SPAN.inline-flex.max-w-full",
+            "DIV.px-3.pb-3"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 792,
+          "value": 0.0058,
+          "sources": [
+            "SPAN.inline-flex.max-w-full"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 779,
+          "value": 0.0021,
+          "sources": [
             "SPAN.inline-flex.min-w-0",
-            "SPAN.inline-flex.min-w-0"
+            "SPAN.inline-flex.min-w-0",
+            "SPAN.max-w-[45%].shrink-0"
           ],
           "mandate": false
         }

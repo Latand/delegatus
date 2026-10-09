@@ -6,10 +6,9 @@ import { createPortal } from "react-dom";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
-import { conversationSpeech } from "@/components/feed/conversationSpeech";
 import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
-import { mobileRowState, nowFragment } from "@/components/mobile/mobileBoardModel";
+import { mobileRowState } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -24,29 +23,26 @@ import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
 import { ConversationAccountChip } from "./AccountPicker";
 import { engineWord } from "./identityMarks";
 import { isLaunchedConversation } from "../launchedConversations";
-import { BranchGlyph, CloseGlyph, CollapseGlyph, ExpandGlyph, MaximizeGlyph, MinimizeGlyph, MoreGlyph } from "./kanbanGlyphs";
+import { BranchGlyph, CloseGlyph, MoreGlyph } from "./kanbanGlyphs";
 import { KanbanPopover } from "./kanbanMenus";
 import { pipelineActionOptions } from "./stagesModel";
 
 /**
- * Conversations open inside kanban cards (#1695 K3).
+ * The conversations open on the board (#1695 K3, docs/design/agent-window.md).
  *
  * Each reader is ONE React subtree for as long as it is open: a portal into a
- * container element this module creates once. Cards only own an empty slot;
- * the container is appended into whichever slot currently shows it. A status
- * move, a re-rank, a search that hides the card, a tab switch or a collapsed
- * card therefore never remount the conversation — its composer draft, voice
- * session, selection and scroll are the same objects throughout. A reader with
- * no slot on screen waits in a hidden park inside the board, still mounted.
+ * container element this module creates once. The agent window and a Stages
+ * pane only own an empty slot; the container is appended into whichever slot
+ * currently shows it. Switching agents in the window, or a pane taking its
+ * conversation, therefore never remounts the conversation — its composer
+ * draft, voice session, selection and scroll are the same objects throughout.
+ * A reader with no slot on screen waits in the park, still mounted and laid
+ * out at the window reader's size, so it comes back as it was last seen.
  *
  * What moving a DOM node loses (focus, caret, feed scroll) is captured as the
- * old slot lets go and restored in the new one, in the same commit.
- *
- * A re-rank inside one column is a different move: React reorders the card
- * itself, the slot never lets go, and the browser drops the feed's scroll
- * position on the way. Every reader's last scroll position is therefore kept
- * from its own scroll events, and `restoreScrolls` puts back one the move
- * reset, on every board commit.
+ * old slot lets go and restored in the new one, in the same commit. A feed
+ * whose scroll position a move reset is put back by `restoreScrolls`, from
+ * the positions its own scroll events recorded.
  */
 
 export class ReaderPlacement {
@@ -57,7 +53,8 @@ export class ReaderPlacement {
   private readonly tracked = new WeakSet<HTMLElement>();
   private park: HTMLElement | null = null;
 
-  /** The hidden place readers without a visible slot wait in. */
+  /** The place readers without a visible slot wait in: off screen, at the
+      window reader's size, and not drawn. */
   setPark(park: HTMLElement | null): void {
     this.park = park;
     if (!park) return;
@@ -127,7 +124,7 @@ export class ReaderPlacement {
     const container = this.containers.get(key);
     if (!container || container.parentNode !== slot) return;
     const snapshot = captureReader(container);
-    /* A feed measured inside a hidden column has no geometry to restore. */
+    /* A feed with no geometry has no position to restore. */
     snapshot.scrolls = snapshot.scrolls.filter(({ element }) => element.clientHeight > 0);
     if (snapshot.focused || snapshot.range || snapshot.scrolls.length || snapshot.fields.length) this.snapshots.set(key, snapshot);
     if (this.park) this.park.append(container);
@@ -153,14 +150,22 @@ export class ReaderPlacement {
     this.snapshots.delete(key);
   }
 
+  /** This key's container, if its reader is mounted. */
+  containerOf(key: string): HTMLDivElement | null {
+    return this.containers.get(key) ?? null;
+  }
+
   /** The slot currently showing this reader, if any. */
   slotOf(key: string): HTMLElement | null {
     return this.slots.get(key) ?? null;
   }
 }
 
-/** A card's place for one reader. Renders nothing of its own. */
-export function ReaderSlot({ placement, readerKey }: { placement: ReaderPlacement; readerKey: string }) {
+/** A place for one reader: the agent window's, or a Stages pane's. Renders
+    nothing of its own. An incoming slot holds the agent the window is about
+    to show, laid out on screen and not drawn, so its feed reads before it is
+    seen. */
+export function ReaderSlot({ placement, readerKey, incoming = false }: { placement: ReaderPlacement; readerKey: string; incoming?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const slot = ref.current;
@@ -168,7 +173,7 @@ export function ReaderSlot({ placement, readerKey }: { placement: ReaderPlacemen
     placement.attach(readerKey, slot);
     return () => placement.detach(readerKey, slot);
   }, [placement, readerKey]);
-  return <div ref={ref} className="reader-slot" data-reader-slot={readerKey} />;
+  return <div ref={ref} className="reader-slot" data-reader-slot={readerKey} data-incoming={incoming ? "" : undefined} aria-hidden={incoming || undefined} />;
 }
 
 
@@ -183,9 +188,6 @@ export interface ReaderOwner {
 export interface ReaderView {
   readerKey: string;
   file: FileEntry;
-  folded: boolean;
-  /** The reader has the whole window. */
-  full: boolean;
   /** The reader stands in a Stages pane, whose head names the stage and its state. */
   inSheet?: boolean;
   owner: ReaderOwner | null;
@@ -193,9 +195,10 @@ export interface ReaderView {
 
 interface ReaderProps extends ReaderView {
   now: number;
-  onFold: (key: string, folded: boolean) => void;
+  /** Close this agent: it leaves the open agents. */
   onClose: (key: string) => void;
-  onFull: (key: string) => void;
+  /** Close the agent window; every agent stays open. */
+  onLeave: () => void;
   onMenu: (key: string, anchor: HTMLElement, stop: ReaderStop) => void;
   /** A failed launch in the conversation's feed offers its retry (K9a). */
   onSpawnRetry?: (file: FileEntry) => void;
@@ -229,7 +232,7 @@ export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full, inSheet = false, owner, now, onFold, onClose, onFull, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
@@ -349,7 +352,6 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
                anchor for it is the path — the reader key is the conversation
                id, which the board index does not hold (#1836 item 4). */
             "data-reader-path": file.path,
-            "data-folded": "0",
             "data-in-sheet": "1",
             "data-role-host": "reader",
             "data-role": frameRole,
@@ -373,64 +375,33 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
           </span>
           <span className="spacer" />
           <SpeakButton scope={file.path} header />
-          <button
-            type="button"
-            className="icon-btn sm"
-            data-reader-fold={readerKey}
-            aria-expanded={!folded}
-            aria-label={t(folded ? "kanban.readerExpand" : "kanban.readerCollapse")}
-            title={t(folded ? "kanban.readerExpand" : "kanban.readerCollapse")}
-            onClick={() => onFold(readerKey, !folded)}
-          >
-            {folded ? <ExpandGlyph /> : <CollapseGlyph />}
-          </button>
-          {folded ? null : (
-            <button
-              type="button"
-              className="icon-btn sm opt-full"
-              data-reader-full-toggle={readerKey}
-              aria-pressed={full}
-              aria-label={t(full ? "kanban.readerLeaveFull" : "kanban.readerFull")}
-              title={t(full ? "kanban.readerLeaveFull" : "kanban.readerFull")}
-              onClick={() => { conversationSpeech(file.path).beginTransfer(); onFull(readerKey); }}
-            >
-              {full ? <MinimizeGlyph /> : <MaximizeGlyph />}
-            </button>
-          )}
           {dismissLaunch}
           {menuButton}
           <button
             type="button"
             className="icon-btn sm"
             data-reader-close={readerKey}
-            aria-label={t("kanban.readerClose")}
-            title={t("kanban.readerClose")}
-            onClick={() => onClose(readerKey)}
+            aria-label={t("kanban.agentWindow.close")}
+            title={t("kanban.agentWindow.close")}
+            onClick={onLeave}
           >
             <CloseGlyph />
           </button>
         </div>
-        {folded ? null : (
-          <div className="ch-meta">
-            <span className={`ch-state ${tone}`}>
-              {stateWord}
-              <span className="num"> · {fmtAge(file.mtime)}</span>
+        <div className="ch-meta">
+          <span className={`ch-state ${tone}`}>
+            {stateWord}
+            <span className="num"> · {fmtAge(file.mtime)}</span>
+          </span>
+          {identity}
+          {file.worktree ? (
+            <span className="ch-tree" title={t("branch.worktree", { name: file.worktree })}>
+              <BranchGlyph />
+              <span>{file.worktree}</span>
             </span>
-            {identity}
-            {file.worktree ? (
-              <span className="ch-tree" title={t("branch.worktree", { name: file.worktree })}>
-                <BranchGlyph />
-                <span>{file.worktree}</span>
-              </span>
-            ) : null}
-          </div>
-        )}
+          ) : null}
+        </div>
       </div>
-      {folded ? (
-        <button type="button" className="rlatest" onClick={() => onFold(readerKey, false)}>
-          {nowFragment(file) || t("kanban.readerNoMessages")}
-        </button>
-      ) : null}
     </>
   );
   return (
@@ -441,13 +412,12 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, folded, full,
       onSpawnRetry={retryLaunch}
       chrome={{
         header,
-        className: `reader conv${needs ? " needs" : ""}${folded ? " folded" : ""}${full ? " full" : ""}${isLaunchedConversation(file) ? " launched" : ""}`,
+        className: `reader conv${needs ? " needs" : ""}${isLaunchedConversation(file) ? " launched" : ""}`,
         attributes: {
           tabIndex: "-1",
           "data-kanban-reader": readerKey,
           /* See above: the pane an arrival on a loose conversation lands on. */
           "data-reader-path": file.path,
-          "data-folded": folded ? "1" : "0",
           "data-role-host": "reader",
           "data-role": frameRole,
           role: "region",

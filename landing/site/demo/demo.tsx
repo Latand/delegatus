@@ -627,7 +627,8 @@ async function navigateView(view: string) {
   }
   if (view === "conversation") {
     location.hash = `#c=${encodeURIComponent(`conversation_${step >= 3 ? "refunds-builder" : "webhook-retries"}`)}`;
-    await press(() => byLabel(label("kanban.readerFull")));
+    /* The link opens the conversation in the agent window. */
+    await waitFor(() => document.querySelector("[data-agent-window] [data-kanban-reader]"));
     /* Unfold the builder's tool calls, so the edit reads as a diff and the test run shows its output. */
     await waitFor(() => document.querySelector("[data-tool-row]"));
     for (const details of document.querySelectorAll<HTMLDetailsElement>("details:not([open])")) {
@@ -727,8 +728,8 @@ html[data-demo-step="0"] [data-mobile2-board-dock] { animation: demo-coach 1.8s 
 @media (prefers-reduced-motion: reduce) { html[data-demo-step="0"] [aria-label="${label("composer.sendToAgent")}"], html[data-demo-step="0"] [data-mobile2-board-dock] { animation: none; box-shadow: 0 0 0 3px rgb(143 136 255 / 0.6); } }`;
 document.head.appendChild(coach);
 
-/* A frame is a small window, so a pipeline's stages and a conversation opened
-   full take all of it: nothing half-covered shows around their edges. Hints
+/* A frame is a small window, so a pipeline's stages and the agent window take
+   all of it: nothing half-covered shows around their edges. Hints
    stay quiet after the send (above), and at phone scale a message's faint
    copy control reads as a stray mark in the margin, so the phone leaves it out. */
 const frameFill = document.createElement("style");
@@ -737,19 +738,20 @@ html[data-demo-quiet-hints] [role="tooltip"] { display: none; }
 [data-demo-docked] .overflow-y-auto { max-height: none !important; }
 [data-demo-docked] { position: fixed !important; margin: 0 !important; inset: 0 0 0 var(--demo-rail-right) !important; width: auto !important; max-width: none !important; max-height: none !important; translate: none !important; transform: none !important; border-radius: 0 !important; }
 html[data-demo-phone] [aria-label="${label("feed.copyMd")}"] { display: none; }
-.kb .gsheet-scrim, .kb .reader-full { padding: 0; }
-.kb .gsheet, .kb .reader-full .reader.conv { border-radius: 0; }
-/* A conversation opened full is the whole frame, and a builder's amber ribbon
-   ring round the whole frame reads as an error. It wears the product's plain
-   reader border and names its role the quiet way the Stages sheet does. */
-:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv[data-role-host]:not([data-role="orchestrator"]) {
+.kb .gsheet-scrim { padding: 0; }
+.kb .gsheet { border-radius: 0; }
+html .kb .agent-window { top: 0; left: 0; width: 100vw; height: 100vh; border-radius: 0; box-shadow: none; }
+/* The agent window is the whole frame, and a builder's amber ribbon ring
+   round the whole frame reads as an error. Its reader wears the product's
+   plain reader border and names its role the quiet way the Stages sheet does. */
+:root[data-role-frame="ribbon"] .kb .agent-window .reader.conv[data-role-host]:not([data-role="orchestrator"]) {
   border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card); padding: 8px var(--inset-conversation) 10px;
 }
-:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv[data-role-host]:not([data-role="orchestrator"])::after { display: none; }
-:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv:not([data-role="orchestrator"]) .role-mark {
+:root[data-role-frame="ribbon"] .kb .agent-window .reader.conv[data-role-host]:not([data-role="orchestrator"])::after { display: none; }
+:root[data-role-frame="ribbon"] .kb .agent-window .reader.conv:not([data-role="orchestrator"]) .role-mark {
   height: auto; margin-left: 0; padding: 0; gap: 7px; color: var(--role-ink); letter-spacing: 0.06em; background: none; clip-path: none;
 }
-:root[data-role-frame="ribbon"] .kb .reader-full .reader.conv:not([data-role="orchestrator"]) .role-mark-emblem {
+:root[data-role-frame="ribbon"] .kb .agent-window .reader.conv:not([data-role="orchestrator"]) .role-mark-emblem {
   width: 22px; height: 22px; border-radius: 6px; color: #fff; background: var(--role-fill); box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
 }
 /* A frame is a still picture as often as a window: a transcript scrolled to
