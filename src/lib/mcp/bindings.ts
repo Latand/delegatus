@@ -1482,7 +1482,7 @@ function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dep
     if (dependencies && caller?.conversationId && !caller.via) {
       allowed = caller.kind === "gateway" || (caller.kind === "manager"
         && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
-          .some((seat) => seat.conversationId === caller.conversationId && canonicalProject(seat.project) === project));
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
     }
   } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
   if (!allowed) {
