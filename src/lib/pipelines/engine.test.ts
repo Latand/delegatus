@@ -21457,7 +21457,12 @@ test("a failed staged read-write receipt that settled before retry is never stop
 test.each([false, true])("refused provider continuations keep their delivery key and exhaust a bounded transport wait, throws=%s", async (throws) => {
   const f = await providerRecoveryHarness("claude", "server_error", "Failed to refresh OAuth token: retry in a minute");
   const keys: string[] = [];
-  f.h.ports.resumeSeveredTurn = async (input) => { keys.push(input.clientMessageId); if (throws) throw new Error("transport unavailable"); return false; };
+  f.h.ports.resumeSeveredTurn = async (input) => {
+    keys.push(input.clientMessageId);
+    if (throws) throw new Error("transport unavailable");
+    input.onRefused?.("recipient host is unhosted and has no writer claim");
+    return false;
+  };
   await tickPipelines([], f.h.ports);
   f.advance(60_000);
   await tickPipelines([], f.h.ports);
@@ -21470,7 +21475,7 @@ test.each([false, true])("refused provider continuations keep their delivery key
   await tickPipelines([], f.h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race");
-  expect(loadPipelines()[0]!.stateDetail).toContain("continuation refused");
+  expect(loadPipelines()[0]!.stateDetail).toContain(throws ? "continuation transport failed: Error: transport unavailable" : "recipient host is unhosted and has no writer claim");
   expectProviderParkAt(loadPipelines()[0]!, f.h.ports.now());
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.tries).toBe(0);
 });
@@ -24361,4 +24366,133 @@ test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandb
     expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
     expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
   }
+});
+
+
+test("a restart-cut stage continues the same conversation after a second native abort leaves its host unhosted", async () => {
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  const initial = f.now();
+  const file = stageTranscript("restart-continuation", [
+    { type: "event_msg", timestamp: new Date(initial - 2000).toISOString(), payload: { type: "agent_message", message: "Working on the stage" } },
+    { type: "event_msg", timestamp: new Date(initial).toISOString(), payload: { type: "turn_aborted", reason: "interrupted" } },
+  ]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "restart-continuation-registry.json"));
+  registry.reconcileConversations([{ engine: "codex", path: file, accountId: LIMITED_ACCOUNT,
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: loadPipelines()[0]!.project }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: f.h.ports.now() }, observedAt: f.h.ports.now() }]);
+  const conversation = registry.conversationForPath(file)!;
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: file, cwd: "/repo", accountId: LIMITED_ACCOUNT,
+    launchProfile: generation.launchProfile, status: "idle", host: null, pendingAction: null, claimEpoch: 1, claimOwner: "fixture:1",
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: null, eventCursor: 1, protocolVersion: "v2",
+      writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.conversationId = conversation.id;
+  savePipelines([lane]);
+  f.h.ports.pathForConversation = () => "/codex/stage-1.jsonl";
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "restart-continuation.sqlite"), { structuredHosts: true });
+  const session = { conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id },
+    artifactPath: file, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1" as string | null, attentionIds: [], capabilities: { steer: true, structuredAttention: true } };
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  publish();
+  let recoveries = 0;
+  let deliveries = 0;
+  let available = true;
+  const client = {
+    readSession: async () => journal.readSession({ conversationId: conversation.id }),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    command: async (command: Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]) => {
+      let result = journal.executeOperation(command);
+      if (result.receipt.status === "queued") {
+        result = journal.transitionOperation(result.operationId, "delivering");
+        expect(result.receipt.status).toBe("delivering");
+        deliveries++;
+        f.h.setConversationActive(true);
+        result = journal.transitionOperation(result.operationId, "delivered");
+      }
+      return result;
+    },
+  } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+  f.h.ports.resumeSeveredTurn = async input => {
+    const result = await enqueueStructuredMessage({ path: file, conversationId: input.conversationId,
+      clientMessageId: input.clientMessageId, text: input.text, origin: { kind: "agent", role: "pipeline" } }, {
+      enabled: () => true, client: () => available ? client : null, registry: () => registry,
+      idleContinuationAllowed: input.continuationAllowed, kick: () => {}, republish: async () => false,
+      recover: async () => {
+        recoveries++;
+        session.host = "hosted"; session.writerClaim = "fixture:2"; publish();
+        return { target: null, path: file, conversationId: conversation.id, spawned: true };
+      },
+    });
+    if (result?.ok !== true) input.onRefused?.(result?.error ?? "delivery unavailable");
+    return result?.ok === true;
+  };
+  f.h.ports.conversationDeliveryCompleted = (_id, key) => registry.deliveryAdmissionForKey(conversation.id, key).outcome === "admitted";
+  try {
+    await tickPipelines([], f.h.ports);
+    f.advance(30_000);
+    await tickPipelines([], f.h.ports);
+    expect(deliveries).toBe(1);
+    // A continuation produced output, then the next Viewer release cut it.
+    f.advance(5000);
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "agent_message", message: "Continuing the stage" } }) + "\n");
+    f.advance(1000);
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "turn_aborted", reason: "interrupted" } }) + "\n");
+    session.host = "unhosted"; session.writerClaim = null; publish();
+    f.h.setConversationActive(false);
+    await tickPipelines([], { ...f.h.ports });
+    available = false;
+    f.advance(30_000);
+    await tickPipelines([], { ...f.h.ports });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait).toBeDefined();
+    expect(recoveries).toBe(0);
+    available = true;
+    f.advance(60_000);
+    await tickPipelines([], { ...f.h.ports });
+    await tickPipelines([], { ...f.h.ports });
+    const after = loadPipelines()[0]!;
+    expect(after.state).toBe("running");
+    expect(after.runs[0]!.attempts).toHaveLength(1);
+    expect(after.runs[0]!.attempts[0]!.conversationId).toBe(conversation.id);
+    expect(after.runs[0]!.attempts[0]!.providerWait?.actionAt).toBeDefined();
+    expect(after.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+    expect(recoveries).toBe(1);
+    expect(deliveries).toBe(2);
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { journal.close(); registry.close(); }
+});
+
+
+test.each([
+  ["unreadable", "stage transcript evidence could not be read"],
+  ["history", "delivered prompt history is incomplete"],
+  ["busy", "stage turn is busy"],
+  ["different-cut", "terminal provider record no longer matches the cut"],
+  ["external", "newer external stage activity was recorded"],
+] as const)("provider continuation records the guard that changed during admission: %s", async (change, reason) => {
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  const cutAt = f.now();
+  await tickPipelines([], f.h.ports);
+  f.advance(30_000);
+  f.h.ports.resumeSeveredTurn = async input => {
+    if (change === "unreadable") f.h.durableTurns.delete("/codex/stage-1.jsonl");
+    else {
+      const latest = f.h.durableTurns.get("/codex/stage-1.jsonl")!;
+      if (change === "history") latest.promptHistoryComplete = false;
+      if (change === "busy") latest.turn = "busy";
+      if (change === "different-cut") latest.terminalProviderMessage!.ts++;
+      if (change === "external") latest.prompts = [{ ts: cutAt + 1, origin: "external" }];
+    }
+    expect(await input.continuationAllowed!()).toBe(false);
+    input.onRefused?.("stage eligibility changed");
+    return false;
+  };
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain(reason);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
 });

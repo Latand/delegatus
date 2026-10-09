@@ -2243,7 +2243,7 @@ test("dead structured recovery stays behind an instruction whose delivery fate i
   });
 });
 
-test("a completed pipeline-stage send replaces dead host ownership and reaches a fresh claim", async () => {
+test.each([false, true])("a completed pipeline-stage send replaces dead host ownership and reaches a fresh claim, automatic=%s", async automatic => {
   const { registry, conversation } = registryWithConversation("pipeline-account");
   const generation = conversation.generations.at(-1)!;
   registry.reconcileConversations([{
@@ -2287,7 +2287,7 @@ test("a completed pipeline-stage send replaces dead host ownership and reaches a
     turn: "unknown",
   };
   const hostedSnapshot = snapshot(conversation.id);
-  hostedSnapshot.sessions[0] = { ...hostedSnapshot.sessions[0]!, sessionKey: key };
+  hostedSnapshot.sessions[0] = { ...hostedSnapshot.sessions[0]!, sessionKey: key, writerClaim: "fresh-viewer-owner" };
   let currentSnapshot = deadSnapshot;
   let recoveryCalls = 0;
   const commands: unknown[] = [];
@@ -2324,6 +2324,7 @@ test("a completed pipeline-stage send replaces dead host ownership and reaches a
     text: "continue after the completed stage host exited",
     hasImages: false,
   }, {
+    ...(automatic ? { idleContinuationAllowed: () => true } : {}),
     enabled: () => true,
     client: () => client,
     registry: () => registry,
@@ -4592,4 +4593,96 @@ test.each(["unchanged", "writer", "generation", "active", "missing-proof", "exec
     expect(await send()).toMatchObject({ ok: false, admission: "refused" });
     expect(state.deliveries).toBe(0);
   } finally { journal.close(); }
+});
+
+
+test.each(["unhosted", "dead", "missing", "republish"] as const)("a restart-cut continuation recovers idle ownership before admission: %s", async stateAtRestart => {
+  const { registry, conversation, journal, session, state, client } = idleContinuationFixture();
+  let recoveries = 0;
+  let republications = 0;
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  // A delivered continuation was working when the second release cut it.
+  const first = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "stage-provider-first-cut", text: "Continue", origin: { kind: "agent", role: "pipeline" } }, {
+    enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, idleContinuationAllowed: () => true,
+  });
+  expect(first).toMatchObject({ ok: true });
+  Object.assign(session, { host: stateAtRestart === "dead" ? "dead" : "unhosted", writerClaim: null, turn: "idle", activeTurnId: null });
+  publish();
+  let missing = stateAtRestart === "missing";
+  const restartedClient = { ...client, readSession: async () => missing ? null : journal.readSession({ conversationId: conversation.id }) } as RuntimeHostClient;
+  const request = { path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "stage-provider-second-cut", text: "Continue", origin: { kind: "agent" as const, role: "pipeline" } };
+  const dependencies = {
+    enabled: () => true, registry: () => registry, client: () => restartedClient, kick: () => {},
+    idleContinuationAllowed: () => state.eligible,
+    republish: async () => {
+      republications++;
+      if (stateAtRestart !== "republish") return false;
+      Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish(); return true;
+    },
+    recover: async () => {
+      recoveries++; missing = false;
+      Object.assign(session, { host: "hosted", writerClaim: "fixture:2" }); publish();
+      return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
+    },
+  };
+  try {
+    expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "delivered" });
+    const delivery = registry.deliveryAdmissionForKey(conversation.id, request.clientMessageId);
+    expect(delivery.outcome).toBe("admitted");
+    if (delivery.outcome === "admitted") {
+      expect(registry.conversationDeliverySnapshot({ conversationId: conversation.id }).heldDeliveries[delivery.deliveryId]!.command.onlyIfIdle!.writerClaim).toBe("fixture:2");
+    }
+    expect(recoveries).toBe(stateAtRestart === "republish" ? 0 : 1);
+    expect(republications).toBe(stateAtRestart === "missing" ? 0 : 1);
+    expect(state.deliveries).toBe(2);
+    expect(state.commands).toBe(2);
+  } finally { journal.close(); registry.close(); }
+});
+
+
+test.each([
+  ["stage-changed", "stage eligibility changed during host recovery"],
+  ["active", "turn=running"],
+  ["attention", "attention=1"],
+  ["failed", "host recovery failed: publication unavailable"],
+  ["not-resumable", "conversation cannot be resumed"],
+  ["missing-publication", "has no writer claim"],
+  ["unknown-admission", "earlier continuation admission must be reconciled"],
+] as const)("a restart-cut continuation preserves refusal evidence without reserving a send: %s", async (scenario, reason) => {
+  const { registry, conversation, journal, session, state, client } = idleContinuationFixture();
+  let recoveries = 0;
+  Object.assign(session, { host: "unhosted", writerClaim: null });
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  publish();
+  if (scenario === "unknown-admission") {
+    const uncertain = registry.holdDelivery(conversation.id, "Continue", "restart-refused");
+    registry.beginDeliveryAttempt(uncertain.id, uncertain.generationId!);
+  }
+  const dependencies = {
+    enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+    idleContinuationAllowed: () => state.eligible, republish: async () => false,
+    recover: async () => {
+      recoveries++;
+      if (scenario === "failed") throw new Error("publication unavailable");
+      if (scenario === "not-resumable") return null;
+      if (scenario !== "missing-publication") Object.assign(session, { host: "hosted", writerClaim: "fixture:2" });
+      if (scenario === "stage-changed") state.eligible = false;
+      if (scenario === "active") Object.assign(session, { turn: "running", activeTurnId: "operator-turn" });
+      if (scenario === "attention") session.attentionIds = ["permission"];
+      publish();
+      return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
+    },
+  };
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: "restart-refused", text: "Continue", origin: { kind: "agent", role: "pipeline" } }, dependencies);
+    expect(result).toMatchObject({ ok: false, admission: "refused" });
+    if (result?.ok === false) expect(result.error).toContain(reason);
+    expect(recoveries).toBe(scenario === "unknown-admission" ? 0 : 1);
+    expect(state.commands).toBe(0);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(scenario === "unknown-admission" ? 1 : 0);
+  } finally { journal.close(); registry.close(); }
 });

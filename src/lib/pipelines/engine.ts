@@ -353,6 +353,8 @@ export interface PipelinePorts {
     policy?: "queue";
     /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
     continuationAllowed?: () => Promise<boolean>;
+    /** The delivery layer's refusal, retained by provider recovery when it parks. */
+    onRefused?: (reason: string) => void;
     project?: string;
     cwd?: string;
     /** Admission time of the attempt this message continues. An update drain
@@ -1624,7 +1626,10 @@ export function defaultPipelinePorts(
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       }, input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {});
-      if (result?.ok !== true && result?.transportUncertain === true) input.onUncertain?.();
+      if (result?.ok !== true) {
+        input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host");
+        if (result?.transportUncertain === true) input.onUncertain?.();
+      }
       return result?.ok === true;
     },
     invalidateProviderContinuation,
@@ -2425,12 +2430,23 @@ async function recoverProviderCut(
   const key = providerContinuationKey(pipeline, stage, attempt);
   const cutTs = wait.turnTs;
   const controlGeneration = pipeline.controlGeneration;
+  let continuationRefusal: string | null = null;
   const continuationAllowed = async () => {
     const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attemptEvidenceFloor(attempt), undefined, cutTs);
-    return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt
-      && pipeline.controlGeneration === controlGeneration && !attempt.report && !attempt.verdict && !wait.retryCancelled
-      && latest?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, latest)
-      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs;
+    continuationRefusal = pipeline.state !== "running" ? "pipeline is no longer running"
+      : pipeline.closedAt ? "pipeline was closed"
+      : pipeline.hiddenAt ? "pipeline was hidden"
+      : pipeline.controlGeneration !== controlGeneration ? "pipeline control generation changed"
+      : attempt.report ? "stage completion was reported"
+      : attempt.verdict ? "stage verdict was recorded"
+      : wait.retryCancelled ? "provider retry was cancelled by operator control"
+      : !latest ? "stage transcript evidence could not be read"
+      : latest.promptHistoryComplete === false ? "delivered prompt history is incomplete"
+      : newerExternalProviderPrompt(attempt, latest) ? "newer external stage activity was recorded"
+      : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
+      : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
+      : null;
+    return continuationRefusal === null;
   };
   let delivered: boolean;
   try {
@@ -2438,10 +2454,10 @@ async function recoverProviderCut(
     persist();
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
-      policy: "queue", continuationAllowed,
+      policy: "queue", continuationAllowed, onRefused: reason => { continuationRefusal ??= reason; },
       project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
-    waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
+    waitForProviderTransport(pipeline, attempt, condition, `continuation transport failed: ${String(error)}`, ports, persist);
     return true;
   }
   if (delivered) {
@@ -2453,7 +2469,7 @@ async function recoverProviderCut(
     recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     persist();
-  } else waitForProviderTransport(pipeline, attempt, condition, "continuation refused", ports, persist);
+  } else waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
   return true;
 }
 
