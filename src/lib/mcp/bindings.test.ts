@@ -3165,6 +3165,8 @@ function tickSettingsBindings(options: {
 } = {}) {
   const store = options.store ?? new Map<string, unknown>();
   const bindings = viewerMcpBindings(undefined, undefined, {
+    registrySnapshot: () => ({ conversations: {} }),
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "another-project", displayName: "Another project", smt: 1, conversations: 1 }], complete: true } }),
     callerAttribution: () => ({ kind: options.kind ?? "manager", conversationId: TICK_SEAT, role: "orchestrator" }),
     authorizedSeats: () => (options.callerProject === null
       ? []
