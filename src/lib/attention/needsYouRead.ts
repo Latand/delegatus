@@ -1,4 +1,5 @@
 import { buildNeedsYouQueue, type MobileAttentionEntry } from "@/components/attention/attentionQueue";
+import { dismissalCovers } from "@/components/attention";
 import { needsYouEntrySince, needsYouRowText, needsYouSections, needsYouSubject } from "@/components/attention/needsYouPanel";
 import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import { bridgeQuestions, openBridgeAsks } from "@/lib/bridge/asks";
@@ -141,15 +142,29 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
   return needsYouEntries(raw, decision, now, project).flatMap(entry => {
     if (visible.has(entry.id) || entry.kind === "update") return [];
     const row = rowOf(entry, ports, options);
+    let undo = row.target;
     let mark: { at: string; by: DismissedBy; note?: string } | undefined;
     if (entry.kind === "prototype") mark = ports.dismissals.find(d => d.kind === "prototype" && d.taskId === entry.notice.taskId && d.subject === entry.id);
     else if (entry.kind === "pipeline") {
       const p = body.pipelines.find(p => p.id === entry.row.pipeline.id);
       if (p?.dismissedAt && p.dismissedBy) mark = { at: p.dismissedAt, by: p.dismissedBy, note: p.dismissedNote };
-    } else if (entry.item.reason.report) mark = ports.reports?.resolvedAsks?.find(r => r.seq === entry.item.reason.report?.seq);
-    else mark = ports.dismissals.find(d => d.kind !== "prototype" && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path));
-    if (!mark || !row.target) return [];
-    return [{ id: row.id, kind: row.kind, title: row.title, taskId: row.taskId, cleared: { at: mark.at, by: mark.by, note: mark.note ?? null }, undo: row.target }];
+    } else if (entry.item.reason.report) {
+      mark = ports.reports?.resolvedAsks?.find(r => r.seq === entry.item.reason.report?.seq);
+      if (!mark) {
+        const record = ports.dismissals.find(d => d.kind !== "prototype"
+          && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path)
+          && dismissalCovers(entry.item.reason, d));
+        if (record) {
+          mark = record;
+          // A task/conversation clear lives on the conversation, so undo must
+          // remove that covering record rather than resolve an individual ask.
+          undo = record.conversationId ? { kind: "conversation", conversationId: record.conversationId }
+            : record.path ? { kind: "conversation", path: record.path } : null;
+        }
+      }
+    } else mark = ports.dismissals.find(d => d.kind !== "prototype" && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path));
+    if (!mark || !undo) return [];
+    return [{ id: row.id, kind: row.kind, title: row.title, taskId: row.taskId, cleared: { at: mark.at, by: mark.by, note: mark.note ?? null }, undo }];
   }).sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
 }
 

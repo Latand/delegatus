@@ -3,7 +3,8 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { maintainerCallerOf } from "@/lib/boardMaintenance/guard";
-import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import { authorizedManagerSeats } from "@/lib/orchestrator/authority";
+import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { liveRootSession } from "@/lib/root/adopt";
 import { readNeedsYou } from "@/lib/attention/needsYouRead";
 import { needsYouHandler } from "./handler";
@@ -17,7 +18,7 @@ const handler = needsYouHandler({
     const snapshot = agentRegistry().readOnlySnapshot();
     const root = liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId: process.env.LLV_ROOT_CONVERSATION_ID ?? null });
     return { authority: root?.conversationId === id ? { kind: "root", conversationId: id } : { kind: "worker", conversationId: id, role: null },
-      seats: activeOrchestratorSeats().flatMap(s => s.conversationId ? [{ conversationId: s.conversationId, project: s.project }] : []), maintainer: maintainerCallerOf(id, snapshot) };
+      seats: authorizedManagerSeats(productionManagerAuthoritySources()), maintainer: maintainerCallerOf(id, snapshot) };
   }, read: readNeedsYou,
 });
 export function POST(request: NextRequest) { return handler(request); }
