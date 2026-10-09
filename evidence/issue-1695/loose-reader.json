@@ -25,7 +25,7 @@
       "name": "focus handoff open",
       "reviewerOpened": "reader",
       "resolution": "reader",
-      "windowAfter": false,
+      "windowAfter": true,
       "targetPresent": true,
       "underTarget": "target"
     },
@@ -33,7 +33,7 @@
       "name": "#c= link",
       "reviewerOpened": "reader",
       "resolution": null,
-      "windowAfter": false,
+      "windowAfter": true,
       "targetPresent": true,
       "underTarget": "target"
     },

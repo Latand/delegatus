@@ -9,10 +9,10 @@ import type { FileEntry } from "@/lib/types";
 import type { AssignmentPorts } from "./kanbanAssignments";
 import type { TaskMutationPorts } from "./useTaskMutations";
 
-/* Conversations open inside kanban cards (#1695 K3), rendered by React with
-   the real conversation pane over invented transcripts. Fetches answer from a
-   stub, storage is the test window's, and no route or state directory is
-   touched. */
+/* Conversations opened on the board (#1695 K3), in the agent window
+   (docs/design/agent-window.md), rendered by React with the real conversation
+   pane over invented transcripts. Fetches answer from a stub, storage is the
+   test window's, and no route or state directory is touched. */
 
 class TestResizeObserver {
   observe() {}
@@ -172,45 +172,61 @@ const click = (element: Element | null | undefined) => {
 };
 /* Attribute selectors over a tree holding a whole conversation pane are slow
    in happy-dom, so cards are read by walking them. */
-const cardIds = (host: HTMLElement) => [...host.querySelectorAll(".card")].map((card) => card.getAttribute("data-id"));
 const cardEl = (host: HTMLElement, id: string) => [...host.querySelectorAll<HTMLElement>(".card")].find((card) => card.getAttribute("data-id") === id) ?? null;
-const columnOf = (host: HTMLElement, element: Element | null) => element?.closest<HTMLElement>(".column")?.dataset.status ?? null;
-const readerIn = (host: HTMLElement) => host.querySelector<HTMLElement>(".card [data-kanban-reader]");
+/* The reader the agent window shows. */
+const readerIn = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]");
 const composerIn = (reader: HTMLElement | null) => reader?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
 const remembered = () => JSON.parse(localStorage.getItem(`${READER_STORAGE_PREFIX}fixture`) ?? "[]") as Array<{ key: string; folded: boolean }>;
+/* The window shows an agent once its first read settled. */
+async function shownIn(host: HTMLElement, key?: string): Promise<HTMLElement> {
+  for (let waited = 0; waited < 3000; waited += 10) {
+    const reader = readerIn(host);
+    if (reader && (!key || reader.dataset.kanbanReader === key)) return reader;
+    await tick(10);
+  }
+  throw new Error(`the agent window never showed ${key ?? "an agent"}`);
+}
 
-test("a tile opens its conversation as a reader in the card, in the prototype's anatomy, and this device remembers it", async () => {
+test("a tile opens its conversation in the agent window, in the prototype's anatomy; the card keeps its tile and this device remembers it", async () => {
   const file = conversation(1);
   const tasks = [task("a", "assigned", "Repair old links", [file])];
   const first = mount({ tasks, files: [file] });
   click(cardEl(first.host, "task:a")?.querySelector(".tile"));
-  const reader = readerIn(first.host);
-  expect(reader).toBeTruthy();
-  expect(reader?.closest(".card")?.getAttribute("data-id")).toBe("task:a");
-  expect(reader?.querySelector(".conv-head .ch-title")?.textContent).toBe("Conversation 1");
-  expect(reader?.querySelector(".ch-meta .ch-engine")?.textContent).toBe("Claude");
+  const reader = await shownIn(first.host);
+  expect(reader.closest(".card")).toBeNull();
+  expect(reader.querySelector(".conv-head .ch-title")?.textContent).toBe("Conversation 1");
+  expect(reader.querySelector(".ch-meta .ch-engine")?.textContent).toBe("Claude");
   /* Model as text, reasoning as the shared five-step ladder beside its word (#1743). */
-  expect(reader?.querySelector(".ch-meta .ch-model span")?.textContent).toBe("claude-opus");
-  expect(reader?.querySelector(".ch-meta .ch-model [data-effort-pills]")?.getAttribute("data-effort-step")).toBe("3");
-  expect(reader?.querySelector(".ch-meta .ch-effort")?.textContent).toBe("high");
-  expect(reader?.querySelector("[data-reader-close]")).toBeTruthy();
-  expect(cardEl(first.host, "task:a")?.querySelector(".tile")).toBeNull();
+  expect(reader.querySelector(".ch-meta .ch-model span")?.textContent).toBe("claude-opus");
+  expect(reader.querySelector(".ch-meta .ch-model [data-effort-pills]")?.getAttribute("data-effort-step")).toBe("3");
+  expect(reader.querySelector(".ch-meta .ch-effort")?.textContent).toBe("high");
+  /* The window's corner holds one close, and it closes the window. */
+  expect(reader.querySelector("[data-reader-close]")?.getAttribute("aria-label")).toBe("Close the window (Esc) — the agents stay open");
+  expect(reader.querySelector("[data-reader-fold], [data-reader-full-toggle]")).toBeNull();
+  /* The card is not touched: its tile stays, marked open. */
+  const tile = cardEl(first.host, "task:a")?.querySelector<HTMLElement>(".tile");
+  expect(tile?.hasAttribute("data-member-open")).toBe(true);
+  expect(cardEl(first.host, "task:a")?.querySelector("[data-kanban-reader], .reader-slot")).toBeNull();
   expect(remembered()).toEqual([{ key: "conversation_fixture_1", path: file.path, folded: false } as never]);
   first.unmount();
 
+  /* After a reload the agent is still open, behind the header's pill, and the pill brings the window back. */
   const again = mount({ tasks, files: [file] });
   await tick();
-  expect(readerIn(again.host)?.closest(".card")?.getAttribute("data-id")).toBe("task:a");
+  expect(readerIn(again.host)).toBeNull();
+  const pill = again.host.querySelector<HTMLElement>("[data-open-agents-pill]");
+  expect(pill?.querySelector(".pill-words")?.textContent).toBe("1 agent");
+  click(pill);
+  expect((await shownIn(again.host)).dataset.kanbanReader).toBe("conversation_fixture_1");
 });
 
-test("a draft, its caret and its focus survive the card moving to another column and re-ranking", async () => {
+test("a draft, its caret and its focus survive a switch to another agent and back, and the card moving", async () => {
   const file = conversation(1);
   const other = conversation(2);
   const tasks = [task("a", "assigned", "Repair old links", [file]), task("b", "blocked", "Passkey sign-in", [other])];
   const view = mount({ tasks, files: [file, other] });
-  click(view.host.querySelector(".tile"));
-  await tick();
-  const reader = readerIn(view.host);
+  click(cardEl(view.host, "task:a")?.querySelector(".tile"));
+  const reader = await shownIn(view.host, "conversation_fixture_1");
   const field = composerIn(reader);
   expect(field).toBeTruthy();
   const setter = Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!;
@@ -222,56 +238,89 @@ test("a draft, its caret and its focus survive the card moving to another column
   field!.setSelectionRange(9, 12);
   expect(document.activeElement).toBe(field);
 
-  /* The task moves to Blocked on a poll: the card is a new element in another
-     column, and the reader inside it is the same one. */
+  /* Another agent comes into the same window; the first waits in the park. */
+  click(cardEl(view.host, "task:b")?.querySelector(".tile"));
+  await shownIn(view.host, "conversation_fixture_2");
+  expect(reader.isConnected).toBe(true);
+  expect(reader.closest(".reader-park")).toBeTruthy();
+
+  /* The task moves to Blocked on a poll; the board under the window changes, and the reader does not. */
   view.render({ tasks: [task("a", "blocked", "Repair old links", [file]), task("b", "blocked", "Passkey sign-in", [other])] });
   await tick();
-  const moved = readerIn(view.host);
-  expect(columnOf(view.host, moved)).toBe("blocked");
-  expect(moved).toBe(reader);
-  expect(composerIn(moved)).toBe(field);
+  click(view.host.querySelector('[data-open-agent-jump="conversation_fixture_1"]'));
+  const back = await shownIn(view.host, "conversation_fixture_1");
+  expect(back).toBe(reader);
+  expect(composerIn(back)).toBe(field);
   expect(field!.value).toBe("Keep the old index live until the new one answers");
   expect(document.activeElement).toBe(field);
   expect([field!.selectionStart, field!.selectionEnd]).toEqual([9, 12]);
 });
 
-test("folding keeps the conversation mounted; closing it gives the card its tile back", async () => {
-  const file = conversation(1);
-  const view = mount({ tasks: [task("a", "inbox", "Write the release notes", [file])], files: [file] });
-  click(view.host.querySelector(".tile"));
-  await tick();
-  const reader = readerIn(view.host)!;
-  const field = composerIn(reader);
-  click(reader.querySelector("[data-reader-fold]"));
-  expect(reader.getAttribute("data-folded")).toBe("1");
-  expect(reader.querySelector(".rlatest")?.textContent).toBe("No messages yet");
-  expect(composerIn(reader)).toBe(field);
-  expect(remembered()[0]?.folded).toBe(true);
-  click(reader.querySelector("[data-reader-close]"));
-  expect(readerIn(view.host)).toBeNull();
-  expect(view.host.querySelector(".tile")?.getAttribute("data-member")).toBe(file.path);
+test("closing the window keeps every agent open; a row's × closes that one and its neighbour takes the same reader; Close all closes all", async () => {
+  const files = [conversation(1), conversation(2), conversation(3)];
+  const view = mount({ tasks: [task("a", "inbox", "Write the release notes", files)], files });
+  for (const file of files) click([...view.host.querySelectorAll<HTMLElement>(".tile")].find((tile) => tile.dataset.member === file.path));
+  await shownIn(view.host, "conversation_fixture_3");
+  const rows = () => [...view.host.querySelectorAll("[data-agent-window] [data-open-agent]")].map((row) => row.getAttribute("data-open-agent"));
+  expect(rows()).toEqual(["conversation_fixture_1", "conversation_fixture_2", "conversation_fixture_3"]);
+  expect(view.host.querySelector("[data-open-agents-count]")?.textContent).toBe("3 agents open");
+
+  /* The corner × closes the window; the agents stay mounted and behind the pill. */
+  click(readerIn(view.host)!.querySelector("[data-reader-close]"));
+  expect(view.host.querySelector("[data-agent-window]")).toBeNull();
+  expect(view.host.querySelectorAll(".reader-park [data-kanban-reader]")).toHaveLength(3);
+  expect(view.host.querySelector("[data-open-agents-pill] .pill-words")?.textContent).toBe("3 agents");
+  expect(remembered()).toHaveLength(3);
+
+  /* The pill brings it back on the agent shown last. */
+  click(view.host.querySelector("[data-open-agents-pill]"));
+  await shownIn(view.host, "conversation_fixture_3");
+
+  /* Closing the agent on screen brings its neighbour into the same window in the same commit. */
+  click(view.host.querySelector('[data-open-agent-jump="conversation_fixture_2"]'));
+  await shownIn(view.host, "conversation_fixture_2");
+  const frame = view.host.querySelector("[data-agent-window-frame]");
+  click(view.host.querySelector('[data-open-agent-close="conversation_fixture_2"]'));
+  expect(view.host.querySelector("[data-agent-window-frame]")).toBe(frame);
+  expect(readerIn(view.host)?.dataset.kanbanReader).toBe("conversation_fixture_3");
+  expect(rows()).toEqual(["conversation_fixture_1", "conversation_fixture_3"]);
+  /* At the end of the list, the previous one. */
+  click(view.host.querySelector('[data-open-agent-close="conversation_fixture_3"]'));
+  expect(readerIn(view.host)?.dataset.kanbanReader).toBe("conversation_fixture_1");
+  /* One agent: nothing to step to, so no ‹ ›. */
+  expect(view.host.querySelector("[data-agent-window-step]")).toBeNull();
+
+  click(view.host.querySelector("[data-open-rail-close-all]"));
+  expect(view.host.querySelector("[data-agent-window]")).toBeNull();
+  expect(view.host.querySelector("[data-open-agents-pill]")).toBeNull();
+  expect(view.host.querySelector("[data-open-agents-slot]")).toBeTruthy();
+  expect(view.host.querySelectorAll("[data-kanban-reader]")).toHaveLength(0);
   expect(remembered()).toEqual([]);
 });
 
-test("a search that hides the card parks its reader, and the same reader comes back with the card", async () => {
-  const file = conversation(1);
-  const view = mount({ tasks: [task("a", "inbox", "Write the release notes", [file]), task("b", "inbox", "Repair old links")], files: [file] });
-  click(view.host.querySelector(".tile"));
+test("‹ ›, Alt+J and Alt+K step round the open agents in the order they were opened; Escape closes the window and Alt+J brings it back", async () => {
+  const files = [conversation(1), conversation(2), conversation(3)];
+  const view = mount({ tasks: [task("a", "assigned", "Write the release notes", files)], files });
+  for (const file of files) click([...view.host.querySelectorAll<HTMLElement>(".tile")].find((tile) => tile.dataset.member === file.path));
+  await shownIn(view.host, "conversation_fixture_3");
+  click(view.host.querySelector('[data-agent-window-step="next"]'));
+  await shownIn(view.host, "conversation_fixture_1");
+  click(view.host.querySelector('[data-agent-window-step="previous"]'));
+  await shownIn(view.host, "conversation_fixture_3");
+  const chord = (code: string) => flushSync(() => { document.dispatchEvent(new dom.KeyboardEvent("keydown", { code, key: code === "KeyJ" ? "j" : "k", altKey: true, bubbles: true }) as unknown as Event); });
+  chord("KeyK");
+  await shownIn(view.host, "conversation_fixture_2");
+  /* Opening one that is already open shows it where it stands. */
+  click([...view.host.querySelectorAll<HTMLElement>(".tile")].find((tile) => tile.dataset.member === files[0]!.path));
+  await shownIn(view.host, "conversation_fixture_1");
+  expect([...view.host.querySelectorAll("[data-open-agent]")].map((row) => row.getAttribute("data-open-agent"))).toEqual(["conversation_fixture_1", "conversation_fixture_2", "conversation_fixture_3"]);
+
+  flushSync(() => { view.host.querySelector<HTMLElement>("[data-open-agent-jump]")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event); });
+  expect(view.host.querySelector("[data-agent-window]")).toBeNull();
   await tick();
-  const reader = readerIn(view.host)!;
-  const input = view.host.querySelector<HTMLInputElement>("[data-kanban-search]")!;
-  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
-  const search = (value: string) => flushSync(() => {
-    setter.call(input, value);
-    input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
-  });
-  input.focus();
-  search("links");
-  expect(cardIds(view.host)).toEqual(["task:b"]);
-  expect(reader.isConnected).toBe(true);
-  expect(reader.closest(".reader-park")).toBeTruthy();
-  search("");
-  expect(readerIn(view.host)).toBe(reader);
+  expect(document.activeElement?.hasAttribute("data-open-agents-pill")).toBe(true);
+  chord("KeyJ");
+  await shownIn(view.host, "conversation_fixture_1");
 });
 
 test("Unlink removes the assignment by its strongest handle and says nothing stopped; the conversation's only task is refused in plain words", async () => {
@@ -284,7 +333,7 @@ test("Unlink removes the assignment by its strongest handle and says nothing sto
   };
   const view = mount({ tasks: [task("a", "assigned", "Repair old links", [file])], files: [file], assignments: ports });
   click(view.host.querySelector(".tile"));
-  await tick();
+  await shownIn(view.host);
   const unlink = () => {
     click(readerIn(view.host)!.querySelector("[data-reader-menu]"));
     click(view.host.querySelector('.menu [data-cm-section="more"]'));
@@ -317,7 +366,7 @@ test("Link to another task lists the project's other tasks and records the link 
     assignments: ports,
   });
   click(view.host.querySelector(".tile"));
-  await tick();
+  await shownIn(view.host);
   click(readerIn(view.host)!.querySelector("[data-reader-menu]"));
   click([...view.host.querySelectorAll('.menu .cm-quick [role="menuitem"]')].find((node) => node.getAttribute("aria-label")?.startsWith("Link to another task")));
   await tick();
@@ -330,7 +379,7 @@ test("Link to another task lists the project's other tasks and records the link 
   expect([...view.host.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent)).toContain("Linked «Conversation 1» to «Write the release notes». Nothing was sent.");
 });
 
-test("an open handoff opens the reader through the board's controller, arrives only once it is on screen and settled, and Return closes it", async () => {
+test("an open handoff opens the agent window through the board's controller, arrives only once it is on screen and settled, and Return closes it", async () => {
   /* A transcript no earlier test has read, so its first read is still out. */
   const file = conversation(7);
   const view = mount({ tasks: [task("a", "blocked", "Show the account limit", [file])], files: [file] });
@@ -342,12 +391,17 @@ test("an open handoff opens the reader through the board's controller, arrives o
   /* Nothing is on screen before the move. */
   expect(board!.arrival!(destination)).toBeNull();
   flushSync(() => { expect(board!.moveTo(destination)).toBe(true); });
-  await tick();
-  const reader = readerIn(view.host);
-  expect(reader).toBeTruthy();
-  /* While the transcript is still being read, nothing has arrived. */
-  expect(reader?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("loading");
-  for (let waited = 0; waited < 4000 && reader?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") !== "empty"; waited += 50) await tick(50);
+  /* While the transcript is still being read, the window is laid out and not drawn, and its agent reads on screen. */
+  const incoming = readerByKey(view.host, "conversation_fixture_7");
+  expect(incoming?.closest("[data-incoming]")).toBeTruthy();
+  expect(view.host.querySelector("[data-agent-window-pending]")).toBeTruthy();
+  expect(view.host.querySelector("[data-agent-window]")).toBeNull();
+  expect(incoming?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("loading");
+  expect(focusHandoffBus.board()!.arrival!(destination)).toBeNull();
+  const reader = await shownIn(view.host, "conversation_fixture_7");
+  expect(reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("empty");
+  /* A handoff leaves the keyboard where it was. */
+  expect(reader.contains(document.activeElement)).toBe(false);
 
   /* happy-dom lays nothing out: every box is empty, so the reader is not seen. */
   expect(focusHandoffBus.board()!.arrival!(destination)).toBeNull();
@@ -358,15 +412,7 @@ test("an open handoff opens the reader through the board's controller, arrives o
   const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: (this: HTMLElement) => unknown };
   prototype.getBoundingClientRect = function () { return onScreen; };
   try {
-    expect(reader?.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("empty");
     expect(focusHandoffBus.board()!.arrival!(destination)).toBe("reader");
-    /* The same reader scrolled out of its column's box is not. */
-    prototype.getBoundingClientRect = function (this: HTMLElement) {
-      if (this.classList.contains("col-body")) return { ...onScreen, top: 100, bottom: 400, height: 300 };
-      if (this.hasAttribute("data-kanban-reader")) return { ...onScreen, top: 420, bottom: 900, height: 480 };
-      return onScreen;
-    };
-    expect(focusHandoffBus.board()!.arrival!(destination)).toBe("visible");
   } finally {
     prototype.getBoundingClientRect = original as never;
   }
@@ -375,7 +421,8 @@ test("an open handoff opens the reader through the board's controller, arrives o
   flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_other"));
   expect(readerIn(view.host)).toBeTruthy();
   flushSync(() => focusHandoffBus.board()!.returnFromHandoff!());
-  expect(readerIn(view.host)).toBeNull();
+  expect(view.host.querySelector("[data-agent-window]")).toBeNull();
+  expect(readerByKey(view.host, "conversation_fixture_7")).toBeNull();
 });
 
 const openDestination = (file: FileEntry, requestId: string) => {
@@ -384,22 +431,20 @@ const openDestination = (file: FileEntry, requestId: string) => {
 };
 const readerByKey = (host: HTMLElement, key: string) => [...host.querySelectorAll<HTMLElement>("[data-kanban-reader]")].find((reader) => reader.dataset.kanbanReader === key) ?? null;
 
-test("Return undoes only what its own request opened: an operator's folded reader is folded again, and B's Return leaves A's reader open", async () => {
+test("Return undoes only what its own request opened: an agent the operator opened stays, and B's Return leaves A's agent open", async () => {
   const mine = conversation(11);
   const a = conversation(12);
   const b = conversation(13);
   const view = mount({ tasks: [task("t", "assigned", "Three conversations", [mine, a, b])], files: [mine, a, b] });
 
-  /* The operator opened and folded this one; a handoff unfolds it. */
+  /* The operator opened this one; a handoff to it leaves it theirs. */
   click([...view.host.querySelectorAll<HTMLElement>(".tile")].find((tile) => tile.dataset.member === mine.path));
-  click(readerByKey(view.host, "conversation_fixture_11")!.querySelector("[data-reader-fold]"));
-  flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(mine, "attention_unfold")); });
-  expect(readerByKey(view.host, "conversation_fixture_11")?.dataset.folded).toBe("0");
-  flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_unfold"));
-  expect(readerByKey(view.host, "conversation_fixture_11")?.dataset.folded).toBe("1");
-  expect(remembered().find((reader) => reader.key === "conversation_fixture_11")?.folded).toBe(true);
+  flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(mine, "attention_mine")); });
+  flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_mine"));
+  expect(readerByKey(view.host, "conversation_fixture_11")).toBeTruthy();
+  expect(remembered().some((reader) => reader.key === "conversation_fixture_11")).toBe(true);
 
-  /* Handoff A ends without a Return; B's Return closes B's reader alone. */
+  /* Handoff A ends without a Return; B's Return closes B's agent alone. */
   flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(a, "attention_a")); });
   flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(b, "attention_b")); });
   expect(readerByKey(view.host, "conversation_fixture_12")).toBeTruthy();
@@ -409,10 +454,14 @@ test("Return undoes only what its own request opened: an operator's folded reade
   expect(readerByKey(view.host, "conversation_fixture_12")).toBeTruthy();
   expect(readerByKey(view.host, "conversation_fixture_11")).toBeTruthy();
 
-  /* Once the operator touches A's reader it is theirs: A's Return leaves it. */
-  click(readerByKey(view.host, "conversation_fixture_12")!.querySelector("[data-reader-fold]"));
+  /* B's Return took the window B opened with it. Once the operator picks A in the window it is theirs: A's
+     Return leaves it. */
+  expect(view.host.querySelector("[data-agent-window]")).toBeNull();
+  click(view.host.querySelector("[data-open-agents-pill]"));
+  await shownIn(view.host);
+  click(view.host.querySelector('[data-open-agent-jump="conversation_fixture_12"]'));
   flushSync(() => focusHandoffBus.board()!.returnFromHandoff!("attention_a"));
-  expect(readerByKey(view.host, "conversation_fixture_12")?.dataset.folded).toBe("1");
+  expect(readerByKey(view.host, "conversation_fixture_12")).toBeTruthy();
 });
 
 test("a transcript that failed to read settles as an error, never as an arrival", async () => {
@@ -421,15 +470,14 @@ test("a transcript that failed to read settles as an error, never as an arrival"
   try {
     const view = mount({ tasks: [task("a", "inbox", "Unreadable", [file])], files: [file] });
     flushSync(() => { focusHandoffBus.board()!.moveTo(openDestination(file, "attention_error")); });
-    const reader = readerByKey(view.host, "conversation_fixture_14")!;
-    for (let waited = 0; waited < 4000 && reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") !== "error"; waited += 50) await tick(50);
+    const reader = await shownIn(view.host, "conversation_fixture_14");
     expect(reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state")).toBe("error");
     expect(reader.textContent).toContain("Couldn't read this conversation");
     const prototype = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: (this: HTMLElement) => unknown };
     const original = prototype.getBoundingClientRect;
     prototype.getBoundingClientRect = function () { return { top: 100, bottom: 700, left: 0, right: 600, width: 600, height: 600, x: 0, y: 100 }; };
     try {
-      /* On screen and expanded, but its feed never settled: the card is seen, the conversation is not. */
+      /* On screen in the window, but its feed never settled: the conversation is seen, not arrived. */
       expect(focusHandoffBus.board()!.arrival!(openDestination(file, "attention_error"))).toBe("visible");
     } finally {
       prototype.getBoundingClientRect = original;
@@ -439,38 +487,40 @@ test("a transcript that failed to read settles as an error, never as an arrival"
   }
 });
 
-test("seventy open readers all stay mounted and remembered; a refused write keeps them open and says so", async () => {
+test("seventy open agents all stay mounted and remembered; a refused write keeps them open and says so", async () => {
   const files = Array.from({ length: 70 }, (_, index) => conversation(100 + index));
   const seeded = new Map<string, string>([[`${READER_STORAGE_PREFIX}fixture`, JSON.stringify(files.map((file) => ({ key: file.conversationId, path: file.path, folded: true })))]]);
   const storage = { getItem: (key: string) => seeded.get(key) ?? null, setItem: (key: string, value: string) => void seeded.set(key, value) };
   const view = mount({ tasks: [task("many", "assigned", "Seventy conversations", files)], files, readerStorage: storage });
   await tick();
   expect(view.host.querySelectorAll("[data-kanban-reader]")).toHaveLength(70);
-  click([...view.host.querySelectorAll<HTMLElement>("[data-reader-fold]")][0]);
+  expect(view.host.querySelector("[data-open-agents-pill] .pill-words")?.textContent).toBe("70 agents");
+  click(view.host.querySelector("[data-open-agents-pill]"));
+  await shownIn(view.host);
+  expect(view.host.querySelectorAll("[data-agent-window] [data-open-agent]")).toHaveLength(70);
   expect((JSON.parse(seeded.get(`${READER_STORAGE_PREFIX}fixture`)!) as unknown[]).length).toBe(70);
   view.unmount();
 
   const refusing = { getItem: () => null, setItem: () => { throw new Error("quota exceeded"); } };
   const second = mount({ tasks: [task("a", "assigned", "One conversation", [files[0]!])], files: [files[0]!], readerStorage: refusing });
   click(second.host.querySelector(".tile"));
-  await tick();
-  expect(readerIn(second.host)).toBeTruthy();
+  await shownIn(second.host);
   expect([...second.host.querySelectorAll("[data-kanban-receipt].error .msg")].map((node) => node.textContent))
     .toContain("This browser refused to store the open conversation, so it won't reopen after a reload. It stays open on this page.");
 });
 
-test("the reader header keeps its title: no PID or Stop host in it, and the full-window control stays", async () => {
+test("the reader header keeps its title: no PID or Stop host in it, and no fold or full-pane control in the window", async () => {
   const file = conversation(15, { proc: "running", pid: 4401, activity: "live" });
   const view = mount({ tasks: [task("a", "assigned", "Running", [file])], files: [file] });
   click(view.host.querySelector(".tile"));
-  const reader = readerIn(view.host)!;
+  const reader = await shownIn(view.host);
   const head = reader.querySelector(".conv-head")!;
   expect(head.textContent).not.toContain("PID");
   expect(head.textContent).not.toContain("Stop host");
-  expect(head.querySelector("[data-reader-full-toggle]")).toBeTruthy();
+  expect(head.querySelector("[data-reader-full-toggle], [data-reader-fold]")).toBeNull();
   click(head.querySelector("[data-reader-menu]"));
   /* The frequent actions are icon cells named by their full label; the rest is behind More. */
-  expect([...view.host.querySelectorAll('.menu .cm-quick [role="menuitem"]')].some((node) => node.getAttribute("aria-label") === "Open as a full pane")).toBe(true);
+  expect([...view.host.querySelectorAll('.menu .cm-quick [role="menuitem"]')].some((node) => node.getAttribute("aria-label") === "Open as a full pane")).toBe(false);
   click(view.host.querySelector('.menu [data-cm-section="more"]'));
   const items = [...view.host.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? "");
   /* Without a host this surface can stop, the menu offers none; the rendered
@@ -478,14 +528,14 @@ test("the reader header keeps its title: no PID or Stop host in it, and the full
   expect(items.some((text) => text.startsWith("Stop host"))).toBe(false);
 });
 
-test("a conversation the Viewer is asked to open while the kanban shows opens as its card's reader", async () => {
+test("a conversation the Viewer is asked to open while the kanban shows opens in the agent window", async () => {
   const file = conversation(1);
   const tasks = [task("a", "done", "Merge the queue adapter", [file])];
   const view = mount({ tasks, files: [file] });
   expect(readerIn(view.host)).toBeNull();
   view.render({ focus: file.path });
-  await tick();
-  expect(readerIn(view.host)?.closest(".card")?.getAttribute("data-id")).toBe("task:a");
+  expect((await shownIn(view.host)).dataset.kanbanReader).toBe("conversation_fixture_1");
+  expect(cardEl(view.host, "task:a")?.querySelector("[data-kanban-reader]")).toBeNull();
 });
 
 function stoppedLaunch(state: Pipeline["state"], stale = false) {
@@ -523,7 +573,9 @@ test("closed never-started launch is dismissible through the task reader's norma
     onSpawnRetry: (entry) => retried.push(entry.path),
     onCloseConversation: (entry) => dismissed.push(entry.path) });
   await tick();
-  const reader = readerIn(view.host);
+  /* Open since the last visit: behind the header's pill until the window is brought back. */
+  click(view.host.querySelector("[data-open-agents-pill]"));
+  const reader = await shownIn(view.host);
   expect(reader).toBeTruthy();
   expect(reader?.textContent).toContain("Launch failed");
   expect(Boolean(reader?.querySelector("[data-launch-retry]"))).toBe(false);
@@ -537,7 +589,7 @@ test("closed never-started launch is dismissible through the task reader's norma
   expect(cardEl(view.host, "task:stopped")?.textContent).not.toContain("never started");
 });
 
-test.each([false, true])("parked task reader offers Retry only for its current launch (stale=%s, #1972)", async (stale) => {
+test.each([false, true])("a task's reader offers Retry only for its current launch (stale=%s, #1972)", async (stale) => {
   const { file, pipeline } = stoppedLaunch("needs_decision", stale);
   const retried: string[] = [];
   localStorage.setItem(`${READER_STORAGE_PREFIX}fixture`, JSON.stringify([{ key: file.conversationId, path: file.path, folded: false }]));
@@ -545,7 +597,8 @@ test.each([false, true])("parked task reader offers Retry only for its current l
     files: [file], pipelines: [pipeline],
     onSpawnRetry: (entry) => retried.push(entry.spawn!.launchId) });
   await tick();
-  const retry = readerIn(view.host)?.querySelector("[data-launch-retry]");
+  click(view.host.querySelector("[data-open-agents-pill]"));
+  const retry = (await shownIn(view.host)).querySelector("[data-launch-retry]");
   if (stale) expect(Boolean(retry)).toBe(false);
   else {
     click(retry);

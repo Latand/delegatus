@@ -1331,9 +1331,10 @@ describe("#1695 K1+K2 kanban board", () => {
   }, 600_000);
 });
 
-describe("#1695 K3 conversations inside cards", () => {
+describe("#1695 K3 conversations opened from cards", () => {
   /*
-   * Rendered evidence for #1695 K3: conversations inside kanban cards and the
+   * Rendered evidence for #1695 K3: conversations opened from kanban cards,
+   * which open in the agent window (docs/design/agent-window.md), and the
    * orchestrator seated above the board, in the real Viewer over
    * `issue1695Evidence.fixture.tsx`, in Chromium, light and dark:
    *
@@ -1350,21 +1351,22 @@ describe("#1695 K3 conversations inside cards", () => {
    *     composer of at least 60 px, collapsed in a window under 800 px tall, the
    *     side dock stays closed, and every conversation on the page, the
    *     orchestrator included, has at most one composer;
-   *   - readers sit inside their cards, at most 780 px wide, keep their title and
-   *     full-window control in the header, and a shelf column holding one widens
-   *     to reading width; Stop host is in the reader's actions menu;
+   *   - an agent opened from its card opens in the agent window and never in
+   *     the card, keeps its title in the header, and leaves its column's width
+   *     as it was; Stop host is in the reader's actions menu;
    *   - a draft, its caret and its focus survive the card moving to another
    *     column while the operator types, and a status move of their own;
    *   - a reader's feed keeps its scroll position when another card passes its
    *     card in the same column;
-   *   - the full-window reader is the same reader, and goes back into its card;
-   *   - readers and their folded state survive a reload;
+   *   - the window's corner closes the window and the pill brings the same
+   *     reader back;
+   *   - the open agents survive a reload, behind the pill;
    *   - the seat's grip resizes it down to 160 px and the height survives a reload; Collapse
    *     keeps its conversation mounted, and the header's Orchestrator control
    *     expands it without opening the dock;
    *   - an attention `open` of an EMPTY transcript arrives as `reader`, presence
-   *     names it, and Return closes it; a reader scrolled out of its column does
-   *     not arrive, and neither does one whose transcript failed to read;
+   *     names it, and Return closes it; a reader the window no longer shows
+   *     does not arrive, and neither does one whose transcript failed to read;
    *   - Link and Unlink go through the assignment route with their own receipts,
    *     including the refusal for a conversation's only task.
    *
@@ -1444,11 +1446,10 @@ describe("#1695 K3 conversations inside cards", () => {
   const readerGeometry = (page: Page) => page.evaluate(() => {
     const readers = [...document.querySelectorAll<HTMLElement>("[data-kanban-reader]")].map((reader) => ({
       key: reader.dataset.kanbanReader!,
-      folded: reader.dataset.folded === "1",
+      inWindow: reader.closest("[data-agent-window] .reader-slot:not([data-incoming])") !== null,
       width: Math.round(reader.getBoundingClientRect().width),
       headText: reader.querySelector(".conv-head .ch-row")?.textContent ?? "",
       titleClipped: (() => { const title = reader.querySelector<HTMLElement>(".ch-title"); return title ? title.scrollWidth > title.clientWidth + 1 : null; })(),
-      fullToggle: (() => { const toggle = reader.querySelector<HTMLElement>("[data-reader-full-toggle]"); return reader.dataset.folded === "1" ? null : Boolean(toggle && toggle.getBoundingClientRect().width > 0); })(),
       card: reader.closest<HTMLElement>(".card")?.dataset.id ?? null,
       column: reader.closest<HTMLElement>(".column")?.dataset.status ?? null,
       feed: reader.querySelector("[data-feed-state]")?.getAttribute("data-feed-state") ?? null,
@@ -1466,6 +1467,12 @@ describe("#1695 K3 conversations inside cards", () => {
 
   const card = (id: string) => `.card[data-id="task:${id}"]`;
   const readerFor = (conversationId: string) => `[data-kanban-reader="${conversationId}"]`;
+  /* The agent window shows an agent once its first read settled. */
+  const inWindow = (page: Page, conversationId: string) => page.waitForSelector(`[data-agent-window] .reader-slot:not([data-incoming]) ${readerFor(conversationId)}`, { timeout: 10_000 });
+  const closeWindow = async (page: Page) => {
+    await page.click("[data-agent-window] .reader-slot:not([data-incoming]) [data-reader-close]");
+    await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+  };
 
   async function waitSettled(page: Page, conversationId: string) {
     await page.waitForFunction((selector) => {
@@ -1476,10 +1483,13 @@ describe("#1695 K3 conversations inside cards", () => {
 
   async function openReadersLikeThePrototype(page: Page) {
     await page.click(`${card("t-export")} .tile >> nth=0`);
+    await inWindow(page, "conversation_export-impl");
+    await closeWindow(page);
     await page.click(`${card("t-auth")} .tile >> nth=0`);
+    await inWindow(page, "conversation_auth-impl");
+    await closeWindow(page);
     await page.click(`${card("t-links")} [data-stage="implement"]`);
-    await waitSettled(page, "conversation_export-impl");
-    await page.click(`${readerFor("conversation_links-impl")} [data-reader-fold]`);
+    await inWindow(page, "conversation_links-impl");
     await page.evaluate((selector) => {
       const target = document.querySelector<HTMLElement>(selector)!;
       const pageBox = document.querySelector<HTMLElement>(".kb-page")!;
@@ -1544,29 +1554,21 @@ describe("#1695 K3 conversations inside cards", () => {
 
             let readers: Awaited<ReturnType<typeof readerGeometry>> | null = null;
             if (viewport.width >= 1024) {
+              const bare = await readerGeometry(page);
               await openReadersLikeThePrototype(page);
               readers = await readerGeometry(page);
-              if (readers.readers.length !== 3) failures.push(`${label}: ${readers.readers.length} readers open, expected 3`);
+              if (readers.readers.length !== 3) failures.push(`${label}: ${readers.readers.length} agents open, expected 3`);
               for (const reader of readers.readers) {
-                if (!reader.card) failures.push(`${label}: reader ${reader.key} is not inside a card`);
-                if (reader.width > 780) failures.push(`${label}: reader ${reader.key} is ${reader.width}px wide`);
+                if (reader.card) failures.push(`${label}: reader ${reader.key} is inside ${reader.card}`);
                 if (/PID|Stop host/.test(reader.headText)) failures.push(`${label}: reader ${reader.key} header still carries host controls`);
-                if (reader.fullToggle === false) failures.push(`${label}: reader ${reader.key} has no full-window control in its header`);
               }
+              if (readers.readers.filter((reader) => reader.inWindow).map((reader) => reader.key).join() !== "conversation_links-impl") failures.push(`${label}: the window shows ${JSON.stringify(readers.readers.filter((reader) => reader.inWindow))}`);
               if (readers.readers.find((reader) => reader.key === "conversation_export-impl")?.feed !== "items") failures.push(`${label}: the export reader has no feed rows`);
-              if (readers.readers.filter((reader) => reader.folded).length !== 1) failures.push(`${label}: expected one folded reader`);
-              const mode = kanbanLayoutMode(seat.boardWidth);
-              const blocked = readers.columns.blocked ?? 0;
-              /* An open agent conversation keeps its column at `--agent-min`,
-                 clamp(520px, 40vw, 760px) (#2300), or a balanced shelf's
-                 width where that is wider. */
-              const agentMin = Math.min(760, Math.max(520, viewport.width * 0.4));
-              const ceiling = Math.max(agentMin, readers.columns.done ?? 0);
-              if ((mode === "wide" || mode === "narrow") && (blocked < agentMin - 1 || blocked > ceiling + 1 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
-              if (mode === "scroll" && Math.abs(blocked - agentMin) > 1) failures.push(`${label}: scroller Blocked holding a reader is ${blocked}px`);
+              /* An open agent takes no width from its column. */
+              if (JSON.stringify(readers.columns) !== JSON.stringify(bare.columns) || readers.reading !== bare.reading) failures.push(`${label}: columns ${JSON.stringify(bare.columns)} became ${JSON.stringify(readers.columns)} with agents open`);
               await page.screenshot({ path: path.join(OUT, `readers-${label}.png`) });
               await prototypeShot("readers=c-export-1,c-links-1:c,c-auth-1&scrollto=t-export", { width: seat.boardWidth, height: viewport.height }, scheme, `prototype-readers-${label}.png`);
-              const conversation = page.locator(readerFor("conversation_export-impl"));
+              const conversation = page.locator(`[data-agent-window] .reader-slot:not([data-incoming]) ${readerFor("conversation_links-impl")}`);
               await conversation.screenshot({ path: path.join(OUT, `conversation-${label}.png`) });
               if (PROTOTYPE) {
                 const proto = await openFixture(browser, `${PROTOTYPE}/?readers=c-export-1&scrollto=t-export`, { width: seat.boardWidth, height: viewport.height }, scheme);
@@ -1598,6 +1600,7 @@ describe("#1695 K3 conversations inside cards", () => {
 
         /* A draft survives a move made elsewhere while the operator types. */
         await page.click(`${card("t-export")} .tile >> nth=0`);
+        await inWindow(page, "conversation_export-impl");
         await waitSettled(page, "conversation_export-impl");
         const field = `${readerFor("conversation_export-impl")} textarea`;
         await page.click(field);
@@ -1613,52 +1616,49 @@ describe("#1695 K3 conversations inside cards", () => {
         const elsewhere = await page.evaluate(() => {
           const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-k3probe="draft"]');
           return {
-            present: Boolean(textarea),
-            column: textarea?.closest<HTMLElement>(".column")?.dataset.status ?? null,
+            present: Boolean(textarea?.closest("[data-agent-window]")),
+            column: document.querySelector<HTMLElement>('.card[data-id="task:t-export"]')?.closest<HTMLElement>(".column")?.dataset.status ?? null,
             value: textarea?.value ?? null,
             focused: document.activeElement === textarea,
             selection: textarea ? [textarea.selectionStart, textarea.selectionEnd] : null,
           };
         });
         await page.screenshot({ path: path.join(OUT, "flow-draft-after-move.png") });
-        if (!elsewhere.present || elsewhere.column !== "blocked") failures.push(`draft: the reader did not travel with its card ${JSON.stringify(elsewhere)}`);
+        if (!elsewhere.present || elsewhere.column !== "blocked") failures.push(`draft: the reader left the window, or the card did not move ${JSON.stringify(elsewhere)}`);
         if (elsewhere.value !== "Three presets and one advanced toggle") failures.push(`draft: value after the move is ${JSON.stringify(elsewhere.value)}`);
         if (!elsewhere.focused) failures.push("draft: focus left the composer when the card moved");
         if (JSON.stringify(elsewhere.selection) !== "[6,13]") failures.push(`draft: caret after the move is ${JSON.stringify(elsewhere.selection)}`);
 
-        /* The operator's own status move keeps it too. */
+        /* The operator's own status move keeps it too: the window's corner closes the window, the card moves,
+           and the pill brings the same reader back. */
+        await closeWindow(page);
         await page.click(`${card("t-export")} [data-menu]`);
         await page.click('.menu [role="menuitemradio"]:has-text("In progress")');
         await page.waitForFunction((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status === "assigned", card("t-export"), { timeout: 5_000 });
+        await page.click("[data-open-agents-pill]");
+        await page.waitForSelector('[data-agent-window] textarea[data-k3probe="draft"]', { timeout: 5_000 });
+        await page.screenshot({ path: path.join(OUT, "flow-window-back.png") });
         const ownMove = await page.evaluate(() => {
           const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-k3probe="draft"]');
-          return { column: textarea?.closest<HTMLElement>(".column")?.dataset.status ?? null, value: textarea?.value ?? null };
+          return { column: document.querySelector<HTMLElement>('.card[data-id="task:t-export"]')?.closest<HTMLElement>(".column")?.dataset.status ?? null, value: textarea?.value ?? null, inWindow: Boolean(textarea?.closest("[data-agent-window]")) };
         });
-        if (ownMove.column !== "assigned" || ownMove.value !== "Three presets and one advanced toggle") failures.push(`draft: after a status move ${JSON.stringify(ownMove)}`);
+        if (ownMove.column !== "assigned" || ownMove.value !== "Three presets and one advanced toggle" || !ownMove.inWindow) failures.push(`draft: after a status move ${JSON.stringify(ownMove)}`);
         flows.draft = { elsewhere, ownMove };
 
-        /* The full-window reader is the same reader. */
-        await page.click(`${readerFor("conversation_export-impl")} [data-reader-full-toggle]`);
-        await page.waitForSelector('.reader-full textarea[data-k3probe="draft"]', { timeout: 5_000 });
-        await page.screenshot({ path: path.join(OUT, "flow-full-pane.png") });
-        await page.click(`.reader-full ${readerFor("conversation_export-impl")} .ch-title`);
-        await page.keyboard.press("Escape");
-        await page.waitForFunction(() => !document.querySelector(".reader-full"), undefined, { timeout: 5_000 });
-        const backInCard = await page.evaluate(() => document.querySelector('textarea[data-k3probe="draft"]')?.closest<HTMLElement>(".card")?.dataset.id ?? null);
-        if (backInCard !== "task:t-export") failures.push(`full pane: the reader went back to ${backInCard}`);
-        flows.fullPane = { backInCard };
-
-        /* Readers and their folded state survive a reload. */
+        /* The open agents survive a reload, behind the pill. */
+        await closeWindow(page);
         await page.click(`${card("t-auth")} .tile >> nth=0`);
-        await page.click(`${readerFor("conversation_auth-impl")} [data-reader-fold]`);
+        await inWindow(page, "conversation_auth-impl");
         await page.reload();
         await boardReady(page);
         const reloaded = await readerGeometry(page);
         const remembered = {
-          exportOpen: reloaded.readers.some((reader) => reader.key === "conversation_export-impl" && !reader.folded),
-          authFolded: reloaded.readers.some((reader) => reader.key === "conversation_auth-impl" && reader.folded),
+          exportOpen: reloaded.readers.some((reader) => reader.key === "conversation_export-impl"),
+          authOpen: reloaded.readers.some((reader) => reader.key === "conversation_auth-impl"),
+          windowClosed: !reloaded.readers.some((reader) => reader.inWindow),
+          pill: await page.evaluate(() => document.querySelector("[data-open-agents-pill] .pill-words")?.textContent ?? null),
         };
-        if (!remembered.exportOpen || !remembered.authFolded) failures.push(`reload: readers came back as ${JSON.stringify(reloaded.readers)}`);
+        if (!remembered.exportOpen || !remembered.authOpen || !remembered.windowClosed || remembered.pill !== "2 agents") failures.push(`reload: the open agents came back as ${JSON.stringify(remembered)}`);
         flows.reload = remembered;
 
         /* The seat: grip, reload, keyboard, Collapse, the header control. The
@@ -1756,44 +1756,33 @@ describe("#1695 K3 conversations inside cards", () => {
         const returned = await page.evaluate(() => !document.querySelector('[data-kanban-reader="conversation_pending-worker"]'));
         if (!returned) failures.push("arrival: Return left the reader the open opened");
 
-        /* A reader scrolled out of its column's box has not arrived. */
+        /* A reader the window no longer shows has not arrived. */
         await page.click(`${card("t-compact")} [data-stage="verify"]`);
+        await inWindow(page, "conversation_compact-ver");
         await waitSettled(page, "conversation_compact-ver");
         const destination = { rect: { x: 0, y: 0, w: 1, h: 1 }, zoom: "inspect", anchorKeys: ["/repo/compact-ver.jsonl"], intent: "open", path: "/repo/compact-ver.jsonl" };
-        const inView = await page.evaluate((target) => {
-          document.querySelector<HTMLElement>('[data-kanban-reader="conversation_compact-ver"]')!.scrollIntoView({ block: "center" });
-          return (window as unknown as { evidence: Evidence }).evidence.focus.bus.board()!.arrival!(target);
-        }, destination);
-        /* The operator drags the orchestrator taller and scrolls back up to it:
-           the reader is still mounted and open, below the page's fold. */
-        await page.focus('[data-seat-grip=""]');
-        for (let step = 0; step < 14; step += 1) await page.keyboard.press("ArrowDown");
-        await page.waitForTimeout(200);
+        const inView = await page.evaluate((target) => (window as unknown as { evidence: Evidence }).evidence.focus.bus.board()!.arrival!(target), destination);
+        await closeWindow(page);
         const outOfView = await page.evaluate((target) => {
           const reader = document.querySelector<HTMLElement>('[data-kanban-reader="conversation_compact-ver"]')!;
-          const pageBox = document.querySelector<HTMLElement>(".kb-page")!;
-          pageBox.scrollTop = 0;
-          const rect = reader.getBoundingClientRect();
-          const box = pageBox.getBoundingClientRect();
           return {
             inView: "",
             outOfView: (window as unknown as { evidence: Evidence }).evidence.focus.bus.board()!.arrival!(target),
-            mounted: reader.isConnected && reader.dataset.folded === "0",
-            visiblePx: Math.round(Math.max(0, Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top))),
+            parked: reader.isConnected && reader.closest(".reader-park") !== null,
           };
         }, destination);
         outOfView.inView = String(inView);
-        if (outOfView.inView !== "reader") failures.push(`arrival: a reader in view measured ${outOfView.inView}`);
-        if (!outOfView.mounted || outOfView.visiblePx >= 48) failures.push(`arrival: could not take the reader out of view ${JSON.stringify(outOfView)}`);
-        else if (outOfView.outOfView === "reader") failures.push("arrival: a reader scrolled out of its column arrived");
+        if (outOfView.inView !== "reader") failures.push(`arrival: a reader in the window measured ${outOfView.inView}`);
+        if (!outOfView.parked) failures.push(`arrival: closing the window did not park the reader ${JSON.stringify(outOfView)}`);
+        else if (outOfView.outOfView === "reader") failures.push("arrival: a reader the window no longer shows arrived");
         flows.arrival = { arrival, presence, returned, outOfView };
 
         /* Link and Unlink over the assignment route. */
         const receipts = () => page.evaluate(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent));
         await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
-        await page.click(`${card("t-export")} .tile >> nth=0`);
+        await page.click(`${card("t-export")} .tile[data-member="/repo/export-explore.jsonl"]`);
         const explore = readerFor("conversation_export-explore");
-        await page.waitForSelector(explore, { timeout: 5_000 });
+        await inWindow(page, "conversation_export-explore");
         await page.click(`${explore} [data-reader-menu]`);
         await openMenuSection(page, "more");
         await page.click('.menu [role="menuitem"]:has-text("Unlink from this task")');
@@ -1807,7 +1796,8 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].some((node) => node.textContent?.startsWith("Linked")), undefined, { timeout: 5_000 });
         const linked = await receipts();
         await page.waitForTimeout(600);
-        const exploreNow = await page.evaluate((selector) => document.querySelector(selector) ? document.querySelector(selector)!.closest<HTMLElement>(".card")?.dataset.id ?? "parked" : null, explore);
+        /* The card that holds the conversation now: the reader stays in the window. */
+        const exploreNow = await page.evaluate(() => document.querySelector('.tile[data-member="/repo/export-explore.jsonl"]')?.closest<HTMLElement>(".card")?.dataset.id ?? null);
         await page.click(`${explore} [data-reader-menu]`);
         await openMenuSection(page, "more");
         await page.click('.menu [role="menuitem"]:has-text("Unlink from this task")');
@@ -1842,13 +1832,12 @@ describe("#1695 K3 conversations inside cards", () => {
         await boardReady(page);
         const order = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id));
 
-        /* A reader's feed keeps its place when another card passes its card. */
+        /* A reader's feed keeps its place when another card passes its card under the window. */
         await page.click(`${card("t-search")} [data-stage="verify"]`);
+        await inWindow(page, "conversation_search-ver-2");
         await waitSettled(page, "conversation_search-ver-2");
         await page.evaluate((selector) => {
-          const reader = document.querySelector<HTMLElement>(selector)!;
-          reader.closest<HTMLElement>(".card")!.dataset.k3mark = "moved";
-          reader.scrollIntoView({ block: "center" });
+          document.querySelector<HTMLElement>(selector)!.dataset.k3mark = "moved";
         }, readerFor("conversation_search-ver-2"));
         await page.waitForTimeout(300);
         /* The operator scrolls the feed up with the wheel, off its live tail. */
@@ -1872,18 +1861,19 @@ describe("#1695 K3 conversations inside cards", () => {
         const afterRank = await order();
         const kept = await page.evaluate((selector) => {
           const reader = document.querySelector<HTMLElement>(selector)!;
-          return { top: reader.querySelector<HTMLElement>("[data-log-feed-scroller]")!.scrollTop, sameCard: reader.closest<HTMLElement>(".card")?.dataset.k3mark === "moved" };
+          return { top: reader.querySelector<HTMLElement>("[data-log-feed-scroller]")!.scrollTop, sameCard: reader.dataset.k3mark === "moved" && reader.closest("[data-agent-window]") !== null };
         }, readerFor("conversation_search-ver-2"));
         await page.waitForTimeout(500);
         const settledTop = await page.evaluate((selector) => document.querySelector<HTMLElement>(`${selector} [data-log-feed-scroller]`)!.scrollTop, readerFor("conversation_search-ver-2"));
         const rerank = { scrolled, beforeRank, afterRank, kept, settledTop };
         if (scrolled.room - scrolled.top < 40) failures.push(`rerank: the verifier's feed did not leave its tail ${JSON.stringify(scrolled)}`);
         if (beforeRank.indexOf("task:t-upload") < beforeRank.indexOf("task:t-search")) failures.push(`rerank: t-upload already led t-search ${JSON.stringify(beforeRank)}`);
-        if (!kept.sameCard) failures.push("rerank: the reader's card was replaced rather than moved");
+        if (!kept.sameCard) failures.push("rerank: the window's reader was replaced, or left the window");
         if (Math.abs(kept.top - scrolled.top) > 4 || Math.abs(settledTop - scrolled.top) > 4) failures.push(`rerank: feed scroll ${scrolled.top} became ${kept.top}, then ${settledTop}`);
         await page.screenshot({ path: path.join(OUT, "flow-rerank-scroll.png") });
         flows.rerank = rerank;
 
+        await closeWindow(page);
         /* The orchestrator's own conversation: since #1841 a seat's
            conversation leaves the board, so no card draws it, and the seat
            keeps the conversation's one composer. */
@@ -1897,6 +1887,7 @@ describe("#1695 K3 conversations inside cards", () => {
 
         /* Stop host from the reader's actions, confirmed by name, then cancelled. */
         await page.click(`${card("t-export")} .tile >> nth=0`);
+        await inWindow(page, "conversation_export-impl");
         await waitSettled(page, "conversation_export-impl");
         await page.click(`${readerFor("conversation_export-impl")} [data-reader-menu]`);
         await openMenuSection(page, "more");
@@ -2879,8 +2870,9 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         if (JSON.stringify(labels) !== JSON.stringify(expected) || !past.every((row) => row.open)) failures.push(`past attempts: ${JSON.stringify(past)}`);
         if (past.some((row) => row.label === "Verify · 2")) failures.push("past attempts: the running Verify attempt is listed");
         await page.click(`${card("t-search")} details.history [data-past-kind="helper"] .hopen`);
-        await page.waitForSelector(`${card("t-search")} [data-kanban-reader]`, { timeout: 10_000 });
-        const opened = await page.evaluate((selector) => document.querySelector<HTMLElement>(`${selector} [data-kanban-reader]`)?.dataset.kanbanReader ?? null, card("t-search"));
+        /* It opens in the agent window. */
+        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
+        const opened = await page.evaluate(() => document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.dataset.kanbanReader ?? null);
         if (opened !== "conversation_search-helper") failures.push(`helper row opened ${opened}`);
         flows.helperOpen = opened;
       });
@@ -2894,13 +2886,16 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         const section = `${card("t-search")} .pblock`;
         await openGraph(page, "t-search");
         await page.click(`${section} .pnode[data-stage="implement"]`);
-        await page.waitForSelector(`${card("t-search")} [data-kanban-reader]`, { timeout: 10_000 });
+        /* The node opens its conversation in the agent window; the window closes before the toggle is reached. */
+        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
         await page.waitForTimeout(300);
         const node = await page.evaluate((selector) => ({
           pressed: document.querySelector(`${selector} .pnode[data-stage="implement"]`)?.getAttribute("aria-pressed"),
-          reader: document.querySelector<HTMLElement>(`${selector.replace(" .pblock", "")} [data-kanban-reader]`)?.dataset.kanbanReader ?? null,
+          reader: document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.dataset.kanbanReader ?? null,
         }), section);
         await shot(page, "production", "node-reader", "light");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
         await page.click(`${section} [data-graph-toggle]`);
         const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), section);
         /* The historical helper was adopted last; the node opens and marks Implement's own latest attempt. */
@@ -3282,16 +3277,18 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         }), panel);
         await shot(page, "production", "flow-stage-started", "light");
         await clickText(page, `${panel} [data-draft-undelivered] button`, "Discard");
-        await page.waitForSelector(`${card("t-links")} [data-kanban-reader="conversation_links-review"]`, { timeout: 10_000 });
+        /* The panel leaves the card and the stage's agent joins the agent window's list. */
+        await page.waitForSelector('.reader-park [data-kanban-reader="conversation_links-review"]', { state: "attached", timeout: 10_000 });
         await page.waitForTimeout(400);
         const promoted = await page.evaluate((selector) => ({
           panel: Boolean(document.querySelector(`${selector} [data-stage-detail]`)),
-          reader: document.querySelector<HTMLElement>(`${selector} [data-kanban-reader]`)?.dataset.kanbanReader ?? null,
+          reader: document.querySelector<HTMLElement>(".reader-park [data-kanban-reader]")?.dataset.kanbanReader ?? null,
+          inCard: Boolean(document.querySelector(`${selector} [data-kanban-reader]`)),
         }), card("t-links"));
         await shot(page, "production", "flow-stage-reader", "light");
         flows.startedDuringSave = { notice, promoted };
         if (notice.message !== "Review started with its previous first message. Your edit was not delivered." || notice.kept !== "Too late for this one." || notice.receipts.length) failures.push(`started during save: ${JSON.stringify(notice)}`);
-        if (promoted.panel || promoted.reader !== "conversation_links-review") failures.push(`started during save, promoted: ${JSON.stringify(promoted)}`);
+        if (promoted.panel || promoted.inCard || promoted.reader !== "conversation_links-review") failures.push(`started during save, promoted: ${JSON.stringify(promoted)}`);
       });
 
       await production("light", "changed between read and write", async (page) => {
@@ -3425,10 +3422,15 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-upload")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="build-ui"]`);
+        /* The chip opens the stage's agent in the agent window; its corner closes the window before the card's
+           Stages button is reached, and the agent waits in the park. */
         const reader = '[data-kanban-reader="conversation_upload-ui"]';
-        await page.waitForSelector(`${card("t-upload")} ${reader} textarea`, { timeout: 10_000 });
-        await page.fill(`${card("t-upload")} ${reader} textarea`, "Keep this draft while the stages open.");
+        const shown = `[data-agent-window] .reader-slot:not([data-incoming]) ${reader}`;
+        await page.waitForSelector(`${shown} textarea`, { timeout: 10_000 });
+        await page.fill(`${shown} textarea`, "Keep this draft while the stages open.");
         await page.evaluate((selector) => { (document.querySelector(selector)!.closest(".reader-host") as HTMLElement & { kbProbe?: number }).kbProbe = 1695; }, reader);
+        await page.click(`${shown} [data-reader-close]`);
+        await page.waitForSelector("[data-agent-window]", { state: "detached", timeout: 5_000 });
         await openStages(page, "t-upload");
         const inPane = await page.evaluate((selector) => {
           const element = document.querySelector(`.gsheet .pane[data-stage="build-ui"] ${selector}`);
@@ -3457,18 +3459,19 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.waitForSelector(".gsheet", { state: "detached", timeout: 5_000 });
         await page.waitForTimeout(200);
         const back = await page.evaluate(({ selector, cardSelector }) => {
-          const element = document.querySelector(`${cardSelector} ${selector}`);
+          const element = document.querySelector(`.reader-park ${selector}`);
           return {
             probe: (element?.closest(".reader-host") as (HTMLElement & { kbProbe?: number }) | null)?.kbProbe ?? null,
             draft: element?.querySelector("textarea")?.value ?? null,
             focus: document.activeElement?.hasAttribute("data-open-stages") ?? false,
+            inCard: Boolean(document.querySelector(`${cardSelector} ${selector}`)),
           };
         }, { selector: reader, cardSelector: card("t-upload") });
         flows.persistentReader = { inPane, stepped, slash, back };
         if (slash.search || !slash.open) failures.push(`slash under the sheet: ${JSON.stringify(slash)}`);
         if (inPane.probe !== 1695 || inPane.draft !== "Keep this draft while the stages open." || inPane.inCard) failures.push(`reader in pane: ${JSON.stringify(inPane)}`);
         if (stepped.focused !== "review-ui" || stepped.current !== "review-ui") failures.push(`arrow key: ${JSON.stringify(stepped)}`);
-        if (back.probe !== 1695 || back.draft !== "Keep this draft while the stages open." || !back.focus) failures.push(`reader back on card: ${JSON.stringify(back)}`);
+        if (back.probe !== 1695 || back.draft !== "Keep this draft while the stages open." || !back.focus || back.inCard) failures.push(`reader back in the park: ${JSON.stringify(back)}`);
       });
     } finally {
       await browser.close();
@@ -4026,8 +4029,9 @@ describe("#1846 one account pick, every surface in the same frame", () => {
 describe("#1712 the window of a conversation no card holds", () => {
   /*
    * Rendered evidence for review round 2 of #1712: the reader of a conversation
-   * no card holds takes the whole window, and every way of going somewhere else
-   * on the Board leaves that window first. In the real Viewer over
+   * no card holds opens in the agent window (docs/design/agent-window.md); a
+   * way of going to a card leaves that window first, and a way of opening a
+   * conversation a card holds brings it into the same window. In the real Viewer over
    * `issue1695Evidence.fixture.tsx?scenario=loose` (a review round of the export
    * implementer, which no card holds), in Chromium:
    *
@@ -4037,7 +4041,8 @@ describe("#1712 the window of a conversation no card holds", () => {
    * and asks the page what is actually under the target's own box
    * (`elementFromPoint`), so a target laid out but covered by the window does
    * not pass. Cases: a focus handoff `show` and `open`, a resumed `show` (the
-   * arrival check runs before any move), a `#c=` link, and a pipeline link.
+   * arrival check runs before any move), a `#c=` link, and a pipeline link;
+   * `open` and the `#c=` link land in the window, the others on the card.
    *
    * Measurements go to `evidence/issue-1695/loose-reader.json`; frames to
    * `.artifacts/issue-1695-loose-reader/`, which is not committed.
@@ -4055,18 +4060,18 @@ describe("#1712 the window of a conversation no card holds", () => {
     };
   };
 
-  /** What is under the middle of the target's visible box: the target itself, the full-window reader, or something else. */
+  /** What is under the middle of the target's visible box: the target itself, the agent window, or something else. */
   const hitTest = (page: Page, selector: string) => page.evaluate((sel) => {
     const target = document.querySelector<HTMLElement>(sel);
-    if (!target) return { present: false, under: "absent", window: Boolean(document.querySelector(".reader-full")) };
+    if (!target) return { present: false, under: "absent", window: Boolean(document.querySelector("[data-agent-window]")) };
     const rect = target.getBoundingClientRect();
     const top = Math.max(rect.top, 0);
     const bottom = Math.min(rect.bottom, window.innerHeight);
     const x = rect.left + rect.width / 2;
     const y = top + Math.min((bottom - top) / 2, 40);
     const hit = document.elementFromPoint(x, y);
-    const under = hit && target.contains(hit) ? "target" : hit?.closest(".reader-full") ? "window" : hit ? "other" : "nothing";
-    return { present: true, under, window: Boolean(document.querySelector(".reader-full")) };
+    const under = hit && target.contains(hit) ? "target" : hit?.closest("[data-agent-window]") ? "window" : hit ? "other" : "nothing";
+    return { present: true, under, window: Boolean(document.querySelector("[data-agent-window]")) };
   }, selector);
 
   const transaction = (page: Page, id: string, targetPath: string, intent: "show" | "open", resume = false) => page.evaluate(async ({ id, targetPath, intent, resume }) => {
@@ -4082,15 +4087,16 @@ describe("#1712 the window of a conversation no card holds", () => {
   }, { id, targetPath, intent, resume });
 
   const readerFor = (conversationId: string) => `[data-kanban-reader="${conversationId}"]`;
+  const inWindow = (conversationId: string) => `[data-agent-window] .reader-slot:not([data-incoming]) ${readerFor(conversationId)}`;
   const implementerCard = `[data-kanban-card]:has([data-member="${IMPLEMENTER}"])`;
 
   async function openReviewer(page: Page, id: string) {
     const resolution = await transaction(page, id, REVIEWER, "open");
     await page.waitForFunction((sel) => {
-      const state = document.querySelector(`.reader-full ${sel} [data-feed-state]`)?.getAttribute("data-feed-state");
+      const state = document.querySelector(`${sel} [data-feed-state]`)?.getAttribute("data-feed-state");
       return state === "items" || state === "empty";
-    }, readerFor("conversation_export-review"), { timeout: 10_000 });
-    return { resolution, hit: await hitTest(page, `.reader-full ${readerFor("conversation_export-review")}`) };
+    }, inWindow("conversation_export-review"), { timeout: 10_000 });
+    return { resolution, hit: await hitTest(page, inWindow("conversation_export-review")) };
   }
 
   browserTest("#1712 review round 2: going anywhere else on the Board leaves the window of a conversation no card holds", async () => {
@@ -4107,17 +4113,18 @@ describe("#1712 the window of a conversation no card holds", () => {
         const onNoCard = await page.evaluate((reviewer) => !document.querySelector(`[data-kanban-card] [data-member="${reviewer}"]`), REVIEWER);
         if (!onNoCard) failures.push("fixture: a card holds the review round");
 
-        const steps: Array<{ name: string; go: () => Promise<string | null>; target: string }> = [
+        const steps: Array<{ name: string; go: () => Promise<string | null>; target: string; window?: boolean }> = [
           { name: "focus handoff show", go: () => transaction(page, "loose-show", IMPLEMENTER, "show"), target: implementerCard },
           { name: "resumed focus handoff show", go: () => transaction(page, "loose-resumed-show", IMPLEMENTER, "show", true), target: implementerCard },
-          { name: "focus handoff open", go: () => transaction(page, "loose-open", IMPLEMENTER, "open"), target: readerFor("conversation_export-impl") },
+          { name: "focus handoff open", go: () => transaction(page, "loose-open", IMPLEMENTER, "open"), target: inWindow("conversation_export-impl"), window: true },
           {
             name: "#c= link",
             go: async () => {
               await page.evaluate(() => { location.hash = "#c=conversation_export-impl"; });
               return null;
             },
-            target: readerFor("conversation_export-impl"),
+            target: inWindow("conversation_export-impl"),
+            window: true,
           },
           {
             name: "pipeline link",
@@ -4132,13 +4139,13 @@ describe("#1712 the window of a conversation no card holds", () => {
           const opened = await openReviewer(page, `loose-reviewer-${index}`);
           if (opened.resolution !== "reader" || opened.hit.under !== "target") failures.push(`${step.name}: the reviewer did not open in the window (${JSON.stringify(opened)})`);
           const resolution = await step.go();
-          /* Settled: the window is gone and the target is laid out, or the wait ends and the hit test says what is on top. */
-          await page.waitForFunction((sel) => !document.querySelector(".reader-full") && Boolean(document.querySelector(sel)), step.target, { timeout: 5_000 }).catch(() => {});
+          /* Settled: the target is laid out (in the window, or with the window gone), or the wait ends and the hit test says what is on top. */
+          await page.waitForFunction(({ sel, window: inside }) => (inside || !document.querySelector("[data-agent-window]")) && Boolean(document.querySelector(sel)), { sel: step.target, window: Boolean(step.window) }, { timeout: 5_000 }).catch(() => {});
           await page.waitForTimeout(400);
           const hit = await hitTest(page, step.target);
           await page.screenshot({ path: path.join(OUT, `${String(index + 1).padStart(2, "0")}-${step.name.replace(/[^a-z0-9]+/gi, "-")}.png`) });
           cases.push({ name: step.name, reviewerOpened: opened.resolution, resolution, windowAfter: hit.window, targetPresent: hit.present, underTarget: hit.under });
-          if (hit.window || hit.under !== "target") failures.push(`${step.name}: after it, ${JSON.stringify(hit)} (resolution ${resolution})`);
+          if (hit.window !== Boolean(step.window) || hit.under !== "target") failures.push(`${step.name}: after it, ${JSON.stringify(hit)} (resolution ${resolution})`);
           if (resolution === "lost") failures.push(`${step.name}: the handoff settled as lost`);
         }
         if (pageErrors.length) failures.push(`page errors: ${pageErrors.join(" | ")}`);
@@ -4770,11 +4777,11 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
   interface Header { text: string; hint: string; label: string; labelWhole: boolean; width: number; attempt: { text: string; muted: boolean; tabular: boolean } | null }
   interface Tile { name: string; attempt: string; hint: string; nameWhole: boolean; attemptMuted: boolean }
 
-  /** Each reader header on the card, whether its leading stage label is painted
-      whole, and how its attempt suffix is set apart from the bold name. */
-  const measureHeaders = (page: Page) => page.evaluate(({ selector, labels }): Header[] => {
-    const cardEl = document.querySelector(selector);
-    return [...(cardEl?.querySelectorAll<HTMLElement>(".conv-head .ch-title") ?? [])].map((title) => {
+  /** Each reader header the card opened (in the agent window, or waiting in
+      its park at the window reader's size), whether its leading stage label is
+      painted whole, and how its attempt suffix is set apart from the bold name. */
+  const measureHeaders = (page: Page) => page.evaluate(({ labels }): Header[] => {
+    return [...document.querySelectorAll<HTMLElement>(".reader-host .conv-head .ch-title")].map((title) => {
       const text = title.textContent ?? "";
       const label = labels.filter((candidate) => text.startsWith(`${candidate} · `)).sort((a, b) => b.length - a.length)[0] ?? "";
       const box = title.getBoundingClientRect();
@@ -4795,7 +4802,7 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
       })() : null;
       return { text, hint: title.getAttribute("title") ?? "", label, labelWhole, width: Math.round(box.width * 10) / 10, attempt };
     });
-  }, { selector: CARD, labels: LABELS });
+  }, { labels: LABELS });
 
   /** Each stage tile on the card: its name, its attempt suffix, and whether the
       name is drawn whole. */
@@ -4825,6 +4832,13 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await page.waitForTimeout(350);
   };
+  /* A chip opens its conversation in the agent window, over the board; the next click on the card comes after
+     the window is left. */
+  const leaveWindow = async (page: Page) => {
+    await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+  };
 
   browserTest("#1865: each stage conversation on the card names its stage and attempt, as the stage list does", async () => {
     fs.mkdirSync(OUT, { recursive: true });
@@ -4847,7 +4861,9 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
               await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
               await opened.page.waitForTimeout(500);
               await clickAt(opened.page, `${CARD} .pb-pill[data-stage="design"]`);
+              await leaveWindow(opened.page);
               await clickAt(opened.page, `${CARD} .pb-pill[data-stage="critique"]`);
+              await leaveWindow(opened.page);
               /* Critique's first attempt opens from the card's Past attempts,
                  which the card keeps folded. */
               if (!(await opened.page.locator(`${CARD} details.history`).first().evaluate((element) => (element as HTMLDetailsElement).open))) {
@@ -4857,7 +4873,10 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
                 .find((row) => /^Critique/.test(row.querySelector(".lbl")?.textContent ?? ""))?.dataset.past ?? null, CARD);
               if (!pastKey) fail("Past attempts lists no earlier critique");
               else await clickAt(opened.page, `${CARD} details.history [data-past=${JSON.stringify(pastKey)}] .hopen`);
+              await opened.page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
               const headers = await measureHeaders(opened.page);
+              await opened.page.screenshot({ path: path.join(OUT, `window-${label}.png`) });
+              await leaveWindow(opened.page);
               await opened.page.locator(CARD).evaluate((element) => element.scrollIntoView({ block: "start" }));
               await opened.page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
 
@@ -9507,155 +9526,368 @@ describe("interface polish round 2: press and open/close motion, the status menu
   }, 600_000);
 });
 
-describe("the open agents at the board's side: short names, role emblem and colour, one click to each", () => {
-  /* The `stages` scenario with 1, 3 and 7 of its conversations open as
-     readers, remembered in this browser's storage before the first render,
-     at 1440×900 and 1920×1080 in English and Ukrainian, and at 1600×900,
-     where the names would cost the columns their layout and the rail is the
-     count. What only a browser settles, and is gated here: the rail stands
-     beside the columns and overlaps none of them; it lists exactly the open
-     readers with the role their ribbon wears; a segment brings its reader
-     into the window and focuses it; Alt+J walks on from there. Frames go to
-     OPEN_AGENTS_PNG_DIR. */
-  const OPEN = {
-    1: ["search-ver-2"],
-    3: ["search-ver-2", "rounds-review", "upload-plan"],
-    7: ["search-ver-2", "rounds-review", "upload-plan", "upload-ui", "export-impl", "links-impl", "search-rev"],
-  } as const;
-  const seedReaders = (ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+describe("the agent window: a click on the board opens the agent in one window, the open agents on its left (docs/design/agent-window.md, Variant 1)", () => {
+  /* The `stages` scenario at 1440×900 and 1000×700, in English and
+     Ukrainian, light and dark. One run per face opens the retry banner's
+     Build from its chip, closes the window with Escape, opens the export
+     implementer from its tile, closes the window from its corner with the
+     mouse, opens the banner's Review, switches by a row, by › and by Alt+J,
+     closes the agent on screen from its row and closes all. A trace records
+     every animation frame of the run: what the window shows, its feed, any
+     skeleton, the composer toolbar, the search field, the header's pill slot
+     and both cards' boxes. What only a browser settles, and is gated here:
+     the cards and the header never move; the search keeps the first row of
+     the header beside the pill's slot, and no header control lies under the
+     attention toast; no frame shows the window with an
+     empty or skeleton reader; closing one agent never takes the window off
+     the screen; an incoming agent keeps one toolbar layout; the window's
+     margins hold no board text; ‹ › are absent with one agent and stand in
+     one place at both widths; the focus ring follows the keyboard only; Tab
+     and Shift+Tab go round the window with one agent open and with two, and
+     never reach the board, the header or the sidebar under it.
+     Frames and a frame-by-frame video per face go to AGENT_WINDOW_PNG_DIR,
+     the readings to evidence/agent-window/built.json. */
+  const ROUNDS = card("t-rounds");
+  const chip = (stage: string) => `${ROUNDS} .pb-pills [data-stage="${stage}"]`;
+  const EXPORT_TILE = `${card("t-export")} .tile[data-member="/repo/export-impl.jsonl"]`;
+  const KEY = { build: "conversation_rounds-build", review: "conversation_rounds-review", export: "conversation_export-impl" } as const;
 
-  interface RailReading {
-    tier: string | null;
-    segments: Array<{ key: string; role: string; readerRole: string | null; name: string; card: string | null; dot: string | null }>;
-    /** The chip, or the count alone: what the strip draws. */
-    rail: { x: number; y: number; width: number; height: number } | null;
-    overlaps: string[];
-    head: string | null;
-    pageErrors: string[];
-  }
-  const readRail = (page: Page) => page.evaluate((): Omit<RailReading, "pageErrors"> => {
-    const rail = document.querySelector<HTMLElement>("[data-open-rail]");
-    const box = rail?.getBoundingClientRect() ?? null;
-    const chip = rail?.querySelector<HTMLElement>(".or-chip, .or-count")?.getBoundingClientRect() ?? null;
-    const overlaps = box ? [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status], [data-kanban-board] .card")].filter((element) => {
-      const other = element.getBoundingClientRect();
-      return other.width > 0 && other.height > 0 && other.left < box.right - 0.5 && other.right > box.left + 0.5 && other.top < box.bottom - 0.5 && other.bottom > box.top + 0.5;
-    }).map((element) => element.dataset.status ?? element.dataset.id ?? element.className) : [];
+  interface Sample { phase: string; window: boolean; shown: string | null; feed: string | null; skeleton: boolean; tools: string | null; composer: string | null; search: string; slot: string; cards: string; pill: string | null }
+  const installTrace = (page: Page) => page.evaluate(() => {
+    const state = { phase: "idle", samples: [] as unknown[], stopped: false };
+    const box = (element: Element | null) => {
+      const rect = element?.getBoundingClientRect();
+      return rect ? `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)},${Math.round(rect.height)}` : "-";
+    };
+    const tick = () => {
+      if (state.stopped) return;
+      /* The window as drawn: a first open still reading is laid out and not drawn, and so is the agent coming in. */
+      const frame = document.querySelector("[data-agent-window]");
+      const slot = frame?.querySelector(".aw-reader > .reader-slot:not([data-incoming])") ?? null;
+      const reader = slot?.querySelector<HTMLElement>("[data-kanban-reader]") ?? null;
+      state.samples.push({
+        phase: state.phase,
+        window: frame !== null,
+        shown: reader?.dataset.kanbanReader ?? null,
+        feed: reader?.querySelector<HTMLElement>("[data-feed-state]")?.dataset.feedState ?? null,
+        skeleton: slot?.querySelector('[role="status"][aria-busy="true"]') != null,
+        tools: reader ? [...reader.querySelectorAll<HTMLElement>("form button")].filter((button) => button.getBoundingClientRect().width > 0).map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "").join("|") : null,
+        /* The composer as drawn: its box and its selected-context line. */
+        composer: reader ? `${box(reader.querySelector("form"))} ${reader.querySelector("form [data-selected-context]")?.textContent ?? "-"}` : null,
+        search: box(document.querySelector("[data-kanban-search]")),
+        slot: box(document.querySelector("[data-open-agents-slot]")),
+        cards: ["t-rounds", "t-export"].map((id) => box(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))).join(" "),
+        pill: document.querySelector("[data-open-agents-pill] .pill-words")?.textContent ?? null,
+      });
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    Object.assign(window, { agentWindowTrace: state });
+  });
+  const phase = (page: Page, name: string) => page.evaluate((next) => { (window as unknown as { agentWindowTrace: { phase: string } }).agentWindowTrace.phase = next; }, name);
+  const samples = (page: Page) => page.evaluate(() => {
+    const state = (window as unknown as { agentWindowTrace: { samples: unknown[]; stopped: boolean } }).agentWindowTrace;
+    state.stopped = true;
+    return state.samples as Sample[];
+  });
+  const showing = (page: Page, key: string) => page.waitForFunction((wanted) => document.querySelector(`[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="${wanted}"]`) !== null, key, { timeout: 15_000 });
+  const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 350)))));
+  /* What the window holds, read once a step has settled. */
+  const readWindow = (page: Page) => page.evaluate(() => {
+    const rect = (element: Element | null | undefined) => {
+      const box = element?.getBoundingClientRect();
+      return box ? { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) } : null;
+    };
+    const frame = document.querySelector("[data-agent-window-frame]");
+    const head = document.querySelector(".aw-head");
+    const reader = frame?.querySelector<HTMLElement>(".reader-slot:not([data-incoming]) [data-kanban-reader]") ?? null;
+    const pill = document.querySelector<HTMLElement>("[data-open-agents-pill]");
+    const active = document.activeElement as HTMLElement | null;
+    const form = reader?.querySelector("form") ?? null;
     return {
-      tier: rail?.dataset.openRail ?? null,
-      segments: [...document.querySelectorAll<HTMLElement>("[data-open-agent]")].map((segment) => ({
-        key: segment.dataset.openAgent!,
-        role: segment.dataset.role!,
-        readerRole: document.querySelector<HTMLElement>(`[data-kanban-reader="${segment.dataset.openAgent}"]`)?.dataset.role ?? null,
-        name: segment.querySelector(".or-name")?.textContent ?? "",
-        card: segment.querySelector(".or-card")?.textContent ?? null,
-        dot: segment.querySelector("[data-open-agent-dot]")?.getAttribute("data-open-agent-dot") ?? null,
-      })),
-      rail: chip ? { x: Math.round(chip.x), y: Math.round(chip.y), width: Math.round(chip.width), height: Math.round(chip.height) } : null,
-      overlaps,
-      head: rail?.querySelector("[data-open-rail-count]")?.textContent ?? null,
+      window: rect(frame),
+      list: rect(document.querySelector(".aw-list")),
+      reader: rect(reader),
+      shown: reader?.dataset.kanbanReader ?? null,
+      rows: [...document.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent]")].map((row) => ({ key: row.dataset.openAgent!, current: row.hasAttribute("data-current"), name: row.querySelector(".or-name")?.textContent ?? "", close: rect(row.querySelector("[data-open-agent-close]")) })),
+      head: head?.querySelector("[data-open-agents-count]")?.textContent ?? null,
+      steps: head ? [...head.querySelectorAll<HTMLElement>("[data-agent-window-step]")].map((step) => ({ step: step.dataset.agentWindowStep!, fromRight: Math.round(head.getBoundingClientRect().right - step.getBoundingClientRect().right), fromTop: Math.round(step.getBoundingClientRect().top - head.getBoundingClientRect().top) })) : [],
+      pill: pill ? { text: pill.textContent, box: rect(pill), focused: active === pill, ring: pill.matches(":focus-visible"), outline: getComputedStyle(pill).outlineStyle } : null,
+      /* The header's buttons beside the pill: the needs-you chip and the new-agent button. */
+      headerButtons: [rect(document.querySelector("[data-attention-count]"))?.height ?? null, rect(document.querySelector("[data-kanban-board] [data-new-agent], .kb .bar [data-new-agent]"))?.height ?? null],
+      composer: form ? { box: rect(form), context: form.querySelector("[data-selected-context]")?.textContent ?? null } : null,
+      readerRing: reader ? reader.matches(":focus-visible") : null,
+      focus: active?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? active?.getAttribute("data-open-agent-jump") ?? active?.tagName ?? null,
+      search: rect(document.querySelector("[data-kanban-search]")),
+      slot: rect(document.querySelector("[data-open-agents-slot]")),
+      /* The header's controls the attention toast lies over. */
+      underToast: (() => {
+        const toast = document.querySelector("[data-attention-toast]");
+        const over = toast?.getBoundingClientRect();
+        if (!toast || !over) return [];
+        return [...document.querySelectorAll<HTMLElement>('.kb .bar[data-bar="project"] :is(button, input, a)')].filter((control) => {
+          const box = control.getBoundingClientRect();
+          return !toast.contains(control) && box.width > 0 && box.left < over.right && box.right > over.left && box.top < over.bottom && box.bottom > over.top;
+        }).map((control) => control.getAttribute("aria-label") ?? control.textContent?.trim() ?? control.tagName);
+      })(),
+      cards: Object.fromEntries(["t-rounds", "t-export"].map((id) => [id, rect(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))])),
     };
   });
-  /* The reader the operator is in, and how much of it the window shows. */
-  const readFocus = (page: Page) => page.evaluate(() => {
-    const reader = document.activeElement?.closest<HTMLElement>("[data-kanban-reader]") ?? null;
-    const box = reader?.getBoundingClientRect();
-    return {
-      key: reader?.dataset.kanbanReader ?? null,
-      headInWindow: box ? box.top >= 0 && box.top + 40 <= window.innerHeight && box.left >= 0 && box.left + 120 <= window.innerWidth : false,
+  /* The window is modal for the keyboard: from its list's first row, Tab or
+     Shift+Tab pressed again and again walks round the window and comes back to
+     that row without once leaving it for the board, the header or the sidebar. */
+  const tabRound = async (page: Page, key: "Tab" | "Shift+Tab") => {
+    await page.locator("[data-agent-window] [data-open-agent-jump]").first().focus();
+    const left: string[] = [];
+    for (let press = 1; press <= 200; press++) {
+      await page.keyboard.press(key);
+      const at = await page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        return {
+          inside: !!active?.closest("[data-agent-window-frame]"),
+          first: !!active && active === document.querySelector("[data-agent-window] [data-open-agent-jump]"),
+          name: active ? `${active.tagName.toLowerCase()} «${active.getAttribute("aria-label") ?? active.textContent?.trim().slice(0, 40) ?? ""}»` : "none",
+        };
+      });
+      if (!at.inside) left.push(at.name);
+      if (at.first) return { presses: press, left };
+    }
+    return { presses: null, left };
+  };
+  /* The window's margins: one flat tone, never a slice of a card. */
+  const margins = async (shot: Buffer, frame: { x: number; y: number; width: number; height: number }, viewport: { width: number; height: number }) => {
+    const strips = {
+      right: { left: frame.x + frame.width + 1, top: frame.y + 2, width: Math.min(6, viewport.width - frame.x - frame.width - 2), height: frame.height - 4 },
+      bottom: { left: frame.x + 2, top: frame.y + frame.height + 1, width: frame.width - 4, height: Math.min(6, viewport.height - frame.y - frame.height - 2) },
+      left: { left: Math.max(0, frame.x - 7), top: frame.y + 2, width: Math.min(6, frame.x - 1), height: frame.height - 4 },
     };
-  });
+    const out: Record<string, number | null> = {};
+    for (const [name, strip] of Object.entries(strips)) {
+      if (strip.width < 1 || strip.height < 1) { out[name] = null; continue; }
+      /* `stats` reads the input, so the strip is cut out first. The window's shadow is a soft ramp; text is not. */
+      const stats = await sharp(await sharp(shot).extract(strip).png().toBuffer()).stats();
+      out[name] = Math.max(...stats.channels.slice(0, 3).map((channel) => channel.stdev));
+    }
+    return out;
+  };
 
-  browserTest("1, 3 and 7 open agents at 1440×900 and 1920×1080, the count alone at 1600×900, in English and Ukrainian", async () => {
-    const pngDir = process.env.OPEN_AGENTS_PNG_DIR ?? "/var/tmp/llv-open-agents-evidence";
-    const out = path.resolve(".artifacts/open-agents-rail");
+  browserTest("open, switch, close one and close all at 1440×900 and 1000×700, en and uk, light and dark, every frame traced", async () => {
+    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
+    const out = path.resolve(".artifacts/agent-window");
     fs.mkdirSync(out, { recursive: true });
     fs.mkdirSync(pngDir, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
+    let browser = await chromium.launch(LAUNCH);
     const readings: Record<string, unknown> = {};
     const failures: string[] = [];
-    const url = `${server.base}?scenario=stages`;
-    const open = async (viewport: { width: number; height: number }, lang: "en" | "uk", ids: readonly string[]) => {
-      const opened = await openFixture(browser, url, viewport, "light", lang);
-      await opened.context.addInitScript(seedReaders(ids));
-      await opened.page.reload();
-      await opened.page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
-      await opened.page.waitForFunction((count) => document.querySelectorAll("[data-kanban-reader]").length >= count, ids.length, { timeout: 30_000 });
-      /* The seat folded, so the board has the window; `O` is its own key, and a click could land on the attention island over its head. */
-      await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      if (await opened.page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await opened.page.keyboard.press("o");
-      await opened.page.waitForTimeout(700);
-      return opened;
-    };
+    const arrows: Record<string, unknown> = {};
     try {
-      for (const lang of ["en", "uk"] as const) {
-        for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }] as const) {
-          for (const count of [1, 3, 7] as const) {
-            const label = `${viewport.width}x${viewport.height}-${count}-${lang}`;
-            const ids = OPEN[count];
-            const { context, page, pageErrors } = await open(viewport, lang, ids);
+      for (const scheme of ["light", "dark"] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          for (const viewport of [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const) {
+            const label = `${viewport.width}-${lang}-${scheme}`;
+            if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+            const fail = (message: string) => failures.push(`${label}: ${message}`);
+            const frames: Array<{ data: string; time: number }> = [];
+            const shot = async (name: string) => {
+              const buffer = await page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`) });
+              return buffer;
+            };
             try {
-              await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
-              const reading = await readRail(page);
-              readings[label] = { ...reading, pageErrors };
-              if (reading.tier !== "full") failures.push(`${label}: the rail is ${reading.tier}, expected its names`);
-              if (JSON.stringify(reading.segments.map((segment) => segment.key)) !== JSON.stringify(ids.map((id) => `conversation_${id}`))) failures.push(`${label}: the rail lists ${reading.segments.map((segment) => segment.key).join(", ")}`);
-              for (const segment of reading.segments) {
-                if (segment.role !== segment.readerRole) failures.push(`${label}: ${segment.key} wears ${segment.role}, its reader ${segment.readerRole}`);
-                if (!segment.name || /conversation_|\/repo\//.test(`${segment.name} ${segment.card ?? ""}`)) failures.push(`${label}: ${segment.key} is named «${segment.name}»`);
+              await page.waitForSelector(`${chip("build")} >> visible=true`, { timeout: 30_000 });
+              /* The seat folded, so the board has the window; `O` is its own key. */
+              await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+              if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+              /* Everything the run clicks on the board well in view first: a click scrolls its target in, and that scroll is the test's, never the product's. */
+              await page.evaluate((targets) => {
+                for (const target of targets) document.querySelector(target)?.closest(".card")?.scrollIntoView({ block: "center" });
+                /* At 700 px centring the export card leaves its tile under the column's head: bring the tile itself in, with air round it. */
+                const tile = document.querySelector<HTMLElement>(targets[0]!);
+                if (tile) {
+                  tile.style.scrollMarginBlock = "16px";
+                  tile.scrollIntoView({ block: "nearest" });
+                  tile.style.scrollMarginBlock = "";
+                }
+              }, [EXPORT_TILE, chip("build")]);
+              await page.mouse.move(viewport.width / 2, 12);
+              await settle(page);
+              await page.waitForTimeout(500);
+              const cdp = await context.newCDPSession(page);
+              cdp.on("Page.screencastFrame", (event) => {
+                frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
+                void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => { /* A last frame may land after the context closes. */ });
+              });
+              await cdp.send("Page.startScreencast", { format: "jpeg", quality: 85, maxWidth: viewport.width, maxHeight: viewport.height, everyNthFrame: 1 });
+              await installTrace(page);
+              const steps: Record<string, unknown> = {};
+              const board = await readWindow(page);
+              steps["01-board"] = board;
+              await shot("01-board");
+              /* The header keeps its rows at every width: the search beside the pill's slot, nothing under the toast. */
+              if (board.search?.y !== board.slot?.y) fail(`the search stands at y ${board.search?.y}, out of the pill slot's row at y ${board.slot?.y}`);
+              if (board.underToast.length) fail(`the attention toast lies over the header's ${JSON.stringify(board.underToast)}`);
+
+              await phase(page, "open-build");
+              await page.locator(chip("build")).click();
+              await showing(page, KEY.build);
+              await page.mouse.move(viewport.width / 2, viewport.height / 2);
+              await settle(page);
+              const one = await readWindow(page);
+              steps["02-one-stage"] = one;
+              await shot("02-one-stage");
+              if (one.steps.length) fail(`‹ › shown with one agent open (${JSON.stringify(one.steps)})`);
+              if (one.rows.length !== 1 || !one.rows[0]!.current) fail(`one open agent lists ${JSON.stringify(one.rows)}`);
+              await phase(page, "tab-one");
+              const trapOne = { forward: await tabRound(page, "Tab"), backward: await tabRound(page, "Shift+Tab") };
+              (steps["02-one-stage"] as Record<string, unknown>).tabRound = trapOne;
+              for (const [way, round] of Object.entries(trapOne)) {
+                if (round.left.length || round.presses === null) fail(`with one agent, ${way} Tab left the window for ${JSON.stringify(round.left.slice(0, 4))} (${round.presses ?? "never"} presses back to the first row)`);
               }
-              if (reading.overlaps.length) failures.push(`${label}: the rail overlaps ${reading.overlaps.join(", ")}`);
-              if (!reading.rail || reading.rail.y + reading.rail.height > viewport.height + 1) failures.push(`${label}: the rail is not whole in the window (${JSON.stringify(reading.rail)})`);
-              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-              if (count === 7) {
-                /* One click on the last segment takes the board there; Alt+J walks on, round the end. */
-                const last = `conversation_${ids[ids.length - 1]}`;
-                await page.locator(`[data-open-agent-jump="${last}"]`).click();
-                await page.waitForTimeout(500);
-                const jumped = await readFocus(page);
-                await page.screenshot({ path: path.join(pngDir, `${label}-jumped.png`) });
-                if (jumped.key !== last || !jumped.headInWindow) failures.push(`${label}: after the click the operator is in ${JSON.stringify(jumped)}`);
-                await page.keyboard.press("Alt+KeyJ");
-                await page.waitForTimeout(500);
-                const cycled = await readFocus(page);
-                await page.screenshot({ path: path.join(pngDir, `${label}-alt-j.png`) });
-                if (cycled.key !== `conversation_${ids[0]}` || !cycled.headInWindow) failures.push(`${label}: Alt+J landed in ${JSON.stringify(cycled)}`);
-                await page.locator(`[data-open-agent="conversation_${ids[2]}"]`).hover();
-                await page.waitForTimeout(250);
-                await page.locator("[data-open-rail]").screenshot({ path: path.join(pngDir, `${label}-rail-hover.png`) });
-                (readings[label] as Record<string, unknown>).jumped = jumped;
-                (readings[label] as Record<string, unknown>).cycled = cycled;
+
+              await phase(page, "escape");
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              await settle(page);
+              const behind = await readWindow(page);
+              steps["03-board-behind"] = behind;
+              await shot("03-board-behind");
+              if (!behind.pill?.focused) fail("Escape did not hand the keyboard to the pill");
+
+              await phase(page, "open-export");
+              await page.locator(EXPORT_TILE).click();
+              await showing(page, KEY.export);
+              await settle(page);
+              await phase(page, "close-window-mouse");
+              await page.locator(`[data-agent-window] [data-reader-close="${KEY.export}"]`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              await page.mouse.move(viewport.width / 2, 12);
+              await settle(page);
+              const byMouse = await readWindow(page);
+              steps["03-closed-by-mouse"] = byMouse;
+              await shot("03-closed-by-mouse");
+              if (!byMouse.pill?.focused) fail("closing the window did not hand the keyboard to the pill");
+              if (byMouse.pill?.ring || byMouse.pill?.outline !== "none") fail(`a mouse close left a focus ring on the pill (${JSON.stringify(byMouse.pill)})`);
+              /* The pill names what it counts and stands as tall as the header's buttons, at every width. */
+              for (const closed of [behind, byMouse]) {
+                if (!/agent|агент/.test(closed.pill?.text ?? "")) fail(`the pill reads «${closed.pill?.text ?? ""}» and names no agents`);
+                for (const height of closed.headerButtons) if (height !== null && closed.pill?.box?.height !== height) fail(`the pill stands ${closed.pill?.box?.height} px beside ${height} px header buttons`);
               }
+
+              await phase(page, "open-review");
+              await page.locator(chip("review")).click();
+              await showing(page, KEY.review);
+              await page.mouse.move(viewport.width / 2, viewport.height / 2);
+              await settle(page);
+              const three = await readWindow(page);
+              steps["04-three-review"] = three;
+              const threeShot = await shot("04-three-review");
+              if (three.rows.map((row) => row.key).join(",") !== [KEY.build, KEY.export, KEY.review].join(",")) fail(`three open agents list ${three.rows.map((row) => row.key).join(",")}`);
+              if (three.steps.length !== 2) fail(`‹ › with three agents: ${JSON.stringify(three.steps)}`);
+              if (three.window) {
+                const ring = await margins(threeShot, three.window, viewport);
+                (steps["04-three-review"] as Record<string, unknown>).margins = ring;
+                for (const [side, stdev] of Object.entries(ring)) if (stdev !== null && stdev > 4) fail(`the window's ${side} margin is not one flat tone (stdev ${stdev.toFixed(2)})`);
+              }
+              arrows[label] = three.steps;
+
+              await phase(page, "switch-row");
+              await page.locator(`[data-open-agent-jump="${KEY.export}"]`).click();
+              await showing(page, KEY.export);
+              await settle(page);
+              const row = await readWindow(page);
+              steps["05-row"] = row;
+              await shot("05-row");
+              if (row.readerRing) fail("a mouse switch drew the reader's focus ring");
+
+              await phase(page, "switch-next");
+              await page.locator('[data-agent-window-step="next"]').click();
+              await showing(page, KEY.review);
+              await settle(page);
+              steps["06-next"] = await readWindow(page);
+              await shot("06-next");
+
+              await phase(page, "switch-alt-j");
+              await page.keyboard.press("Alt+KeyJ");
+              await showing(page, KEY.build);
+              await settle(page);
+              steps["06-alt-j"] = await readWindow(page);
+              await shot("06-alt-j");
+
+              await phase(page, "close-one");
+              await page.locator(`[data-open-agent-close="${KEY.build}"]`).click();
+              await showing(page, KEY.export);
+              await settle(page);
+              const closedOne = await readWindow(page);
+              steps["07-closed-one"] = closedOne;
+              await shot("07-closed-one");
+              if (closedOne.rows.map((entry) => entry.key).join(",") !== [KEY.export, KEY.review].join(",")) fail(`after closing Build the list is ${closedOne.rows.map((entry) => entry.key).join(",")}`);
+              /* The same agent comes back from a close with the composer it had after the row switch. */
+              if (JSON.stringify(closedOne.composer) !== JSON.stringify(row.composer)) fail(`the export agent's composer after the close ${JSON.stringify(closedOne.composer)} is not the one after the row ${JSON.stringify(row.composer)}`);
+              if (!row.composer?.context) fail("the agent in the reader carries no selected-context line after a row switch");
+              await phase(page, "tab-two");
+              const trapTwo = { forward: await tabRound(page, "Tab"), backward: await tabRound(page, "Shift+Tab") };
+              (steps["07-closed-one"] as Record<string, unknown>).tabRound = trapTwo;
+              for (const [way, round] of Object.entries(trapTwo)) {
+                if (round.left.length || round.presses === null) fail(`with two agents, ${way} Tab left the window for ${JSON.stringify(round.left.slice(0, 4))} (${round.presses ?? "never"} presses back to the first row)`);
+              }
+
+              await phase(page, "close-all");
+              await page.locator("[data-open-rail-close-all]").click();
+              await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+              await page.mouse.move(viewport.width / 2, 12);
+              await settle(page);
+              const closedAll = await readWindow(page);
+              steps["08-closed-all"] = closedAll;
+              await shot("08-closed-all");
+              if (closedAll.pill) fail("the pill stayed after «Close all»");
+
+              await cdp.send("Page.stopScreencast");
+              const trace = await samples(page);
+              /* Every frame against the bare board: nothing under the window moves, nothing in the header moves. */
+              const first = trace[0]!;
+              const moved = trace.filter((sample) => sample.cards !== first.cards);
+              const header = trace.filter((sample) => sample.search !== first.search || sample.slot !== first.slot);
+              if (moved.length) fail(`${moved.length} frames moved a card (${moved[0]!.phase}: ${moved[0]!.cards} against ${first.cards})`);
+              if (header.length) fail(`${header.length} frames moved the header (${header[0]!.phase}: search ${header[0]!.search}, slot ${header[0]!.slot})`);
+              const zero = trace.filter((sample) => /^0\b/.test(sample.pill ?? ""));
+              if (zero.length) fail(`${zero.length} frames showed «${zero[0]!.pill}»`);
+              const empty = trace.filter((sample) => sample.window && (sample.skeleton || !sample.shown || !["items", "empty", "error"].includes(sample.feed ?? "")));
+              if (empty.length) fail(`${empty.length} frames showed the window with an empty or skeleton reader (${JSON.stringify(empty[0])})`);
+              for (const name of ["switch-row", "switch-next", "switch-alt-j", "close-one"]) {
+                const within = trace.filter((sample) => sample.phase === name);
+                const bare = within.filter((sample) => !sample.window);
+                if (bare.length) fail(`${bare.length} frames of ${name} showed no window`);
+              }
+              const transitions: Record<string, { frames: number; incoming: string | null; layouts: number; bareFrames: number; emptyFrames: number }> = {};
+              for (const name of ["open-build", "open-export", "open-review", "switch-row", "switch-next", "switch-alt-j", "close-one", "close-all"]) {
+                const within = trace.filter((sample) => sample.phase === name);
+                const incoming = within.at(-1)?.shown ?? null;
+                const layouts = new Set(within.filter((sample) => sample.shown && sample.shown === incoming).map((sample) => sample.tools)).size;
+                transitions[name] = { frames: within.length, incoming, layouts, bareFrames: within.filter((sample) => !sample.window).length, emptyFrames: within.filter((sample) => sample.window && (sample.skeleton || !sample.shown)).length };
+                if (layouts > 1) fail(`${name}: the incoming agent showed ${layouts} toolbar layouts`);
+              }
+              /* Once in the reader, an agent's composer holds still through a close and the Tab rounds after it. */
+              for (const name of ["close-one", "tab-two"]) {
+                const within = trace.filter((sample) => sample.phase === name && sample.shown === KEY.export);
+                const jumps = within.filter((sample, index) => index > 0 && sample.composer !== within[index - 1]!.composer);
+                (transitions as Record<string, unknown>)[`${name}-composer`] = { frames: within.length, jumps: jumps.length, layouts: [...new Set(within.map((sample) => sample.composer))] };
+                if (jumps.length) fail(`${name}: ${jumps.length} frames moved the incoming agent's composer (${within[0]!.composer} → ${jumps[0]!.composer})`);
+              }
+              if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+              readings[label] = { steps, transitions, frames: trace.length, pageErrors };
+
+              /* The run as a video, each captured frame for as long as it stood. */
+              const frameDir = path.join(out, `${label}-frames`);
+              fs.rmSync(frameDir, { recursive: true, force: true });
+              fs.mkdirSync(frameDir, { recursive: true });
+              frames.forEach((frame, index) => fs.writeFileSync(path.join(frameDir, `${index}.jpg`), Buffer.from(frame.data, "base64")));
+              const manifest = frames.map((frame, index) => `file '${index}.jpg'\noption framerate 1000\nduration ${Math.max(0.001, ((frames[index + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
+              fs.writeFileSync(path.join(frameDir, "frames.txt"), `${manifest}\n`);
+              if (frames.length) execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", path.join(frameDir, "frames.txt"), "-fps_mode", "passthrough", "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", path.join(pngDir, `${label}.webm`)]);
             } finally {
               await context.close();
             }
-          }
-        }
-        {
-          const label = `1600x900-7-${lang}`;
-          const { context, page, pageErrors } = await open({ width: 1600, height: 900 }, lang, OPEN[7]);
-          try {
-            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
-            const reading = await readRail(page);
-            if (reading.tier !== "compact") failures.push(`${label}: the rail is ${reading.tier}, expected the count`);
-            if (reading.head !== "7") failures.push(`${label}: the count reads «${reading.head}»`);
-            if (reading.overlaps.length) failures.push(`${label}: the rail overlaps ${reading.overlaps.join(", ")}`);
-            await page.locator("[data-open-rail-count]").click();
-            await page.waitForSelector(".popover.open-agents", { timeout: 5_000 });
-            await page.waitForTimeout(300);
-            await page.screenshot({ path: path.join(pngDir, `${label}-list.png`) });
-            const listed = await readRail(page);
-            if (listed.segments.length !== 7) failures.push(`${label}: the list holds ${listed.segments.length}`);
-            await page.locator(`.popover.open-agents [data-open-agent-jump="conversation_${OPEN[7][3]}"]`).click();
-            await page.waitForTimeout(500);
-            const jumped = await readFocus(page);
-            await page.screenshot({ path: path.join(pngDir, `${label}-jumped.png`) });
-            if (jumped.key !== `conversation_${OPEN[7][3]}` || !jumped.headInWindow) failures.push(`${label}: after the click the operator is in ${JSON.stringify(jumped)}`);
-            readings[label] = { ...reading, listed: listed.segments.length, jumped, pageErrors };
-            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-          } finally {
-            await context.close();
           }
         }
       }
@@ -9663,42 +9895,233 @@ describe("the open agents at the board's side: short names, role emblem and colo
       await browser.close();
       server.stop();
     }
-    fs.mkdirSync("evidence/open-agents-rail", { recursive: true });
-    fs.writeFileSync("evidence/open-agents-rail/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    /* ‹ › stand in one place in the list's head at both widths. */
+    for (const scheme of ["light", "dark"]) {
+      for (const lang of ["en", "uk"]) {
+        const wide = JSON.stringify(arrows[`1440-${lang}-${scheme}`]);
+        const narrow = JSON.stringify(arrows[`1000-${lang}-${scheme}`]);
+        if (wide !== narrow) failures.push(`${lang}-${scheme}: ‹ › stand at ${wide} at 1440 and ${narrow} at 1000`);
+      }
+    }
+    fs.mkdirSync("evidence/agent-window", { recursive: true });
+    fs.writeFileSync("evidence/agent-window/built.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
 
-  /* The page's edges, read in the same frames. The project's name, the
-     folded Orchestrator row and the rail start on one left edge; the row
-     stands one gap below the bar and one gap above what the board draws
-     next (the columns, or the strip over them, the scroll mode's jump
-     strip or the tabbed mode's tabs, which starts where the first column
-     does and stands that gap above the columns); the rail's top is the columns' top; the
-     rail's rows and the cards hold their content at one inset; and every
-     column's title sits at the same offset in its column, framed or not.
-     The first column the board shows starts on that edge too, and beside
-     the rail it stands the board's edge (`--kb-edge`) clear of it, the same
-     space the rail keeps from the sidebar, in every mode; the scroller's
-     snap once scrolled that edge away at 1440×900. Each case runs with the
-     rail, in its full tier at 1440×900 and 1920×1080 and as the count at
-     1600×900, and without it, and at 1000×800 and 700×800 without it,
-     where the board scrolls and where it shows tabs. */
+  /* A stage that has not started still opens its panel on the card, and the
+     panel folds to its head and one line of the stage's first message: one
+     row, cut with an ellipsis, in the secondary ink, at both widths. */
+  browserTest("a stage's panel folded on its card is its head and one ellipsised line", async () => {
+    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
+    const out = path.resolve(".artifacts/agent-window-folded");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const MERGE = `${card("t-search")} .pb-pills [data-stage="merge"]`;
+    try {
+      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
+        const label = `folded-${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+        try {
+          await page.waitForSelector(`${MERGE} >> visible=true`, { timeout: 30_000 });
+          await page.locator(MERGE).click();
+          const panel = page.locator(`${card("t-search")} [data-stage-detail]`);
+          await panel.waitFor();
+          await panel.locator("[data-panel-fold]").click();
+          await page.waitForSelector(`${card("t-search")} [data-stage-detail][data-collapsed="1"]`);
+          await page.mouse.move(viewport.width / 2, 12);
+          await page.waitForTimeout(300);
+          const reading = await panel.evaluate((node) => {
+            const line = node.querySelector<HTMLElement>(":scope > .rlatest")!;
+            const style = getComputedStyle(line);
+            const ink = document.createElement("span");
+            ink.style.color = "var(--color-secondary)";
+            line.append(ink);
+            const secondary = getComputedStyle(ink).color;
+            ink.remove();
+            const shown = [...node.children].filter((child) => getComputedStyle(child).display !== "none").map((child) => child.className);
+            return {
+              panel: Math.round(node.getBoundingClientRect().height),
+              gap: getComputedStyle(node).rowGap,
+              paddingBottom: getComputedStyle(node).paddingBottom,
+              line: { height: Math.round(line.getBoundingClientRect().height), whiteSpace: style.whiteSpace, textOverflow: style.textOverflow, overflow: style.overflowX, color: style.color, secondary, cut: line.scrollWidth > line.clientWidth },
+              shown,
+            };
+          });
+          await panel.screenshot({ path: path.join(pngDir, `${label}.png`) });
+          readings[label] = { ...reading, pageErrors };
+          if (reading.line.whiteSpace !== "nowrap" || reading.line.textOverflow !== "ellipsis" || reading.line.overflow !== "hidden") failures.push(`${label}: the folded line wraps (${JSON.stringify(reading.line)})`);
+          if (reading.line.height > 24) failures.push(`${label}: the folded line stands ${reading.line.height} px tall, more than one row`);
+          if (reading.line.color !== reading.line.secondary) failures.push(`${label}: the folded line is ${reading.line.color}, the secondary ink is ${reading.line.secondary}`);
+          if (reading.gap !== "2px" || reading.paddingBottom !== "6px") failures.push(`${label}: the folded panel spaces its rows ${reading.gap} apart over ${reading.paddingBottom}`);
+          if (reading.shown.length !== 2) failures.push(`${label}: the folded panel shows ${JSON.stringify(reading.shown)}`);
+          /* 70 px is what the folded panel measured before the agent window (a4e0477e6), at both faces. */
+          if (reading.panel !== 70) failures.push(`${label}: the folded panel stands ${reading.panel} px tall, 70 before the agent window`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/agent-window", { recursive: true });
+    fs.writeFileSync("evidence/agent-window/folded-panel.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  /* A link (#c=) opens its agent in the window and gives the reader the
+     keyboard. Nobody has pressed a key, on a page just loaded or on one the
+     link changed later, so the reader shows no focus ring; a key pressed
+     before the link brings the ring back. */
+  browserTest("a link opens its agent in the window without a focus ring nobody asked for", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/agent-window-link"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const reader = `[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="${KEY.export}"]`;
+    const ring = (page: Page) => page.waitForFunction((selector) => {
+      const node = document.querySelector<HTMLElement>(selector);
+      return node && node.contains(document.activeElement) ? { focused: document.activeElement === node, ring: node.matches(":focus-visible") } : null;
+    }, reader, { timeout: 30_000 }).then((handle) => handle.jsonValue());
+    try {
+      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages#c=${KEY.export}`, viewport, scheme, lang);
+        try {
+          const onLoad = await ring(page);
+          if (!onLoad?.focused || onLoad.ring) failures.push(`${label}: a page loaded on the link ${JSON.stringify(onLoad)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); });
+          const fresh = await context.newPage();
+          await fresh.goto(`${server.base}?scenario=stages`);
+          await fresh.waitForSelector(`${card("t-export")} >> visible=true`, { timeout: 30_000 });
+          await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
+          const later = await ring(fresh);
+          if (!later?.focused || later.ring) failures.push(`${label}: the link followed later ${JSON.stringify(later)}`);
+          await fresh.keyboard.press("Escape");
+          await fresh.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          await fresh.evaluate(() => { location.hash = ""; });
+          await fresh.keyboard.press("Shift");
+          await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
+          const keyed = await ring(fresh);
+          if (!keyed?.focused || !keyed.ring) failures.push(`${label}: the link followed after a key ${JSON.stringify(keyed)}`);
+          /* The same link once more without leaving the board: the Viewer still
+             holds that conversation as its focus, and the window opens all the
+             same. The hop above may or may not reach the Overview first; this
+             one never does. */
+          await fresh.keyboard.press("Escape");
+          await fresh.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          await fresh.evaluate(() => { location.hash = "#p=atlas"; });
+          await fresh.evaluate((key) => { location.hash = `#c=${key}`; }, KEY.export);
+          const again = await ring(fresh);
+          if (!again?.focused) failures.push(`${label}: the same link followed again ${JSON.stringify(again)}`);
+          console.log(`${label}: ${JSON.stringify({ onLoad, later, keyed, again })}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  /* Closing the agent on screen when its neighbour has never read: three
+     agents opened, the transcripts the page kept for them dropped and the
+     page loaded again, so only the agent the pill brings back reads. Its row's
+     × keeps the window, and the reader shows the agent closed until the
+     neighbour has read, never a reader still loading or its skeleton. */
+  browserTest("closing the agent on screen before its neighbour has ever read keeps the window and shows no loading reader", async () => {
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/agent-window-unread-neighbour"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+        try {
+          await page.waitForSelector(`${chip("build")} >> visible=true`, { timeout: 30_000 });
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
+          for (const [target, key] of [[chip("build"), KEY.build], [EXPORT_TILE, KEY.export], [chip("review"), KEY.review]] as const) {
+            await page.evaluate((selector) => document.querySelector(selector)?.closest(".card")?.scrollIntoView({ block: "center" }), target);
+            await page.locator(target).click();
+            await showing(page, key);
+            await page.keyboard.press("Escape");
+            await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
+          }
+          await page.evaluate(() => {
+            for (const key of Object.keys(localStorage)) if (key.startsWith("llvTail:")) localStorage.removeItem(key);
+          });
+          await page.reload();
+          await page.waitForSelector("[data-open-agents-pill] >> visible=true", { timeout: 30_000 });
+          await page.locator("[data-open-agents-pill]").click();
+          await showing(page, KEY.build);
+          await settle(page);
+          const parked = await page.evaluate((key) => document.querySelector(`.reader-park [data-kanban-reader="${key}"] [data-feed-state]`)?.getAttribute("data-feed-state") ?? null, KEY.export);
+          await installTrace(page);
+          await phase(page, "close-one");
+          await page.locator(`[data-open-agent-close="${KEY.build}"]`).click();
+          await showing(page, KEY.export);
+          await settle(page);
+          const trace = await samples(page);
+          const bare = trace.filter((sample) => !sample.window);
+          const loading = trace.filter((sample) => sample.window && (sample.skeleton || !sample.shown || !["items", "empty", "error"].includes(sample.feed ?? "")));
+          const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent]")].map((row) => row.dataset.openAgent));
+          const sequence = trace.map((sample) => sample.shown).filter((shown, index, all) => shown !== all[index - 1]);
+          console.log(`${label}: ${JSON.stringify({ parked, frames: trace.length, bare: bare.length, loading: loading.length, sequence, rows })}`);
+          if (bare.length) failures.push(`${label}: ${bare.length} frames of the close showed no window`);
+          if (loading.length) failures.push(`${label}: ${loading.length} frames showed the window with a loading or skeleton reader (${JSON.stringify(loading[0])})`);
+          if (rows.join(",") !== [KEY.export, KEY.review].join(",")) failures.push(`${label}: after the close the list is ${rows.join(",")}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  const seedReaders =(ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
+
+  /* The page's edges. The project's name, the folded Orchestrator row and
+     the first column the board shows start on one left edge; the row stands
+     one gap below the bar and one gap above what the board draws next (the
+     columns, or the scroll mode's jump strip or the tabbed mode's tabs,
+     which starts where the first column does and stands that gap above the
+     columns); and every column's title sits at the same offset in its
+     column, framed or not. Open agents take no strip beside the columns
+     (their pill stands in the header), so each width is read with three
+     agents open and with none, and both must hold the same edges: at
+     1440×900, 1920×1080 and 1600×900, and at 1000×800 and 700×800, where the
+     board scrolls and where it shows tabs. */
+  const OPEN3 = ["search-ver-2", "rounds-review", "upload-plan"] as const;
+
   interface EdgeReading {
     mode: string | null;
-    tier: string | null;
     name: number | null;
     seat: { left: number; top: number; bottom: number } | null;
     bar: number;
     /** The bottom of what stands right above the Orchestrator row: the bar, or the reason filters under it. */
     above: number;
-    rail: { left: number; top: number; right: number } | null;
     edge: number;
     column: number | null;
     strip: { left: number; top: number; bottom: number } | null;
     columns: number;
-    railInset: number | null;
-    cardInset: number | null;
     titles: Record<string, { left: number; top: number }>;
   }
   const readEdges = (page: Page) => page.evaluate((): EdgeReading => {
@@ -9713,13 +10136,7 @@ describe("the open agents at the board's side: short names, role emblem and colo
       name = range.getBoundingClientRect().left;
     }
     const seat = rect(document.querySelector(".kb-page > .seat"));
-    const railBox = rect(document.querySelector("[data-open-rail] :is(.or-chip, .or-count)"));
     const strip = rect(document.querySelector(".scroll-wrap > .tabs-nav > button"));
-    const chip = rect(document.querySelector("[data-open-rail] .or-chip"));
-    const emblem = rect(document.querySelector("[data-open-rail] .or-emblem"));
-    const cardEl = document.querySelector<HTMLElement>("[data-kanban-board] .column[data-status=\"inbox\"] .card");
-    const cardBox = rect(cardEl);
-    const cardHead = rect(cardEl?.querySelector(".head"));
     const titles: Record<string, { left: number; top: number }> = {};
     for (const column of document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")) {
       const box = column.getBoundingClientRect();
@@ -9732,36 +10149,23 @@ describe("the open agents at the board's side: short names, role emblem and colo
     const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
     return {
       mode: document.querySelector<HTMLElement>("[data-kanban-board]")?.dataset.mode ?? null,
-      tier: document.querySelector<HTMLElement>("[data-open-rail]")?.dataset.openRail ?? null,
       name,
       seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
       bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
       above: (rect(document.querySelector(".kb > .reason-filter-row")) ?? rect(document.querySelector(".bar[data-bar=\"project\"]")))!.bottom,
-      rail: railBox ? { left: railBox.left, top: railBox.top, right: railBox.right } : null,
       edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
       column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
       strip: strip ? { left: strip.left, top: strip.top, bottom: strip.bottom } : null,
       columns,
-      railInset: chip && emblem ? emblem.left - chip.left : null,
-      cardInset: cardBox && cardHead ? cardHead.left - cardBox.left : null,
       titles,
     };
   });
-  const edgeFailures = (label: string, edges: EdgeReading, railExpected: boolean): string[] => {
+  const edgeFailures = (label: string, edges: EdgeReading): string[] => {
     const failures: string[] = [];
     const near = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) <= 0.5;
     if (!edges.seat) return [`${label}: no Orchestrator row on top`];
     if (!near(edges.name, edges.seat.left)) failures.push(`${label}: the project's name starts at ${edges.name}, the Orchestrator row at ${edges.seat.left}`);
-    if (railExpected) {
-      if (!edges.rail) failures.push(`${label}: no rail`);
-      else {
-        if (!near(edges.rail.left, edges.seat.left)) failures.push(`${label}: the rail starts at ${edges.rail.left}, the Orchestrator row at ${edges.seat.left}`);
-        if (!near(edges.rail.top, edges.columns)) failures.push(`${label}: the rail's top is ${edges.rail.top}, the columns' ${edges.columns}`);
-        if (edges.column != null && !near(edges.column - edges.rail.right, edges.edge)) failures.push(`${label}: the first column stands ${edges.column - edges.rail.right} px clear of the rail, the board's edge is ${edges.edge}`);
-      }
-      if (edges.tier === "full" && !near(edges.railInset, edges.cardInset)) failures.push(`${label}: the rail's rows hold their content ${edges.railInset} in, the cards ${edges.cardInset}`);
-    }
-    if (!railExpected && !near(edges.column, edges.seat.left)) failures.push(`${label}: the first column starts at ${edges.column}, the Orchestrator row at ${edges.seat.left}`);
+    if (!near(edges.column, edges.seat.left)) failures.push(`${label}: the first column starts at ${edges.column}, the Orchestrator row at ${edges.seat.left}`);
     const above = edges.seat.top - edges.above;
     const next = edges.strip ?? { top: edges.columns, bottom: edges.columns };
     const below = next.top - edges.seat.bottom;
@@ -9775,9 +10179,9 @@ describe("the open agents at the board's side: short names, role emblem and colo
     return failures;
   };
 
-  browserTest("one left edge, one gap round the Orchestrator row, the rail level with the columns, one inset for its rows and the cards", async () => {
-    const pngDir = process.env.OPEN_AGENTS_PNG_DIR ?? "/var/tmp/llv-open-agents-evidence";
-    const out = path.resolve(".artifacts/open-agents-rail");
+  browserTest("one left edge and one gap round the Orchestrator row, the same with agents open as with none", async () => {
+    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
+    const out = path.resolve(".artifacts/agent-window-edges");
     fs.mkdirSync(out, { recursive: true });
     fs.mkdirSync(pngDir, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -9787,35 +10191,37 @@ describe("the open agents at the board's side: short names, role emblem and colo
     try {
       for (const lang of ["en", "uk"] as const) {
         for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }, { width: 1600, height: 900 }, { width: 1000, height: 800 }, { width: 700, height: 800 }] as const) {
-          for (const ids of viewport.width < 1440 ? [[]] as const : [OPEN[3], []] as const) {
+          const pair: EdgeReading[] = [];
+          for (const ids of [OPEN3, []] as const) {
             const label = `edges-${viewport.width}x${viewport.height}-${ids.length}-${lang}`;
             const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, "light", lang);
             try {
               await context.addInitScript(seedReaders(ids));
               await page.reload();
               await page.waitForSelector("[data-kanban-board] .column[data-status] .card >> visible=true", { timeout: 30_000 });
-              if (ids.length) await page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+              if (ids.length) await page.waitForSelector("[data-open-agents-pill]", { timeout: 30_000 });
               await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
               if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) await page.keyboard.press("o");
               await page.waitForTimeout(700);
               await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
               const edges = await readEdges(page);
               readings[label] = { ...edges, pageErrors };
-              failures.push(...edgeFailures(label, edges, ids.length > 0));
-              if (ids.length && edges.tier !== (viewport.width === 1600 ? "compact" : "full")) failures.push(`${label}: the rail is ${edges.tier}`);
+              failures.push(...edgeFailures(label, edges));
+              pair.push(edges);
               if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
             } finally {
               await context.close();
             }
           }
+          if (pair.length === 2 && JSON.stringify(pair[0]) !== JSON.stringify(pair[1])) failures.push(`${viewport.width}x${viewport.height}-${lang}: the edges with three agents open differ from those with none`);
         }
       }
     } finally {
       await browser.close();
       server.stop();
     }
-    fs.mkdirSync("evidence/open-agents-rail", { recursive: true });
-    fs.writeFileSync("evidence/open-agents-rail/edges.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    fs.mkdirSync("evidence/agent-window", { recursive: true });
+    fs.writeFileSync("evidence/agent-window/edges.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
@@ -11805,125 +12211,6 @@ describe("column dwell smooth", () => {
     }
   }, 60_000);
 
-  browserTest("keyboard agent jumps preserve navigation while column widths change", async () => {
-    const out = path.resolve(".artifacts/column-dwell-smooth/keyboard");
-    fs.mkdirSync(out, { recursive: true });
-    const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
-    try {
-      // At 1440, both agent columns stay at their minimum width on every jump.
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 3840, height: 2160 }, "light", "en", "no-preference");
-      await inspectColumnAnimations(page);
-      try {
-        await context.addInitScript(() => {
-          localStorage.setItem("llv:kanban-readers:v1:atlas", JSON.stringify(["search-ver-2", "rounds-review", "pending-worker", "upload-plan", "export-impl"].map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))));
-          localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
-        });
-        await page.reload();
-        await page.locator("[data-open-rail]").waitFor();
-        await page.locator('[data-rail-hide]').click();
-        await page.mouse.move(700, 10);
-        await page.locator('[data-open-agent-jump="conversation_search-ver-2"]').click();
-        await page.waitForTimeout(450);
-        await page.evaluate(() => {
-          const changes: { wide: string; delta: number; active: boolean; animations: number; scrolled: boolean; visible: boolean }[] = [];
-          const columns = [...document.querySelectorAll<HTMLElement>(".board > .column")];
-          const widths = () => columns.map((node) => node.getBoundingClientRect().width);
-          const bodies = [...document.querySelectorAll<HTMLElement>(".col-body, .kb-page")];
-          let before: number[] = [], beforeScroll: number[] = [];
-          document.addEventListener("keydown", (event) => {
-            if (event.altKey && (event.code === "KeyJ" || event.code === "KeyK")) {
-              before = widths(); beforeScroll = bodies.map((node) => node.scrollTop);
-            }
-          }, true);
-          Object.assign(window, { keyboardWidthChanges: changes });
-          new MutationObserver(() => {
-            requestAnimationFrame(async () => {
-              const root = document.querySelector<HTMLElement>(".kb")!;
-              while (root.hasAttribute("data-column-layout") && root.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-              const key = document.querySelector<HTMLElement>('[data-open-agent-jump][aria-current="true"]')!.dataset.openAgentJump!;
-              const reader = document.querySelector<HTMLElement>(`[data-kanban-reader="${key}"]`)!;
-              const rect = reader.getBoundingClientRect(), viewport = reader.closest(".col-body")!.getBoundingClientRect();
-              const tracks = getComputedStyle(document.querySelector(".board")!).gridTemplateColumns.split(" ").map(Number.parseFloat);
-              changes.push({ wide: document.querySelector<HTMLElement>('.column[data-wide="1"]')!.dataset.status!, delta: Math.max(...tracks.map((width, i) => Math.abs(width - before[i]!))), active: root.hasAttribute("data-column-layout"), animations: document.getAnimations().filter((animation) => ((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))).length, scrolled: bodies.some((node, i) => node.scrollTop !== beforeScroll[i]), visible: rect.top < viewport.bottom && rect.bottom > viewport.top });
-            });
-          }).observe(document.querySelector(".kb")!, { subtree: true, attributes: true, attributeFilter: ["data-wide"] });
-        });
-        for (const shortcut of ["Alt+j", "Alt+j", "Alt+j", "Alt+k"]) {
-          await page.keyboard.press(shortcut);
-          await page.waitForTimeout(450);
-        }
-        const changes = await page.evaluate(() => (window as unknown as { keyboardWidthChanges: { wide: string; delta: number; active: boolean; animations: number; scrolled: boolean; visible: boolean }[] }).keyboardWidthChanges);
-        expect(changes.map(({ wide }) => wide)).toEqual(["inbox", "assigned", "inbox"]);
-        for (const change of changes) {
-          expect(change.delta).toBeGreaterThan(1);
-          expect(change.visible).toBe(true);
-          if (change.active) expect(change.animations).toBeGreaterThan(0);
-          else expect(change.scrolled).toBe(true);
-        }
-        expect(await page.locator(".kb-layout-copy").count()).toBe(0);
-        expect(pageErrors).toEqual([]);
-      } finally { await context.close(); }
-    } finally { await browser.close(); server.stop(); }
-  }, 90_000);
-
-  browserTest("width transforms preserve the visible scroll position of an open reader", async () => {
-    const out = path.resolve(".artifacts/column-dwell-smooth/readers");
-    fs.mkdirSync(out, { recursive: true });
-    const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
-    try {
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, "light", "en", "no-preference");
-      await inspectColumnAnimations(page);
-      try {
-        await context.addInitScript(() => {
-          localStorage.setItem("llv:kanban-readers:v1:atlas", JSON.stringify([{ key: "conversation_search-ver-2", path: "/repo/search-ver-2.jsonl", folded: false }]));
-          localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
-        });
-        await page.reload();
-        await page.locator("[data-kanban-reader]").first().waitFor();
-        await page.locator('[data-rail-hide]').click();
-        await page.mouse.move(700, 10);
-        await page.waitForTimeout(400);
-        const scrolls = await page.evaluate(async () => {
-          const feed = document.querySelector<HTMLElement>(".column .card [data-log-feed-scroller]")!;
-          const history = document.createElement("div");
-          Object.assign(history.style, { height: "800px", width: "1200px" });
-          history.textContent = "Additional conversation history";
-          feed.append(history);
-          feed.style.overflowX = "auto";
-          feed.scrollTop = 150; feed.scrollLeft = 80;
-          await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-          const before = { top: feed.scrollTop, left: feed.scrollLeft };
-          document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
-          await Promise.resolve();
-              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-          for (const animation of document.getAnimations()) if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = 40; }
-          const copies = [...document.querySelectorAll<HTMLElement>(".kb-layout-copy [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
-          return { before, live: { top: feed.scrollTop, left: feed.scrollLeft }, copies };
-        });
-        expect(scrolls.before).toEqual({ top: 150, left: 80 });
-        expect(scrolls.live).toEqual(scrolls.before);
-        expect(scrolls.copies).toHaveLength(0);
-        for (const copy of scrolls.copies) expect(copy).toEqual(scrolls.before);
-        const retargeted = await page.evaluate(async () => {
-          document.querySelector<HTMLButtonElement>('[data-col-width="inbox"]')!.click();
-          await Promise.resolve();
-              while (document.querySelector<HTMLElement>(".kb")?.dataset.columnLayout !== "running") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-          for (const animation of document.getAnimations()) if (((animation.effect as KeyframeEffect | null)?.target instanceof HTMLElement && ((animation.effect as KeyframeEffect).target as HTMLElement).hasAttribute("data-layout-animating"))) { animation.pause(); animation.currentTime = 40; }
-          return [...document.querySelectorAll<HTMLElement>(".column .card [data-log-feed-scroller]")].map((node) => ({ top: node.scrollTop, left: node.scrollLeft }));
-        });
-        expect(retargeted).toHaveLength(1);
-        for (const copy of retargeted) expect(copy).toEqual(scrolls.before);
-        await page.evaluate(() => { document.querySelector<HTMLElement>(".column .card [data-log-feed-scroller]")!.scrollTop += 80; });
-        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
-        expect(await page.locator(".kb-layout-copy").count()).toBe(0);
-        expect(await page.locator("[data-layout-animating]").count()).toBe(0);
-        expect(pageErrors).toEqual([]);
-      } finally { await context.close(); }
-    } finally { await browser.close(); server.stop(); }
-  }, 90_000);
-
   browserTest("interrupted width transitions preserve visible geometry and actual scrolling reveals live cards", async () => {
     const out = path.resolve(".artifacts/column-dwell-smooth/interruptions");
     fs.mkdirSync(out, { recursive: true });
@@ -12550,27 +12837,24 @@ describe("column dwell smooth", () => {
   }, 180_000);
 });
 
-describe("a column widens itself: the agent focused from the rail, the mouse resting on it", () => {
+describe("a column widens itself: the mouse resting on it", () => {
   /*
-   * The `stages` scenario at 1440×900 with five of its conversations open,
-   * one of them on an Inbox card, beside the Viewer's sidebar (the board
-   * scrolls its columns) and with the sidebar put away (the columns share a
-   * grid). The mouse comes to rest over a card in the rightmost narrow shelf
-   * the window shows whole: the frames are that column mid-countdown, with its
-   * cue, and the board after the dwell, with the column holding the wide
-   * share; in both schemes, and under reduced motion. A fresh board then takes
-   * the rail's segment for the Inbox agent: the frame is Inbox widened with
-   * the reader focused in it. What is gated: the cue shows before the
-   * threshold and sweeps (still under reduced motion), and both the dwell and
-   * the rail leave every column exactly as wide as a press of the same
-   * column's Widen button does on a fresh board. Frames and readings go to
-   * COLUMN_AUTOEXPAND_PNG_DIR.
+   * The `stages` scenario at 1440×900 with five of its conversations open
+   * (behind the header's pill; an open agent takes no width from its column),
+   * beside the Viewer's sidebar (the board scrolls its columns) and with the
+   * sidebar put away (the columns share a grid). The mouse comes to rest over
+   * a card in the rightmost narrow shelf the window shows whole: the frames
+   * are that column mid-countdown, with its cue, and the board after the
+   * dwell, with the column holding the wide share; in both schemes, and under
+   * reduced motion. What is gated: the cue shows before the threshold and
+   * sweeps (still under reduced motion), and the dwell leaves every column
+   * exactly as wide as a press of the same column's Widen button does on a
+   * fresh board. Frames and readings go to COLUMN_AUTOEXPAND_PNG_DIR.
    *
    *   CHROME_BIN=/usr/bin/google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "widens itself"
    */
   const OPEN = ["search-ver-2", "rounds-review", "pending-worker", "upload-plan", "export-impl"] as const;
-  const SHELF_AGENT = "conversation_pending-worker";
   const seedReaders = `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(OPEN.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
   const readColumns = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => {
     const head = column.querySelector(".col-head");
@@ -12584,7 +12868,7 @@ describe("a column widens itself: the agent focused from the rail, the mouse res
     }];
   })));
 
-  browserTest("the cue mid-countdown, the widened column and the rail's agent, at 1440×900", async () => {
+  browserTest("the cue mid-countdown and the widened column, at 1440×900", async () => {
     const pngDir = process.env.COLUMN_AUTOEXPAND_PNG_DIR ?? "/var/tmp/llv-column-autoexpand";
     const out = path.resolve(".artifacts/column-autoexpand");
     fs.mkdirSync(out, { recursive: true });
@@ -12597,7 +12881,7 @@ describe("a column widens itself: the agent focused from the rail, the mouse res
       const opened = await openFixture(browser, `${server.base}?scenario=stages`, VIEWPORT, scheme, "en", motion);
       await opened.context.addInitScript(seedReaders);
       await opened.page.reload();
-      await opened.page.waitForSelector("[data-open-rail]", { timeout: 30_000 });
+      await opened.page.waitForSelector("[data-open-agents-pill]", { timeout: 30_000 });
       await opened.page.waitForFunction((count) => document.querySelectorAll("[data-kanban-reader]").length >= count, OPEN.length, { timeout: 30_000 });
       if (!sidebar) await opened.page.click("[data-rail-hide]");
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -12672,35 +12956,6 @@ describe("a column widens itself: the agent focused from the rail, the mouse res
           if (!after[target.status]?.wide || before[target.status]?.wide) failures.push(`${label}: ${target.status} did not widen`);
           if (button) sameAs(label, after, button);
           if (after[target.status]?.cue) failures.push(`${label}: the cue stayed after the widening`);
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } finally {
-          await context.close();
-        }
-      }
-      for (const sidebar of [true, false]) {
-        const label = `${sidebar ? "sidebar" : "no-sidebar"}-light-rail-focus`;
-        const { context, page, pageErrors } = await open(sidebar, "light");
-        try {
-          const status = await page.evaluate((key) => document.querySelector(`[data-kanban-reader="${key}"]`)?.closest<HTMLElement>(".column")?.dataset.status ?? null, SHELF_AGENT);
-          /* Another agent first, so the rail's jump is a move across the board. */
-          const first = async (on: Page) => {
-            await on.locator(`[data-open-agent-jump="conversation_${OPEN[0]}"]`).click();
-            await on.waitForTimeout(500);
-          };
-          await first(page);
-          const before = await readColumns(page);
-          await page.screenshot({ path: path.join(pngDir, `${label}-before.png`) });
-          await page.locator(`[data-open-agent-jump="${SHELF_AGENT}"]`).click();
-          await page.waitForTimeout(700);
-          const after = await readColumns(page);
-          const focused = await page.evaluate(() => document.activeElement?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? null);
-          await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
-          const button = await viaButton(sidebar, "inbox", first);
-          readings[label] = { status, before, after, button, focused, pageErrors };
-          if (status !== "inbox") failures.push(`${label}: the shelf agent's reader sits in ${status}`);
-          else if (!after.inbox?.wide || before.inbox?.wide) failures.push(`${label}: Inbox did not widen`);
-          sameAs(label, after, button);
-          if (focused !== SHELF_AGENT) failures.push(`${label}: the operator is in ${focused}`);
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally {
           await context.close();
@@ -14132,21 +14387,20 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
   }, 900_000);
 });
 
-describe("an empty column folds to a strip; an open agent keeps its minimum width", () => {
+describe("an empty column folds to a strip; an open agent leaves the columns as they are", () => {
   /*
    * The `stages` scenario with Blocked emptied (`&empty=blocked`), at
    * 1280×900, 1440×900 and 1600×900, with no conversation open and with the
-   * Assigned card's worker open (the open-agents rail then stands beside the
-   * columns), in English and Ukrainian; and at 390×844 on a phone, which
+   * Assigned card's worker open (behind the header's pill, in the agent
+   * window's list), in English and Ukrainian; and at 390×844 on a phone, which
    * draws its own layout and no strip. What is gated: the empty column is a
    * strip no wider than 48 px that still names itself and its count and draws
    * no menu button; a pointer passing across it leaves it shut; it opens to a
    * shelf under a resting mouse (whose menu then opens) and under a dragged
    * card, and a card dropped on it lands there; it stays open while its own
    * menu is, with the pointer on the menu or focus in it; a search typed on
-   * the full board folds no column; the open agent's column is never narrower than
-   * `--agent-min` (clamp(520px, 40vw, 760px)), and when the columns do not
-   * fit the board scrolls sideways instead. Frames go to
+   * the full board folds no column; an open agent changes no column's width,
+   * so the columns read the same with it as without it. Frames go to
    * EMPTY_STRIP_PNG_DIR.
    *
    *   CHROME_BIN=/usr/bin/google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
@@ -14169,19 +14423,11 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
         cards: column.querySelectorAll(".card[data-id]").length,
       }];
     }));
-    const reader = document.querySelector<HTMLElement>("[data-kanban-reader]");
-    const agentColumn = reader?.closest<HTMLElement>(".column[data-status]") ?? null;
-    const probe = document.createElement("div");
-    probe.style.width = "var(--agent-min)";
-    document.querySelector("[data-kanban-board]")?.appendChild(probe);
-    const agentMin = Math.round(probe.getBoundingClientRect().width);
-    probe.remove();
     return {
       mode: board?.dataset.mode ?? null,
-      rail: document.querySelector<HTMLElement>("[data-open-rail]")?.dataset.openRail ?? null,
+      pill: document.querySelector<HTMLElement>("[data-open-agents-pill] .pill-words")?.textContent ?? null,
+      inColumn: document.querySelector(".column [data-kanban-reader]") !== null,
       columns,
-      agentMin,
-      agent: reader ? { column: agentColumn?.dataset.status ?? null, columnWidth: Math.round(agentColumn!.getBoundingClientRect().width), readerWidth: Math.round(reader.getBoundingClientRect().width) } : null,
       scroll: board ? { scrollWidth: board.scrollWidth, clientWidth: board.clientWidth } : null,
     };
   });
@@ -14201,7 +14447,7 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
       if (agent) {
         await opened.context.addInitScript(seedReaders);
         await opened.page.reload();
-        await opened.page.waitForSelector("[data-kanban-reader]", { timeout: 30_000 });
+        await opened.page.waitForSelector("[data-open-agents-pill]", { timeout: 30_000 });
       }
       await opened.page.waitForSelector('[data-kanban-board] .column[data-status="blocked"]', { timeout: 30_000 });
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -14213,35 +14459,24 @@ describe("an empty column folds to a strip; an open agent keeps its minimum widt
     try {
       for (const lang of ["en", "uk"] as const) {
         for (const width of [1280, 1440, 1600] as const) {
+          let none: Awaited<ReturnType<typeof readBoard>> | null = null;
           for (const agent of [false, true]) {
             const label = `${width}x900-${agent ? "agent" : "none"}-${lang}`;
             const { context, page, pageErrors } = await open({ width, height: 900 }, lang, agent);
             try {
-              if (agent) await page.locator("[data-kanban-reader]").first().scrollIntoViewIfNeeded();
               await page.waitForTimeout(300);
               await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
               const reading = await readBoard(page);
               readings[label] = { ...reading, pageErrors };
+              if (!agent) none = reading;
               const blocked = reading.columns.blocked;
               if (!blocked?.strip || blocked.width > 48) failures.push(`${label}: Blocked is ${blocked?.width}px, strip ${blocked?.strip}`);
               if (!blocked?.title || blocked.count !== "0") failures.push(`${label}: the strip reads «${blocked?.title}» «${blocked?.count}»`);
               for (const status of ["inbox", "assigned", "done"]) if (reading.columns[status]?.strip) failures.push(`${label}: ${status} holds cards and folded`);
               if (agent) {
-                if (!reading.agent) failures.push(`${label}: no open agent`);
-                else if (reading.agent.columnWidth < reading.agentMin - 1) failures.push(`${label}: the agent's column is ${reading.agent.columnWidth}px under its ${reading.agentMin}px minimum`);
-                if (reading.rail === null) failures.push(`${label}: no open-agents rail`);
-                if (width === 1280) {
-                  /* Inbox widened, Assigned gives the wide share away and turns
-                     a shelf; the agent it holds keeps its minimum all the same. */
-                  await page.locator('[data-kanban-board] [data-col-width="inbox"][data-col-width-action="widen"]').click();
-                  await page.mouse.move(700, 10);
-                  await page.waitForTimeout(700);
-                  await page.screenshot({ path: path.join(pngDir, `${label}-inbox-wide.png`) });
-                  const widened = await readBoard(page);
-                  (readings[label] as Record<string, unknown>).inboxWide = { mode: widened.mode, agentMin: widened.agentMin, agent: widened.agent, assigned: widened.columns.assigned };
-                  if (!widened.agent) failures.push(`${label}: Inbox widened, no open agent`);
-                  else if (widened.agent.columnWidth < widened.agentMin - 1) failures.push(`${label}: Inbox widened, the agent's column is ${widened.agent.columnWidth}px under its ${widened.agentMin}px minimum`);
-                }
+                if (!reading.pill) failures.push(`${label}: no pill for the open agent`);
+                if (reading.inColumn) failures.push(`${label}: the open agent's reader stands in a column`);
+                if (none && (JSON.stringify(reading.columns) !== JSON.stringify(none.columns) || reading.mode !== none.mode)) failures.push(`${label}: the columns with an open agent ${JSON.stringify(reading.columns)} differ from those with none ${JSON.stringify(none.columns)}`);
               }
               if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
               if (width !== 1280) {
@@ -17155,24 +17390,29 @@ describe("task motion and waiting reasons", () => {
           await prompt.fill("Read the README and tell me what this project does");
           await page.waitForTimeout(800);
           await page.getByRole("button", { name: locale === "uk" ? "Запустити агента" : "Launch the agent" }).first().click();
-          await page.locator('.col-body[data-status="assigned"] [data-kanban-reader]').first().waitFor({ timeout: 20_000 });
+          /* The launched agent goes on in the agent window. */
+          const launchedReader = "[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]";
+          await page.locator(launchedReader).first().waitFor({ timeout: 20_000 });
           await page.waitForTimeout(1500);
+          const share = await page.evaluate((selector) => {
+            const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+            /* The same share the first-prompt case reads: the visible width times the visible height over the reader's box. */
+            return box && box.width > 0 && box.height > 0
+              ? (Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) * Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0))) / (box.width * box.height)
+              : null;
+          }, launchedReader);
+          /* The operator leaves the window to start the next one. */
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
           await create();
           await page.waitForFunction(() => document.querySelectorAll("[data-kanban-draft] textarea").length >= 1, undefined, { timeout: 10_000 });
           await page.waitForTimeout(800);
           const read = await page.evaluate(() => {
-            const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
-            const box = reader?.getBoundingClientRect();
-            /* The same share the first-prompt case reads: the visible width times the visible height over the reader's box. */
-            const share = box && box.width > 0 && box.height > 0
-              ? (Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) * Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0))) / (box.width * box.height)
-              : null;
             const area = document.querySelector<HTMLElement>("[data-kanban-draft] textarea")?.getBoundingClientRect();
-            return { share, areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
+            return { areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
           });
           if (width < 1440 !== read.rowShown) failures.push(`${label}: the reason filters ${read.rowShown ? "stand under" : "share"} the bar`);
-          /* At 1000 px the board is tabs and the launched agent's reader stands in a tab that is not shown. */
-          if (width >= 1280 && (read.share === null || read.share <= 0.6)) failures.push(`${label}: the launched agent is ${read.share === null ? "not drawn" : `${(read.share * 100).toFixed(1)}% in the window`}`);
+          if (share === null || share <= 0.6) failures.push(`${label}: the launched agent is ${share === null ? "not drawn" : `${(share * 100).toFixed(1)}% in the window`}`);
           const limit = width === 1000 ? 898 : 876;
           if (read.areaBottom === null || read.areaBottom > limit) failures.push(`${label}: the next draft ends its prompt at ${read.areaBottom}, limit ${limit}`);
           expect(pageErrors).toEqual([]);
@@ -18011,7 +18251,7 @@ type Shift = { at: number; value: number; sources: string[]; mandate: boolean };
 /* Chrome's layout-shift entries, from here on, each with the nodes that moved. */
 async function installShiftObserver(page: Page) {
   await page.evaluate(() => {
-    const w = window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean }> };
+    const w = window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean; covered: boolean }> };
     w.__shifts = [];
     const describeNode = (node: Node | null) => node instanceof Element ? `${node.tagName}.${String(node.getAttribute("class") ?? "").split(/\s+/).slice(0, 2).join(".")}${node.getAttribute("data-status") ? `[${node.getAttribute("data-status")}]` : ""}` : "?";
     new PerformanceObserver((list) => {
@@ -18020,15 +18260,17 @@ async function installShiftObserver(page: Page) {
           at: entry.startTime, value: entry.value, recent: entry.hadRecentInput, sources: (entry.sources ?? []).slice(0, 3).map((source) => describeNode(source.node)),
           /* A shift of the orchestrator's mandate bubble: its hand-over is the first-bubble lane's (#2006, #2415). */
           mandate: (entry.sources ?? []).some((source) => (source.node?.textContent ?? "").trimStart().startsWith("You are this project's orchestrator")),
+          /* Under the agent window: a board the window covers settles out of the operator's sight. */
+          covered: Boolean(document.querySelector("[data-agent-window]")) && (entry.sources ?? []).every((source) => !source.node || !(source.node instanceof Element ? source.node : source.node.parentElement)?.closest("[data-agent-window]")),
         });
       }
     }).observe({ type: "layout-shift", buffered: true });
   });
 }
-/* The shifts no input explains, from `from` (a `performance.now()` reading) on. */
+/* The shifts no input explains and the agent window does not cover, from `from` (a `performance.now()` reading) on. */
 function collectShifts(page: Page, from: number): Promise<Shift[]> {
-  return page.evaluate((start) => (window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean }> }).__shifts
-    .filter((entry) => entry.at >= start && !entry.recent)
+  return page.evaluate((start) => (window as unknown as { __shifts: Array<{ at: number; value: number; recent: boolean; sources: string[]; mandate: boolean; covered: boolean }> }).__shifts
+    .filter((entry) => entry.at >= start && !entry.recent && !entry.covered)
     .map((entry): Shift => ({ at: Math.round(entry.at - start), value: Number(entry.value.toFixed(4)), sources: entry.sources, mandate: entry.mandate })), from);
 }
 
@@ -18100,30 +18342,34 @@ describe("launch layout shift rendered evidence", () => {
               headVisible: Boolean(head && head.top >= view.top - 0.5 && head.bottom <= view.bottom + 0.5),
             };
           });
-          /* Opening a second draft beside the launched agent must leave that agent in the window. */
+          /* The launched agent goes on in the agent window; a second draft, opened after the operator leaves the
+             window, leaves that agent open behind the pill. */
           let secondDraft: Record<string, unknown> | null = null;
           if (!viewport.touch) {
+            const launched = await page.evaluate(() => {
+              const box = document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.getBoundingClientRect();
+              const visibleWidth = box ? Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) : 0;
+              const visibleHeight = box ? Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0)) : 0;
+              return box ? Number(((visibleWidth * visibleHeight) / (box.width * box.height)).toFixed(3)) : 0;
+            });
+            await page.keyboard.press("Escape");
+            await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
             await page.click('[data-bar-control][aria-label="Create"]');
             await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
             await page.locator('[data-kanban-draft] textarea[aria-label="First prompt text"]').first().waitFor({ timeout: 10_000 });
             await page.waitForTimeout(800);
-            secondDraft = await page.evaluate(() => {
-              const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
-              const box = reader?.getBoundingClientRect();
-              const visibleWidth = box ? Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0)) : 0;
-              const visibleHeight = box ? Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0)) : 0;
-              return box ? { top: Math.round(box.top), left: Math.round(box.left), width: Math.round(box.width), visibleShare: Number(((visibleWidth * visibleHeight) / (box.width * box.height)).toFixed(3)), viewportHeight: window.innerHeight } : null;
-            });
+            secondDraft = { visibleShare: launched, pill: await page.evaluate(() => document.querySelector("[data-open-agents-pill] .pill-words")?.textContent ?? null) };
             await page.screenshot({ path: path.join(out, `${label}-${viewport.name}-second-draft.png`) });
           }
           readings.push({ viewport: viewport.name, cls, shifts: shifts.length, largest, handOff, secondDraft, pageErrors });
           expect(pageErrors, `${viewport.name} page errors`).toEqual([]);
           if (handOff && label === "after") {
-            expect(handOff.headVisible, `${viewport.name} the launched card's head stays in view after the hand-off`).toBe(true);
+            expect(handOff.headVisible, `${viewport.name} the launched card's head stays in view after the hand-off ${JSON.stringify(handOff)}`).toBe(true);
             expect(handOff.scrollDrift, `${viewport.name} the Assigned column does not scroll at the hand-off`).toBeLessThanOrEqual(2);
           }
           if (secondDraft && label === "after") {
-            expect(secondDraft.visibleShare, `${viewport.name} the launched agent stays in the window while a second draft opens`).toBeGreaterThan(0.6);
+            expect(secondDraft.visibleShare, `${viewport.name} the launched agent is in the agent window`).toBeGreaterThan(0.6);
+            expect(secondDraft.pill, `${viewport.name} the launched agent stays open while a second draft opens`).toBe("1 agent");
           }
         } finally { await context.close(); }
       }
@@ -18133,94 +18379,6 @@ describe("launch layout shift rendered evidence", () => {
     for (const reading of readings as Array<{ viewport: string; cls: number }>) {
       if (label === "after") expect(reading.cls, `${reading.viewport} cumulative layout shift of one launch`).toBeLessThan(LAUNCH_CLS_LIMIT);
     }
-  }, 240_000);
-
-  /* A launch made while the operator reads another agent in Assigned: the draft opens beside that agent and
-     the launched card lands under it, so the agent being read neither moves nor leaves the window, when the
-     draft opens or when the launch hands off. */
-  browserTest("launching while an agent is read in Assigned keeps that agent in the window and shifts by less than 0.1 at 1440", async () => {
-    const out = path.resolve(".artifacts/launch-render-polish");
-    fs.mkdirSync(out, { recursive: true });
-    const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
-    try {
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width: 1440, height: 900 }, "light", "en", "no-preference", false);
-      try {
-        await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
-        await installShiftObserver(page);
-        const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
-        if (await seat.count()) await seat.click();
-        await page.waitForTimeout(600);
-        /* The agent the operator is reading: the first task card in Assigned that has a tile, opened from it. The
-           needs-you card stands first under the motion order and carries stage chips, no tile. */
-        const card = page.locator('.col-body[data-status="assigned"] .card[data-id^="task:"]:has(.tile)').first();
-        const readId = await card.getAttribute("data-id");
-        await card.locator(".tile").first().click();
-        const readerOf = `.card[data-id="${readId}"] [data-kanban-reader]`;
-        await page.locator(readerOf).first().waitFor({ timeout: 10_000 });
-        await page.waitForTimeout(600);
-        await page.click('[data-bar-control][aria-label="Create"]');
-        await page.getByRole("menuitem", { name: "New conversation with an agent" }).click();
-        const prompt = page.locator('textarea[aria-label="First prompt text"]').first();
-        await prompt.waitFor({ timeout: 10_000 });
-        await page.selectOption('select[aria-label="Agent model"]', "haiku");
-        await page.selectOption('select[aria-label="Reasoning effort level"]', "low");
-        await prompt.fill("Read the README and tell me what this project does");
-        await page.waitForTimeout(800);
-        const sentAt = await page.evaluate((selector) => {
-          /* The share of the read agent's reader in the window, sampled from the send to the turn's end. */
-          const w = window as unknown as { __readerShare: number[] };
-          w.__readerShare = [];
-          const share = () => {
-            const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
-            if (!box || !box.width || !box.height) return 0;
-            const width = Math.max(0, Math.min(box.right, window.innerWidth) - Math.max(box.left, 0));
-            const height = Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0));
-            return (width * height) / (box.width * box.height);
-          };
-          w.__readerShare.push(share());
-          setInterval(() => w.__readerShare.push(share()), 50);
-          return performance.now();
-        }, readerOf);
-        await page.getByRole("button", { name: "Launch the agent" }).first().click();
-        const orderOf = () => page.evaluate((id) => {
-          const cards = [...document.querySelectorAll<HTMLElement>('.col-body[data-status="assigned"] .card[data-id^="task:"]')];
-          const read = cards.findIndex((entry) => entry.dataset.id === id);
-          const launched = cards.findIndex((entry) => entry.dataset.id === "task:t-launch");
-          return { read, launched };
-        }, readId);
-        /* Where the card lands is read as it lands, with its reader open
-           (docs/design/launch-render-polish.md §5), and again once the board
-           shows the turn finished: a finished conversation folds off the
-           board, and one whose reader is open must keep its card and its
-           place. The end reaches the page a poll after the fixture's clock
-           ends the turn, so the read waits for the card to say so. */
-        const landedAt = Date.now();
-        await page.locator('.card[data-id="task:t-launch"] [data-kanban-reader]').first().waitFor({ timeout: 14_000 });
-        const landed = await orderOf();
-        await page.locator('.card[data-id="task:t-launch"] .motion-line[data-motion="stopped"]').first().waitFor({ timeout: 60_000 });
-        await page.waitForTimeout(Math.max(3_000, 14_000 - (Date.now() - landedAt)));
-        const atTurnEnd = { ...(await orderOf()), readerInCard: await page.locator('.card[data-id="task:t-launch"] [data-kanban-reader]').count() };
-        const shifts = await collectShifts(page, sentAt);
-        const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
-        await page.screenshot({ path: path.join(out, `${label}-read-launch-desktop-1440.png`) });
-        const state = await page.evaluate(() => {
-          const shares = (window as unknown as { __readerShare: number[] }).__readerShare;
-          return { minShare: Number(Math.min(...shares).toFixed(3)), samples: shares.length };
-        });
-        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: landed, orderAtTurnEnd: atTurnEnd, pageErrors };
-        fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
-        fs.writeFileSync(`evidence/launch-render-polish/read-launch-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings: [reading] }, null, 2)}\n`);
-        expect(pageErrors, "page errors").toEqual([]);
-        if (label === "after") {
-          expect(state.minShare, "the agent being read stays in the window from the send to the turn's end").toBeGreaterThan(0.6);
-          expect(landed.launched, "the launched card lands right under the agent being read").toBe(landed.read + 1);
-          expect(atTurnEnd.readerInCard, "the launched agent's reader stays in its card after its turn ends").toBe(1);
-          expect(atTurnEnd.launched, "the launched card still stands right under the agent being read after its turn ends").toBe(atTurnEnd.read + 1);
-          expect(cls, "cumulative layout shift of a launch made beside a read agent").toBeLessThan(LAUNCH_CLS_LIMIT);
-        }
-      } finally { await context.close(); }
-    } finally { await browser.close(); server.stop(); }
   }, 240_000);
 
   /* Creating an orchestrator from the project's draft: the same clock as a launch (`?scenario=seat-create-cls`).
