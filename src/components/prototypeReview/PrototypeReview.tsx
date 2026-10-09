@@ -272,7 +272,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      the tap on the microphone to the last word landing in the field: while it
      is transcribed the field may be empty, and closing then would unmount the
      review before the answer has anywhere to go. */
-  const unsaved = rounds.some((entry) => !entry.decision && ((drafts[entry.id]?.comment.trim() ?? "") !== "" || (entry.questions?.length && drafts[entry.id] && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions))))) || Boolean(dictation.liveText) || dictation.phase !== "idle";
+  const answersChanged = rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!)));
+  const unsaved = answersChanged || rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
+  /* The guard names what is lost: changed answers, else the comment. */
+  const guardKind = answersChanged ? "answers" : "comment";
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
     else if (unsaved) setGuard(true);
@@ -808,10 +811,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const guardDialog = guard ? (
     <div className={`${phone ? `fixed ${Z.overlay}` : "absolute z-[2]"} inset-0 flex items-center justify-center bg-black/40 p-4`} onClick={(event) => { if (event.target === event.currentTarget) setGuard(false); }}>
-      <div role="alertdialog" aria-modal="true" aria-label={t("proto.guard.title")} data-prototype-guard="" className="flex w-full max-w-[360px] flex-col gap-3 rounded-surface border border-border bg-raised p-4 shadow-2">
+      <div role="alertdialog" aria-modal="true" aria-label={t(`proto.guard.${guardKind}.title`)} data-prototype-guard="" className="flex w-full max-w-[360px] flex-col gap-3 rounded-surface border border-border bg-raised p-4 shadow-2">
         <div>
-          <p className="m-0 text-body font-semibold text-primary">{t("proto.guard.title")}</p>
-          <p className="m-0 mt-1 text-label text-secondary">{t("proto.guard.body")}</p>
+          <p className="m-0 text-body font-semibold text-primary">{t(`proto.guard.${guardKind}.title`)}</p>
+          <p className="m-0 mt-1 text-label text-secondary">{t(`proto.guard.${guardKind}.body`)}</p>
         </div>
         <div className="flex justify-end gap-2">
           <button type="button" autoFocus className={SECONDARY} data-prototype-guard-keep="" onClick={() => setGuard(false)}>{t("proto.guard.keep")}</button>

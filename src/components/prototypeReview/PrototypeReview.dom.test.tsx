@@ -608,6 +608,29 @@ describe("short questionnaire", () => {
     expect(footer.textContent).toContain("Skipped, recommended answers taken");
     expect(footer.textContent).not.toMatch(/answered|No comment/i);
   });
+  const escape = async () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  const typeComment = async (value: string) => {
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (e: { target: { value: string } }) => void }>)[Object.keys(field).find(k => k.startsWith("__reactProps$"))!]!;
+    await act(async () => props.onChange({ target: { value } }));
+  };
+  test("closing after only an answer changed asks about the answers, not a comment", async () => {
+    await mountQuestions();
+    await escape();
+    expect(document.querySelector("[data-prototype-guard]")).toBeNull();
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("");
+    await escape();
+    const guard = document.querySelector("[data-prototype-guard]")!;
+    expect(guard.textContent).toContain("Discard the unsaved answers?");
+    expect(guard.textContent).not.toMatch(/comment/i);
+  });
+  test("closing an images-only review with a comment keeps the comment wording", async () => {
+    await mountReview(reviewRead());
+    await typeComment("Tighter spacing.");
+    await escape();
+    expect(document.querySelector("[data-prototype-guard]")!.textContent).toContain("Discard the unsaved comment?");
+  });
   test("an open questionnaire keeps the hint and unfaded options", async () => {
     await mountQuestions();
     expect(document.body.textContent).toContain("Choose any");
