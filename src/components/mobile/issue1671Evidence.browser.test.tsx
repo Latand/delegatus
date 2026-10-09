@@ -12,7 +12,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
@@ -8632,5 +8632,77 @@ describe("prototype review on the phone", () => {
     fs.mkdirSync("evidence/prototype-review-phone", { recursive: true });
     fs.writeFileSync("evidence/prototype-review-phone/readings.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+});
+
+
+describe("short questionnaire rendered evidence", () => {
+  browserTest("questions only, images, multi-select, long text and answered in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/prototype-review-phone/questions"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+          try {
+            await page.waitForSelector(true ? "[data-mobile2-bar]" : "[data-attention-count]");
+            await page.waitForSelector("[data-phone-kanban]");
+            await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            if (taskId === "t-search") {
+              await page.locator("[data-mobile2-open=attention]").click();
+              const notice = page.locator('[data-mobile2-sheet=attention] [data-attention-prototype="t-search"]');
+              await notice.waitFor();
+              const rowText = await notice.textContent();
+              expect(rowText).toContain(lang === "uk" ? "Питання до вас" : "Questions for you");
+              expect(await notice.getAttribute("aria-label")).toContain(lang === "uk" ? "Відповісти" : "Answer");
+              readings.push({ lang, scheme, width: 390, needsYouRow: rowText });
+              await page.screenshot({ path: path.join(out, `${lang}-${scheme}-needs-you.png`) });
+              await notice.click();
+            } else {
+            const opener = page.locator(`[data-phone-card-prototype-button="${taskId}"]`);
+            await opener.scrollIntoViewIfNeeded();
+            await opener.click();
+            }
+            await page.waitForSelector("[data-prototype-questions]");
+            const reading = await capturePrototypeQuestions(page, true);
+            expect(reading.sideways).toBeLessThanOrEqual(1);
+            expect(reading.pillOverflow).toBe(0);
+            expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
+            expect(reading.actions.every(a => a.visible)).toBe(true);
+            if (taskId === "t-upload" && !true) { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
+            if (taskId === "t-search") { expect(reading.stageWidth).toBeNull(); expect(reading.questionCount).toBe(5); }
+            if (taskId === "t-export") { expect(reading.readonly).toBe(true); expect(reading.skipped).toBe(true); }
+            const label = `${lang}-${scheme}-${taskId}`;
+            await page.screenshot({ path: path.join(out, `${label}.png`) });
+            readings.push({ lang, scheme, taskId, width: 390, ...reading });
+            if (taskId === "t-links") {
+              await page.locator('[data-prototype-option="place:1"]').click();
+              await page.locator('[data-prototype-save]').click();
+              await page.waitForSelector('[data-prototype-decision]');
+              const posted = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[] }> }> }).protoPosts.at(-1));
+              expect(posted?.answers[0]?.options).toEqual([0,1]);
+              await page.screenshot({ path: path.join(out, `${label}-answered.png`) });
+            }
+            if (taskId === "t-search") {
+              await page.locator('[data-prototype-skip]').click();
+              await page.waitForSelector('[data-prototype-skipped]');
+              expect((await capturePrototypeQuestions(page, true)).readonly).toBe(true);
+              await page.screenshot({ path: path.join(out, `${label}-skipped.png`) });
+            }
+            expect(pageErrors).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${taskId}-failure.png`) });
+            throw new Error(`${String(error)}; page errors: ${JSON.stringify(pageErrors)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/prototype-review-phone", { recursive: true });
+      fs.writeFileSync("evidence/prototype-review-phone/questions.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
   }, 900_000);
 });

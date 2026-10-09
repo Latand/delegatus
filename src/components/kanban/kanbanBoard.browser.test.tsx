@@ -15,7 +15,7 @@ import { parkedTaskNote } from "@/lib/pipelines/taskStatusNote";
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
-import { browserCase, caseChromium as chromium, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { clipTitle } from "./taskText";
@@ -23886,4 +23886,74 @@ describe("idle seat interval eligibility", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+
+describe("short questionnaire rendered evidence", () => {
+  browserTest("questions only, images, multi-select, long text and answered in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/prototype-review/questions"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
+          try {
+            await page.waitForSelector(false ? "[data-mobile2-bar]" : "[data-attention-count]");
+            if (taskId === "t-search") {
+              await page.locator("[data-attention-count]").click();
+              const notice = page.locator('[data-needs-you-panel] [data-attention-prototype="t-search"]');
+              await notice.waitFor();
+              const rowText = await notice.textContent();
+              expect(rowText).toContain(lang === "uk" ? "Питання до вас" : "Questions for you");
+              expect(await notice.getAttribute("aria-label")).toContain(lang === "uk" ? "Відповісти" : "Answer");
+              readings.push({ lang, scheme, width: 1440, needsYouRow: rowText });
+              await page.screenshot({ path: path.join(out, `${lang}-${scheme}-needs-you.png`) });
+              await notice.click();
+            } else {
+            const opener = page.locator(`[data-prototype-button="${taskId}"]`);
+            await opener.scrollIntoViewIfNeeded();
+            await opener.click();
+            }
+            await page.waitForSelector("[data-prototype-questions]");
+            const reading = await capturePrototypeQuestions(page, false);
+            expect(reading.sideways).toBeLessThanOrEqual(1);
+            expect(reading.pillOverflow).toBe(0);
+            expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
+            expect(reading.actions.every(a => a.visible)).toBe(true);
+            if (taskId === "t-upload" && !false) { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
+            if (taskId === "t-search") { expect(reading.stageWidth).toBeNull(); expect(reading.questionCount).toBe(5); }
+            if (taskId === "t-export") { expect(reading.readonly).toBe(true); expect(reading.skipped).toBe(true); }
+            const label = `${lang}-${scheme}-${taskId}`;
+            await page.screenshot({ path: path.join(out, `${label}.png`) });
+            readings.push({ lang, scheme, taskId, width: 1440, ...reading });
+            if (taskId === "t-links") {
+              await page.locator('[data-prototype-option="place:1"]').click();
+              await page.locator('[data-prototype-save]').click();
+              await page.waitForSelector('[data-prototype-decision]');
+              const posted = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[] }> }> }).protoPosts.at(-1));
+              expect(posted?.answers[0]?.options).toEqual([0,1]);
+              await page.screenshot({ path: path.join(out, `${label}-answered.png`) });
+            }
+            if (taskId === "t-search") {
+              await page.locator('[data-prototype-skip]').click();
+              await page.waitForSelector('[data-prototype-skipped]');
+              expect((await capturePrototypeQuestions(page, false)).readonly).toBe(true);
+              await page.screenshot({ path: path.join(out, `${label}-skipped.png`) });
+            }
+            expect(pageErrors).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${taskId}-failure.png`) });
+            throw new Error(`${String(error)}; page errors: ${JSON.stringify(pageErrors)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/prototype-review", { recursive: true });
+      fs.writeFileSync("evidence/prototype-review/questions.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
+  }, 900_000);
 });

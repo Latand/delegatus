@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 41, and a v40 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(41);
+test("the default mandate is at version 42, and a v41 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -110,7 +110,7 @@ test("the default mandate is at version 41, and a v40 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. v40 (#2518)
      adds the ask-first bug report and the seat-to-seat rule for another
      project's work. v41 points the operator to a task's prototype review
-     instead of describing variants in prose. */
+     instead of describing variants in prose. v42 asks a short questionnaire before ambiguous work. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -122,7 +122,8 @@ test("the default mandate is at version 41, and a v40 seat reads as stale", () =
   expect(orchestratorMandateStale(38)).toBe(true);
   expect(orchestratorMandateStale(39)).toBe(true);
   expect(orchestratorMandateStale(40)).toBe(true);
-  expect(orchestratorMandateStale(41)).toBe(false);
+  expect(orchestratorMandateStale(41)).toBe(true);
+  expect(orchestratorMandateStale(42)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -170,6 +171,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
+  42: "4e33a5cc9acc504bce6753864030eafd8b0950d37c0bd75aaaceae19a7ed1627",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -777,6 +779,7 @@ test("the role table keeps the delivered default inside the structured envelope"
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
      the merged delivered default measures 29 363 bytes. The applyNow
      pointer on the override-stage line adds 16 more, 29 379 in all.
+     The questionnaire and two repeated-text trims leave 29 361 bytes (39 bytes of room).
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
@@ -938,4 +941,16 @@ test("the mandate directs prototype review to the task", () => {
     expect(mandate).toContain("Prototype review: point to the task's review.");
     expect(mandate.split("Prototype review:")).toHaveLength(2);
   }
+});
+
+
+test("questionnaire mandate upgrades the shipped pointer once and preserves bespoke wording", () => {
+  const directive = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review."]) {
+    const delivered = orchestratorMandateForDelivery(input);
+    expect(delivered).toContain(directive);
+    expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+    expect(delivered.split(directive)).toHaveLength(2);
+  }
+  expect(orchestratorMandateForDelivery("Prototype review: our own wording.")).toContain("Prototype review: our own wording.");
 });

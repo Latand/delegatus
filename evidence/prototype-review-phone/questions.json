@@ -1,0 +1,534 @@
+[
+  {
+    "lang": "en",
+    "scheme": "light",
+    "width": 390,
+    "needsYouRow": "Questions for youRestore search results after the index rebuild4m ago"
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-search",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-upload",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": 390,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-links",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-disk",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "taskId": "t-export",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [],
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "width": 390,
+    "needsYouRow": "Questions for youRestore search results after the index rebuild4m ago"
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-search",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-upload",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": 390,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-links",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-disk",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 243.296875,
+        "y": 794
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 302.640625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "taskId": "t-export",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [],
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "width": 390,
+    "needsYouRow": "Питання до васRestore search results after the index rebuild4 хв тому"
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-search",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-upload",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": 390,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-links",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-disk",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "taskId": "t-export",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [],
+    "readonly": true,
+    "skipped": true
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "width": 390,
+    "needsYouRow": "Питання до васRestore search results after the index rebuild4 хв тому"
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-search",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-upload",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": 390,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-links",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-disk",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 177.0625,
+        "y": 794
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 281.15625,
+        "y": 794
+      }
+    ],
+    "readonly": false,
+    "skipped": false
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "taskId": "t-export",
+    "width": 390,
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "actions": [],
+    "readonly": true,
+    "skipped": true
+  }
+]

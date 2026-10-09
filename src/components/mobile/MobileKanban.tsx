@@ -512,7 +512,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const loose = item.kind === "conversation" || item.kind === "flow";
   /* High and low only, as on the desktop card; the card's label says it. */
   const priority = item.kind === "task" && card.priority !== "normal" ? card.priority : null;
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t("proto.notice.ready") : null, project].filter(Boolean).join(", ");
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (

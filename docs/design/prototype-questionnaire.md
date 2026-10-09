@@ -761,3 +761,40 @@ Use the existing drivers only (AGENTS.md, "Rendered evidence"):
   choice (§9, the third column) follows from the window's own measurements,
   and a review would put a second gate in front of work the operator asked to
   start.
+
+
+## Implementation verification
+
+The implementation extends the existing round, operator decision and delivery receipt.
+Questionnaire answers are canonicalized in question order and option-index order;
+skip derives the answers on the server. Images remain optional context. The
+variants-only decision message is pinned byte for byte by a golden test.
+
+Failing-first checks observed the absent questionnaire schema and publication,
+missing decision formatter, unmarked summaries, v5 wire version, missing window
+controls, old notice text and old mandate directive before their implementations.
+The focused checks also cover malformed answers, shared Other text, skip replay,
+message-size refusal before storage, and the production runtime delivery after reload.
+
+The mandate at version 42 measures 29 361 delivered bytes, with 39 bytes inside
+its 29 400-byte ceiling. The rotation-history margin is 33 bytes. Delivery adds
+15 027 bytes to an empty mandate, inside the deliberate 15 100-byte directive
+budget. Existing fingerprints remain intact, and delivering a shipped old pointer
+twice is a fixed point.
+
+Rendered evidence uses the existing board and phone drivers, at 1440 and 390,
+in English and Ukrainian, light and dark. Each matrix covers questions only,
+questions with images, multi-select, maximum question and option text, answered
+and skipped states, and the needs-you row. Measurements are in
+`evidence/prototype-review/questions.json` and
+`evidence/prototype-review-phone/questions.json`; screenshots are local artifacts
+under `.artifacts/prototype-review/questions` and
+`.artifacts/prototype-review-phone/questions`. The drivers record their browser
+PID and close the browser they started.
+
+The focused schema, HTTP, decision, model, wire, window, attention, mandate,
+rotation, localization, media-fence, task-sync and MCP receipt checks pass in
+isolated state. The real runtime delivery integration passes. Type checking
+passes; the repository's lint comparison introduces zero errors and reports
+four existing errors in the phone board on the merge base. The local privacy
+gate passes. Publication runs the repository's hooks as well.

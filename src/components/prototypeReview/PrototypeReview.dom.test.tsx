@@ -531,3 +531,62 @@ describe("the full-screen viewer", () => {
     expect(document.querySelector<HTMLElement>("[data-prototype-video]")!.className).toContain("w-full");
   });
 });
+
+
+describe("short questionnaire", () => {
+  const questions = [
+    { id: "place", text: "Where?", options: [{ label: "Here", recommended: true }, { label: "There" }] },
+    { id: "scope", text: "Which surfaces?", multiple: true, options: [{ label: "Desktop", recommended: true }, { label: "Phone" }] },
+    { id: "timing", text: "When?", other: true, options: [{ label: "Now", recommended: true }, { label: "Later" }] },
+  ];
+  async function mountQuestions(phone = false, answered = false) {
+    phoneLayout = phone;
+    const data = reviewRead(); data.rounds[0]!.variants = []; data.rounds[0]!.questions = questions;
+    if (answered) data.rounds[0]!.decision = { chosen: [], answers: questions.map(q => ({ questionId: q.id, options: [0] })), skipped: true, comment: "", at: data.rounds[0]!.createdAt, delivery: { state: "sent", retryable: false } };
+    const posted: unknown[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)); posted.push(body);
+        data.rounds[0]!.decision = { chosen: [], answers: body.answers ?? questions.map(q => ({ questionId: q.id, options: [0] })), ...(body.skip ? { skipped: true as const } : {}), comment: body.comment, at: data.rounds[0]!.createdAt, delivery: { state: "sent", retryable: false } };
+      }
+      return new Response(JSON.stringify(data), { status: 200 });
+    }) as typeof fetch;
+    const host = document.createElement("div"); document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); await new Promise(r => setTimeout(r,20)); });
+    return posted;
+  }
+  const click = async (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
+  test("questions only preselect recommendations, single and multiple choices and shared other save once", async () => {
+    const posted = await mountQuestions();
+    expect(Boolean(document.querySelector("[data-prototype-variants]"))).toBe(false);
+    expect(Boolean(document.querySelector("[data-prototype-stage]"))).toBe(false);
+    expect(document.querySelectorAll("[data-prototype-recommended]")).toHaveLength(3);
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.getAttribute("aria-checked")).toBe("true");
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector('[data-prototype-option="place:0"]')?.getAttribute("aria-checked")).toBe("false");
+    await click('[data-prototype-option="scope:1"]');
+    await click('[data-prototype-other="timing"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    const props = (field as unknown as Record<string, { onChange: (e: { target: { value: string } }) => void }>)[Object.keys(field).find(k => k.startsWith("__reactProps$"))!]!;
+    await act(async () => props.onChange({ target: { value: "  Start after lunch.\nKeep this.  " } }));
+    await click("[data-prototype-save]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "  Start after lunch.\nKeep this.  ", answers: [{ questionId: "place", options: [1] }, { questionId: "scope", options: [0,1] }, { questionId: "timing", options: [], other: true }] }]);
+  });
+  test("images accompanying questions keep variant choices optional", async () => {
+    const read = reviewRead();
+    read.rounds[0]!.questions = questions;
+    await mountReview(read);
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
+    expect(document.querySelector("[data-prototype-decide]")?.textContent).not.toContain("Choose one or more");
+  });
+  test("phone skip posts only skip and leaves read-only recommended answers", async () => {
+    const posted = await mountQuestions(true);
+    expect(document.querySelector("[data-prototype-actions]")?.contains(document.querySelector("[data-prototype-skip]"))).toBe(true);
+    await click("[data-prototype-skip]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "", skip: true }]);
+    expect(document.querySelector("[data-prototype-skipped]")).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[data-prototype-option="place:0"]')?.disabled).toBe(true);
+  });
+});

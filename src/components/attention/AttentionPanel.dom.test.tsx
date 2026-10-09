@@ -371,3 +371,13 @@ test("a waiting prototype review is a counted row that opens its task's review a
   await click(host.querySelector('[data-attention-prototype="task-layout"]')!);
   expect(opened).toEqual(["prototype:pr_1"]);
 });
+
+
+test("a questionnaire waiting row asks for an answer", async () => {
+  const notice = { id: "prototype:questions", taskId: "task-layout", reviewId: "questions", project: ALPHA, title: "Before work", asks: "questions" as const, createdAt: new Date().toISOString(), target: { kind: "prototype-review" as const, taskId: "task-layout", reviewId: "questions" } };
+  const host = document.createElement("div"); document.body.appendChild(host);
+  await act(async () => { root = createRoot(host); root.render(<AttentionPanel queue={[{ kind: "prototype", id: notice.id, notice }]} current={ALPHA} projectNames={{ [ALPHA]: "alpha" }} pipelines={[]} placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />); });
+  expect(host.textContent).toContain("Questions for you");
+  expect(host.querySelector("[data-attention-decision]")?.textContent).toBe("Answer");
+  expect(host.querySelector("[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
+});

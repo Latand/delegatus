@@ -650,3 +650,26 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
   fs.mkdirSync("evidence/first-message", { recursive: true });
   fs.writeFileSync(`evidence/first-message/${surface}-handover.json`, JSON.stringify({ surface, width: mobile ? 390 : 1440, frames }, null, 2) + "\n");
 }
+
+
+/** Shared questionnaire readings for the board and phone evidence drivers. */
+export async function capturePrototypeQuestions(page: Page, phone: boolean) {
+  return page.evaluate((phone) => {
+    const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
+    const questions = document.querySelector<HTMLElement>("[data-prototype-questions]")!;
+    const stage = document.querySelector<HTMLElement>("[data-prototype-stage]");
+    const bounds = frame.getBoundingClientRect();
+    const options = [...document.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
+    const pillOverflow = [...document.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
+      const box = pill.getBoundingClientRect(); const row = pill.closest("button")!.getBoundingClientRect();
+      return box.left < row.left || box.right > row.right + 0.5;
+    }).length;
+    const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
+      const b = button.getBoundingClientRect(); return { text: button.textContent, visible: b.top >= bounds.top && b.bottom <= bounds.bottom + 0.5, x: b.x, y: b.y };
+    });
+    return { sideways: frame.scrollWidth - frame.clientWidth, questionWidth: questions.getBoundingClientRect().width,
+      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: document.querySelectorAll("[data-prototype-question]").length,
+      optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, actions,
+      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(document.querySelector("[data-prototype-skipped]")) };
+  }, phone);
+}
