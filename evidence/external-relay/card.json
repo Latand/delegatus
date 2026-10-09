@@ -1,7 +1,7 @@
 {
   "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
   "browser": {
-    "pid": 1400066,
+    "pid": 1628117,
     "closed": true
   },
   "readings": [
@@ -40,24 +40,30 @@
           "state": "polling",
           "text": "Asking the service for requests.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Paused. This install takes no requests from the service.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:58",
-        "Paired as Person A (@person_a) · Oct 8, 11:58"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 11:54",
-      "lastProgress": "Support bot · 11:53",
+      "lastOutcome": "Answered · 12:31",
+      "lastProgress": "Support bot · 12:30",
       "targets": [
         {
           "id": "bot-1",
@@ -211,7 +217,7 @@
       "minControlHeight": 44,
       "shortControls": [],
       "cardHeights": [
-        180,
+        184,
         185
       ],
       "borderedBoxes": [
@@ -229,23 +235,29 @@
           "state": "credential_rejected",
           "text": "The service no longer accepts this pairing. Disconnect and pair again.",
           "tone": "danger",
-          "color": "rgb(198, 40, 40)"
+          "color": "rgb(198, 40, 40)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "The service cannot be reached. Retrying.",
           "tone": "warning",
-          "color": "rgb(138, 95, 0)"
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:58",
-        "Paired as Person A (@person_a) · Oct 8, 11:58"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 10:58",
+      "lastOutcome": "Failed: the agent stopped with an error · 11:35",
       "lastProgress": null,
       "targets": [
         {
@@ -299,7 +311,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:07.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:44.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -413,24 +425,30 @@
           "state": "polling",
           "text": "Asking the service for requests.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Paused. This install takes no requests from the service.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:58",
-        "Paired as Person A (@person_a) · Oct 8, 11:58"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 11:54",
-      "lastProgress": "Support bot · 11:53",
+      "lastOutcome": "Answered · 12:31",
+      "lastProgress": "Support bot · 12:30",
       "targets": [
         {
           "id": "bot-1",
@@ -584,7 +602,7 @@
       "minControlHeight": 44,
       "shortControls": [],
       "cardHeights": [
-        180,
+        184,
         185
       ],
       "borderedBoxes": [
@@ -602,23 +620,29 @@
           "state": "credential_rejected",
           "text": "The service no longer accepts this pairing. Disconnect and pair again.",
           "tone": "danger",
-          "color": "rgb(240, 113, 113)"
+          "color": "rgb(240, 113, 113)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "The service cannot be reached. Retrying.",
           "tone": "warning",
-          "color": "rgb(224, 174, 69)"
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:58",
-        "Paired as Person A (@person_a) · Oct 8, 11:58"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 10:58",
+      "lastOutcome": "Failed: the agent stopped with an error · 11:35",
       "lastProgress": null,
       "targets": [
         {
@@ -672,7 +696,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:08.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:44.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -804,24 +828,30 @@
           "state": "polling",
           "text": "Asking the service for requests.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Paused. This install takes no requests from the service.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:59",
-        "Paired as Person A (@person_a) · Oct 8, 11:59"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 11:55",
-      "lastProgress": "Support bot · 11:54",
+      "lastOutcome": "Answered · 12:31",
+      "lastProgress": "Support bot · 12:30",
       "targets": [
         {
           "id": "bot-1",
@@ -1026,23 +1056,29 @@
           "state": "credential_rejected",
           "text": "The service no longer accepts this pairing. Disconnect and pair again.",
           "tone": "danger",
-          "color": "rgb(198, 40, 40)"
+          "color": "rgb(198, 40, 40)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "The service cannot be reached. Retrying.",
           "tone": "warning",
-          "color": "rgb(138, 95, 0)"
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:59",
-        "Paired as Person A (@person_a) · Oct 8, 11:59"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 10:59",
+      "lastOutcome": "Failed: the agent stopped with an error · 11:35",
       "lastProgress": null,
       "targets": [
         {
@@ -1098,7 +1134,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:08.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:44.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -1250,24 +1286,30 @@
           "state": "polling",
           "text": "Asking the service for requests.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Paused. This install takes no requests from the service.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:59",
-        "Paired as Person A (@person_a) · Oct 8, 11:59"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 11:55",
-      "lastProgress": "Support bot · 11:54",
+      "lastOutcome": "Answered · 12:31",
+      "lastProgress": "Support bot · 12:30",
       "targets": [
         {
           "id": "bot-1",
@@ -1472,23 +1514,29 @@
           "state": "credential_rejected",
           "text": "The service no longer accepts this pairing. Disconnect and pair again.",
           "tone": "danger",
-          "color": "rgb(240, 113, 113)"
+          "color": "rgb(240, 113, 113)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "The service cannot be reached. Retrying.",
           "tone": "warning",
-          "color": "rgb(224, 174, 69)"
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 8, 11:59",
-        "Paired as Person A (@person_a) · Oct 8, 11:59"
+        "Paired as Person A (@person_a) · Oct 8, 12:35",
+        "Paired as Person A (@person_a) · Oct 8, 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 10:59",
+      "lastOutcome": "Failed: the agent stopped with an error · 11:35",
       "lastProgress": null,
       "targets": [
         {
@@ -1544,7 +1592,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:08.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 12:44.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -1678,24 +1726,30 @@
           "state": "polling",
           "text": "Питаємо сервіс про запити.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:35",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 11:55",
-      "lastProgress": "Support bot · 11:54",
+      "lastOutcome": "Відповіли · 12:31",
+      "lastProgress": "Support bot · 12:30",
       "targets": [
         {
           "id": "bot-1",
@@ -1849,7 +1903,7 @@
       "minControlHeight": 44,
       "shortControls": [],
       "cardHeights": [
-        180,
+        184,
         185
       ],
       "borderedBoxes": [
@@ -1867,23 +1921,29 @@
           "state": "credential_rejected",
           "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
           "tone": "danger",
-          "color": "rgb(198, 40, 40)"
+          "color": "rgb(198, 40, 40)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "Сервіс недоступний. Повторюємо спробу.",
           "tone": "warning",
-          "color": "rgb(138, 95, 0)"
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:35",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 10:59",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 11:35",
       "lastProgress": null,
       "targets": [
         {
@@ -1937,7 +1997,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:08.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:44.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -2051,24 +2111,30 @@
           "state": "polling",
           "text": "Питаємо сервіс про запити.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:35",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:35"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 11:55",
-      "lastProgress": "Support bot · 11:54",
+      "lastOutcome": "Відповіли · 12:31",
+      "lastProgress": "Support bot · 12:30",
       "targets": [
         {
           "id": "bot-1",
@@ -2222,7 +2288,7 @@
       "minControlHeight": 44,
       "shortControls": [],
       "cardHeights": [
-        180,
+        184,
         185
       ],
       "borderedBoxes": [
@@ -2240,23 +2306,29 @@
           "state": "credential_rejected",
           "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
           "tone": "danger",
-          "color": "rgb(240, 113, 113)"
+          "color": "rgb(240, 113, 113)",
+          "lines": 2,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "Сервіс недоступний. Повторюємо спробу.",
           "tone": "warning",
-          "color": "rgb(224, 174, 69)"
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 10:59",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 11:36",
       "lastProgress": null,
       "targets": [
         {
@@ -2310,7 +2382,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:08.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:45.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -2442,24 +2514,30 @@
           "state": "polling",
           "text": "Питаємо сервіс про запити.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
           "tone": "plain",
-          "color": "rgb(28, 28, 34)"
+          "color": "rgb(28, 28, 34)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 11:55",
-      "lastProgress": "Support bot · 11:54",
+      "lastOutcome": "Відповіли · 12:32",
+      "lastProgress": "Support bot · 12:31",
       "targets": [
         {
           "id": "bot-1",
@@ -2664,23 +2742,29 @@
           "state": "credential_rejected",
           "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
           "tone": "danger",
-          "color": "rgb(198, 40, 40)"
+          "color": "rgb(198, 40, 40)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "Сервіс недоступний. Повторюємо спробу.",
           "tone": "warning",
-          "color": "rgb(138, 95, 0)"
+          "color": "rgb(138, 95, 0)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 10:59",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 11:36",
       "lastProgress": null,
       "targets": [
         {
@@ -2736,7 +2820,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:08.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:45.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -2888,24 +2972,30 @@
           "state": "polling",
           "text": "Питаємо сервіс про запити.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "paused",
           "text": "Призупинено. Інсталяція не бере запитів від сервісу.",
           "tone": "plain",
-          "color": "rgb(232, 232, 236)"
+          "color": "rgb(232, 232, 236)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 11:55",
-      "lastProgress": "Support bot · 11:54",
+      "lastOutcome": "Відповіли · 12:32",
+      "lastProgress": "Support bot · 12:31",
       "targets": [
         {
           "id": "bot-1",
@@ -3110,23 +3200,29 @@
           "state": "credential_rejected",
           "text": "Сервіс більше не приймає це під’єднання. Від’єднайте й під’єднайте знову.",
           "tone": "danger",
-          "color": "rgb(240, 113, 113)"
+          "color": "rgb(240, 113, 113)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         },
         {
           "state": "unreachable",
           "text": "Сервіс недоступний. Повторюємо спробу.",
           "tone": "warning",
-          "color": "rgb(224, 174, 69)"
+          "color": "rgb(224, 174, 69)",
+          "lines": 1,
+          "dotOffset": 0,
+          "gapBelow": 3
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59",
-        "Під’єднано як Person A (@person_a) · 8 жовт., 11:59"
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36",
+        "Під’єднано як Person A (@person_a) · 8 жовт., 12:36"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 10:59",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 11:36",
       "lastProgress": null,
       "targets": [
         {
@@ -3182,7 +3278,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:08.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 12:45.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],

@@ -610,8 +610,9 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
         </span>
       </div>
       <div className="flex min-w-0 flex-col">
-        <p role="status" data-external-relay-state={state} className={`flex min-h-[22px] min-w-0 items-center gap-1.5 text-[11.5px] font-semibold ${tone === "danger" ? "text-danger" : tone === "warn" ? "text-warning" : "text-primary"}`}>
-          <Dot tone={tone} /><span className="min-w-0 break-words">{t(STATE_KEYS[state] ?? "externalRelay.poller.paused")}</span>
+        {/* The meter line's 22px, kept as padding around each 16px line, so a state that wraps keeps its dot on the first line and its gap to the line below. */}
+        <p role="status" data-external-relay-state={state} className={`flex min-w-0 items-start gap-1.5 py-[3px] text-[11.5px] font-semibold leading-4 ${tone === "danger" ? "text-danger" : tone === "warn" ? "text-warning" : "text-primary"}`}>
+          <Dot tone={tone} className="mt-[5px]" /><span className="min-w-0 break-words">{t(STATE_KEYS[state] ?? "externalRelay.poller.paused")}</span>
         </p>
         <MeterLine label={t("externalRelay.lastOutcome")} value={<span data-external-relay-last-outcome="">{outcome}</span>} percent={null} color="" bar={false} />
         {progress ? <MeterLine label={t("externalRelay.lastProgress")} value={<span data-external-relay-last-progress="" title={progress.label}>{`${progressTarget} · ${clock(progress.at, locale)}`}</span>} percent={null} color="" bar={false} /> : null}

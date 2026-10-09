@@ -898,6 +898,20 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
                 text: node.textContent,
                 tone: node.className.includes("text-danger") ? "danger" : node.className.includes("text-warning") ? "warning" : "plain",
                 color: getComputedStyle(node).color,
+                /* The dot sits on the first line of a wrapped state, and the line below keeps the gap a one-line state leaves. */
+                ...(() => {
+                  const text = node.querySelector("span:not([aria-hidden])")!;
+                  const range = document.createRange();
+                  range.selectNodeContents(text);
+                  const lines = Array.from(range.getClientRects()).reduce<DOMRect[]>((kept, rect) => kept.some((line) => Math.abs(line.top - rect.top) < 2) ? kept : [...kept, rect], []);
+                  const dot = node.querySelector("[aria-hidden]")!.getBoundingClientRect();
+                  const next = node.nextElementSibling?.getBoundingClientRect();
+                  return {
+                    lines: lines.length,
+                    dotOffset: Math.round((dot.top + dot.height / 2 - (lines[0]!.top + lines[0]!.height / 2)) * 10) / 10,
+                    gapBelow: next ? Math.round((next.top - text.getBoundingClientRect().bottom) * 10) / 10 : null,
+                  };
+                })(),
               })),
               pairedAs: Array.from(element.querySelectorAll("[data-external-relay-paired-at]")).map((node) => node.textContent),
               /* A line the row cuts short: who it is paired as, a target's model and load, or what it still needs. */
@@ -988,6 +1002,11 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (JSON.stringify(tones) !== JSON.stringify(["credential_rejected:danger", "unreachable:warning"])) failures.push(`${label}: poller lines ${JSON.stringify(tones)}`);
             const [refused, unreachable] = reading.stateLines;
             if (!refused || !unreachable || refused.color === unreachable.color) failures.push(`${label}: the danger and warning lines render alike`);
+            for (const line of reading.stateLines) {
+              if (Math.abs(line.dotOffset) > 1) failures.push(`${label}: the ${line.state} dot sits ${line.dotOffset}px off its first line`);
+              if (line.gapBelow !== null && line.gapBelow < 2.5) failures.push(`${label}: the ${line.state} line leaves ${line.gapBelow}px to the line below`);
+            }
+            if (phone && !reading.stateLines.some((line) => line.lines > 1)) failures.push(`${label}: no state line wraps, so the first-line dot goes unmeasured`);
           }
           if (scene === "ended") {
             if (reading.pairing !== "denied") failures.push(`${label}: the ended pairing reads ${JSON.stringify(reading.pairing)}`);
