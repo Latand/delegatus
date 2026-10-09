@@ -1,5 +1,6 @@
 // Behaviour for the landing: language, install boxes, the legacy giggle and
-// the live demo frames. Classic script.
+// the live demo frames. The hero's demo plays itself (boardDemo.js). Classic
+// script.
 (function () {
   "use strict";
 
@@ -287,22 +288,40 @@
   }
   applyLanguage(lang, false);
 
-  // ---------- The live demo ----------
+  // ---------- The phone visitor's action ----------
   //
-  // Every picture of the product on this page is the product: an iframe
+  // Delegatus runs on a computer, so on a phone the hero leads with sending
+  // this page there: the system share sheet, or a copied link without one.
+
+  const share = document.querySelector("[data-share]");
+  share?.addEventListener("click", async () => {
+    const url = `${location.origin}${location.pathname}?lang=${lang}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: document.title, url });
+        return;
+      }
+    } catch (error) {
+      if (error && error.name === "AbortError") return;
+    }
+    if (!(await writeClipboard(url))) return;
+    const label = share.querySelector("span");
+    label.textContent = t("share.copied");
+    setTimeout(() => { label.textContent = t("share.btn"); }, 2000);
+  });
+
+  // The hero's demo counts once, when it first plays on screen.
+  document.addEventListener("demo-start", () => countEvent("demo_start"), { once: true });
+
+  // ---------- The live frames ----------
+  //
+  // The pictures of the product below the hero are the product: an iframe
   // running Delegatus's own interface over invented data (demo/). The page
-  // tells a frame which language, step and view to show; the hero's frame
-  // runs the scripted walkthrough and reports its step back.
+  // tells a frame which language, step and view to show.
 
   // A touch screen this short is a phone turned sideways; a tablet keeps the
   // desktop frames.
   const phoneQuery = matchMedia("(max-width: 639px), (hover: none) and (pointer: coarse) and (max-height: 639px)");
-  // Where the hero's frame turns at each step of the script. On the desktop
-  // the board has the orchestrator docked beside it; on the phone the chat
-  // holds the request until it is sent, the board shows the new card, and
-  // "Orchestrator" is its report log once the reports start landing.
-  const HERO_VIEW_FOR_STEP = { 0: "board", 2: "board", 3: "orchestrator", 4: "orchestrator", 5: "board" };
-  const HERO_PHONE_VIEW_FOR_STEP = { 0: "orchestrator", 2: "board", 3: "orchestrator", 4: "orchestrator", 5: "board" };
   const lives = [...document.querySelectorAll("[data-live]")].map((el) => ({
     el,
     id: el.dataset.live,
@@ -313,7 +332,6 @@
     step: null,
     view: null,
   }));
-  const hero = lives.find((live) => live.id === "hero");
   let panAnimation = 0;
   function stopPanMomentum() {
     cancelAnimationFrame(panAnimation);
@@ -345,14 +363,12 @@
     }
     panAnimation = requestAnimationFrame(tick);
   }
-  let heroManual = false;
   // The frame that is showing full screen, and how: the browser's Fullscreen
   // API where it exists, or the same layout as a fixed overlay where it does not.
   let fsLive = null;
   let fsNative = false;
   let fsScroll = null;
   let fsWatch = null;
-  const heroViewFor = (step) => ((hero.fixed || phoneQuery.matches) ? HERO_PHONE_VIEW_FOR_STEP : HERO_VIEW_FOR_STEP)[step];
 
   function liveSrc(live) {
     const params = new URLSearchParams(live.phone ? live.el.dataset.phoneQuery : live.el.dataset.query);
@@ -446,8 +462,8 @@
 
   function markTabs(live, view) {
     live.view = view;
-    for (const tab of document.querySelectorAll(`[data-tabs-for="${live.id}"] [data-view], [data-tabs-for="${live.id}"] [data-hero-view]`)) {
-      const on = (tab.dataset.view || tab.dataset.heroView) === view;
+    for (const tab of document.querySelectorAll(`[data-tabs-for="${live.id}"] [data-view]`)) {
+      const on = tab.dataset.view === view;
       tab.setAttribute("aria-selected", String(on));
       tab.tabIndex = on ? 0 : -1;
     }
@@ -473,8 +489,7 @@
     const tabs = [...list.querySelectorAll('[role="tab"]')];
     tabs.forEach((tab, index) => {
       tab.addEventListener("click", () => {
-        if (live === hero) heroManual = true;
-        const view = tab.dataset.view || tab.dataset.heroView;
+        const view = tab.dataset.view;
         if (view === live.view && live.iframe) return;
         if (!live.iframe) {
           live.view = view;
@@ -494,53 +509,8 @@
       });
     });
     const first = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
-    if (first) live.view = first.dataset.view || first.dataset.heroView;
+    if (first) live.view = first.dataset.view;
   }
-
-  // The hero's steps: a rail under the frame, and a line that says what just happened.
-  const stepButtons = [...document.querySelectorAll("[data-step]")];
-  const hint = document.querySelector("[data-step-hint]");
-  let heroStep = 0;
-  const playback = document.querySelector("[data-playback]");
-  let playbackAnimation;
-
-  function renderSteps() {
-    const shown = heroStep === 1 ? 0 : heroStep;
-    for (const button of stepButtons) {
-      const at = Number(button.dataset.step);
-      button.toggleAttribute("data-done", at < shown || (heroStep === 1 && at === 0));
-      if (at === shown && heroStep !== 1) button.setAttribute("aria-current", "step");
-      else button.removeAttribute("aria-current");
-    }
-    hint.textContent = t(`hint.${heroStep}`);
-    hint.dataset.step = String(heroStep);
-  }
-
-  for (const button of stepButtons) {
-    button.addEventListener("click", () => {
-      const to = Number(button.dataset.step);
-      heroManual = false;
-      mount(hero);
-      if (to < heroStep || !hero.iframe) {
-        hero.step = to;
-        heroStep = to;
-        renderSteps();
-        showView(hero, heroViewFor(to), true);
-        return;
-      }
-      heroStep = to;
-      renderSteps();
-      send(hero, { type: "dlg:step", step: to });
-      showView(hero, heroViewFor(to));
-    });
-  }
-  document.querySelector("[data-replay]").addEventListener("click", () => {
-    heroManual = false;
-    hero.step = 0;
-    heroStep = 0;
-    renderSteps();
-    showView(hero, heroViewFor(0), true);
-  });
 
   window.addEventListener("message", (event) => {
     const live = lives.find((entry) => entry.iframe && entry.iframe.contentWindow === event.source);
@@ -609,28 +579,10 @@
       applyLanguage(data.lang, true);
       return;
     }
-    if (data.type !== "dlg:state" || typeof data.step !== "number") return;
-    const moved = data.step !== live.step;
-    if (live === hero && live.step === 0 && data.step === 1) countEvent("demo_start");
-    live.step = data.step;
-    if (live !== hero) return;
-    heroStep = data.step;
-    playback.hidden = !data.playing;
-    playbackAnimation?.cancel();
-    if (data.playing && !still) playbackAnimation = playback.querySelector("span").animate(
-      [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
-      { duration: data.nextInMs, fill: "forwards" },
-    );
-    renderSteps();
-    /* While the script plays, the frame turns to where the step happened. */
-    const target = heroViewFor(data.step);
-    if (moved && !heroManual && target && target !== hero.view) showView(hero, target);
+    if (data.type === "dlg:state" && typeof data.step === "number") live.step = data.step;
   });
 
-  // The hero's frame loads with the page, on the view its first step shows;
-  // the others as they come near.
-  markTabs(hero, heroViewFor(0));
-  mount(hero);
+  // Each frame loads as it comes near.
   const near = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
@@ -644,8 +596,8 @@
   // ---------- Full screen ----------
   //
   // Every frame has a control that shows it at the size of the screen. The
-  // hero and the run frame go full screen inside their window, so the tabs and
-  // the hero's steps stay in reach; the other two take a strip of their own.
+  // run frame goes full screen inside its window, so its tabs stay in reach;
+  // the other two take a strip of their own.
   // Where the browser has no element fullscreen (iPhone), the same layout
   // is a fixed overlay with the page behind it locked.
 
@@ -749,7 +701,7 @@
   window.visualViewport?.addEventListener("resize", relayout);
 
   onLanguage = () => {
-    renderSteps();
+    renderReleases();
     labelFullscreen();
     for (const live of lives) {
       live.el.querySelector(".demo-retry")?.remove();
@@ -769,24 +721,38 @@
       }
     }
   };
-  renderSteps();
+  // ---------- Live numbers: the version and how recently it shipped ----------
 
-  // ---------- Live numbers: stars and version ----------
+  let releases = null;
+  const DAY = 86_400_000;
+  function renderReleases() {
+    if (!releases) return;
+    const now = Date.now();
+    const days = Math.max(0, Math.round((now - releases.latestAt) / DAY));
+    const ago = new Intl.RelativeTimeFormat(lang, { numeric: "auto" }).format(-days, "day");
+    const month = releases.times.filter((at) => now - at <= 30 * DAY).length;
+    const form = new Intl.PluralRules(lang).select(month);
+    const word = lang === "uk"
+      ? ({ one: "реліз", few: "релізи", many: "релізів" })[form] ?? "релізу"
+      : form === "one" ? "release" : "releases";
+    document.querySelector("[data-released]").textContent = lang === "uk"
+      ? `вийшла ${ago} · ${month} ${word} за 30 днів`
+      : `released ${ago} · ${month} ${word} in 30 days`;
+  }
 
-  fetch("https://api.github.com/repos/Latand/delegatus", { headers: { Accept: "application/vnd.github+json" } })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((repo) => {
-      if (!repo || typeof repo.stargazers_count !== "number") return;
-      document.querySelector("[data-stars-count]").textContent = repo.stargazers_count.toLocaleString(lang === "uk" ? "uk-UA" : "en-US");
-      document.querySelector("[data-stars]").hidden = false;
-    })
-    .catch(() => {});
-
-  fetch("https://registry.npmjs.org/delegatus-cli", { headers: { Accept: "application/vnd.npm.install-v1+json" } })
+  fetch("https://registry.npmjs.org/delegatus-cli")
     .then((r) => (r.ok ? r.json() : null))
     .then((pkg) => {
       const latest = pkg && pkg["dist-tags"] && pkg["dist-tags"].latest;
-      if (latest) document.querySelector("[data-version]").textContent = latest;
+      if (!latest) return;
+      document.querySelector("[data-version]").textContent = latest;
+      if (!pkg.time || !pkg.time[latest]) return;
+      // 0.0.0 held the name before the first release under it.
+      const times = Object.entries(pkg.time)
+        .filter(([version]) => /^\d+\.\d+\.\d+$/.test(version) && version !== "0.0.0")
+        .map(([, at]) => Date.parse(at));
+      releases = { latestAt: Date.parse(pkg.time[latest]), times };
+      renderReleases();
     })
     .catch(() => {});
 })();

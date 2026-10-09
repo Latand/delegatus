@@ -243,6 +243,9 @@ export type Tmsg = {
   internal?: boolean;
   senderProject?: string;
   senderConversationId?: string;
+  /** #2519: the operator's own instruction, relayed by the voice companion
+      after an explicit confirmation. Its own tint, and no agent author. */
+  voiceRelay?: boolean;
 };
 export type CmdGroupItem = {
   kind: "cmd-group";

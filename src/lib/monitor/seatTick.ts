@@ -373,6 +373,9 @@ function dischargedThrough(input: SeatTickCheckInput, cursor: number | null): nu
  * expires into `stalled` or `gone` on its own) are progress; everything else,
  * absent verdicts included, is not.
  */
+export const AUTO_ROTATE_COOLDOWN_MS = 60 * 60_000;
+export const AUTO_ROTATE_NUDGE_AFTER_MS = 15 * 60_000;
+
 export function seatTurnProgressing(seat: SeatTickSeatInput): boolean {
   if (seat.turn !== "busy") return false;
   const activity = seat.activity;

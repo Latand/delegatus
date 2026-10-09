@@ -16,6 +16,13 @@ import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
+import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
+import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
+import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
+import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
+import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -121,6 +128,33 @@ const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
+/* The floating voice companion (#2519, docs/design/voice-companion-research.md §9, §10): the default board with the
+   character over it in its one final look, driven by the simulator on the shared event contract.
+   `&script=<scenario>` picks the scripted scenario (delegation by default), `&collapsed=1` starts it as its small
+   tile, `&delivered=1` opens with the delegated message and the orchestrator's answer already in the seat's
+   conversation, `&full=1` puts earlier exchanges above them, enough to fill the conversation to its whole height, `&engine=codex` seats a Codex orchestrator, `&surface=underlay` replaces the board with a field of
+   plain click-counting cells (no controls), where the character can be taken to any edge, and `&surface=buttons`
+   with small real buttons every 100 px, where no lane fits. `&failure=<code>` makes Talk refuse with that failure,
+   as the product does for a missing key or a reached cap, and `&seat=none` says the project has no orchestrator.
+   `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
+   `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
+   memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
+   driver turns the companion on through the settings dialog. `&transcript=1` (item 6 of
+   docs/design/voice-delegatus-live-feedback.md) lets the companion read a whole session's transcript record, as the
+   live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
+const VOICE = SCENARIO === "voice-companion";
+const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
+const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
+  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
+const voiceSettings = {
+  enabled: false, monthlyCapUsd: 20,
+  keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
+  month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
+};
+const VOICE_RELAY_UUID = "engine_message_voice_delegation";
+const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
+const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
 const FEED_FAILURES = SCENARIO === "feed-failures";
 /* `&reload=1`: a window opened fresh on a long conversation. The host still
    keeps the replies of the turns it ran, and this window watched none arrive. */
@@ -299,6 +333,7 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+const SEAT_UNCONFIRMED = SEAT_HEAD && new URLSearchParams(location.search).get("usage") === "unconfirmed";
 /* The same seat with its agent not running and its context past the rotation
    line: the status read reports both causes, as data, beside the sentences it
    writes for an agent. */
@@ -588,6 +623,7 @@ function fmApply() {
   else adopted(undefined);
 }
 if (FIRST_MESSAGE && !FM_SEAT) fmApply();
+if (VOICE && new URLSearchParams(location.search).get("engine") === "codex") seatOn("codex", "gpt-5.6-sol", "high", "voice");
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -1919,15 +1955,20 @@ if (BOARD_ORDER) {
   );
 }
 if (TICK_CARDS) {
-  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice: string; failed: string; live: string };
+  /* Each card is present when the driver sends its text. An automatic
+     rotation's card (#2577) carries its text and its folded details. */
+  type Card = { text: string; details: string };
+  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice?: string; failed?: string; live?: string; rotFailed?: Card; rotDone?: Card };
   files.splice(0, files.length, orchestrator);
   pipelines.splice(0, pipelines.length);
   tasks.splice(0, tasks.length,
-    task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" }),
+    ...(texts.notice === undefined ? [] : [task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" })]),
+    ...(texts.rotFailed ? [task("t-rot-failed", "inbox", "", "", 9 * MIN, [], texts.rotFailed)] : []),
     task("t-tick-cleanup", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 3 * 60 * MIN, [], { color: "slate", icon: "wrench" }),
-    task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    ...(texts.live === undefined ? [] : [task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" })]),
     task("t-tick-search", "assigned", L("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), "", 25 * MIN),
-    task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    ...(texts.failed === undefined ? [] : [task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" })]),
+    ...(texts.rotDone ? [task("t-rot-done", "done", "", "", 70 * MIN, [], texts.rotDone)] : []),
   );
 }
 if (PRIORITY) {
@@ -2111,6 +2152,28 @@ function transcriptOf(pathname: string): string {
       ...tool(4 * MIN, "toolu_seat_update_task", "mcp__viewer__update_task", { taskId: SEAT_TASK_ID, status: "assigned" }),
       ...tool(3 * MIN, "toolu_seat_shell", "Bash", { command: SEAT_SHELL, description: "Check the worktree" }),
       said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
+    ].join("\n")}\n`;
+  }
+  if (VOICE && file === orchestrator) {
+    const codex = file.engine === "codex";
+    /* A message Delegatus delivered: the SDK's record on Claude, a user-role response item on Codex. */
+    const relayed = (secondsAgo: number, uuid: string, text: string) => codex
+      ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: uuid, role: "user", content: [{ type: "input_text", text }] } })
+      : line(secondsAgo, { type: "user", uuid, message: { role: "user", content: text }, promptSource: "sdk" });
+    const answered = (secondsAgo: number, text: string) => codex
+      ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: "voice_answer", role: "assistant", content: [{ type: "output_text", text }] } })
+      : said(secondsAgo, text);
+    /* Earlier exchanges: the operator's question and the orchestrator's answer, eight times over. */
+    const earlier = new URLSearchParams(location.search).get("full") === "1" ? Array.from({ length: 8 }, (_, index) => [
+      (codex ? (secondsAgo: number, text: string) => line(secondsAgo, { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) : asked)((60 - index * 6) * MIN, L(`Where does lane ${index + 1} stand, and is anything waiting on me?`, `Як справи зі смугою ${index + 1} і чи щось чекає на мене?`)),
+      answered((59 - index * 6) * MIN, L(`Lane ${index + 1} passed review on its second attempt and is merging; nothing is waiting on you there.`, `Смуга ${index + 1} пройшла рев’ю з другої спроби й зливається; там на вас нічого не чекає.`)),
+    ]).flat() : [];
+    return `${[
+      ...earlier,
+      relayed(5 * MIN, VOICE_INTERNAL_UUID, voiceInternalText()),
+      answered(4 * MIN, L("Noted. The retry banner lane can merge.", "Прийнято. Смугу банера повтору можна зливати.")),
+      ...(voice.delivered ? [relayed(40, VOICE_RELAY_UUID, demoInstruction(UK ? "uk" : "en"))] : []),
+      ...(voice.answered ? [answered(10, demoAnswer(UK ? "uk" : "en"))] : []),
     ].join("\n")}\n`;
   }
   if (REPORT_PREVIEW && file === orchestrator) {
@@ -3574,7 +3637,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }
@@ -3583,6 +3646,37 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
     if (FM_HANDOVER) await fmEvidenceGate;
     return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+  }
+  /* The delegated message is the operator's own instruction on the voice channel; the reviewer's relay beside it is
+     ordinary internal traffic. Both joins are answered: the engine id (Claude) and the occurrence (Codex).
+     The relay's owner is answered from the first read, before its record exists, as the registry writes a
+     delivery's owner when it admits the send. The feed reads provenance only once a row it cannot name is
+     shown, and until that read answers it draws such a record as a system fold across the whole row: answered
+     late, the delegated row flashed as a fold before it took its tint. */
+  if (VOICE && url.pathname === "/api/voice-companion/settings") {
+    if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
+    return json(voiceSettings);
+  }
+  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
+    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
+    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
+    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
+    voice.keyWrites.push(key.length);
+    voiceSettings.keySource = "file";
+    return json(voiceSettings);
+  }
+  if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
+  if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
+  if (url.pathname === "/api/log/provenance" && VOICE) {
+    const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
+    const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };
+    return json({
+      messages: { [VOICE_INTERNAL_UUID]: internal, [VOICE_RELAY_UUID]: relay },
+      occurrences: [
+        { ...internal, textDigest: messageTextDigest(voiceInternalText()), deliveredAt: iso(5 * MIN) },
+        { ...relay, textDigest: messageTextDigest(demoInstruction(UK ? "uk" : "en")), deliveredAt: iso(40) },
+      ],
+    });
   }
   if (REPORT_PREVIEW && url.pathname === "/api/log/suggestions") {
     /* The set the seat offers after reading the preview back: the tool's own approving draft beside a no and an edit. */
@@ -3636,9 +3730,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
       engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
-      context: { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
-      transcriptFacts: null,
-      rotation: FM_SEAT
+      context: SEAT_UNCONFIRMED
+        ? { tokens: 1_249, limit: 1_000_000, percent: 0, estimated: true, basis: "CLI post-compaction estimate; awaiting provider usage" }
+        : { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
+      transcriptFacts: SEAT_UNCONFIRMED ? { bytes: 9 * 1024 * 1024, messageCount: 100, toolCount: 20, compactionCount: 2 } : null,
+      rotation: FM_SEAT || SEAT_UNCONFIRMED
         ? { recommended: false, level: "none", reasons: [], thresholdUnknown: false }
         : SEAT_GONE
         ? {
@@ -3746,9 +3842,62 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
+   message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
+   The page gives up the strip the companion docks into, as a host surface is asked to. */
+function voiceCompanionScene() {
+  const params = new URLSearchParams(location.search);
+  const script = params.get("script");
+  const failure = params.get("failure");
+  const readsTranscript = params.get("transcript") === "1";
+  const adapter = createSimulatedCompanion({
+    script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
+    recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
+    dispatch: () => { voice.dispatches += 1; voice.delivered = true; },
+  });
+  adapter.subscribe((event) => {
+    if (event.type !== "playback.level") voice.events.push(event);
+    if (event.type === "orchestrator.answer") voice.answered = true;
+  });
+  void adapter.finished.then(() => { voice.finished = true; });
+  Object.assign(window, { voiceCompanion: voice });
+  let sendLost = params.get("sendlost") === "1";
+  const shown: VoiceCompanionAdapter = !sendLost && !readsTranscript ? adapter : {
+    mode: adapter.mode, start: (options) => adapter.start(options), subscribe: (emit) => adapter.subscribe(emit), close: () => adapter.close(),
+    command: async (command) => {
+      if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
+      return adapter.command(command);
+    },
+    ...(readsTranscript ? { transcript: async () => sampleTranscript(UK ? "uk" : "en", PROJECT) } : {}),
+  };
+  /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
+     the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
+  const underlay = params.get("surface") === "underlay";
+  const buttons = params.get("surface") === "buttons";
+  const clicks: Record<string, number> = {};
+  Object.assign(window, { voiceUnderlayClicks: clicks });
+  return (
+    <>
+      {underlay ? (
+        <div data-voice-underlay style={{ position: "fixed", inset: 0, display: "grid", gridTemplateColumns: "repeat(auto-fill, 40px)", gridAutoRows: 40, background: "var(--color-canvas)" }}>
+          {Array.from({ length: Math.ceil(innerWidth / 40) * Math.ceil(innerHeight / 40) }, (_, index) => (
+            <div key={index} data-underlay-cell={index} style={{ border: "1px solid var(--color-border)", opacity: 0.6 }} onClick={() => { clicks[index] = (clicks[index] ?? 0) + 1; }} />
+          ))}
+        </div>
+      ) : buttons ? (
+        <div data-voice-buttons style={{ position: "fixed", inset: 0, background: "var(--color-canvas)" }}>
+          {Array.from({ length: Math.ceil(innerWidth / 100) * Math.ceil(innerHeight / 100) }, (_, index) => (
+            <button key={index} type="button" aria-label={`cell ${index}`} style={{ position: "absolute", left: (index % Math.ceil(innerWidth / 100)) * 100 + 40, top: Math.floor(index / Math.ceil(innerWidth / 100)) * 100 + 40, width: 20, height: 20, borderRadius: 4, border: "1px solid var(--color-border)", background: "var(--color-raised)" }} />
+          ))}
+        </div>
+      ) : <Viewer />}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
+    </>
+  );
+}
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
-createRoot(document.getElementById("root")!).render(diskDensity ? (
+createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

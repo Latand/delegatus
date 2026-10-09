@@ -1,15 +1,17 @@
 import fs from "node:fs";
 
+import { nativeCompaction } from "../session/compaction";
+import { claudeCapacityHints, type ContextCapacityHints } from "../scanner/contextCapacity";
+
 import { ROTATION_THRESHOLD_FRACTION, type ContextWindowPolicy } from "./contextPolicy";
 
 /* get_orchestrator's reporting core (two-axis contract).
  *
  * Everything here is a READ and a RECOMMENDATION. Context pressure produces a
- * recommendation with reasons and nothing else: no heuristic in this module —
- * or anywhere downstream of it — may retire, rotate or replace an orchestrator
- * on its own. Numbers that are inferred rather than measured are CLEARLY
- * labelled estimates, with the basis spelled out, so an operator never mistakes
- * a bytes-derived guess for a provider-reported token count.
+ * recommendation with reasons. The seat tick independently reads the same
+ * context under an explicit per-project auto-rotation setting. Numbers that
+ * are inferred rather than measured are labelled estimates, with the basis
+ * spelled out, so an operator never mistakes a bytes-derived guess for a provider-reported token count.
  *
  * Pure over gathered facts; the transcript-reading helpers are the only I/O and
  * are separately injectable.
@@ -40,7 +42,7 @@ export interface OrchestratorContextReading {
   limit: number | null;
   /** 0-100, when both tokens and limit are known. */
   percent: number | null;
-  /** TRUE means at least one component is inferred, not provider-reported. */
+  /** TRUE means token usage is estimated or unconfirmed. */
   estimated: boolean;
   /** Where the numbers came from, operator-readable. */
   basis: string;
@@ -49,18 +51,18 @@ export interface OrchestratorContextReading {
   policy: string | null;
 }
 
-export interface OrchestratorTranscriptFacts {
+export interface OrchestratorTranscriptFacts extends ContextCapacityHints {
+  /** Newest boundary has no later provider usage; historical bytes are inactive. */
+  afterCompaction?: boolean;
   transcriptBytes: number | null;
   messageCount: number | null;
   toolCount: number | null;
-  /** Compaction records observed in the transcript. Engine-dependent: what the
-      transcript records is what is counted. */
+  /** Completed native compaction boundaries observed in the bounded tail. */
   compactionCount: number | null;
   /** Provider-reported context tokens from the newest usage record, if any. */
   reportedContextTokens: number | null;
-  /** The byte-derived estimate, read only when no usage was reported: text
-      bytes / 4 plus a fixed cost per base64 attachment. Absent means
-      transcriptBytes / 4. */
+  /** Unconfirmed CLI postTokens after compaction, or a byte estimate when no
+      boundary was observed. Null after a boundary with no CLI estimate. */
   estimatedContextTokens?: number | null;
 }
 
@@ -78,15 +80,19 @@ export function readOrchestratorTranscriptFacts(
       bytes = null;
     }
   }
-  const reportedContextTokens = path && bytes !== null ? lastReportedContextTokens(path, bytes) : null;
+  const usage = path && bytes !== null ? lastContextUsage(path, bytes) : null;
+  const reportedContextTokens = usage?.tokens ?? null;
+  const afterCompaction = usage?.boundary === true || (reportedContextTokens === null && (session?.compactions ?? 0) > 0);
   return {
     transcriptBytes: bytes,
     messageCount: session?.messages ?? null,
     toolCount: session?.tools ?? null,
     compactionCount: session?.compactions ?? null,
     reportedContextTokens,
+    ...(usage?.hints ?? {}),
+    ...(afterCompaction ? { afterCompaction: true } : {}),
     ...(path && bytes !== null && reportedContextTokens === null
-      ? { estimatedContextTokens: estimatedContextTokens(path, bytes) }
+      ? { estimatedContextTokens: afterCompaction ? usage?.postTokens ?? null : usage?.activeFromStart ? estimatedContextTokens(path, bytes) : null }
       : {}),
   };
 }
@@ -97,10 +103,23 @@ export function readOrchestratorTranscriptFacts(
  * Claude rows carry `message.usage` (input + cache reads/creation is what sat
  * in context for that turn); Codex rollouts carry token-usage info events.
  * Bounded chunks are scanned backwards, newest line first, up to a fixed cap.
+ * A completed native compaction stops the search before any older usage.
  * Incomplete rows are carried as bytes so a chunk boundary cannot corrupt JSON
  * or split a multi-byte character before the row is parsed.
  */
 export function lastReportedContextTokens(path: string, totalBytes: number): number | null {
+  return lastContextUsage(path, totalBytes)?.tokens ?? null;
+}
+
+interface FreshUsage {
+  tokens: number | null;
+  hints?: ContextCapacityHints;
+  boundary?: boolean;
+  postTokens?: number | null;
+  activeFromStart?: boolean;
+}
+
+function lastContextUsage(path: string, totalBytes: number): FreshUsage | null {
   try {
     const descriptor = fs.openSync(path, "r");
     try {
@@ -134,10 +153,10 @@ export function lastReportedContextTokens(path: string, totalBytes: number): num
 
         if (atFileStart || firstNewline >= 0) {
           const completeRows = atFileStart ? combined : combined.subarray(firstNewline + 1);
-          const tokens = lastReportedContextTokensInRows(completeRows);
+          const tokens = lastContextUsageInRows(completeRows);
           if (tokens !== null) return tokens;
         }
-        if (atFileStart) break;
+        if (atFileStart) return { tokens: null, activeFromStart: true };
 
         newerRowSuffix = firstNewline >= 0 ? combined.subarray(0, firstNewline) : combined;
         if (newerRowSuffix.length > USAGE_SCAN_OVERSIZED_ROW_BYTES) {
@@ -154,17 +173,24 @@ export function lastReportedContextTokens(path: string, totalBytes: number): num
   return null;
 }
 
-function lastReportedContextTokensInRows(rows: Buffer): number | null {
+function lastContextUsageInRows(rows: Buffer): FreshUsage | null {
   let lineEnd = rows.length;
   while (lineEnd > 0) {
     const newline = rows.lastIndexOf(0x0a, lineEnd - 1);
     const line = rows.subarray(newline + 1, lineEnd);
     lineEnd = Math.max(0, newline);
-    if (!line.includes("input_tokens")) continue;
+    if (!line.includes("input_tokens") && !line.includes("compact") && !line.includes("Compaction")) continue;
     try {
       const row = JSON.parse(line.toString("utf8")) as Record<string, unknown>;
+      const boundary = nativeCompaction(row);
+      if (boundary) return { tokens: null, boundary: true, postTokens: boundary.postTokens };
       const tokens = claudeUsageTokens(row) ?? codexUsageTokens(row);
-      if (tokens !== null) return tokens;
+      if (tokens !== null) {
+        const info = usageObject(usageObject(row.payload)?.info);
+        const hints = claudeCapacityHints(row);
+        const window = info?.model_context_window;
+        return { tokens, hints: typeof window === "number" && Number.isFinite(window) && window > 0 ? { runtimeWindow: window } : hints };
+      }
     } catch {
       /* a non-JSON row that happens to mention input_tokens */
     }
@@ -288,7 +314,7 @@ export function contextReading(input: {
   policy: ContextWindowPolicy | null;
   facts: OrchestratorTranscriptFacts;
 }): OrchestratorContextReading {
-  const limit = input.policy?.windowTokens ?? null;
+  const limit = input.policy?.windowTokens ?? input.facts.runtimeWindow ?? null;
   const policy = input.policy?.policy ?? null;
   const reported = input.facts.reportedContextTokens;
   if (reported !== null) {
@@ -308,11 +334,11 @@ export function contextReading(input: {
       limit,
       percent: limit ? Math.min(100, Math.round((counted / limit) * 100)) : null,
       estimated: true,
-      basis: `ESTIMATE: transcript text bytes / 4, each inline image or document counted as ${ATTACHMENT_ESTIMATE_TOKENS.toLocaleString("en-US")} tokens — no provider-reported usage found`,
+      basis: input.facts.afterCompaction ? "UNCONFIRMED: CLI post-compaction token estimate — awaiting provider usage" : `ESTIMATE: transcript text bytes / 4, each inline image or document counted as ${ATTACHMENT_ESTIMATE_TOKENS.toLocaleString("en-US")} tokens — no provider-reported usage found`,
       policy,
     };
   }
-  if (input.facts.transcriptBytes !== null) {
+  if (input.facts.transcriptBytes !== null && counted === undefined && !input.facts.afterCompaction) {
     const guess = Math.round(input.facts.transcriptBytes / 4);
     return {
       tokens: guess,
@@ -323,7 +349,7 @@ export function contextReading(input: {
       policy,
     };
   }
-  return { tokens: null, limit, percent: null, estimated: true, basis: "no transcript to read", policy };
+  return { tokens: null, limit, percent: null, estimated: true, basis: input.facts.afterCompaction ? "UNCONFIRMED: awaiting provider usage after compaction" : "UNCONFIRMED: active context could not be established", policy };
 }
 
 /** The prominent advisory marker (operator decision): present in the payload
@@ -332,11 +358,11 @@ export function contextReading(input: {
 export const STRONGLY_RECOMMEND_ROTATION = "STRONGLY_RECOMMEND_ROTATION" as const;
 
 export interface RotationRecommendation {
-  /** A recommendation and NOTHING more: no caller may act on it automatically. */
+  /** Advisory data; the opted-in tick judges the context reading independently. */
   recommended: boolean;
   /** `strongly_recommend` exactly when provider-reported usage reached the
       configured threshold; `recommend` for an estimate over it and for
-      secondary wear signals; `none` otherwise. */
+      a gone host; `none` otherwise. */
   level: "none" | "recommend" | "strongly_recommend";
   /** {@link STRONGLY_RECOMMEND_ROTATION} at strongly_recommend, else null. */
   advisory: typeof STRONGLY_RECOMMEND_ROTATION | null;
@@ -355,21 +381,18 @@ export interface RotationRecommendation {
 
 export type RotationCause =
   | { kind: "context"; tokens: number; estimated: boolean; thresholdTokens: number; windowTokens: number }
-  | { kind: "compactions"; count: number; threshold: number }
-  | { kind: "transcript"; megabytes: number; thresholdMegabytes: number }
   | { kind: "host_gone" };
 
-const ROTATION_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
-const ROTATION_COMPACTIONS = 2;
-const MAX_REASONS = 4;
+const MAX_REASONS = 2;
 
 /**
  * Bounded rotation advice (operator decision). Reaching the configured
  * context threshold changes exactly ONE thing: what this function SAYS —
  * `strongly_recommend` with the {@link STRONGLY_RECOMMEND_ROTATION} advisory.
  * The return value is plain serializable data with no action, no target and
- * no side effect on any path; rotation happens only when rotate_orchestrator
- * is explicitly called. Every reason names its threshold and whether the
+ * no side effect on any path; the opted-in tick calls the normal rotation
+ * command from its own safe-point decision. Every reason names its threshold
+ * and whether the
  * number behind it is an estimate. An estimate over the threshold is an
  * ordinary `recommend`: only a provider-reported count can make it strong.
  */
@@ -395,18 +418,6 @@ export function rotationRecommendation(input: {
     reasons.push(
       `context usage ${input.context.tokens.toLocaleString("en-US")} tokens${input.context.estimated ? " (estimate)" : ""} has reached the rotation threshold of ${input.policy.rotationThresholdTokens.toLocaleString("en-US")} tokens (${input.policy.policy}: ${Math.round(ROTATION_THRESHOLD_FRACTION * 100)}% of a ${input.policy.windowTokens.toLocaleString("en-US")}-token window)`,
     );
-  }
-  if (input.facts.compactionCount !== null && input.facts.compactionCount >= ROTATION_COMPACTIONS) {
-    causes.push({ kind: "compactions", count: input.facts.compactionCount, threshold: ROTATION_COMPACTIONS });
-    reasons.push(`${input.facts.compactionCount} compaction(s) recorded in the transcript, threshold ${ROTATION_COMPACTIONS}`);
-  }
-  if (input.facts.transcriptBytes !== null && input.facts.transcriptBytes >= ROTATION_TRANSCRIPT_BYTES) {
-    causes.push({
-      kind: "transcript",
-      megabytes: Number((input.facts.transcriptBytes / (1024 * 1024)).toFixed(1)),
-      thresholdMegabytes: ROTATION_TRANSCRIPT_BYTES / (1024 * 1024),
-    });
-    reasons.push(`transcript is ${(input.facts.transcriptBytes / (1024 * 1024)).toFixed(1)} MB, threshold ${ROTATION_TRANSCRIPT_BYTES / (1024 * 1024)} MB`);
   }
   if (input.activity === "dead") {
     causes.push({ kind: "host_gone" });

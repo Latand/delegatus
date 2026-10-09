@@ -455,3 +455,17 @@ test("a disk episode acknowledgment survives persistence and a seat succession",
   expect(read.diskPressureShown).toBe(pressure.diskPressureShown);
   expect(seatTickStateForEpoch(read, 8).diskPressureShown).toBe(pressure.diskPressureShown);
 });
+
+test("auto-rotation attempt and failure accounting survive restart and seat succession", () => {
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "auto-rotation-"));
+  const file = path.join(directory, "tick.json");
+  const autoRotation = { overSince: { seatEpoch: 7, at: "2026-10-09T03:00:00Z" }, lastAttempt: {
+    id: "fixture-attempt", seatEpoch: 7, conversationId: CONVERSATION, startedAt: "2026-10-09T03:00:00Z", tokens: 720000, windowTokens: 1000000,
+    thresholdPercent: 60, state: "failed" as const, error: "fixture refusal", told: { card: true, report: true },
+  }, failureTold: { seatEpoch: 7, id: "fixture-attempt", resolved: false } };
+  const state = readSeatTickState("viewer", file);
+  writeSeatTickState("viewer", { ...state, seatEpoch: 7, autoRotation }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.autoRotation).toEqual(autoRotation);
+  expect(seatTickStateForEpoch(reopened, 8).autoRotation).toEqual(autoRotation);
+});

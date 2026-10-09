@@ -295,8 +295,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 268 files: 176 with asynchronous primitives and
-92 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 269 files: 176 with asynchronous primitives and
+93 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -336,13 +336,10 @@ repeated for this inventory correction.
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 37, 53, 55 | owned |
 | `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
-| `scripts/local-gate.noproc.test.ts` | 37; forwarded synchronous ps probes | owned; deadline root handles retained from spawn and reaped after bounded identity cleanup; helper PID/start/boot identity captured while alive |
-| `scripts/local-gate.test.ts` | 255, 308, 344; synchronous Git/verifier commands | owned; launch handles registered by preload; refused-root and group fixtures retain live PID/start/boot identities and await bounded cleanup |
 | `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 187, 204, 205, 209, 272, 285, 289, 316, 328, 329, 331, 332, 334, 378, 407, 536, 561 | owned |
 | `scripts/newcomer-install.mjs` | 67 | contained helper; synchronous installers have 120-second deadlines, readiness is bounded, the launched CLI is stopped through its original handle in finally. Its standalone installation campaign is outside a test run |
 | `scripts/npm-package-smoke.mjs` | 109, 485, 520 | contained helper; commands have a 30-second handle timeout, startup/restart waits 30 seconds, observation 60 seconds, and the caller has a 150-second deadline. Direct and CLI server handles stop with bounded TERM/KILL; runtime-host restart pins the fence start identity. The owning service contains descendants on interruption |
 | `scripts/npm-package-smoke.test.ts` | 32, 34, 61 | owned |
-| `scripts/owned-runner.integration.test.ts` | 56, 59, 64, 106, 108 | owned |
 | `scripts/owned-runner.ts` | 27, 29, 56, 88, 98 | contained helper; immediate original handles, private service capability, finite command and service deadlines, two-second cgroup TERM/KILL bound; portable limitations stated below |
 | `scripts/privacy-publication-gate.test.ts` | 448, 955, 2175, 2282, 2559, 2572, 2587, 2608, 2682, 2970, 3603, 3778, 3822, 3872, 3922, 3971, 4018, 4065, 4112, 4158, 4203, 4745 | owned |
 | `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
@@ -352,7 +349,7 @@ repeated for this inventory correction.
 | `scripts/verify-viewer-runtime.test.ts` | 121, 139 | owned |
 | `scripts/verify-viewer-runtime.ts` | 200, 244, 383 | contained helper; direct Linux CLI enters containment, served probe owns a nested service and rejects unconfirmed shutdown |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
-| `src/app/api/attention/needs-you/route.test.ts` | 70 | owned; the isolated authority probe retains its Bun handle and awaits output and exit before assertions |
+| `src/app/api/attention/needs-you/route.test.ts` | 70 | owned; preload records the child handle before it runs; its exit is awaited and the runner contains descendants from fork time |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
 | `src/app/api/runtime/hosts/route.test.ts` | 31, 88, 92 | owned |
 | `src/app/api/runtime/snapshot/route.test.ts` | 177 | owned; preload records the original Bun handle before return, stdout/stderr and exit are awaited in an isolated route sandbox, and the private runner service contains interrupted probes |
@@ -370,11 +367,9 @@ repeated for this inventory correction.
 | `src/lib/accounts/codex.test.ts` | 153, 162, 302, 388 | owned |
 | `src/lib/accounts/copilotLogin.test.ts` | 204 | owned |
 | `src/lib/accounts/manager.interprocess.test.ts` | 76, 100, 204, 270, 310, 330, 369 | owned |
-| `src/lib/accounts/migration/coordinatorTurnAuthority.test.ts` | 212 | owned |
 | `src/lib/accounts/projectBindings.interprocess.test.ts` | 43 | owned |
 | `src/lib/agent/cli.integration.test.ts` | 70 | owned |
 | `src/lib/agent/cli.test.ts` | 84, 194, 206, 214, 221, 224, 532, 669 | owned |
-| `src/lib/agent/codexSpawnPolicy.test.ts` | 100, 178, 355, 429 | owned |
 | `src/lib/agent/ephemeral.probe.test.ts` | 57 | owned |
 | `src/lib/agent/identityWaveMigration.test.ts` | 976 | owned |
 | `src/lib/agent/registry.sqlite.test.ts` | 475, 951, 961, 999, 1009, 1046, 1119, 1134, 1169, 1199, 1222, 1243, 1625, 1709, 1906, 1921 | owned |
@@ -388,8 +383,6 @@ repeated for this inventory correction.
 | `src/lib/boardMaintenance/store.test.ts` | 18, 23 | owned |
 | `src/lib/externalRelay/store.test.ts` | 54, 96 | owned |
 | `src/lib/flows/decisions.test.ts` | 17, 132 | owned |
-| `src/lib/flows/engine.test.ts` | 29, 1090, 1184, 1272 | owned |
-| `src/lib/flows/exec.test.ts` | 219, 257 | owned |
 | `src/lib/flows/store.test.ts` | 190 | owned |
 | `src/lib/links/boardSync.test.ts` | 50, 120, 122, 133, 135, 168 | owned |
 | `src/lib/links/pairing.test.ts` | 25 | owned |
@@ -406,7 +399,6 @@ repeated for this inventory correction.
 | `src/lib/memory/hook.test.ts` | 33, 47, 72, 91, 113, 150, 198 | owned |
 | `src/lib/memory/index.test.ts` | 248 | owned; fresh-process memory queries retain the Bun handle and await output and exit |
 | `src/lib/monitor/seatTickController.test.ts` | 826 | owned |
-| `src/lib/pipelines/engine.test.ts` | 4026, 4056, 5096, 5450, 5452, 7622, 7623, 7624, 7626, 7627, 7628, 9436, 10521, 13682, 13702, 13733, 13754, 13802, 16616, 16653, 16708, 16818, 16863, 17003, 17033, 17158, 17328, 17355, 17515, 18278, 19189, 19206, 20520 | owned |
 | `src/lib/pipelines/fixtures/generationParent.ts` | 7 | contained helper |
 | `src/lib/pipelines/fixtures/stageHostGeneration.ts` | 63, 76 | contained helper |
 | `src/lib/pipelines/git.test.ts` | 110, 864, 2378, 2436 | owned |
@@ -425,12 +417,10 @@ repeated for this inventory correction.
 | `src/lib/prototypeReview/decision.integration.test.ts` | 97 | owned; the decision-stop child retains its Bun handle and its exit is awaited |
 | `src/lib/resourceViewerTree.test.ts` | 150, 153 | owned |
 | `src/lib/resources.structuredHosts.test.ts` | 221, 382, 423, 494 | owned |
-| `src/lib/resources.test.ts` | 518, 563, 617, 1750, 1926, 2051, 2138, 2600, 3329, 3334, 3337 | owned |
 | `src/lib/resources.truth.test.ts` | 107 | owned |
 | `src/lib/runtime/agentMemory.scope.test.ts` | 9, 19 | owned |
 | `src/lib/runtime/agentMemory.test.ts` | 241 | owned |
 | `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 782, 858, 2276, 2351 | owned |
-| `src/lib/runtime/cpuPlacement.scope.test.ts` | Node spawn plus synchronous systemd, tmux and gate probes | owned; private units contain detached fixtures, original PID/start/boot identities are captured while alive and bounded cleanup is awaited |
 | `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 43, 62 | owned |
 | `src/lib/runtime/codexAppServerHost.injectResponses.test.ts` | 90 | owned |
 | `src/lib/runtime/codexAppServerHost.test.ts` | 5043 | owned |
@@ -454,7 +444,6 @@ repeated for this inventory correction.
 | `src/lib/runtime/structuredDelivery.integration.test.ts` | 41, 4327 | owned |
 | `src/lib/runtime/structuredDeliveryRebind.test.ts` | 189, 648 | owned |
 | `src/lib/runtime/structuredHostControl.test.ts` | 80, 90 | owned |
-| `src/lib/runtime/structuredHostRetirement.test.ts` | 231 | owned |
 | `src/lib/runtime/structuredMessageDelivery.sqlite.test.ts` | 148 | owned; preload records the original Bun lock-holder handle before return, its 500-millisecond release and exit are awaited in finally, and helper-based cases await holder.close before deleting their private databases; the runner service contains interrupted children |
 | `src/lib/runtime/structuredMessageDelivery.test.ts` | 562 | owned |
 | `src/lib/runtime/structuredSpawn.integration.test.ts` | 4685, 4778, 4903, 5148 | owned |
@@ -463,24 +452,21 @@ repeated for this inventory correction.
 | `src/lib/scanner/process.test.ts` | 47, 52, 59 | owned |
 | `src/lib/scanner/projectDirectories.test.ts` | 101 | owned |
 | `src/lib/scanner/roots.claudeTasks.test.ts` | 55, 91 | owned |
-| `src/lib/selfUpdate/actions.test.ts` | 218, 315 | owned |
 | `src/lib/selfUpdate/pid.test.ts` | 68 | owned |
 | `src/lib/selfUpdate/quietDeadHosts.test.ts` | 48, 327, 346, 393, 494, 571, 606, 629, 650, 684, 746, 762, 812, 847, 903, 976, 1016, 1052, 1090, 1116, 1141, 1194, 1276, 1289 | owned |
 | `src/lib/selfUpdate/snapshotIdentity.test.ts` | 34 | owned |
 | `src/lib/selfUpdate/workEvidence.test.ts` | 544, 620; synchronous Git and mkdir | owned; HTTP clients retain Bun handles and existing finally cleanup; the runner contains cancellation and detached descendants |
 | `src/lib/session/titleStore.interprocess.test.ts` | 32 | owned |
 | `src/lib/state/buildPhaseGuard.test.ts` | 133 | owned |
-| `src/lib/state/durability.test.ts` | 60, 69, 366, 423 | owned |
 | `src/lib/state/diskPressure.test.ts` | 420, 544; forwarded synchronous namespace-reader probes | owned; reader handles and exit promises are retained, parallel fixture children stay in the owning service |
+| `src/lib/state/durability.test.ts` | 60, 69, 366, 423 | owned |
 | `src/lib/state/hotStateStores.sqlite.test.ts` | 41, 118, 235, 284, 367, 444, 808, 862, 870 | owned |
 | `src/lib/state/stateLeaseRecovery.test.ts` | 168 | owned |
 | `src/lib/tasks/store.sqlite.test.ts` | 65 | owned |
-| `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
 | `src/lib/telemetry/sender.test.ts` | 67, 96, 119, 158, 235, 239 | owned |
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
 | `src/lib/testing/fixtureProcess.test.ts` | Node spawn and private-namespace spawnSync | owned; original-handle, start/boot, real PID reuse, descendant and stalled-report regressions preserve same-argv bystanders within three/seven-second deadlines |
 | `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
-| `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
 | `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
 | `src/runtime-host/hostRollback.test.ts` | 253, 279 | owned |
@@ -495,8 +481,6 @@ repeated for this inventory correction.
 
 | File | Synchronous launch sites | Disposition |
 | --- | --- | --- |
-| `src/lib/memory/roleEgress.test.ts` | 74, 97, 183 | synchronous; privacy and Git probe results return before fixture cleanup; the runner contains interrupted descendants |
-| `src/lib/memory/roleEgressUnreadable.test.ts` | 23, 59 | synchronous; isolated store and publication probes return before fixture cleanup; the runner contains interrupted descendants |
 | `bin/agent-binaries.test.ts` | 75, 93 | synchronous |
 | `bin/envAlias.test.ts` | 65, 121 | synchronous |
 | `bin/install-cpu-placement.test.ts` | 37, 42 | synchronous; isolated installer queries are awaited and the runner contains interrupted descendants |
@@ -532,7 +516,6 @@ repeated for this inventory correction.
 | `src/app/api/pipelines/route.test.ts` | 24 | synchronous |
 | `src/components/Viewer.switching.dom.test.tsx` | 299 | synchronous |
 | `src/components/kanban/issue1695BrowserHarness.ts` | 26, 320, 324 | synchronous |
-| `src/components/kanban/kanbanBoard.browser.test.tsx` | 6709, 11921, 12068 | synchronous |
 | `src/components/mobile/issue1671Evidence.browser.test.tsx` | 8387 | synchronous; ffmpeg fixture generation is awaited, browser handles are owned by the shared browser harness and test service |
 | `src/lib/accounts/claudeCredentials.test.ts` | 97, 127 | synchronous |
 | `src/lib/agent/spawnCommand.contention.test.ts` | 92, 155, 226 | synchronous |
@@ -541,16 +524,18 @@ repeated for this inventory correction.
 | `src/lib/boardMaintenance/run.test.ts` | 245 (dynamic import), 248 (`git` helper) | synchronous; caller waits for Git init/commit/branch in an isolated repository, and the runner contains descendants on deadline or cancellation |
 | `src/lib/flows/git.test.ts` | 19, 20, 46 | synchronous |
 | `src/lib/forge/autoMerge.test.ts` | 258, 292, 336, 375, 406 | synchronous |
-| `src/lib/issueReports/store.test.ts` | 64 | synchronous; isolated race helper has a 60-second deadline and stays in the owning service |
 | `src/lib/git/agentForgeCredentials.test.ts` | 70, 87, 88, 89, 119, 120, 413, 419, 435, 438 | synchronous |
 | `src/lib/git/agentHistoryGuard.test.ts` | 46, 130 | synchronous |
 | `src/lib/git/codexShellPolicy.test.ts` | 69 | synchronous |
+| `src/lib/issueReports/store.test.ts` | 64 | synchronous; isolated race helper has a 60-second deadline and stays in the owning service |
 | `src/lib/links/self.test.ts` | 338, 561, 732 | synchronous |
 | `src/lib/links/taskSync.test.ts` | 387, 389, 475 | synchronous |
 | `src/lib/mcp/callCost.test.ts` | 577 | synchronous |
 | `src/lib/mcp/compactAnswers.test.ts` | 38 | synchronous |
 | `src/lib/mcp/spawnRecovery.integration.test.ts` | 251 | synchronous |
 | `src/lib/mcp/workLinks.test.ts` | 21 | synchronous |
+| `src/lib/memory/roleEgress.test.ts` | 74, 97, 183 | synchronous; privacy and Git probe results return before fixture cleanup; the runner contains interrupted descendants |
+| `src/lib/memory/roleEgressUnreadable.test.ts` | 23, 59 | synchronous; isolated store and publication probes return before fixture cleanup; the runner contains interrupted descendants |
 | `src/lib/memory/roleLaunch.test.ts` | 28 | synchronous; Git fixture commands return before the private checkout is removed; the runner contains interrupted descendants |
 | `src/lib/onboarding/healthCheck.test.ts` | 342, 346, 357, 365 | synchronous |
 | `src/lib/orchestrator/seatProjectIdentity.test.ts` | 22 | synchronous |
@@ -581,7 +566,7 @@ repeated for this inventory correction.
 | `src/lib/telegram/packaging.test.ts` | 72, 149, 183, 213, 302, 369, 447, 468 | synchronous |
 | `src/lib/telegram/vendorPagination.test.ts` | 64 | synchronous |
 | `src/lib/tempDirs.test.ts` | 88 | synchronous |
-| `src/lib/tmux.test.ts` | 647, 647, 663, 691, 759, 783 | synchronous |
+| `src/lib/voiceCompanion/companion.test.ts` | 39 | synchronous; the Node gate probe has a five-second deadline and a bounded output; the runner contains descendants if interrupted |
 | `src/lib/workflows/engine.test.ts` | 169, 580, 602 | synchronous |
 | `src/lib/workflows/provision.test.ts` | 68, 96 | synchronous |
 | `src/runtime-host/candidateContainer.test.ts` | 94, 204, 344 | synchronous |
@@ -594,9 +579,7 @@ Additional launch wiring checked by text and imports:
 | --- | --- |
 | `src/lib/mcp/ownedFixtureChildren.ts` | Receives existing handles; immediate registration and handle cleanup retained. The preload owns them before any caller can await. |
 | `src/lib/testing/testChildren.ts` | Wraps the real Node primitive and both Bun overloads before spawn returns; supplies the parent identity even without options. |
-| `scripts/local-gate-tests.ts` | Per-file comparison launches the kernel-owned runner and removes the old post-exit group-number kill. |
 | `scripts/verify-native-codex-runtime.ts` | Preserves the existing manager connection for nested containment, with one named file per process and a five-minute bound. |
-| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | The direct CLI helper records its root identity at spawn and awaits bounded identity-checked tree termination in every finally block, including native app-server helpers. |
 | `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/codexAppServerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/copilotAcpHost.integration.test.ts` | Calls a product launch port; the preload owns real process creation. |
