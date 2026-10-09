@@ -8832,7 +8832,7 @@ describe("seat auto-rotation through production seams", () => {
     f.command.spawn = async (...args) => {
       const result = await spawn(...args);
       f.turn(true);
-      f.command.launchSettlement = () => ({ kind: "settled", conversationId: String(result.body.conversationId), path: String(result.body.path) });
+      f.command.launchSettlement = () => ({ kind: "settled", conversationId: String(result.body.conversationId), path: String(result.body.path), launchId: null });
       await reconcileOrchestratorSeatLaunch(PROJECT, f.command);
       expect(f.active().conversationId).toBe(f.original.conversationId);
       return result;
@@ -8840,6 +8840,7 @@ describe("seat auto-rotation through production seams", () => {
     await f.check();
     expect(f.active().conversationId).toBe(f.original.conversationId);
     expect(f.state().autoRotation?.lastAttempt?.state).toBe("failed");
+    expect(f.state().autoRotation?.lastAttempt?.error).toContain("busy or unknown");
     expect(f.reports()).toHaveLength(1);
     await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
   }));
@@ -8874,13 +8875,13 @@ describe("seat auto-rotation through production seams", () => {
         const result = JSON.parse(process.env.FIXTURE_SETTLEMENT);
         await reconcileOrchestratorSeatLaunch("viewer", { ...productionSeatCommandDependencies,
           now: () => process.env.FIXTURE_AT,
-          launchSettlement: () => ({ kind: "settled", conversationId: result.conversationId, path: result.path }) });
+          launchSettlement: () => ({ kind: "settled", conversationId: result.conversationId, path: result.path, launchId: null }) });
       `], { cwd: process.cwd(), env: { ...process.env, FIXTURE_REGISTRY: f.registryPath, FIXTURE_SETTLEMENT: JSON.stringify(settled), FIXTURE_AT: AT }, stdio: ["ignore", "pipe", "pipe"] });
       const errors: Buffer[] = [];
       child.stdout!.resume(); child.stderr!.on("data", data => errors.push(data));
       const exitCode = await new Promise<number | null>((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
       expect({ exitCode, stderr: Buffer.concat(errors).toString() }).toEqual({ exitCode: 0, stderr: "" });
-      expect(f.active().conversationId).toBe(state === "idle" ? settled.conversationId : f.original.conversationId);
+      expect(f.active().conversationId).toBe(state === "idle" ? String(settled.conversationId) : f.original.conversationId);
     } finally { resume(); await checking; }
     await runSeatTickCheck(PROJECT, { ...f.rig.deps, sources: { ...f.rig.deps.sources! } });
     expect(f.spawns).toHaveLength(1);
@@ -8913,7 +8914,7 @@ describe("seat auto-rotation through production seams", () => {
     if (outcome === "failed") {
       expect(f.reports()[0]!.body).toContain(retryAt);
       const { seatTickSettingsAnswer, autoRotationFailureAnswer } = await import("./seatTickSettingsAnswer");
-      expect(seatTickSettingsAnswer(PROJECT, false, { kind: "gateway", conversationId: null, project: null, seatEpoch: null }).autoRotate.lastAttempt?.nextAttemptAt).toBe(retryAt);
+      expect(seatTickSettingsAnswer(PROJECT, false, { kind: "gateway", conversationId: null, project: null, seatEpoch: null }).autoRotate?.lastAttempt?.nextAttemptAt).toBe(retryAt);
       expect(autoRotationFailureAnswer(PROJECT).lastAttempt?.nextAttemptAt).toBe(retryAt);
     }
     const child = spawn(process.execPath, ["-e", `

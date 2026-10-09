@@ -263,7 +263,12 @@ export async function runSeatAutoRotation(
       if (current?.intent.clientRequestId === seatAutoRotationKey(a.id) && current.seatEpoch !== a.seatEpoch && result.status >= 200 && result.status < 300 && result.body.ok !== false) {
         a.state = "rotated"; a.successorConversationId = current.conversationId ?? undefined;
       } else if (result.body.code === "incumbent_changed" || current?.seatEpoch !== a.seatEpoch) a.state = "superseded";
-      else { a.state = "failed"; a.error = redactMonitorText(String(result.body.error ?? "rotation failed")).slice(0, 500); }
+      else {
+        a.state = "failed";
+        // A poll may have terminalized this launch before its request returned.
+        const terminalError = sources.seatFor(input.project).history?.find(row => row.seat.intent.clientRequestId === seatAutoRotationKey(a.id))?.seat.intent.error;
+        a.error = redactMonitorText(String(terminalError ?? result.body.error ?? "rotation failed")).slice(0, 500);
+      }
     } catch (error) { a.state = "failed"; a.error = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
     advanceCooldown(a, new Date(sources.now()).toISOString());
     persist(); await tell();
