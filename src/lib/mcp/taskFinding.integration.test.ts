@@ -28,7 +28,7 @@ test("published finding schemas, recurrence, receipts and key updates through MC
   await Promise.all([client.connect(a), server.connect(b)]);
   let seq = 0;
   const call = async (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: { full: true, clientRequestId: `finding-${++seq}`, ...args } });
-  const answer = (result: Awaited<ReturnType<typeof call>>) => result.structuredContent as { task: BoardTask; matched?: boolean; code?: string };
+  const answer = (result: Awaited<ReturnType<typeof call>>) => result.structuredContent as { task: BoardTask; matched?: boolean; code?: string; changedFields: string[] };
   const input = { project: "mcp-findings", text: "Keep the original wording", findingKey: "socket:timeout", note: "First seen" };
   try {
     const { tools } = await client.listTools();
@@ -41,6 +41,9 @@ test("published finding schemas, recurrence, receipts and key updates through MC
     const repeatArgs = { ...input, text: "Reporter title", note: "Repeated", clientRequestId: "repeat-receipt" };
     const repeat = answer(await call("create_task", repeatArgs));
     expect(repeat).toMatchObject({ matched: true, task: { id: initial.task.id, text: input.text, finding: { count: 2 }, note: { text: "Repeated", author: { kind: "agent", conversationId: null } } } });
+    expect(repeat.changedFields).toContain("finding");
+    expect(repeat.changedFields).toContain("note");
+    for (const field of ["text", "status", "assignments", "placement"]) expect(repeat.changedFields).not.toContain(field);
     const replay = answer(await call("create_task", repeatArgs));
     expect(replay.matched).toBe(true);
     expect(replay.task).toEqual(JSON.parse(JSON.stringify(repeat.task)));
