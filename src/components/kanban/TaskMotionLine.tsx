@@ -14,7 +14,7 @@ export function TaskMotionLine({ motion, working, nowMs, plain = false, full = f
   if (quiet && !recurred) return null;
   const hold = typeof motion.reason === "object" ? motion.reason : null;
   const date = hold?.until ? new Date(hold.until).toLocaleString(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
-  const label = hold ? t(`kanban.hold.${hold.kind}`, { note: hold.note, ref: taskTitle ?? hold.ref?.match(/\/(?:pull|issues)\/(\d+)/)?.[1] ?? hold.ref ?? "?", date })
+  const label = motion.key === "not-started" || motion.key === "done" ? "" : hold ? t(`kanban.hold.${hold.kind}`, { note: hold.note, ref: taskTitle ?? hold.ref?.match(/\/(?:pull|issues)\/(\d+)/)?.[1] ?? hold.ref ?? "?", date })
     : motion.reason === "paused" ? t("kanban.motion.paused")
       : motion.key === "working" && working ? t("kanban.motion.workingN", { count: working }) : t(`kanban.motion.${motion.key}`);
   const note = hold && !["operator", "external", "postponed", "unstated"].includes(hold.kind) ? hold.note : "";

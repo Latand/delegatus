@@ -1,0 +1,38 @@
+[
+  {
+    "lang": "en",
+    "width": 1440,
+    "text": "Seen 3 times · last seen 9 Oct, 11:00",
+    "dateTime": "2026-10-09T08:00:00.000Z",
+    "clipped": false,
+    "left": 290,
+    "right": 470.1875
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "text": "Seen 3 times · last seen 9 Oct, 11:00",
+    "dateTime": "2026-10-09T08:00:00.000Z",
+    "clipped": false,
+    "left": 24,
+    "right": 204.1875
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "text": "Помічено 3 рази · востаннє 9 жовт., 11:00",
+    "dateTime": "2026-10-09T08:00:00.000Z",
+    "clipped": false,
+    "left": 290,
+    "right": 500.546875
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "text": "Помічено 3 рази · востаннє 9 жовт., 11:00",
+    "dateTime": "2026-10-09T08:00:00.000Z",
+    "clipped": false,
+    "left": 24,
+    "right": 234.546875
+  }
+]

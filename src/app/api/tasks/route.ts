@@ -110,7 +110,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   if (!result.replay) {
     recordTeamEvent({
       actor,
-      action: result.matched ? "task.updated" : "task.created",
+      action: result.matched ? "task.changed" : "task.created",
       project: result.task.project,
       subject: { kind: "task", id: result.task.id, title: result.task.text.split("\n")[0] ?? null },
     });

@@ -24,6 +24,7 @@ function create(body: CreateTaskInput, now = first) {
 describe("finding identity", () => {
   test("persists recurrence and retry receipts without replacing the original text or other fields", () => {
     const initial = create({ ...input, details: "Keep this context", note: "First observation", clientRequestId: "first" });
+    expect(create({ ...input, clientRequestId: "first" })).toMatchObject({ replay: true, matched: false, task: { finding: { count: 1 } } });
     const match = create({ ...input, text: "New reporter wording", details: "New context", note: "Seen again", clientRequestId: "repeat" }, later);
     expect(match.matched).toBe(true);
     expect(match.task).toMatchObject({ id: initial.task.id, text: input.text, details: "Keep this context", findingKey: input.findingKey, finding: { count: 2, lastSeenAt: later }, note: { text: "Seen again", author: { kind: "operator" }, updatedAt: later } });

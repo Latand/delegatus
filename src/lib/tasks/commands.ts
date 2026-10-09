@@ -52,7 +52,7 @@ export type TaskCommandResult =
 export interface RecentCreate {
   clientRequestId: string;
   taskId: string;
-  matched?: true;
+  matched?: boolean;
 }
 
 export type CreateTaskResult =
@@ -367,7 +367,7 @@ export function createTask(
       const task = existing.find((item) => item.id === prior.taskId);
       /* The task may have been deleted since; a replay then behaves as a fresh
          create rather than resurrecting a phantom. */
-      if (task) return { ok: true, tasks: existing, task, recentCreates, replay: true, ...(prior.matched ? { matched: true } : {}) };
+      if (task) return { ok: true, tasks: existing, task, recentCreates, replay: true, ...(prior.matched !== undefined ? { matched: prior.matched } : {}) };
     }
   }
 
@@ -376,7 +376,7 @@ export function createTask(
   const key = findingKey.key;
   const now = deps.now?.() ?? isoNow();
   const receipt = (taskId: string, matched = false): RecentCreate[] => clientRequestId
-    ? [...recentCreates.filter(entry => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId, ...(matched ? { matched: true as const } : {}) }].slice(-RECENT_CREATES_CAP)
+    ? [...recentCreates.filter(entry => entry.clientRequestId !== clientRequestId), { clientRequestId, taskId, ...(key !== undefined ? { matched } : {}) }].slice(-RECENT_CREATES_CAP)
     : recentCreates;
   if (key !== undefined) {
     const prior = existing.find(task => task.project === project && task.findingKey === key && task.status !== "done");

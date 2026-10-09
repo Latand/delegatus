@@ -41,7 +41,9 @@ test("published finding schemas, recurrence, receipts and key updates through MC
     const repeatArgs = { ...input, text: "Reporter title", note: "Repeated", clientRequestId: "repeat-receipt" };
     const repeat = answer(await call("create_task", repeatArgs));
     expect(repeat).toMatchObject({ matched: true, task: { id: initial.task.id, text: input.text, finding: { count: 2 }, note: { text: "Repeated", author: { kind: "agent", conversationId: null } } } });
-    expect(answer(await call("create_task", repeatArgs))).toEqual(repeat);
+    const replay = answer(await call("create_task", repeatArgs));
+    expect(replay.matched).toBe(true);
+    expect(replay.task).toEqual(JSON.parse(JSON.stringify(repeat.task)));
     expect(loadTasks().find(task => task.id === initial.task.id)?.finding?.count).toBe(2);
     await call("update_task", { taskId: initial.task.id, status: "done" });
     const next = answer(await call("create_task", input));
