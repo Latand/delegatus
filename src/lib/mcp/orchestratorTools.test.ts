@@ -737,7 +737,7 @@ test("unknown and ambiguous bridge projects refuse before receipt access or deli
     const key = `directive-${code}`;
     const result = await service.callTool("bridge_directive", { clientRequestId: key, project, rootTurnId: "turn_fixture", utterance: 0, instruction: "check progress" });
     expect(result).toMatchObject({ ok: false, code, details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
-    if (code === "ambiguous_project") expect(result.details?.candidates).toEqual(["project-a", "project-b"]);
+    if (code === "ambiguous_project") expect(result).toMatchObject({ details: { candidates: ["project-a", "project-b"] } });
     expect(receipts.lookup(`bridge_directive:${key}`)).toBeNull();
   }
   expect(posts).toEqual([]);
@@ -762,7 +762,7 @@ test("a definite message refusal after seat creation preserves both the cause an
       ok: false, code: "orchestrator_relay_refused", error: "the recipient cannot accept this relay", retryable: false,
       details: { status: 403, code: "orchestrator_relay_refused", outcome: "settled", messageOutcome: "not-executed", created: true, conversationId: SEATED_ID },
     });
-    expect(result.details?.nextAction).not.toBe("new-request-permitted");
+    expect(result).toMatchObject({ details: { nextAction: "follow-disposition" } });
     expect(receipts.lookup("send_message_to_orchestrator:created-then-refused")).toMatchObject({ stage: "settled", binding: { target: { identity: SEATED_ID } } });
     expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ...result, replayed: true });
     expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);

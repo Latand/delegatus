@@ -97,7 +97,7 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
   else delete process.env.LLV_SPAWN_CAPABILITY;
   const domain: Partial<ViewerMcpDomainDependencies> = {
     registrySnapshot: () => registry.readOnlySnapshot(),
-    completedFileScan: async () => ({ snapshot: {
+    completedFileScan: async () => ({ generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0, snapshot: {
       files: [], complete: true, projectCatalog: [
         { project: "project-a", displayName: "Example sender", smt: 1, conversations: 1 },
         { project: "project-b", displayName: "Example recipient", smt: 1, conversations: 0 },
