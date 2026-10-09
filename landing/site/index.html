@@ -11,7 +11,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geologica:wght@300..600&family=Martian+Mono:wght@400;500&family=Unbounded:wght@600;700&display=swap">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="variants.css">
   <script>
     // Pick the language before first paint so a Ukrainian visitor never sees English flash.
     (function () {
@@ -37,10 +36,6 @@
     <nav class="nav-links" aria-label="Delegatus">
       <a class="nav-gh" href="https://github.com/Latand/delegatus">
         <span>GitHub</span>
-        <span class="stars" data-stars hidden>
-          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-          <span data-stars-count></span>
-        </span>
       </a>
       <a href="https://github.com/Latand/delegatus#readme"><span class="long" data-i18n="nav.docs">Docs</span><span class="short" data-i18n="nav.docsShort">Docs</span></a>
       <div class="lang" role="group" data-i18n-aria="nav.lang" aria-label="Language">
@@ -59,35 +54,36 @@
           <p class="sub" data-i18n="hero.sub">One agent runs your board. Claude Code and Codex build and review. You see every agent and can step in.</p>
           <p class="promise" data-i18n="hero.promise">Free and open source. Runs the official CLIs on your machine, with your own logins.</p>
         </div>
-        <div class="install-slot" data-install="hero"></div>
+        <div class="install-slot" data-install="hero">
+          <div class="share">
+            <button type="button" class="copy-btn share-btn" data-share>
+              <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+              <span data-i18n="share.btn">Send the link to my computer</span></button>
+            <p data-i18n="share.note">Delegatus runs on your computer. The prompt below is for an agent there.</p>
+          </div>
+        </div>
       </div>
 
-      <div class="stage-wrap">
+      <div class="stage-wrap demo-wrap">
         <span class="catcher" data-mascot="catching"></span>
-        <div class="stage-bar">
-          <div class="seg" role="tablist" data-i18n-aria="demo.views" aria-label="Views">
-            <button type="button" role="tab" data-hero-view="board" aria-selected="true" data-i18n="demo.board">Board</button>
-            <button type="button" role="tab" data-hero-view="orchestrator" aria-selected="false" tabindex="-1" data-i18n="demo.orchestrator">Orchestrator</button>
-          </div>
-          <p class="live-tag"><i class="dot dot-green"></i><span data-i18n="demo.live">Live demo</span></p>
+        <div class="demo" data-demo role="img" data-i18n-aria="demo.alt" aria-label="An autoplaying demo with invented data: a new project gets its orchestrator, a request becomes three tasks on the board, and one of them passes Build, Review and Verify on its way to Done.">
+          <div class="demo-stage" aria-hidden="true"></div>
         </div>
-        <div class="live live-hero" data-live="hero" data-lw="1820" data-lh="1150" data-pw="390" data-ph="700"
-             data-query="step=0&view=board" data-phone-query="step=0&phone=1"
-             role="region" data-i18n-aria="demo.heroAlt" aria-label="The Delegatus interface with invented data: the harbor-api orchestrator beside its board.">
-          <div class="live-frame"></div>
+        <div class="demo-rail" data-demo-rail>
+          <ol class="demo-steps" data-i18n-aria="demo.steps" aria-label="What the demo shows">
+            <li><span class="chip"><i class="on"></i><i class="fill"></i><b>1</b><span class="lbl" data-i18n="demo.s1">New project</span></span><span class="cap" data-i18n="demo.c1">A new project: an empty board and no orchestrator yet.</span></li>
+            <li><span class="chip"><i class="on"></i><i class="fill"></i><b>2</b><span class="lbl" data-i18n="demo.s2">Orchestrator</span></span><span class="cap" data-i18n="demo.c2">One click creates its orchestrator, the agent that runs the board.</span></li>
+            <li><span class="chip"><i class="on"></i><i class="fill"></i><b>3</b><span class="lbl" data-i18n="demo.s3">Request</span></span><span class="cap" data-i18n="demo.c3">You tell it what you want, in your own words.</span></li>
+            <li><span class="chip"><i class="on"></i><i class="fill"></i><b>4</b><span class="lbl" data-i18n="demo.s4">Tasks</span></span><span class="cap" data-i18n="demo.c4">It turns the request into tasks on the board.</span></li>
+            <li><span class="chip"><i class="on"></i><i class="fill"></i><b>5</b><span class="lbl" data-i18n="demo.s5">Pipeline</span></span><span class="cap" data-i18n="demo.c5">The orchestrator starts the work: Claude Code builds, a fresh Codex reviewer checks.</span></li>
+            <li><span class="chip"><i class="on"></i><i class="fill"></i><b>6</b><span class="lbl" data-i18n="demo.s6">Done</span></span><span class="cap" data-i18n="demo.c6">Review passed and the PR merged, so the card moves to Done.</span></li>
+          </ol>
+          <p class="demo-note" data-i18n="demo.note">Demo, invented data</p>
+          <button type="button" class="demo-pause" data-demo-pause aria-pressed="false" aria-label="Pause the demo">
+            <svg class="i i-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+            <svg class="i i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 7 5.5z"/></svg>
+          </button>
         </div>
-        <ol class="steps" data-steps>
-          <li><button type="button" data-step="0"><b>1</b><span data-i18n="step.0">Send the request</span></button></li>
-          <li><button type="button" data-step="2"><b>2</b><span data-i18n="step.2">A task and its pipeline</span></button></li>
-          <li><button type="button" data-step="3"><b>3</b><span data-i18n="step.3">Build passed</span></button></li>
-          <li><button type="button" data-step="4"><b>4</b><span data-i18n="step.4">Review passed</span></button></li>
-          <li><button type="button" data-step="5"><b>5</b><span data-i18n="step.5">It needs you</span></button></li>
-          <li class="steps-replay"><button type="button" data-replay>
-            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-            <span data-i18n="hero.replay">Replay</span></button></li>
-        </ol>
-        <p class="step-hint" aria-live="polite" data-step-hint></p>
-        <p class="playback" data-playback hidden><b data-i18n="demo.playing"></b><span aria-hidden="true"></span></p>
       </div>
     </section>
 
@@ -165,6 +161,31 @@
         </div>
       </div>
     </section>
+
+    <!-- 5. The questions people ask first -->
+    <section class="sec sec-faq" data-section="faq">
+      <h2 data-i18n="faq.title">Questions people ask first.</h2>
+      <div class="faq">
+        <details class="q"><summary><span data-i18n="faq.q1">Does it get around Anthropic’s or OpenAI’s terms?</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></summary>
+          <p data-i18n="faq.a1">No. Delegatus starts the official Claude Code and Codex CLIs, signed in with your own accounts, the way you would start them in a terminal. It does not share or resell access. Your provider’s terms and limits apply as always.</p></details>
+        <details class="q"><summary><span data-i18n="faq.q2">Is it Claude Code with a new face?</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></summary>
+          <p data-i18n="faq.a2">Claude Code and Codex do the work inside it. Delegatus adds what sits around them: an orchestrator that keeps a board of tasks, a worktree for each task, a fresh read-only reviewer for every round, decisions that wait for you on their card, and every conversation open and searchable.</p></details>
+        <details class="q"><summary><span data-i18n="faq.q3">What leaves my machine?</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></summary>
+          <p data-i18n="faq.a3">The board and every conversation stay on your machine, and the agents talk to their providers as they always do. Delegatus itself sends one anonymous install ping a day: a random id, the version, OS, architecture and install kind. Turn it off in Settings or with DELEGATUS_TELEMETRY=0.</p></details>
+        <details class="q"><summary><span data-i18n="faq.q4">Does it merge pull requests by itself?</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></summary>
+          <p data-i18n="faq.a4">Only when you turn that on. Merging on a passed review is off by default: a pipeline ends with its pull request open, and the orchestrator tells you it is ready.</p></details>
+        <details class="q"><summary><span data-i18n="faq.q5">Do I need both Claude Code and Codex?</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></summary>
+          <p data-i18n="faq.a5">No. Either one runs the orchestrator and the builders. With both, one engine builds and the other reviews. GitHub Copilot can run single agents too.</p></details>
+        <details class="q"><summary><span data-i18n="faq.q6">What does it cost?</span>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></summary>
+          <p data-i18n="faq.a6">Delegatus is free and open source under the MIT license. The agents run on your own Claude, Codex and Copilot accounts, within the plans you already have.</p></details>
+      </div>
+    </section>
   </main>
 
   <footer class="band">
@@ -180,6 +201,8 @@
       <a href="https://github.com/Latand/delegatus">GitHub</a>
       <a href="https://www.npmjs.com/package/delegatus-cli">npm <code>delegatus-cli</code></a>
       <span><span data-i18n="foot.version">version</span> <span class="num" data-version>1.5.0</span></span>
+      <span data-released></span>
+      <a class="changelog" href="https://github.com/Latand/delegatus/blob/main/CHANGELOG.md" data-i18n="foot.changelog">Changelog</a>
     </div>
     <p class="band-analytics" data-i18n="foot.analytics">This site counts visits with Cloudflare Web Analytics (no cookies), clicks on its copy buttons, demo starts and full-screen opens.</p>
   </footer>
@@ -202,6 +225,11 @@
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
       </div>
     </div>
+    <dl class="compat" data-i18n-aria="compat" aria-label="Compatibility">
+      <dt data-i18n="compat.osL">Runs on</dt><dd data-i18n="compat.os">macOS · Linux · Windows through WSL 2</dd>
+      <dt data-i18n="compat.agentsL">Agents</dt><dd data-i18n="compat.agents">Claude Code · Codex · GitHub Copilot for single agents</dd>
+      <dt data-i18n="compat.bunL">Needs</dt><dd data-i18n="compat.bun">Bun 1.4+</dd>
+    </dl>
     <div class="legacy-wrap">
       <button type="button" class="legacy-link" aria-expanded="false" data-i18n="legacy.open">I still use a terminal</button>
       <div class="legacy" hidden>
@@ -222,7 +250,7 @@
   </template>
 
   <script src="copy.js"></script>
-  <script src="variants.js"></script>
+  <script src="boardDemo.js"></script>
   <script src="mascot.js"></script>
   <script src="main.js"></script>
 </body>

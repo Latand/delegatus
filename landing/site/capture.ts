@@ -4,12 +4,11 @@
  *   bun landing/site/build.ts && CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts
  *
  * At 1440×900 and 390×844, in English and Ukrainian: the full page, the first
- * screen, each section, the hero demo at every step of its script (driven by
- * pressing the product's own send control inside the frame, the way a visitor
- * does), the other views of each frame, and the legacy-install joke. PNGs go
- * to LANDING_RENDER_DIR (default ~/Pictures/delegatus-review/landing/final/),
- * which is never committed. Page errors and requests the demo left unanswered
- * are written beside them in report.json.
+ * screen, each section, the hero's demo held at each of its six steps, the
+ * other views of each frame, and the legacy-install joke. PNGs go to
+ * LANDING_RENDER_DIR (default ~/Pictures/delegatus-review/landing/final/),
+ * which is never committed. Page errors and requests the frames left
+ * unanswered are written beside them in report.json.
  *
  * `--only=en-1440` limits the run to one language and width.
  * `--scheme=light` asks the browser for a light colour scheme (default dark).
@@ -32,11 +31,15 @@
  * languages and fails unless the agent window fills the frame and its reader
  * wears the plain border, without the role ribbon or a focus ring nobody asked for.
  *
- * `--check-request=10` renders nothing: it plays the hero's script that many
- * times in each language and width and fails unless every step shows the
- * visitor's request exactly once in the orchestrator's chat, above the reply.
- * On the phone the chat is held open (the visitor pressed "Orchestrator"), so
- * the chat is on screen at every step there too.
+ * `--check-demo` measures the hero's demo: one full loop at 1440×900 and
+ * 390×844 under a 4× CPU throttle, traced, with the frames Chrome presented
+ * and dropped and every main-thread task over 50 ms; the cold load (LCP and
+ * bytes transferred) of this build and, with LANDING_BEFORE_DIR, of another
+ * build on the same driver; that the demo waits off screen and in a hidden
+ * tab and stands still under reduced motion; and, unthrottled, a frame every
+ * half second and a screen recording of one loop at both widths. It fails on a
+ * long task during the loop, on more than 1% dropped frames, or on a demo that
+ * moves when it should not.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -44,9 +47,8 @@ import path from "node:path";
 
 import { chromium, type Frame, type Page } from "playwright-core";
 
-import { translate, type Locale } from "@/lib/i18n";
+import { type Locale } from "@/lib/i18n";
 
-import { buildWorld } from "./demo/world";
 import worker, { type DataPoint } from "../worker";
 
 type PerfRecord = {
@@ -59,16 +61,20 @@ type PerfRecord = {
 };
 type PerfWindow = Window & {
   perfRecords: PerfRecord[];
-  stepClick: number;
   restoreSearch(): void;
 };
+/* What boardDemo.js exposes for this driver. */
+declare global {
+  interface Window {
+    DLG: { demo: { loop: number; steps: number[]; hold: number; now(): number; seek(at: number): void; release(): void } };
+  }
+}
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const dist = process.env.LANDING_DIST_DIR ?? path.join(here, "dist");
 const out = process.env.LANDING_RENDER_DIR ?? path.join(os.homedir(), "Pictures/delegatus-review/landing/final");
 const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length) ?? null;
 const colorScheme = process.argv.find((arg) => arg.startsWith("--scheme="))?.slice("--scheme=".length) === "light" ? "light" : "dark";
-const checkRuns = Number(process.argv.find((arg) => arg.startsWith("--check-request="))?.slice("--check-request=".length) ?? 0);
 const fullscreenCheck = process.argv.includes("--check-fullscreen");
 const eventsCheck = process.argv.includes("--check-events");
 const promptCheck = process.argv.includes("--check-prompt");
@@ -122,51 +128,6 @@ async function shoot(page: Page, selector: string, file: string) {
   await element.scrollIntoViewIfNeeded();
   await settle(page, 300);
   await element.screenshot({ path: path.join(out, file) });
-}
-
-/* The orchestrator's answer to the request, by a phrase of it that is plain text. */
-const ANSWER = { en: "is on the board", uk: "вже на дошці" } as const;
-/* The script moves at 0.65, 5.85, 11.05 and 15.65 seconds. Check the
-   delivered request before the first reply, then allow each rendered report
-   half a second after its streamed update. Each wait follows the last. */
-const TIMES_MS = [300, 1200, 4900, 5200, 4600];
-
-/** How many copies of the request the frame shows, and whether each sits above the answer. */
-async function requestBubbles(frame: Frame, lang: Locale) {
-  const request = buildWorld(0, lang, 0, []).request;
-  return frame.evaluate(({ request, answer }) => {
-    /* The composer's one-line delivery receipt quotes the message too; it is not a chat row. */
-    /* The feed binds short words to the next one with no-break spaces. */
-    const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
-    const leaves = (text: string) => [...document.querySelectorAll<HTMLElement>("body *")].filter((el) =>
-      (el.getClientRects().length > 0 || getComputedStyle(el).display === "contents") && !el.closest("[data-delivery-echo]") && words(el).includes(text) && ![...el.children].some((child) => words(child).includes(text)));
-    /* A display: contents wrapper has no box of its own; its parent's stands for it. */
-    const top = (el: HTMLElement) => (el.getClientRects().length ? el : el.parentElement!).getBoundingClientRect().top;
-    const answers = leaves(answer).map(top);
-    const copies = leaves(request).map(top);
-    return { copies: copies.length, belowAnswer: copies.filter((top) => answers.some((at) => top > at)).length, answered: answers.length > 0 };
-  }, { request, answer: ANSWER[lang] });
-}
-
-async function checkRequest(lang: Locale, viewport: (typeof VIEWPORTS)[number], run: number): Promise<string[]> {
-  const context = await browser.newContext({
-    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
-    ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
-  });
-  const page = await context.newPage();
-  await page.goto(`${base}?lang=${lang}`);
-  const hero = await frameOf(page, ".live-hero");
-  await settle(page, 1500);
-  const failures: string[] = [];
-  await hero.locator(`[aria-label="${translate(lang, "composer.sendToAgent")}"]`).first().click();
-  if (viewport.phone) await page.locator('.hero [data-hero-view="orchestrator"]').click();
-  for (let at = 1; at <= 5; at += 1) {
-    await settle(page, TIMES_MS[at - 1]!);
-    const seen = await requestBubbles(hero, lang);
-    if (seen.copies !== 1 || seen.belowAnswer > 0 || (at >= 2 && !seen.answered)) failures.push(`${lang}-${viewport.name} run ${run} step ${at}: ${JSON.stringify(seen)}`);
-  }
-  await context.close();
-  return failures;
 }
 
 /* The install prompts, expanded: every line has to be readable, so the last
@@ -228,8 +189,8 @@ async function checkSwipe() {
   const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number; available: number }[] = [];
   const surfaces = [
     ["install-prompt", '.hero [data-install="hero"] .prompt pre'],
-    ["hero-composer", ".live-hero iframe"],
-    ["hero-demo", ".live-hero iframe"],
+    ["hero-board", ".hero .demo"],
+    ["open-composer", ".live-open iframe"],
     ["run-demo", ".live-run iframe"],
     ["open-demo", ".live-open iframe"],
     ["phone-demo", ".live-phone iframe"],
@@ -241,12 +202,12 @@ async function checkSwipe() {
     const cdp = await context.newCDPSession(page);
     await page.goto(`${base}?lang=${lang}`);
     for (const [surface, selector] of surfaces) {
-      if (surface.endsWith("demo") || surface === "hero-composer") {
+      if (surface.endsWith("demo") || surface === "open-composer") {
         await page.locator(selector.replace(" iframe", "")).scrollIntoViewIfNeeded();
         await frameOf(page, selector.replace(" iframe", ""));
       }
       for (const direction of ["down", "up"] as const) {
-        if (swipeCheck === "after" && (surface.endsWith("demo") || surface === "hero-composer")) {
+        if (swipeCheck === "after" && (surface.endsWith("demo") || surface === "open-composer")) {
           const frame = await frameOf(page, selector.replace(" iframe", ""));
           await frame.evaluate((direction) => {
             for (const node of document.querySelectorAll<HTMLElement>("*")) {
@@ -266,14 +227,14 @@ async function checkSwipe() {
           const positioned = document.querySelector(selector)!.getBoundingClientRect();
           return { x: Math.round(positioned.left + positioned.width / 2), y: Math.round(Math.max(positioned.top + 12, Math.min(positioned.bottom - 12, 420))) };
         }, selector);
-        if (surface === "hero-composer") {
-          const field = (await frameOf(page, ".live-hero")).locator("textarea").first();
+        if (surface === "open-composer") {
+          const field = (await frameOf(page, ".live-open")).locator("textarea").first();
           await field.waitFor({ state: "visible" });
           let rect = await field.boundingBox();
-          if (!rect) throw new Error("hero composer has no box");
+          if (!rect) throw new Error("conversation composer has no box");
           await page.evaluate((dy) => scrollBy(0, dy), rect.y + rect.height / 2 - 420);
           rect = await field.boundingBox();
-          if (!rect) throw new Error("hero composer moved out of view");
+          if (!rect) throw new Error("conversation composer moved out of view");
           point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
         }
         await settle(page, 250);
@@ -291,22 +252,24 @@ async function checkSwipe() {
       }
     }
     if (swipeCheck === "after") {
-      const hero = await frameOf(page, ".live-hero");
-      const composer = hero.locator("textarea").first();
+      await page.locator(".live-open").scrollIntoViewIfNeeded();
+      const open = await frameOf(page, ".live-open");
+      const composer = open.locator("textarea").first();
       await composer.fill("A visitor can still type in this field");
       if (await composer.inputValue() !== "A visitor can still type in this field") throw new Error(`${lang}: composer did not accept typing`);
 
       // A short flick must keep moving after release, unlike an immediate scrollBy.
-      await page.locator(".live-hero").scrollIntoViewIfNeeded();
-      await hero.evaluate(() => {
+      await page.locator(".live-run").scrollIntoViewIfNeeded();
+      const run = await frameOf(page, ".live-run");
+      await run.evaluate(() => {
         for (const node of document.querySelectorAll<HTMLElement>("*")) {
           if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
         }
       });
-      const heroBox = await page.locator(".live-hero iframe").boundingBox();
-      if (!heroBox) throw new Error("hero frame has no box");
-      const flickX = Math.round(heroBox.x + heroBox.width / 2);
-      const flickY = Math.round(heroBox.y + Math.min(heroBox.height / 2, 400));
+      const runBox = await page.locator(".live-run iframe").boundingBox();
+      if (!runBox) throw new Error("run frame has no box");
+      const flickX = Math.round(runBox.x + runBox.width / 2);
+      const flickY = Math.round(runBox.y + Math.min(runBox.height / 2, 400));
       await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: flickX, y: flickY, id: 2 }] });
       for (let step = 1; step <= 4; step += 1) {
         await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: flickX, y: flickY - step * 40, id: 2 }] });
@@ -317,14 +280,14 @@ async function checkSwipe() {
       const atRelease = await page.evaluate(() => scrollY);
       await settle(page, 300);
       const afterCoast = await page.evaluate(() => scrollY);
-      console.log(`${lang} hero flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
-      if (afterCoast - atRelease < 40) throw new Error(`${lang}: hero flick stopped without momentum`);
+      console.log(`${lang} run-frame flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
+      if (afterCoast - atRelease < 40) throw new Error(`${lang}: run-frame flick stopped without momentum`);
 
       // A new gesture on the landing must take over from a forwarded iframe flick.
       for (const interruption of ["touch", "wheel"] as const) {
-        await page.locator(".live-hero").scrollIntoViewIfNeeded();
-        const box = await page.locator(".live-hero iframe").boundingBox();
-        if (!box) throw new Error("hero frame has no box");
+        await page.locator(".live-run").scrollIntoViewIfNeeded();
+        const box = await page.locator(".live-run iframe").boundingBox();
+        if (!box) throw new Error("run frame has no box");
         const x = Math.round(box.x + box.width / 2);
         const y = Math.round(box.y + Math.min(box.height / 2, 400));
         await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 4 }] });
@@ -403,7 +366,7 @@ async function checkSwipe() {
 async function checkFullscreen() {
   const dir = process.env.LANDING_RENDER_DIR ?? "/tmp/landing-fullscreen-renders";
   fs.mkdirSync(dir, { recursive: true });
-  const frames = [["hero", ".live-hero"], ["run", ".live-run"], ["open", ".live-open"], ["phone", ".live-phone"]] as const;
+  const frames = [["run", ".live-run"], ["open", ".live-open"], ["phone", ".live-phone"]] as const;
   const LABELS = { en: { enter: "Full screen", exit: "Exit full screen" }, uk: { enter: "На весь екран", exit: "Вийти з повного екрана" } };
   const failures: string[] = [];
   const rows: Record<string, unknown>[] = [];
@@ -507,11 +470,7 @@ async function checkFullscreen() {
           if (inside.covers.length) fail(`exit control covers ${inside.covers.join(", ")}`);
           if (inside.label !== LABELS[lang].exit || before.label !== LABELS[lang].enter) fail(`labels "${before.label}" / "${inside.label}"`);
           await page.screenshot({ path: path.join(dir, `${lang}-${viewport.name}-${name}-${mode}.png`) });
-          if (name === "hero" && mode === "overlay") {
-            /* The hero's step bar works from inside full screen. */
-            await page.locator('[data-step="3"]').click();
-            await settle(page, 800);
-            if ((await page.locator('[data-step="3"][aria-current="step"]').count()) !== 1) fail("hero step bar did not answer in full screen");
+          if (name === "run" && mode === "overlay") {
             /* The window changing size while full screen. */
             await page.setViewportSize({ width: viewport.width === 1440 ? 1100 : 360, height: viewport.height === 900 ? 700 : 640 });
             await settle(page, 700);
@@ -579,18 +538,32 @@ async function checkEvents() {
         await run();
         if ((await response).status() !== 204) throw new Error(`${key}: ${event} did not return 204`);
         await settle(page, 100);
+        if (eventPoints.length !== before + 1) throw new Error(`${key}: wrong or duplicated ${event} data point`);
+        exact(event, agent);
+      };
+      const exact = (event: string, agent = "") => {
         const expected = { blobs: [event, agent, lang, ""], doubles: [1], indexes: [event] };
-        if (eventPoints.length !== before + 1 || JSON.stringify(eventPoints.at(-1)) !== JSON.stringify(expected)) {
-          throw new Error(`${key}: wrong or duplicated ${event} data point`);
-        }
+        if (JSON.stringify(eventPoints.at(-1)) !== JSON.stringify(expected)) throw new Error(`${key}: wrong ${event} data point`);
         const body = { event, lang, ...(agent ? { agent } : {}) };
         if (JSON.stringify(eventBodies.at(-1)) !== JSON.stringify(body)) throw new Error(`${key}: unexpected beacon fields`);
       };
       try {
         await page.goto(`${base}?lang=${lang}`);
-        const hero = await frameOf(page, ".live-hero");
-        await settle(page, 300);
-        if (eventPoints.length) throw new Error(`${key}: load counted an event`);
+        await settle(page, 600);
+        /* The demo counts once, when it first plays in view: on load where most of it shows in the
+           first screen, otherwise once it is scrolled to. Scrolling past it again counts nothing. */
+        const inView = await page.evaluate(() => {
+          const box = document.querySelector(".hero .demo")!.getBoundingClientRect();
+          return (Math.min(innerHeight, box.bottom) - Math.max(0, box.top)) / box.height >= 0.55;
+        });
+        if (inView) {
+          if (eventPoints.length !== 1) throw new Error(`${key}: a demo in view at load counted ${eventPoints.length} events`);
+          exact("demo_start");
+        } else {
+          if (eventPoints.length) throw new Error(`${key}: load counted an event`);
+          await action(() => page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" })), "demo_start");
+        }
+        await page.evaluate(() => scrollTo(0, 0));
         for (const install of ["hero", "footer"]) {
           const slot = `[data-install="${install}"]`;
           for (const agent of ["claude", "codex"]) {
@@ -601,10 +574,12 @@ async function checkEvents() {
           await action(() => page.locator(`${slot} [data-copy-cmd]`).click(), "copy_legacy");
           await page.locator(`${slot} .legacy-link`).click();
         }
-        await action(() => hero.locator(`[aria-label="${translate(lang, "composer.sendToAgent")}"]`).first().click(), "demo_start");
-        await page.locator('button[data-step="5"]').click();
-        await action(() => page.locator('.hero .fs-btn').click(), "fullscreen_open");
-        await page.locator('.hero .fs-btn').click();
+        await page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" }));
+        await settle(page, 300);
+        await page.locator(".live-run").scrollIntoViewIfNeeded();
+        await frameOf(page, ".live-run");
+        await action(() => page.locator('.sec-run .fs-btn').click(), "fullscreen_open");
+        await page.locator('.sec-run .fs-btn').click();
         await page.waitForFunction(() => !document.documentElement.classList.contains("fs-lock"));
         await settle(page, 200);
         if (eventPoints.length !== 8) throw new Error(`${key}: unrelated controls counted events`);
@@ -617,9 +592,9 @@ async function checkEvents() {
           throw new Error(`${key}: unavailable analytics blocked copy`);
         }
         await page.evaluate(() => { Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => { throw new Error("blocked"); } }); });
-        await page.locator('.hero .fs-btn').click();
+        await page.locator('.sec-run .fs-btn').click();
         await page.waitForFunction(() => document.documentElement.classList.contains("fs-lock"));
-        await page.locator('.hero .fs-btn').click();
+        await page.locator('.sec-run .fs-btn').click();
         await page.waitForFunction(() => !document.documentElement.classList.contains("fs-lock"));
         if (eventPoints.length !== 8) throw new Error(`${key}: unavailable analytics wrote a point`);
         if (errors.length) throw new Error(`${key}: ${errors.join("; ")}`);
@@ -742,7 +717,7 @@ async function checkSwipeFeedback() {
     const page = await context.newPage();
     const cdp = await context.newCDPSession(page);
     await page.goto(`${base}?lang=en`);
-    for (const surface of ["hero", "phone"]) {
+    for (const surface of ["run", "phone"]) {
       const host = `.live-${surface}`;
       await page.locator(host).scrollIntoViewIfNeeded();
       const frame = await frameOf(page, host);
@@ -927,59 +902,13 @@ async function performanceCase(viewport: (typeof VIEWPORTS)[number]) {
     }
     await trace("load", async () => {
       await page.goto(`${base}?lang=en`, { waitUntil: "load" });
-      await frameOf(page, ".live-hero");
+      await page.waitForSelector(".hero .demo .d-card");
       const readyMs = await page.evaluate(() => performance.now());
       await page.waitForTimeout(700);
       return page.evaluate((readyMs) => ({ readyMs, navigation: performance.getEntriesByType("navigation")[0]?.toJSON(), records: (window as unknown as PerfWindow).perfRecords }), readyMs);
     });
     await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-loaded.png`) });
     if (process.argv.includes("--load-only")) return;
-    await trace("steps", async () => {
-      const rows = [];
-      await frameOf(page, ".live-hero");
-      for (const step of [2, 3, 4, 5, 0]) {
-        const button = page.locator(`button[data-step="${step}"]`);
-        await button.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(500);
-        await page.evaluate(() => { (window as unknown as PerfWindow).stepClick = 0; document.addEventListener("click", () => { (window as unknown as PerfWindow).stepClick = performance.now(); }, { once: true, capture: true }); });
-        await button.click();
-        await page.waitForFunction(step => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === String(step), step);
-        const current = await frameOf(page, ".live-hero");
-        await current.waitForFunction(step => document.documentElement.dataset.demoStep === String(step), step);
-        const stateMs = await page.evaluate(() => performance.now() - (window as unknown as PerfWindow).stepClick);
-        if (step === 2) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Idempotent refunds"));
-        if (step === 3) await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("Build passed"));
-        if (step === 4) {
-          try { await current.waitForFunction(() => document.body.innerText.replace(/\s+/g, " ").includes("passed review with no findings: two"), undefined, { timeout: 4000 }); }
-          catch (error) {
-            await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-step4.png`) });
-            fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-step4.txt`), await current.locator("body").innerText());
-            if (perfLabel === "after") throw error;
-            rows.push({ step, stateMs, visibleMs: null, error: "report not visible after 4 seconds" });
-            continue;
-          }
-        }
-        if (step === 5) {
-          try { await current.waitForFunction(() => !!document.querySelector('[data-id="task:t-retries"][data-attention="needs"], [data-mobile2-section="needs"], [data-pstate="needs_decision"]'), undefined, { timeout: 4000 }); }
-          catch (error) {
-            await page.screenshot({ path: path.join(out, `${perfLabel}-${viewport.name}-step5.png`) });
-            fs.writeFileSync(path.join(out, `${perfLabel}-${viewport.name}-step5.txt`), await current.locator("body").innerText());
-            if (perfLabel === "after") throw error;
-            rows.push({ step, stateMs, visibleMs: null, error: "decision not visible after 4 seconds" });
-            continue;
-          }
-        }
-        rows.push({ step, stateMs, visibleMs: await page.evaluate(() => performance.now() - (window as unknown as PerfWindow).stepClick) });
-      }
-      return rows;
-    });
-    if (process.argv.includes("--steps-only")) return;
-    await trace("playback", async () => {
-      const hero = await frameOf(page, ".live-hero");
-      await hero.locator(`[aria-label="${translate("en", "composer.sendToAgent")}"]`).first().click();
-      await page.waitForFunction(() => document.querySelector("[data-step-hint]")?.getAttribute("data-step") === "5", undefined, { timeout: 30_000 });
-      return page.evaluate(() => (window as unknown as PerfWindow).perfRecords.filter((r) => r.type === "message" && r.data?.type === "dlg:state"));
-    });
     await trace("tabs", async () => {
       await page.locator(".live-open").scrollIntoViewIfNeeded();
       await frameOf(page, ".live-open");
@@ -1067,110 +996,270 @@ if (perfLabel) {
   process.exit(0);
 }
 
-/* `--variants=0,1,2,3` renders the prototype variants of variants.js for the
-   operator's pick, 0 being today's landing. Each PNG carries its variant's
-   number, printed into the page before the shot. */
-const variantsArg = process.argv.find((arg) => arg.startsWith("--variants="))?.slice("--variants=".length);
-async function captureVariant(variant: number, lang: Locale, viewport: (typeof VIEWPORTS)[number]) {
-  const context = await browser.newContext({
-    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme,
-    ...(viewport.phone ? { hasTouch: true, isMobile: true } : {}),
+/* The hero's demo: its moments for the renders, and the `--check-demo` measurement. */
+async function demoMoments(page: Page): Promise<number[]> {
+  const { steps, hold } = await page.evaluate(() => ({ steps: window.DLG.demo.steps, hold: window.DLG.demo.hold }));
+  return steps.slice(0, 6).map((from, index) => (index === 5 ? hold : index === 4 ? Math.round((from + steps[5]!) / 2) : steps[index + 1]! - 400));
+}
+
+function serveDirectory(dir: string) {
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname.startsWith("/api/")) return new Response(null, { status: 204 });
+      let pathname = decodeURIComponent(new URL(request.url).pathname);
+      if (pathname.endsWith("/")) pathname += "index.html";
+      const file = Bun.file(path.join(dir, path.normalize(pathname)));
+      return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
+    },
   });
+}
+
+const FRAME_CATEGORIES = ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "toplevel", "benchmark", "cc", "viz"];
+type TraceEvent = { name: string; ph: string; ts: number; dur?: number; pid: number; tid: number; args?: Record<string, unknown> };
+
+/* A cold load with the cache off and the CPU at a quarter speed, the page left
+   where it opens: the largest contentful paint and every byte that arrived. */
+async function coldLoad(url: string, viewport: (typeof VIEWPORTS)[number]) {
+  const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, isMobile: viewport.phone, hasTouch: viewport.phone });
+  const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+  await cdp.send("Network.enable");
+  await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+  let bytes = 0, requests = 0, failed = 0, errors = 0;
+  const largest: { url: string; kb: number }[] = [];
+  const urls = new Map<string, string>();
+  cdp.on("Network.requestWillBeSent", (event) => urls.set(event.requestId, event.request.url));
+  cdp.on("Network.responseReceived", (event) => { if (event.response.status >= 400) errors += 1; });
+  cdp.on("Network.loadingFinished", (event) => {
+    bytes += event.encodedDataLength;
+    requests += 1;
+    largest.push({ url: (urls.get(event.requestId) ?? "").replace(url.replace(/\?.*$/, ""), "/").slice(0, 90), kb: Math.round(event.encodedDataLength / 102.4) / 10 });
+  });
+  cdp.on("Network.loadingFailed", () => { failed += 1; });
+  await page.addInitScript(() => {
+    const seen = { at: 0, element: "", shift: 0 };
+    Object.assign(window, { lcp: seen });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as (PerformanceEntry & { value: number; hadRecentInput: boolean })[]) if (!entry.hadRecentInput) seen.shift += entry.value;
+    }).observe({ type: "layout-shift", buffered: true });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as (PerformanceEntry & { element?: Element | null })[]) {
+        seen.at = entry.startTime;
+        seen.element = entry.element ? `${entry.element.tagName.toLowerCase()}${entry.element.className ? `.${String(entry.element.className).split(" ")[0]}` : ""}` : "";
+      }
+    }).observe({ type: "largest-contentful-paint", buffered: true });
+  });
+  await page.goto(url, { waitUntil: "load" });
+  /* What loads on its own after the load event (the frames that start with the page) arrives in this time. */
+  await page.waitForTimeout(8000);
+  const seen = await page.evaluate(() => {
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming;
+    return { lcp: (window as unknown as { lcp: { at: number; element: string; shift: number } }).lcp, domContentLoaded: navigation.domContentLoadedEventEnd, load: navigation.loadEventEnd };
+  });
+  await context.close();
+  largest.sort((a, b) => b.kb - a.kb);
+  return {
+    lcpMs: Math.round(seen.lcp.at), lcpElement: seen.lcp.element, cls: Math.round(seen.lcp.shift * 1000) / 1000,
+    domContentLoadedMs: Math.round(seen.domContentLoaded), loadMs: Math.round(seen.load),
+    transferKB: Math.round(bytes / 102.4) / 10, requests, failed, httpErrors: errors, largest: largest.slice(0, 6),
+  };
+}
+
+/* One full loop, playing in view, traced at a quarter of the CPU. */
+async function loopTrace(viewport: (typeof VIEWPORTS)[number], dir: string) {
+  const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, isMobile: viewport.phone, hasTouch: viewport.phone });
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const key = `v${variant}-${viewport.name}-${lang}`;
-  const label = variant === 0 ? (lang === "uk" ? "СЬОГОДНІ" : "TODAY") : `${lang === "uk" ? "ВАРІАНТ" : "VARIANT"} ${variant}`;
-  const print = (selector: string) => page.evaluate(({ selector, label }) => {
-    const host = document.querySelector<HTMLElement>(selector);
-    if (!host) return;
-    host.querySelector(":scope > .capture-badge")?.remove();
-    if (getComputedStyle(host).position === "static") host.style.position = "relative";
-    const corner = host === document.body ? "left:50%;top:10px;transform:translateX(-50%)" : "right:10px;bottom:10px";
-    const badge = document.createElement("b");
-    badge.className = "capture-badge";
-    badge.textContent = label;
-    badge.style.cssText = `position:absolute;z-index:99;${corner};padding:5px 10px;border-radius:8px;background:#8f88ff;color:#14122b;font:600 15px/1.2 'Martian Mono',monospace;letter-spacing:.04em;pointer-events:none`;
-    host.appendChild(badge);
-  }, { selector, label });
-  const shot = async (selector: string, name: string) => {
-    await print(selector);
-    const element = page.locator(selector).first();
-    await element.scrollIntoViewIfNeeded();
-    await settle(page, 400);
-    await element.screenshot({ path: path.join(out, `${key}-${name}.png`) });
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+  await page.goto(`${base}?lang=en`, { waitUntil: "load" });
+  await page.waitForSelector(".hero .demo .d-card");
+  await page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" }));
+  await settle(page, 1500);
+  const loop = await page.evaluate(() => { window.DLG.demo.seek(0); window.DLG.demo.release(); return window.DLG.demo.loop; });
+  await browser.startTracing(page, { screenshots: false, categories: FRAME_CATEGORIES });
+  await settle(page, loop + 200);
+  const data = await browser.stopTracing();
+  const played = await page.evaluate(() => window.DLG.demo.now());
+  await context.close();
+  fs.writeFileSync(path.join(dir, `loop-${viewport.name}.trace.json`), data);
+  const events = (JSON.parse(data.toString()).traceEvents as TraceEvent[]);
+  const threads = new Map<string, string>();
+  for (const event of events) if (event.name === "thread_name") threads.set(`${event.pid}:${event.tid}`, String((event.args as { name?: string })?.name));
+  const main = events.filter((event) => threads.get(`${event.pid}:${event.tid}`) === "CrRendererMain");
+  const tasks = main.filter((event) => (event.name === "RunTask" || event.name === "ThreadControllerImpl::RunTask") && event.ph === "X");
+  const long = tasks.filter((event) => (event.dur ?? 0) >= 50_000).map((event) => Math.round(event.dur! / 1000));
+  const count = (name: string) => events.filter((event) => event.name === name).length;
+  /* Chrome's frame reporter states each frame it was asked for: presented, partly presented (the main thread
+     missed it, the compositor did not), or dropped. */
+  const reports = events.filter((event) => event.name === "PipelineReporter" && event.ph === "b");
+  const state = (event: TraceEvent) => String((event.args?.frame_reporter as { state?: string } | undefined)?.state ?? "none");
+  const states: Record<string, number> = {};
+  for (const event of reports) states[state(event)] = (states[state(event)] ?? 0) + 1;
+  const dropped = states.STATE_DROPPED ?? 0;
+  const presented = (states.STATE_PRESENTED_ALL ?? 0) + (states.STATE_PRESENTED_PARTIAL ?? 0);
+  const wanted = presented + dropped;
+  const longestMs = tasks.reduce((max, event) => Math.max(max, (event.dur ?? 0) / 1000), 0);
+  return {
+    viewport: `${viewport.width}x${viewport.height}`, cpuThrottle: 4, loopMs: loop, tracedMs: loop + 200, playedTo: Math.round(played),
+    frames: { reported: reports.length, presented, dropped, droppedPercent: wanted ? Math.round((dropped / wanted) * 1000) / 10 : null, states,
+      drawFrame: count("DrawFrame"), droppedFrameEvents: count("DroppedFrame"), beginFrame: count("BeginFrame") },
+    mainThread: { tasks: tasks.length, longTasks: long.length, longTaskMs: long, longestTaskMs: Math.round(longestMs * 10) / 10,
+      layoutMs: Math.round(main.filter((e) => e.name === "Layout").reduce((sum, e) => sum + (e.dur ?? 0), 0) / 100) / 10,
+      layouts: main.filter((e) => e.name === "Layout").length,
+      styleMs: Math.round(main.filter((e) => e.name === "UpdateLayoutTree").reduce((sum, e) => sum + (e.dur ?? 0), 0) / 100) / 10,
+      paintMs: Math.round(main.filter((e) => e.name === "Paint").reduce((sum, e) => sum + (e.dur ?? 0), 0) / 100) / 10 },
+    errors,
   };
-  try {
-    await page.goto(`${base}?lang=${lang}${variant ? `&variant=${variant}` : ""}`);
-    const hero = await frameOf(page, ".live-hero");
-    await settle(page, 2500);
-    await print("body");
-    await page.screenshot({ path: path.join(out, `${key}-1-first-screen.png`) });
-    if (viewport.phone) await shot(".hero-head", "2-hero-head");
-
-    /* The script, sent the way a visitor sends it, caught mid-step. */
-    await hero.locator(`[aria-label="${translate(lang, "composer.sendToAgent")}"]`).first().click();
-    await settle(page, 8000);
-    await shot(".hero .stage-wrap", "3-hero-playing");
-
-    for (const selector of [".live-run", ".live-open", ".live-phone"]) {
-      await page.locator(selector).scrollIntoViewIfNeeded();
-      await frameOf(page, selector);
-    }
-    await settle(page, 2500);
-    await shot(".sec-run", "4-run");
-    if (await page.locator(".sec-faq").count()) {
-      await page.locator(".sec-faq details").first().evaluate((item) => { (item as HTMLDetailsElement).open = true; });
-      await shot(".sec-faq", "5-faq");
-    }
-    await shot(".band", "6-footer");
-    if (viewport.phone) {
-      /* Mid-page on the phone: where a bar that stays in reach would show. */
-      await page.locator(".sec-open").scrollIntoViewIfNeeded();
-      await settle(page, 900);
-      await print("body");
-      await page.evaluate(() => {
-        const badge = document.body.querySelector<HTMLElement>(":scope > .capture-badge");
-        if (badge) { badge.style.position = "fixed"; badge.style.top = "70px"; }
-      });
-      await page.screenshot({ path: path.join(out, `${key}-7-mid-page.png`) });
-    }
-    report[key] = {
-      errors,
-      unanswered: await hero.evaluate(() => (window as unknown as { demoUnanswered?: string[] }).demoUnanswered ?? []),
-      overflowX: await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
-      heroScale: await page.evaluate(() => document.querySelector<HTMLElement>(".live-hero iframe")?.style.transform ?? ""),
-    };
-  } finally { await context.close(); }
-  console.log(`${key}: done`);
-}
-if (variantsArg) {
-  try {
-    for (const variant of variantsArg.split(",").map(Number)) {
-      for (const lang of ["en", "uk"] as Locale[]) {
-        for (const viewport of VIEWPORTS) if (!only || only === `${lang}-${viewport.name}`) await captureVariant(variant, lang, viewport);
-      }
-    }
-    fs.writeFileSync(path.join(out, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
-  } finally { await browser.close(); server.stop(true); }
-  console.log(`renders in ${out}`);
-  process.exit(0);
 }
 
-if (checkRuns > 0) {
+/* The demo waits off screen, in a hidden tab and on the visitor's pause, and stands still under reduced motion. */
+async function demoHolds(viewport: (typeof VIEWPORTS)[number]) {
   const failures: string[] = [];
-  for (let run = 0; run < checkRuns; run += 1) {
-    const combos = (["en", "uk"] as Locale[]).flatMap((lang) => VIEWPORTS.map((viewport) => ({ lang, viewport })))
-      .filter(({ lang, viewport }) => !only || only === `${lang}-${viewport.name}`);
-    for (const { lang, viewport } of combos) failures.push(...await checkRequest(lang, viewport, run));
-    console.log(`run ${run}: ${failures.length ? `${failures.length} failure(s) so far` : "one request, above the answer, at every step"}`);
+  const running = (page: Page) => page.evaluate(() => document.getAnimations().filter((animation) => {
+    const target = (animation.effect as KeyframeEffect | null)?.target as Element | null;
+    return animation.playState === "running" && !!target?.closest(".demo, .demo-rail");
+  }).length);
+  const advances = async (page: Page) => {
+    const first = await page.evaluate(() => window.DLG.demo.now());
+    await settle(page, 600);
+    return (await page.evaluate(() => window.DLG.demo.now())) !== first;
+  };
+  for (const motion of ["no-preference", "reduce"] as const) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, isMobile: viewport.phone, hasTouch: viewport.phone, reducedMotion: motion });
+    const page = await context.newPage();
+    const key = `${viewport.name}-${motion}`;
+    await page.goto(`${base}?lang=en`, { waitUntil: "load" });
+    await page.waitForSelector(".hero .demo .d-card");
+    await page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" }));
+    await settle(page, 800);
+    if (motion === "reduce") {
+      if (await advances(page) || await running(page)) failures.push(`${key}: the demo moves under reduced motion`);
+      const captions = await page.evaluate(() => [...document.querySelectorAll(".demo-steps .cap")].map((cap) => getComputedStyle(cap).opacity));
+      if (captions.length !== 6 || captions.some((opacity) => opacity !== "1")) failures.push(`${key}: not every step's caption shows (${captions.join(",")})`);
+      const cursor = await page.evaluate(() => getComputedStyle(document.querySelector(".d-cursor")!).display);
+      if (cursor !== "none") failures.push(`${key}: the cursor shows on the still board`);
+    } else {
+      if (!await advances(page)) failures.push(`${key}: the demo does not play in view`);
+      await page.locator("[data-demo-pause]").click();
+      if (await advances(page) || await running(page)) failures.push(`${key}: the pause button does not stop it`);
+      await page.locator("[data-demo-pause]").click();
+      if (!await advances(page)) failures.push(`${key}: play does not resume it`);
+      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+      await settle(page, 400);
+      if (await advances(page) || await running(page)) failures.push(`${key}: the demo plays off screen`);
+      await page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" }));
+      await settle(page, 400);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      if (await advances(page) || await running(page)) failures.push(`${key}: the demo plays in a hidden tab`);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      if (!await advances(page)) failures.push(`${key}: the demo does not come back with the tab`);
+      /* The loop starts on an empty board, and nothing that flies stays behind. */
+      const strays = await page.evaluate(() => {
+        const shown = (selector: string) => [...document.querySelectorAll(selector)].filter((el) => Number(getComputedStyle(el).opacity) > 0.01).length;
+        const at = (time: number) => { window.DLG.demo.seek(time); return { cards: shown(".d-card"), messages: shown(".d-msg"), fliers: shown(".d-fly"), pulses: shown(".d-pulse") }; };
+        const result = { start: at(0), hold: at(window.DLG.demo.hold) };
+        window.DLG.demo.release();
+        return result;
+      });
+      if (Object.values(strays.start).some(Boolean)) failures.push(`${key}: the loop does not start empty ${JSON.stringify(strays.start)}`);
+      if (strays.hold.fliers || strays.hold.pulses) failures.push(`${key}: flying marks stay on the finished board ${JSON.stringify(strays.hold)}`);
+      /* Nothing in the picture takes the pointer. */
+      const pointer = await page.evaluate(() => getComputedStyle(document.querySelector(".demo-stage")!).pointerEvents);
+      if (pointer !== "none") failures.push(`${key}: the stage takes the pointer`);
+    }
+    await context.close();
   }
-  await browser.close();
-  server.stop(true);
+  return failures;
+}
+
+/* Unthrottled: a frame every half second through one loop, and the loop recorded as it plays. */
+async function demoFrames(viewport: (typeof VIEWPORTS)[number], dir: string) {
+  for (const lang of ["en", "uk"] as Locale[]) {
+    const frames = path.join(dir, `frames-${viewport.name}-${lang}`);
+    fs.mkdirSync(frames, { recursive: true });
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: viewport.phone ? 2 : 1, isMobile: viewport.phone, hasTouch: viewport.phone });
+    const page = await context.newPage();
+    await page.goto(`${base}?lang=${lang}`, { waitUntil: "load" });
+    await page.waitForSelector(".hero .demo .d-card");
+    await page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" }));
+    await settle(page, 800);
+    const loop = await page.evaluate(() => window.DLG.demo.loop);
+    for (let at = 0; at < loop; at += 500) {
+      await page.evaluate((at) => window.DLG.demo.seek(at), at);
+      await settle(page, 60);
+      await page.locator(".hero .stage-wrap").screenshot({ path: path.join(frames, `t${String(at).padStart(5, "0")}.png`) });
+    }
+    await context.close();
+  }
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, isMobile: viewport.phone, hasTouch: viewport.phone,
+    recordVideo: { dir, size: { width: viewport.width, height: viewport.height } },
+  });
+  const page = await context.newPage();
+  await page.goto(`${base}?lang=en`, { waitUntil: "load" });
+  await page.waitForSelector(".hero .demo .d-card");
+  await page.evaluate(() => document.querySelector(".hero .demo")!.scrollIntoView({ block: "center" }));
+  await settle(page, 800);
+  const loop = await page.evaluate(() => { window.DLG.demo.seek(0); window.DLG.demo.release(); return window.DLG.demo.loop; });
+  await settle(page, loop + 1500);
+  const video = page.video();
+  await context.close();
+  const recorded = await video?.path();
+  if (recorded) fs.renameSync(recorded, path.join(dir, `loop-${viewport.name}.webm`));
+}
+
+if (process.argv.includes("--check-demo")) {
+  const failures: string[] = [];
+  const result: Record<string, unknown> = { url: base, browser: browser.version() };
+  const before = process.env.LANDING_BEFORE_DIR ? serveDirectory(process.env.LANDING_BEFORE_DIR) : null;
+  try {
+    for (const viewport of VIEWPORTS) {
+      if (only && only !== `en-${viewport.name}`) continue;
+      const loop = await loopTrace(viewport, out);
+      result[`loop-${viewport.name}`] = loop;
+      console.log(`loop ${viewport.name}: ${JSON.stringify(loop)}`);
+      if (loop.mainThread.longTasks > 0) failures.push(`${viewport.name}: ${loop.mainThread.longTasks} long task(s) during the loop`);
+      if (loop.frames.droppedPercent === null || loop.frames.droppedPercent > 1) failures.push(`${viewport.name}: ${loop.frames.droppedPercent}% of frames dropped`);
+      if (loop.errors.length) failures.push(`${viewport.name}: page errors ${loop.errors.join("; ")}`);
+      /* Five cold loads of each build, alternating, and the median of each timing. */
+      const runs: { after: Awaited<ReturnType<typeof coldLoad>>[]; before: Awaited<ReturnType<typeof coldLoad>>[] } = { after: [], before: [] };
+      for (let run = 0; run < 5; run += 1) {
+        runs.after.push(await coldLoad(`${base}?lang=en`, viewport));
+        if (before) runs.before.push(await coldLoad(`http://127.0.0.1:${before.port}/?lang=en`, viewport));
+      }
+      const median = (list: Awaited<ReturnType<typeof coldLoad>>[]) => {
+        if (!list.length) return null;
+        const mid = (key: "lcpMs" | "domContentLoadedMs" | "loadMs" | "cls") => list.map((entry) => entry[key]).sort((a, b) => a - b)[Math.floor(list.length / 2)]!;
+        return { ...list[0]!, lcpMs: mid("lcpMs"), domContentLoadedMs: mid("domContentLoadedMs"), loadMs: mid("loadMs"), cls: mid("cls"), lcpRuns: list.map((entry) => entry.lcpMs) };
+      };
+      const load = { after: median(runs.after), before: median(runs.before) };
+      result[`load-${viewport.name}`] = load;
+      console.log(`load ${viewport.name}: ${JSON.stringify(load)}`);
+      failures.push(...await demoHolds(viewport));
+      if (!process.argv.includes("--no-frames")) await demoFrames(viewport, out);
+    }
+  } finally {
+    await browser.close();
+    server.stop(true);
+    before?.stop(true);
+  }
+  result.failures = failures;
+  fs.writeFileSync(path.join(out, "demo-check.json"), `${JSON.stringify(result, null, 2)}\n`);
   for (const failure of failures) console.error(failure);
+  console.log(failures.length ? `${failures.length} failure(s)` : `the demo holds: no long task, frames presented, it waits when it should; renders in ${out}`);
   process.exit(failures.length ? 1 : 0);
 }
-
 for (const lang of ["en", "uk"] as Locale[]) {
   for (const viewport of VIEWPORTS) {
     const key = `${lang}-${viewport.name}`;
@@ -1183,7 +1272,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${base}?lang=${lang}`);
-    const hero = await frameOf(page, ".live-hero");
+    await page.waitForSelector(".hero .demo .d-card");
     await settle(page, 2500);
     await page.screenshot({ path: path.join(out, `${key}-first-screen.png`) });
 
@@ -1204,17 +1293,19 @@ for (const lang of ["en", "uk"] as Locale[]) {
     await shoot(page, ".sec-run", `${key}-2-run.png`);
     await shoot(page, ".sec-open", `${key}-3-open.png`);
     await shoot(page, ".sec-reach", `${key}-4-reach.png`);
-    await shoot(page, ".band", `${key}-5-footer.png`);
+    await page.locator(".sec-faq details").first().evaluate((item) => { (item as HTMLDetailsElement).open = true; });
+    await shoot(page, ".sec-faq", `${key}-5-faq.png`);
+    await page.locator(".sec-faq details").first().evaluate((item) => { (item as HTMLDetailsElement).open = false; });
+    await shoot(page, ".band", `${key}-6-footer.png`);
 
-    /* The hero's script, the way a visitor runs it. */
-    const demo = ".hero .stage-wrap";
-    await shoot(page, demo, `${key}-demo-0-request.png`);
-    const send = translate(lang, "composer.sendToAgent");
-    await hero.locator(`[aria-label="${send}"]`).first().click();
-    for (const [index, name] of ["1-sent", "2-task", "3-build", "4-review", "5-needs-you"].entries()) {
-      await settle(page, TIMES_MS[index]!);
-      await shoot(page, demo, `${key}-demo-${name}.png`);
+    /* The hero's demo, held near the end of each of its steps. */
+    await page.locator(".hero .demo").scrollIntoViewIfNeeded();
+    for (const [index, at] of (await demoMoments(page)).entries()) {
+      await page.evaluate((at) => window.DLG.demo.seek(at), at);
+      await settle(page, 150);
+      await page.locator(".hero .stage-wrap").screenshot({ path: path.join(out, `${key}-demo-${index + 1}.png`) });
     }
+    await page.evaluate(() => window.DLG.demo.release());
 
     /* The other faces of each frame, through the page's own tabs. */
     const tab = async (selector: string, settleMs: number, file: string, target: string) => {
@@ -1223,7 +1314,6 @@ for (const lang of ["en", "uk"] as Locale[]) {
       await settle(page, settleMs);
       await shoot(page, target, file);
     };
-    await tab('.hero [data-hero-view="orchestrator"]', 1600, `${key}-demo-view-orchestrator.png`, demo);
     await tab('.sec-run [data-view="decision"]', 2200, `${key}-2-run-decision.png`, ".sec-run .stage-wrap");
     for (const view of ["search", "accounts", "overview"]) {
       await tab(`.sec-open [data-view="${view}"]`, 2600, `${key}-3-open-${view}.png`, viewport.phone ? ".live-open" : ".sec-open");
@@ -1232,7 +1322,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
     await tab('.seg-phone [data-view="reports"]', 1800, `${key}-4-reach-reports.png`, ".reach-art");
 
     /* The page whole, every frame loaded: each is brought into view first so it renders. */
-    for (const selector of [".live-open", ".live-run", ".live-phone", ".live-hero"]) {
+    for (const selector of [".live-open", ".live-run", ".live-phone"]) {
       await page.locator(selector).scrollIntoViewIfNeeded();
       await settle(page, 700);
     }
@@ -1247,7 +1337,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
 
     report[key] = {
       errors,
-      unanswered: await hero.evaluate(() => (window as unknown as { demoUnanswered?: string[] }).demoUnanswered ?? []),
+      unanswered: await (await frameOf(page, ".live-run")).evaluate(() => (window as unknown as { demoUnanswered?: string[] }).demoUnanswered ?? []),
       overflowX: await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
     };
     await context.close();

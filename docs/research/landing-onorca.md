@@ -392,3 +392,13 @@ The operator picks.
 - **Proof idea 4 needs a fact checked.** Before any variant says the project is built
   through its own pipelines, the operator should confirm the wording. The data is public in
   the repository history.
+
+## Outcome
+
+The operator picked variant 3 (prototype review, 2026-10-09): the readable hero, the
+compatibility row, the phone's send-the-link action, a six-question FAQ and the release
+freshness in the footer's version line. In the same review the operator asked for the
+hero's board to become a demo that plays one flow by itself, with a visible pointer and
+no interaction. That reverses "a separate replica of the app for the hero" above: the hero
+is now a board drawn in the product's own look over invented data (`landing/site/boardDemo.js`),
+animated on the compositor only. Every frame below the hero is still the product.

@@ -62,3 +62,21 @@ test("hero runs the official CLIs, the description fits a search snippet, and th
   for (const key of ["hero.sub", "hero.promise"]) expect(html).toContain(`data-i18n="${key}">${en[key]}</p>`);
   expect(html).toContain(`<meta name="description" content="${en["meta.description"]}">`);
 });
+
+test("every string the page and the hero's demo name exists in both languages", () => {
+  const { en, uk } = strings();
+  expect(Object.keys(uk).sort()).toEqual(Object.keys(en).sort());
+  const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const demo = fs.readFileSync(new URL("./boardDemo.js", import.meta.url), "utf8");
+  const named = [
+    ...[...html.matchAll(/data-i18n(?:-aria)?="([^"]+)"/g)].map((match) => match[1]!),
+    ...[...demo.matchAll(/\bt\("([^"]+)"\)/g)].map((match) => match[1]!),
+    /* The demo also builds these names from parts. */
+    ...["build", "review", "verify", "col.inbox", "col.progress", "col.done", "t1", "t1d", "t2", "t2d", "t3", "t3d"].map((key) => `d.${key}`),
+  ];
+  expect(named.length).toBeGreaterThan(60);
+  for (const key of named) {
+    expect(en[key], key).toBeString();
+    expect(uk[key], key).toBeString();
+  }
+});
