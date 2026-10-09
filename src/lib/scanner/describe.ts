@@ -428,7 +428,7 @@ function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cw
 
     const roots = new Set<string>();
     for (const [, , info] of projectInfoCwdCache.values()) if (info?.repo) roots.add(info.repo);
-    for (const info of worktreeMap().values()) roots.add(info.repo);
+    for (const info of refreshWorktreeMap().values()) roots.add(info.repo);
     const catalog = recordValue(readStateJson("project-catalog.json"));
     for (const file of Object.values(recordValue(catalog?.files) ?? {})) {
       const root = stringValue(recordValue(file)?.projectRoot);

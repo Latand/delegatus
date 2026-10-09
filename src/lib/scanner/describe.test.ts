@@ -1052,10 +1052,11 @@ test("first scan of a sibling worktree descendant records it before outside dele
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
 });
 
-test.each(["ordinary", "separate"])("a real linked sibling with %s Git directory survives removal in a fresh resolver", layout => {
-  const separate = layout === "separate";
-  const state = useStateDirectory(`git-outside-removal-state-${separate}`);
-  const repo = path.join(SANDBOX, `git-outside-repository-${separate}`);
+test.each(["ordinary", "separate", "refreshed"])("a real linked sibling with %s Git ownership survives removal in a fresh resolver", layout => {
+  const separate = layout !== "ordinary";
+  const mapOnly = layout === "refreshed";
+  const state = useStateDirectory(`git-outside-removal-state-${layout}`);
+  const repo = path.join(SANDBOX, `git-outside-repository-${layout}`);
   const checkout = repo + "-review";
   fs.mkdirSync(repo);
   const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
@@ -1064,24 +1065,38 @@ test.each(["ordinary", "separate"])("a real linked sibling with %s Git directory
     const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, ...args], { env, encoding: "utf8" });
     expect(result.status).toBe(0);
   };
-  git("init", ...(separate ? ["--separate-git-dir=" + path.join(SANDBOX, "git-data")] : []));
+  git("init", ...(separate ? ["--separate-git-dir=" + repo + "-git-data"] : []));
   git("commit", "--allow-empty", "-m", "fixture");
   git("remote", "add", "origin", "https://example.invalid/team/widgets.git");
   const identity = projectIdentityFromRepositoryRoot(repo)!;
-  expect(projectInfoFromCwd(repo)).toMatchObject({ project: identity.project, repo });
+  if (!mapOnly) expect(projectInfoFromCwd(repo)).toMatchObject({ project: identity.project, repo });
   // A second checkout with the same remote cannot establish common-directory ownership.
   const clone = path.join(SANDBOX, `git-unrelated-clone-${layout}`);
   createRepository(clone, "https://example.invalid/team/widgets.git");
   expect(projectInfoFromCwd(clone)?.project).toBe(identity.project);
   expect(fs.existsSync(path.join(state, "worktree-map.json"))).toBe(false);
   git("worktree", "add", "--detach", checkout);
+  const previous = repo + "-lane-1";
+  if (mapOnly) {
+    // This process loaded the map before another observer knew the repository.
+    projectInfoFromCwd(path.join(state, "absent"));
+    git("worktree", "add", "--detach", previous);
+    const writerScript = `const { projectInfoFromCwd, recordWorktreeResolution } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+      + `projectInfoFromCwd(${JSON.stringify(repo)});`
+      + `if (!recordWorktreeResolution(${JSON.stringify(previous)})) throw Error("fixture observation failed");`;
+    const writer = spawnSync(process.execPath, ["-e", writerScript], { cwd: path.resolve(import.meta.dir, "../../.."), env, encoding: "utf8" });
+    expect(writer.status).toBe(0);
+    git("worktree", "remove", previous);
+  }
   const cwd = path.join(checkout, "src"); fs.mkdirSync(cwd);
   const transcript = path.join(state, "session.jsonl");
   fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cwd } }) + "\n");
   expect(describe("codex-sessions", state, transcript, fs.statSync(transcript))).toMatchObject({
     project: identity.project, projectName: identity.displayName, projectRoot: repo, worktree: path.basename(checkout),
   });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
+  const map = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"));
+  expect(map[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
+  if (mapOnly) expect(map[previous]).toEqual({ repo, worktree: path.basename(previous) });
   fs.rmdirSync(cwd);
   git("worktree", "remove", checkout);
   const script = `const { projectInfoFromCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
