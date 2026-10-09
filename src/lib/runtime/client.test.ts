@@ -321,6 +321,68 @@ test("issue 1987: a snapshot-sized frame is measured once per byte, not once per
   expect(measured).toBeLessThan(payload.length * 2);
 });
 
+for (const kind of ["send", "kill"] as const) {
+  test(`provider recovery ${kind} refuses an older runtime before ordinary command admission`, async () => {
+    let ordinaryAdmissions = 0;
+    const socketPath = serve((frame, socket) => {
+      const request = JSON.parse(frame);
+      if (request.method === "command") ordinaryAdmissions++;
+      socket.end(JSON.stringify(request.method === "command"
+        ? { id: request.id, ok: true, result: { receipt: { status: "queued" } } }
+        : { id: request.id, ok: false, error: "runtime request method is unsupported" }) + "\n");
+    });
+    const base = { conversationId: "conversation_guarded_fixture", operationId: `guarded-${kind}`, idempotencyKey: `guarded-${kind}`,
+      onlyIfIdle: { revision: 1, writerClaim: "fixture:1" } };
+    const command = kind === "send" ? { ...base, kind, text: "continue", policy: "queue" as const, turnId: null }
+      : { ...base, kind, sessionKey: { engine: "codex" as const, sessionId: "fixture-session" },
+        providerRecovery: { pipelineId: "fixture-pipeline", stageId: "build", attempt: 1, turnTs: 1000.25, controlGeneration: null } };
+    await expect(new UnixRuntimeHostClient(socketPath).command(command)).rejects.toThrow("unsupported");
+    expect(ordinaryAdmissions).toBe(0);
+  });
+}
+
+test("guarded recovery wire admits its fences on the current runtime and cancels before execution", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { RuntimeHost } = await import("@/runtime-host/host");
+  const journal = new RuntimeJournal(path.join(SANDBOX, "guarded-wire.sqlite"), { structuredHosts: true });
+  const host = new RuntimeHost(journal, undefined, undefined, true);
+  const conversationId = "conversation_guarded_wire";
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "wire-session" }, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+    activeTurnId: null, writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  const requests: string[] = [];
+  const socketPath = serve((frame, socket) => {
+    const request = JSON.parse(frame);
+    requests.push(request.method);
+    void host.handle(request).then(result => socket.end(JSON.stringify(result) + "\n"));
+  });
+  try {
+    const client = new UnixRuntimeHostClient(socketPath);
+    const session = journal.readSession({ conversationId })!;
+    const fence = { revision: session.revision, writerClaim: session.writerClaim! };
+    const recovery = { pipelineId: "fixture-pipeline", stageId: "build", attempt: 1, turnTs: 1000.25, controlGeneration: null };
+    const killed = await client.command({ kind: "kill", operationId: "guarded-kill-wire", idempotencyKey: "guarded-kill-wire", conversationId,
+      sessionKey: session.sessionKey, onlyIfIdle: fence, providerRecovery: recovery });
+    expect(killed.receipt.status).toBe("queued");
+    expect(journal.effectBatch(100, ["runtime.kill"])[0]!.payload).toMatchObject({ providerRecovery: recovery });
+    const admitted = await client.command({ kind: "send", operationId: "guarded-send-wire", idempotencyKey: "guarded-send-wire", conversationId,
+      text: "continue", policy: "queue", turnId: null, onlyIfIdle: fence });
+    expect(admitted.receipt.status).toBe("queued");
+    expect(journal.effectBatch(100, ["runtime.send"])[0]!.payload).toMatchObject({ onlyIfIdle: fence });
+    expect(journal.effectBatch(100, ["runtime.native-queue"])).toHaveLength(0);
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "pipeline.provider-continuation-cancelled", payload: { conversationId } });
+    expect(journal.transitionOperation(admitted.operationId, "delivering").receipt.status).toBe("failed");
+    expect(requests).toEqual(["guarded-command", "guarded-command"]);
+    const invalid = await host.handle({ id: "unguarded", method: "guarded-command", params: { command: {
+      kind: "send", operationId: "unguarded", idempotencyKey: "unguarded", conversationId, text: "ordinary", policy: "queue" } } });
+    expect(invalid.ok).toBe(false);
+    expect(journal.operationResult("unguarded")).toBeNull();
+    await client.command({ kind: "send", operationId: "ordinary-wire", idempotencyKey: "ordinary-wire", conversationId, text: "ordinary", policy: "queue" });
+    expect(requests.at(-1)).toBe("command");
+  } finally { journal.close(); }
+});
+
 const text = (bytes: Uint8Array) => Buffer.from(bytes).toString("utf8");
 
 test("the encoded snapshot is the host's own text, never a re-encoding of it", async () => {
