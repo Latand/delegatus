@@ -770,4 +770,6 @@ missing seats and a coded 409 through the fake provider; Russian confirmation
 and waiting-request withdrawal; a 14-second echo replay and 600–1,400 ms
 playback pauses; 800 transcript fragments and both successful and refused tool
 records; record privacy, post-close GET admission, retention and the byte cap.
+The playback transcript also has a browser-bundle regression: its pure masking
+helpers stay separate from server credential stores and filesystem imports.
 Tests use the local fake provider and isolated state, home and temporary roots.

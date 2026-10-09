@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import { LiveTranscript } from "./liveTranscript";
 
+test("the browser playback transcript bundles without server state or Node imports", async () => {
+  const result = await Bun.build({ entrypoints: ["src/lib/voiceCompanion/liveTranscript.ts"], target: "browser" });
+  expect(result.success).toBe(true);
+});
+
 test("each speaker accumulates independently; provider timeline pauses split display messages", () => {
   const transcript = new LiveTranscript();
   const first = transcript.fragment("operator", "Please ", 0, 500);

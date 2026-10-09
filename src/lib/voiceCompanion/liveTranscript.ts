@@ -1,5 +1,5 @@
 import type { Payload } from "./contract";
-import { credentialMask, maskedSlice } from "./redaction";
+import { credentialMask, maskedSlice } from "./credentialMask";
 
 type Speaker = "operator" | "companion";
 type Snapshot = Extract<Payload, { type: "transcript.snapshot" }>;
