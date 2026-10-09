@@ -13,7 +13,7 @@ import { setPriority } from "node:os";
 import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
-import { readStartIdentity, signalGroup, type RecordedPid } from "./pid";
+import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
 import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepName, type Step, type StepFailure, type UpdateState } from "./types";
 
@@ -37,8 +37,8 @@ export interface StepPorts {
   publish(release: Release): void | Promise<void>;
   now(): number;
   abort?(): void;
-  /** False only when the child ended without an exit status. A recorded exit
-      status remains valid while run() drains output and settles the step. */
+  /** False when the child ended or is confirmed lost without an exit status.
+      A recorded status remains valid while run() drains output and settles. */
   childAlive?(): boolean;
   /** The commit whose build passed the ready check in this directory, when
       the directory records one; a new build withdraws the record first. */
@@ -312,7 +312,7 @@ export interface RealPorts extends StepPorts { abort(): void }
 export function realPorts(publish: (release: Release) => void | Promise<void>,
   cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
-  let completion: { ended: boolean; code: number | null } | null = null;
+  let completion: { ended: boolean; code: number | null; missing: boolean } | null = null;
   let waiting: AbortController | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
@@ -329,7 +329,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         } finally { waiting = null; }
       }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-      const result = { ended: false, code: null as number | null };
+      const result = { ended: false, code: null as number | null, missing: false };
       completion = result;
       const exited = new Promise<number | null>((resolve) => {
         const finish = (code: number | null) => {
@@ -343,7 +343,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         child.once("close", (code) => finish(code));
       });
       const identity = child.pid ? readStartIdentity(child.pid) : null;
-      if (child.pid && identity) current = { pid: child.pid, startIdentity: identity };
+      current = child.pid && identity ? { pid: child.pid, startIdentity: identity } : null;
       if (lowPriority && child.pid) {
         try { setPriority(child.pid, 10); } catch { /* best effort; never fail the update for scheduling */ }
       }
@@ -363,10 +363,21 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       waiting?.abort();
       if (current) signalGroup(current, "SIGTERM");
     },
-    // A PID can disappear before its exit event is delivered, and its pipes
-    // can stay open after that event. Let the child report its status; the
-    // step deadline still bounds a missing event or output that never closes.
-    childAlive: () => completion === null || !completion.ended || completion.code !== null,
+    childAlive() {
+      if (waiting) return true;
+      if (completion === null) return true;
+      if (completion.ended) return completion.code !== null;
+      if (!current || sameProcess(current)) {
+        completion.missing = false;
+        return true;
+      }
+      // A PID can disappear before its exit event is delivered. Confirm its
+      // loss at the next poll, giving that event a chance to supply a status.
+      // Open pipes cannot keep an unreported loss running until the deadline.
+      if (completion.missing) return false;
+      completion.missing = true;
+      return true;
+    },
     memAvailableMb,
     async revParse(ref, cwd) {
       return (await runGit(["rev-parse", "--verify", "--quiet", ref], cwd)).stdout.trim();
