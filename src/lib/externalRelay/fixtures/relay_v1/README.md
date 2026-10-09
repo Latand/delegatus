@@ -13,3 +13,20 @@ a8f60107ec907ca0237cae6670edb36875716a3d94097981f8f3c448d4cd6785 1165 tool_call_
 3d34147920af82036e5cfd628f911a5dcd406fb238ce93396c6c368cc4caf50f 38069 tool_call_results.json
 bc90fffcec11665fee7022470747d0b741a9e649c3048a54474902945ad88e59 1436 tool_index_measurements.json
 ```
+
+The merge of slice 2a at `f38f7e64` refreshed all ten service JSON files to
+the manifest above. Slice 2b uses those exact bytes.
+
+`actions-off-2a-hashes.json` and `actions-off-x2-2a-hashes.json` were captured
+from the real runner at `f38f7e64`, in an isolated archive of that revision.
+They pin SHA-256 of each runner prompt, compact CLI schema and serialized call
+body for the five X1 role runs, the action index degraded to hand-off exactly
+as the service does with actions OFF, and the X2 pending/page run in both HTTP
+arrival orders. The X2 `wire` hash pins the complete 2a X2 bytes; the 2b test
+removes its appended action runs and F2 advertisement before comparing them.
+Read metadata rows carry no effect field.
+
+The 2b X2 action run includes two concurrent reads before the action so that
+normal and reversed HTTP arrivals exercise the same admission snapshots.
+Polling an admitted image generation returns its stored delivered outcome with
+`replayed: true`; the double counts one execution for that call identity.

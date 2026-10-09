@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { seatGrowth } from "@/lib/composerScroll";
 import { useLocale } from "@/lib/i18n";
@@ -10,6 +10,7 @@ import { OrchestratorPanel, type SeatSignal } from "@/components/orchestrator/Or
 import { onSeatTickPanelRequest } from "@/components/orchestrator/openSeatTick";
 import type { OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
 
+import { AgentWindowOpener } from "./agentWindowOpener";
 import {
   clampSeatHeight, clampSeatTopWidth, clampSeatWidth, publishSeatSignal, SEAT_KEY_STEP, SEAT_SIDE_MAX_WIDTH, SEAT_SIDE_MIN_WIDTH,
   SEAT_TOP_MIN_WIDTH, expandKanbanSeat, useKanbanSeat,
@@ -56,6 +57,8 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
 }) {
   const { t } = useLocale();
   const seat = useKanbanSeat(project);
+  /* The board's agent window, where the head's expand button opens the seat's conversation. */
+  const openInWindow = useContext(AgentWindowOpener);
   const sectionRef = useRef<HTMLElement>(null);
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
@@ -311,6 +314,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
           onTogglePlacement={seat.togglePlacement}
           onSeatSignal={onSeatSignal}
           onClose={seat.toggle}
+          {...(openInWindow ? { onOpenWindow: openInWindow } : {})}
           project={project}
           projectName={projectName}
           projectCwd={projectCwd}
