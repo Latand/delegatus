@@ -925,12 +925,7 @@ test("an explicit migration opt-out keeps structured delivery on the source acco
     scope: "all",
   });
   registry.setMigrationIntentState(intent.id, "stopped", intent.revision);
-  const requestMigration = registry.requestConversationMigrationToActiveAccount.bind(registry);
-  let migrationRequests = 0;
-  registry.requestConversationMigrationToActiveAccount = ((id) => {
-    migrationRequests += 1;
-    return requestMigration(id);
-  }) as typeof registry.requestConversationMigrationToActiveAccount;
+  const beforeIntents = registry.snapshot().migrationIntents;
   let commands = 0;
 
   const result = await enqueueStructuredMessage({
@@ -946,11 +941,29 @@ test("an explicit migration opt-out keeps structured delivery on the source acco
   });
 
   expect(result).toMatchObject({ ok: true, outcome: "delivered", target: conversation.id });
-  expect({ migrationRequests, commands }).toEqual({ migrationRequests: 1, commands: 1 });
+  expect(commands).toBe(1);
+  expect(registry.snapshot().migrationIntents).toEqual(beforeIntents);
   expect(registry.conversation(conversation.id)).toMatchObject({
     migration: { phase: "rolled-back", targetId: "seat-active" },
     migrationOptOut: { targetId: "seat-active" },
   });
+});
+
+test("an opted-out reseat settles its early image reservation when the source rejects images", async () => {
+  const { registry, conversation } = registryWithConversation("seat-source", "claude");
+  const intent = registry.commitMigrationIntent({ engine: "claude", targetId: "seat-active", origin: "manual",
+    requestId: "opt-out-image", expectedRevision: registry.engineRouting("claude").revision, scope: "all" });
+  registry.setMigrationIntentState(intent.id, "stopped", intent.revision);
+  const client = deliveredClient(conversation.id, () => { throw new Error("rejected image reached source"); });
+  client.readSession = sessionReader(async () => snapshot(conversation.id, "claude"));
+  const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "opted-out-image", text: "source cannot accept this image",
+    imageRefs: [{ sha256: "e".repeat(64), mime: "image/png", bytes: 67 }] },
+  { enabled: () => true, client: () => client,
+    registry: () => registry, kick: () => {}, progress: null });
+  expect(result).toMatchObject({ ok: false, status: 409 });
+  expect(registry.pendingDeliveries(conversation.id).filter(item => ["held", "assigned", "delivery-uncertain"].includes(item.state))).toEqual([]);
+  expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{ state: "failed" }]);
 });
 
 test("an explicit migration opt-out keeps a synchronization hold assigned to the source account", async () => {
@@ -966,12 +979,7 @@ test("an explicit migration opt-out keeps a synchronization hold assigned to the
     scope: "all",
   });
   registry.setMigrationIntentState(intent.id, "stopped", intent.revision);
-  const requestMigration = registry.requestConversationMigrationToActiveAccount.bind(registry);
-  let migrationRequests = 0;
-  registry.requestConversationMigrationToActiveAccount = ((id) => {
-    migrationRequests += 1;
-    return requestMigration(id);
-  }) as typeof registry.requestConversationMigrationToActiveAccount;
+  const beforeIntents = registry.snapshot().migrationIntents;
 
   const result = await enqueueStructuredMessage({
     path: artifactPath,
@@ -986,7 +994,7 @@ test("an explicit migration opt-out keeps a synchronization hold assigned to the
   });
 
   expect(result).toMatchObject({ ok: true, outcome: "held", target: conversation.id });
-  expect(migrationRequests).toBe(1);
+  expect(registry.snapshot().migrationIntents).toEqual(beforeIntents);
   expect(registry.conversation(conversation.id)).toMatchObject({
     migration: { phase: "rolled-back", targetId: "seat-active" },
     migrationOptOut: { targetId: "seat-active" },

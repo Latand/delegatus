@@ -8491,93 +8491,100 @@ export class AgentRegistry {
     options: { launchId?: string | null } = {},
   ): RegistryConversation {
     const bindings = accountProjectBindings();
-    return this.mutate((file) => {
-      const canonicalId = resolveConversationAlias(file, id);
-      const conversation = file.conversations[canonicalId];
-      if (!conversation) throw new Error("viewer conversation is unknown");
-      if (conversation.pinnedAccountId) return clone(conversation);
-      /* Account migration covers Claude and Codex only. */
-      if (conversation.engine === "copilot") return clone(conversation);
-      const targetId = file.engineRouting[conversation.engine].activeAccountId;
-      const source = conversation.generations.at(-1);
-      if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
-      if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
-      /* The launch's own first message (#2051). The launch picked this account
-         moments ago by the automatic rule, where the project's pool ranks
-         accounts by room and routing only breaks a tie. Moving the
-         conversation now strands its mandate behind a migration of a thread
-         with no turn yet: a Claude move waits for a transcript only that
-         held message can start, and a committed move drops the held message. */
-      if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
-      /* A conversation-scoped reseat already chose this thread's successor.
-         Lazy routing on message admission must leave that migration and its
-         held continuation on the chosen account. */
-      if (file.migrationIntents[conversation.migration?.intentId ?? ""]?.scope === "conversation"
-        && migrationTargetWithPendingDelivery(file, conversation)) return clone(conversation);
-      if (admitAutomaticAccountTarget({
-        project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
+    return this.mutate((file) => this.requestConversationMigrationToActiveAccountInFile(file, id, options, bindings));
+  }
+
+  private requestConversationMigrationToActiveAccountInFile(
+    file: RegistryFile,
+    id: ViewerConversationId,
+    options: { launchId?: string | null },
+    bindings: ReturnType<typeof accountProjectBindings>,
+  ): RegistryConversation {
+    const canonicalId = resolveConversationAlias(file, id);
+    const conversation = file.conversations[canonicalId];
+    if (!conversation) throw new Error("viewer conversation is unknown");
+    if (conversation.pinnedAccountId) return clone(conversation);
+    /* Account migration covers Claude and Codex only. */
+    if (conversation.engine === "copilot") return clone(conversation);
+    const targetId = file.engineRouting[conversation.engine].activeAccountId;
+    const source = conversation.generations.at(-1);
+    if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
+    if (conversation.migrationOptOut?.targetId === targetId) return clone(conversation);
+    /* The launch's own first message (#2051). The launch picked this account
+       moments ago by the automatic rule, where the project's pool ranks
+       accounts by room and routing only breaks a tie. Moving the
+       conversation now strands its mandate behind a migration of a thread
+       with no turn yet: a Claude move waits for a transcript only that
+       held message can start, and a committed move drops the held message. */
+    if (settlingLaunchChoseAccount(file, canonicalId, source, options.launchId)) return clone(conversation);
+    /* A conversation-scoped reseat already chose this thread's successor.
+       Lazy routing on message admission must leave that migration and its
+       held continuation on the chosen account. */
+    if (file.migrationIntents[conversation.migration?.intentId ?? ""]?.scope === "conversation"
+      && migrationTargetWithPendingDelivery(file, conversation)) return clone(conversation);
+    if (admitAutomaticAccountTarget({
+      project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
+      engine: conversation.engine,
+      targetId,
+      model: source.launchProfile.model,
+      observations: Object.values(file.quotaObservations[conversation.engine]),
+      bindings,
+    }).kind !== "available") return clone(conversation);
+    /* Past its first message the same holds: the pool placed this thread by
+       room, and while that account is still allowed and still has room a
+       send keeps it there rather than following routing into a migration. */
+    if (placedAccountHolds({
+      project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
+      engine: conversation.engine,
+      accountId: source.accountId,
+      model: source.launchProfile.model,
+      observations: Object.values(file.quotaObservations[conversation.engine]),
+      bindings,
+    })) return clone(conversation);
+    /* A failed-recoverable migration stays parked (#708). Re-arming it from a
+       lazy active-account request minted a fresh operation identity on every
+       later touch of the conversation, and a fresh identity means a fresh
+       provider journal, which means the provider cannot recognise the fork
+       the previous attempt already created. Recovery is an explicit retry. */
+    if (conversation.migration?.targetId === targetId
+      && !["committed", "rolled-back"].includes(conversation.migration.phase)) {
+      return clone(conversation);
+    }
+
+    const changedAt = now();
+    let intent = Object.values(file.migrationIntents)
+      .filter((candidate) => candidate.engine === conversation.engine && candidate.targetId === targetId && candidate.state !== "stopped" && engineScopedIntent(candidate))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    if (!intent) {
+      intent = {
+        id: crypto.randomUUID(),
         engine: conversation.engine,
         targetId,
-        model: source.launchProfile.model,
-        observations: Object.values(file.quotaObservations[conversation.engine]),
-        bindings,
-      }).kind !== "available") return clone(conversation);
-      /* Past its first message the same holds: the pool placed this thread by
-         room, and while that account is still allowed and still has room a
-         send keeps it there rather than following routing into a migration. */
-      if (placedAccountHolds({
-        project: conversationProjectKey(conversation.projectOwnership, source.launchProfile),
-        engine: conversation.engine,
-        accountId: source.accountId,
-        model: source.launchProfile.model,
-        observations: Object.values(file.quotaObservations[conversation.engine]),
-        bindings,
-      })) return clone(conversation);
-      /* A failed-recoverable migration stays parked (#708). Re-arming it from a
-         lazy active-account request minted a fresh operation identity on every
-         later touch of the conversation, and a fresh identity means a fresh
-         provider journal, which means the provider cannot recognise the fork
-         the previous attempt already created. Recovery is an explicit retry. */
-      if (conversation.migration?.targetId === targetId
-        && !["committed", "rolled-back"].includes(conversation.migration.phase)) {
-        return clone(conversation);
-      }
+        origin: "manual",
+        revision: 1,
+        state: "draining",
+        createdAt: changedAt,
+        updatedAt: changedAt,
+        requestIds: [`lazy:${file.engineRouting[conversation.engine].revision}:${canonicalId}`],
+        evidence: null,
+        stoppedAt: null,
+      };
+      file.migrationIntents[intent.id] = intent;
+    } else {
+      if (intent.state !== "draining") intent.revision += 1;
+      intent.state = "draining";
+      intent.updatedAt = changedAt;
+    }
 
-      const changedAt = now();
-      let intent = Object.values(file.migrationIntents)
-        .filter((candidate) => candidate.engine === conversation.engine && candidate.targetId === targetId && candidate.state !== "stopped" && engineScopedIntent(candidate))
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
-      if (!intent) {
-        intent = {
-          id: crypto.randomUUID(),
-          engine: conversation.engine,
-          targetId,
-          origin: "manual",
-          revision: 1,
-          state: "draining",
-          createdAt: changedAt,
-          updatedAt: changedAt,
-          requestIds: [`lazy:${file.engineRouting[conversation.engine].revision}:${canonicalId}`],
-          evidence: null,
-          stoppedAt: null,
-        };
-        file.migrationIntents[intent.id] = intent;
-      } else {
-        if (intent.state !== "draining") intent.revision += 1;
-        intent.state = "draining";
-        intent.updatedAt = changedAt;
-      }
-
-      const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
-      const replaced = inFlightMigration(conversation);
-      queueAbandonedMigrationCleanup(file, conversation, changedAt);
-      conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
-      adoptFencedDeliveries(file, conversation, replaced);
-      conversation.updatedAt = changedAt;
-      file.conversationRevision[conversation.engine] += 1;
-      file.engineRouting[conversation.engine].revision += 1;
-      return clone(conversation);
-    });
+    const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
+    const replaced = inFlightMigration(conversation);
+    queueAbandonedMigrationCleanup(file, conversation, changedAt);
+    conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
+    adoptFencedDeliveries(file, conversation, replaced);
+    conversation.updatedAt = changedAt;
+    file.conversationRevision[conversation.engine] += 1;
+    file.engineRouting[conversation.engine].revision += 1;
+    return clone(conversation);
   }
 
   /** One-click successor reseat of a rate-limited conversation (issue #97).
@@ -9110,7 +9117,11 @@ export class AgentRegistry {
     runtimeImages: readonly StructuredImageRef[] = [],
     contentDigest: string | null = null,
     commandInput: HeldDeliveryCommandInput = {},
-    admission: { recoveryIntent?: HeldDelivery["recoveryIntent"]; admissionGuard?: () => void } = {},
+    admission: {
+      recoveryIntent?: HeldDelivery["recoveryIntent"];
+      admissionGuard?: () => void;
+      reseatToActiveAccount?: { launchId?: string | null };
+    } = {},
   ): HeldDelivery {
     if (payloadKind === "text" && !text) throw new Error("held delivery must contain at most 32000 characters");
     if (payloadKind === "runtime-images" && runtimeImages.length === 0) {
@@ -9119,6 +9130,7 @@ export class AgentRegistry {
     /* One UTF-8 bound covers every payload kind, including image captions. */
     assertStructuredTextEnvelope(text);
     const recoveryIntent = admission.recoveryIntent ?? null;
+    const bindings = admission.reseatToActiveAccount ? accountProjectBindings() : null;
     return this.mutate((file) => {
       const inspection = inspectDeliveryReservation(
         file,
@@ -9129,6 +9141,19 @@ export class AgentRegistry {
         commandInput,
       );
       const { canonicalId, existing, requestDigest } = inspection;
+      const terminalReplay = terminalDeliveryReplay(
+        inspection, text, clientMessageId, payloadKind, runtimeImages, contentDigest,
+      );
+      if (terminalReplay) {
+        if (existing?.state === "delivered") syncDeliveryOperationOwnerState(file, existing);
+        return terminalReplay;
+      }
+      // Authorize the reservation and its account move inside ONE mutation.
+      // A later reservation failure rolls back the executable migration too.
+      if (!existing) admission.admissionGuard?.();
+      if (admission.reseatToActiveAccount && bindings) {
+        this.requestConversationMigrationToActiveAccountInFile(file, canonicalId, admission.reseatToActiveAccount, bindings);
+      }
       /* The stale terminal failed record stays for audit but releases the
          client message id: the new reservation below owns the key from now on
          (a dead conversation stays continuable — its poisoned key retires). */
@@ -9178,18 +9203,6 @@ export class AgentRegistry {
         if (existing.error === CORRUPT_HELD_DELIVERY_IMAGES_ERROR) return clone(existing);
         return place(existing);
       }
-      const terminalReplay = terminalDeliveryReplay(
-        inspection,
-        text,
-        clientMessageId,
-        payloadKind,
-        runtimeImages,
-        contentDigest,
-      );
-      if (terminalReplay) return terminalReplay;
-      // The writer can wait while link authorization changes. Check inside
-      // the acquired write, only for a fresh reservation; never persist it.
-      admission.admissionGuard?.();
       const deliveryId = crypto.randomUUID();
       const held: HeldDelivery = {
         id: deliveryId,
@@ -9238,7 +9251,7 @@ export class AgentRegistry {
         settledAt: null,
       };
       return place(held);
-    }, { deliveryOnly: true });
+    }, { deliveryOnly: !admission.reseatToActiveAccount });
   }
 
   /** {@link holdDelivery} with the write lock waited for off the event loop
