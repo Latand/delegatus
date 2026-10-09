@@ -2924,8 +2924,8 @@ Without a subscription, the dot and the banner are the whole notice.
 `chat_conversations` switch, which defaults off. The slice 3 design in
 `relay-slice3.md` defines separate member and owner records, with non-owner
 administrators continuing one-shot. With the switch off every request still
-uses the slice 2b session-less profile and claim bytes. `/compact` and the
-owner API each have their own default-off switch.
+uses the slice 2b session-less profile and claim bytes. `/compact` has its own
+default-off switch and requires conversations.
 
 **Identity and map.** A (relay id, target id, chat key) maps to one record in
 `conversations.json` (§B.2), created by the first request with that key. The
@@ -3313,10 +3313,9 @@ The explicit 2b seams and conditions for revisiting these choices are in
 ### Slice 3 revision (dark)
 
 The install implements persistent member and owner conversations per chat,
-compact requests, and owner operations through the runner proxy. Each is
-behind its own default-off switch; compact also requires conversations.
-Administrators answer one-shot. The owner key is bound through the service,
-kept outside relay records and agent context, and used only by the proxy.
+and compact requests. Each is behind its own default-off switch; compact
+also requires conversations. Administrators answer one-shot. Owner operations
+are deferred to the follow-up described in the slice 3 design.
 See [relay-slice3.md](relay-slice3.md) for the boundaries and lifecycle.
 `evidence/external-relay/install_compact_loop.json` records the real poller
 and runner replay against the service's X3 claims. Activation awaits the

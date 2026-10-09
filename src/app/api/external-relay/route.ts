@@ -1,5 +1,3 @@
-import { ownerApiView } from "@/lib/externalRelay/ownerApi";
-import { readRelaySwitches } from "@/lib/externalRelay/switches";
 import { NextRequest, NextResponse } from "next/server";
 import { guardRelayRoute } from "@/lib/externalRelay/routeGuard";
 import {
@@ -19,12 +17,7 @@ export async function GET(req: NextRequest) {
   await refreshTargetsForRead();
   const store = readRelayStore();
   return NextResponse.json({
-    relays: await Promise.all(store.relays.map(async (relay) => {
-      const view = publicRelay(relay);
-      if (!readRelaySwitches().owner_api) return view;
-      const ownerApi = await ownerApiView(relay);
-      return ownerApi ? { ...view, ownerApi } : view;
-    })),
+    relays: store.relays.map(publicRelay),
     pending: store.pending.map(publicPending),
     status: externalRelayRows(),
   });

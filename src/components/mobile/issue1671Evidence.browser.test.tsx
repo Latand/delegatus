@@ -8635,7 +8635,7 @@ describe("prototype review on the phone", () => {
   }, 900_000);
 });
 
-browserTest("external relay owner key: write-only states at phone and desktop widths", async () => {
+browserTest("external relay: paired card uses existing pairing at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture(); const browser = await launchChromium();
   const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
   const readings: Record<string, unknown>[] = [];
@@ -8645,33 +8645,24 @@ browserTest("external relay owner key: write-only states at phone and desktop wi
       await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
       const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       try {
-        await page.goto(`${base}/?relay=owner-key`);
-        if (width === 390) await page.locator('[data-mobile2-open="menu"]').click(); else await page.locator("[data-rail-menu]").click();
+        await page.goto(`${base}/?relay=paired`);
+        await page.locator(width === 390 ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").click();
         await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
         await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
-        await page.locator("[data-owner-key-row]").first().waitFor();
-        for (const [index, state] of ["none", "bound", "expired", "rejected"].entries()) {
-          const row = page.locator("[data-owner-key-row]").nth(index); await row.scrollIntoViewIfNeeded();
-          const reading = await row.evaluate((element) => ({ text: (element as HTMLElement).innerText, overflow: element.scrollWidth > element.clientWidth,
-            inputType: element.querySelector("input")?.getAttribute("type"), autocomplete: element.querySelector("input")?.getAttribute("autocomplete"),
-            minControlHeight: Math.min(...Array.from(element.querySelectorAll<HTMLElement>("input, button, a")).map((node) => node.getBoundingClientRect().height)) }));
-          expect(reading.overflow).toBe(false); expect(reading.inputType).toBe("password"); expect(reading.autocomplete).toBe("off"); expect(reading.minControlHeight).toBeGreaterThanOrEqual(40);
-          const name = `variant-1-owner-key-${state}-${width}-${locale}.png`;
-          await row.screenshot({ path: path.join(out, name) }); readings.push({ locale, width, state, ...reading, frame: name });
+        const card = page.locator("[data-external-relay=relay-1]"); await card.waitFor();
+        const reading = await card.evaluate((element) => ({ overflow: element.scrollWidth > element.clientWidth, passwordFields: element.querySelectorAll('input[type="password"]').length,
+          targets: element.querySelectorAll("[data-external-relay-target]").length }));
+        expect(reading.overflow).toBe(false); expect(reading.passwordFields).toBe(0); expect(reading.targets).toBe(3);
+        const frames = [];
+        for (const position of ["top", "bottom"]) {
+          if (position === "bottom") await card.locator("button").last().scrollIntoViewIfNeeded();
+          const frame = `variant-1-paired-${position}-${width}-${locale}.png`;
+          await page.screenshot({ path: path.join(out, frame) }); frames.push(frame);
         }
-        const refused = page.locator("[data-owner-key-row]").nth(3);
-        await refused.locator("input").fill("clst_browser_fixture_key"); await refused.locator("[data-owner-key-save]").click();
-        await refused.locator('[role="alert"]').waitFor();
-        const refusal = await refused.evaluate((element) => ({ text: (element as HTMLElement).innerText, overflow: element.scrollWidth > element.clientWidth,
-          inputType: element.querySelector("input")?.getAttribute("type"), autocomplete: element.querySelector("input")?.getAttribute("autocomplete"),
-          minControlHeight: Math.min(...Array.from(element.querySelectorAll<HTMLElement>("input, button, a")).map((node) => node.getBoundingClientRect().height)) }));
-        expect(refusal.overflow).toBe(false); expect(refusal.text).toContain(locale === "en" ? "The service refused this key. Create a new key." : "Сервіс відхилив цей ключ. Створіть новий ключ."); expect(refusal.text).not.toContain("key_rejected"); expect(refusal.text).not.toContain("clst_browser_fixture_key");
-        const frame = `variant-1-owner-key-refusal-${width}-${locale}.png`; await refused.screenshot({ path: path.join(out, frame) });
-        readings.push({ locale, width, state: "refusal", ...refusal, frame });
+        readings.push({ locale, width, ...reading, frames });
         expect(errors).toEqual([]);
       } finally { await context.close(); }
     }
-    fs.mkdirSync(path.resolve("evidence/external-relay"), { recursive: true });
-    fs.writeFileSync(path.resolve("evidence/external-relay/owner-key-settings.json"), JSON.stringify({ readings }, null, 2) + "\n");
+    fs.writeFileSync(path.resolve("evidence/external-relay/conversation-settings.json"), JSON.stringify({ readings }, null, 2) + "\n");
   } finally { await browser.close(); stop(); }
 }, 90000);

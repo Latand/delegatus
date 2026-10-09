@@ -661,39 +661,3 @@ test("the member limit shows the default, saves a number on leaving the field, a
   await act(async () => settle());
   expect(patches().at(-1)).toEqual({ target: { id: "bot-1", memberLimitPerHour: null } });
 });
-
-test("owner key is write-only and clears after submit", async () => {
-  const key = "clst_dom_fixture_key";
-  answers.relay = { relays: [relay({ ownerApi: { offered: true, state: "none", boundAt: null, expiresAt: null, keyUrl: "https://relay.example/key" } })], pending: [], status: [] };
-  let sent: unknown;
-  route((url, init) => { if (url.endsWith("/owner-key")) { sent = JSON.parse(String(init?.body)); return jsonResponse({ ownerApi: { state: "bound" } }); } });
-  const host = await mount(<ExternalRelaySection />);
-  const input = host.querySelector<HTMLInputElement>("[data-owner-key-input]");
-  expect(input?.type).toBe("password");
-  await act(async () => typeInto(input!, key));
-  expect(host.innerHTML).not.toContain(key);
-  await click(host.querySelector("[data-owner-key-save]"));
-  expect(sent).toEqual({ key });
-  expect(input?.value).toBe("");
-  expect(host.innerHTML).not.toContain(key);
-});
-
-test.each(["en", "uk"] as const)("a refused owner key refreshes binding status and gives a readable error (%s)", async (locale) => {
-  setLocale(locale);
-  const ownerApi = { offered: true, state: "bound", boundAt: null, expiresAt: null, keyUrl: "https://relay.example/key" };
-  answers.relay = { relays: [relay({ ownerApi })], pending: [], status: [] };
-  route((url) => {
-    if (url.endsWith("/owner-key")) {
-      answers.relay = { relays: [relay({ ownerApi: { ...ownerApi, state: "rejected" } })], pending: [], status: [] };
-      return jsonResponse({ error: "key_rejected" }, 409);
-    }
-  });
-  const host = await mount(<ExternalRelaySection />);
-  const input = host.querySelector<HTMLInputElement>("[data-owner-key-input]")!;
-  await act(async () => typeInto(input, "clst_refused_dom_fixture"));
-  await click(host.querySelector("[data-owner-key-save]"));
-  const row = host.querySelector("[data-owner-key-row]")!;
-  expect(row.querySelector('[role="status"]')?.textContent).toBe(locale === "en" ? "Key refused" : "Ключ відхилено");
-  expect(row.querySelector('[role="alert"]')?.textContent).toBe(locale === "en" ? "The service refused this key. Create a new key." : "Сервіс відхилив цей ключ. Створіть новий ключ.");
-  expect(input.value).toBe(""); expect(row.innerHTML).not.toContain("clst_refused_dom_fixture");
-});

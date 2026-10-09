@@ -1942,12 +1942,10 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
   const { setRelaySwitch } = await import("./switches");
   const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
   try {
-    for (const raw of [JSON.stringify({ v: 1, chat_conversations: false, compact: false, owner_api: false }), "{", JSON.stringify({ v: 2, chat_conversations: true })]) {
+    for (const raw of [JSON.stringify({ v: 1, chat_conversations: false, compact: false }), "{", JSON.stringify({ v: 2, chat_conversations: true })]) {
       fs.writeFileSync(switchFile, raw);
       for (const role of cases) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
     }
-    setRelaySwitch("owner_api", true);
-    for (const role of cases) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
     setRelaySwitch("chat_conversations", true);
     for (const role of ["admin", "anonymous_admin", "actions_admin"]) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
   } finally { fs.rmSync(switchFile, { force: true }); }

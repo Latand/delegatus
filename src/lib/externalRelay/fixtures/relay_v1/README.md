@@ -37,8 +37,6 @@ Copied byte for byte from service revision `c5067f000493ca14e51216cdcac68fd6442f
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `descriptor_owner_api.json` | 1102 | `04d1da1e6ee737cac6f4596fbb8229c6d55bd7a54555d7a1b85436347fc02378` |
-| `owner_api_me.json` | 116 | `cb92b7a6fa024402cc35ac1af60444a52a65192d98c905ed3ff2ccede86ce032` |
 | `claimed_compact_owner.json` | 692 | `9b38c08da1a938cef1f28c8ca41703bc3f5207a3c2c61308c90055436a8c5276` |
 | `claimed_compact_admin.json` | 690 | `63230ac373e55c9fe039bd5a5d313f9e5062a164dfc622bef23f762c25304a04` |
 | `compact_completions.json` | 7988 | `4b90e23eed944d18f127ac2121b25a6fc6c48fa30db70a23b36c0f2db746816c` |

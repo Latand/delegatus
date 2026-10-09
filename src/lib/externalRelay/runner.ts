@@ -1,7 +1,6 @@
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
-import { ownerToolsFor } from "./ownerApi";
 import { conversationContext, reserveConversations, releaseConversation, prepareConversationAccount, conversationCodexHome, sweepConversations, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
@@ -29,7 +28,7 @@ import {
   type ExternalRelayProgress,
 } from "./protocol";
 import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
-import { answerPrompt, toolRoundPrompt, ownerToolSection, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
+import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
 import { answerRecorder, countMemberAnswers, type RelayAnswerDelivery } from "./answers";
@@ -327,7 +326,6 @@ export async function runClaimedRequest(
         ),
       );
     if (conversation) { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
-    const ownerTools = await ownerToolsFor(relay, request);
     let newestProgress: ExternalRelayProgress | null = null;
     let leaseUnavailable = false;
     let beatBusy = false;
@@ -378,7 +376,7 @@ export async function runClaimedRequest(
       }
     };
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
-    if (callableTools(request).length || ownerTools.length) loop = createToolLoop(relay, request, {
+    if (callableTools(request).length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -395,7 +393,7 @@ export async function runClaimedRequest(
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
         noteRelayProgress(relay.id, target.id, newestProgress);
       }
-    }, ownerTools);
+    });
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
@@ -403,11 +401,10 @@ export async function runClaimedRequest(
       runFinished = false;
       try {
         if (rounds === 1 && activeDrain()) return await finish(declined(leaseId, "busy"));
-        const promptRequest = ownerTools.length ? { ...request, input: { ...request.input, tools: [...(request.input.tools ?? []), ...ownerTools.map(({ name, summary, effect, parameters, audience, mode }) => ({ name, summary, effect, parameters, audience, mode }))] } } : request;
-        const roundPrompt = loop ? toolRoundPrompt(promptRequest, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
+        const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
-        if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, ownerTools, frame);
-        const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt + ownerToolSection(ownerTools);
+        if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
+        const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
         run = runEphemeralAgent({
           ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
@@ -415,7 +412,7 @@ export async function runClaimedRequest(
           model: target.model,
           effort: target.effort,
           account: selection.account,
-          ["prompt"]: conversation || ownerTools.length ? persistentPrompt : roundPrompt,
+          ["prompt"]: conversation ? persistentPrompt : roundPrompt,
           schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,

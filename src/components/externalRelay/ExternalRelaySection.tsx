@@ -37,7 +37,6 @@ type Target = {
   memberLimitPerHour?: number | null;
 };
 export type RelayView = {
-  ownerApi?: import("@/lib/externalRelay/ownerApi").OwnerApiView;
   id: string;
   origin: string;
   name: string;
@@ -82,10 +81,6 @@ const ERROR_KEYS: Record<string, Parameters<TFunction>[0]> = {
   operator_only: "externalRelay.error.operatorOnly",
   owner_required: "externalRelay.error.operatorOnly",
   rate_limited: "externalRelay.error.rateLimited",
-  owner_api_unavailable: "externalRelay.ownerKey.unavailable",
-  owner_mismatch: "externalRelay.ownerKey.mismatch",
-  key_rejected: "externalRelay.ownerKey.refused",
-  key_expired: "externalRelay.ownerKey.expiredAdvice",
   refused_here: "externalRelay.error.refusedHere",
   local_error: "externalRelay.error.local",
 };
@@ -640,7 +635,6 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
           onChange={(patch) => void act(base, "PATCH", { target: { id: target.id, ...patch } })}
           onRoute={(answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy })} />
       )) : <p className="text-muted">{t("externalRelay.noTargets")}</p>}
-      {relay.ownerApi ? <OwnerKeyRow relay={relay} onChange={() => void onChanged()} /> : null}
       {error ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-danger">{relayErrorText(t, error)}</p> : null}
       {warned ? <p role="status" className="rounded-[8px] bg-warning-soft px-3 py-2 text-warning">{t("externalRelay.removeWarning")}</p> : null}
       <div className="flex flex-wrap gap-2">
@@ -649,32 +643,6 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
       </div>
     </div>
   );
-}
-
-export function OwnerKeyRow({ relay, onChange }: { relay: RelayView; onChange: () => void }) {
-  const { t } = useLocale(); const typedKey = useRef(""); const keyInput = useRef<HTMLInputElement>(null); const [hasKey, setHasKey] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null);
-  const view = relay.ownerApi!;
-  async function submit(method: "PUT" | "DELETE") {
-    const typed = typedKey.current; typedKey.current = ""; if (keyInput.current) keyInput.current.value = ""; setHasKey(false); setBusy(true); setError(null);
-    try {
-      const response = await fetch(`/api/external-relay/relays/${encodeURIComponent(relay.id)}/owner-key`, { method,
-        ...(method === "PUT" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: typed }) } : {}) });
-      if (!response.ok) { const body = await response.json(); setError(typeof body.error === "string" ? body.error : "local_error"); }
-      onChange();
-    } catch { setError("unreachable"); }
-    finally { setBusy(false); }
-  }
-  return <div data-owner-key-row className="space-y-2 rounded-[8px] border border-border p-3">
-    <p className="font-semibold">{t("externalRelay.ownerKey.label")}</p>
-    <p role="status" className="text-muted">{t(`externalRelay.ownerKey.${view.state}`)}{view.expiresAt ? ` · ${view.expiresAt}` : ""}</p>
-    <div className="flex flex-wrap gap-2">
-      <input data-owner-key-input type="password" autoComplete="off" aria-label={t("externalRelay.ownerKey.label")} className={input} ref={keyInput} onChange={(event) => { typedKey.current = event.target.value; setHasKey(!!event.target.value); }} />
-      <button data-owner-key-save type="button" className={bordered} disabled={busy || !hasKey} onClick={() => void submit("PUT")}>{t("externalRelay.ownerKey.save")}</button>
-      {view.state === "bound" ? <button type="button" className={bordered} disabled={busy} onClick={() => void submit("DELETE")}>{t("externalRelay.ownerKey.remove")}</button> : null}
-      <a href={view.keyUrl} target="_blank" rel="noopener noreferrer" className={bordered}>{t("externalRelay.ownerKey.create")}</a>
-    </div>
-    {error ? <p role="alert" className="text-danger">{relayErrorText(t, error)}</p> : null}
-  </div>;
 }
 
 /**

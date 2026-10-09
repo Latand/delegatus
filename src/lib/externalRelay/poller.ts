@@ -1,5 +1,4 @@
 import { sweepConversations } from "./conversations";
-import { sweepOwnerKeys } from "./ownerApi";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
 import path from "node:path";
@@ -323,7 +322,6 @@ async function sweepAndRefresh(): Promise<void> {
     controller.prunedAt = Date.now();
     pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
     sweepConversations(readRelayStore().relays, readRunLedger().runs);
-    sweepOwnerKeys(readRelayStore().relays);
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {

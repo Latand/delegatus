@@ -315,13 +315,6 @@ export type ExternalRelayCompletion =
       detail: string | null;
     };
 
-// Parsed separately: the public slice 2b descriptor keeps dropping these fields.
-export const ownerApiSchema = z.object({
-  features: z.array(z.string()).refine((value) => value.includes("owner_api")),
-  owner_api: z.object({ api_base: z.url(), openapi_url: z.url(), key_url: z.url(),
-    operations: z.array(z.string().min(1).max(128)).min(1).max(128).refine((value) => new Set(value).size === value.length) }),
-});
-export const ownerApiMeSchema = z.object({ user_id: z.number().int(), expires_at: time.nullish() });
 export const compactRequestSchema = z.object({ request_id: id, lease_id: leaseId,
   kind: z.literal("compact"), target_id: id, claimed_at: time, liveness: livenessSchema,
   chat: z.object({ key: chatKey }), input: z.object({ requester: requesterSchema }) });
