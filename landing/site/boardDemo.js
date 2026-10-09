@@ -24,8 +24,10 @@
   const still = root.classList.contains("still");
   const phoneQuery = matchMedia("(max-width: 639px)");
 
-  /* The stage is laid out at one size per layout and scaled to the column. */
-  const SIZE = { desktop: { w: 1280, h: 720 }, phone: { w: 360, h: 606 } };
+  /* The stage is laid out at one size per layout and scaled to the column.
+     The desktop board is short enough that the stage and the steps under it
+     fit a 1440×900 first screen below the headline. */
+  const SIZE = { desktop: { w: 1280, h: 384 }, phone: { w: 360, h: 606 } };
 
   /* The script, in milliseconds of one loop. */
   const LOOP = 24000;
@@ -274,9 +276,22 @@
     // Step 4: each task of the answer flies to the board and lands as a card.
     const columns = Object.fromEntries($$(".d-col").map((col) => [col.dataset.col, box(col.querySelector(".d-colb"))]));
     const cardEls = Object.fromEntries($$(".d-card").map((el) => [el.dataset.card, el]));
-    const cardBox = box(cardEls.a);
+    /* A card is as tall as its whole title. Where each column stacks its cards,
+       top first; the inbox takes all three at once, so there they land
+       overlapping, each showing its title above the next. */
+    const height = {};
+    const peek = {};
+    for (const [id, el] of Object.entries(cardEls)) {
+      const card = box(el);
+      const title = box(el.querySelector(".d-ct"));
+      height[id] = card.h;
+      peek[id] = title.y + title.h - card.y + (phone ? 7 : 10);
+    }
+    const ORDER = { inbox: ["a", "b", "c"], progress: ["b", "a"], done: ["a"] };
     const gap = phone ? 6 : 10;
-    const slot = (col, index) => ({ x: columns[col].x, y: columns[col].y + index * (cardBox.h + gap) });
+    const stack = (col, index, step) => ({ x: columns[col].x, y: ORDER[col].slice(0, index).reduce((y, id) => y + step(id), columns[col].y) });
+    const slot = (col, index) => stack(col, index, (id) => height[id] + gap);
+    const landing = (index) => stack("inbox", index, (id) => peek[id]);
     const home = { a: slot("done", 0), b: slot("progress", 0), c: slot("inbox", 0) };
     const offset = (id, at) => ({ x: at.x - home[id].x, y: at.y - home[id].y });
     const flight = { a: "a", b: "b", c: "c" };
@@ -286,7 +301,7 @@
       track(chip, { o: 0, x: -6 }).to(AT.chips + index * 180, AT.chips + index * 180 + 300, { o: 1, x: 0 });
       const from = box(chip.querySelector("svg"));
       from.y += shiftAt(AT.fly);
-      const to = slot("inbox", index);
+      const to = landing(index);
       const dot = document.createElement("span");
       dot.className = "d-fly";
       dot.style.left = `${from.x + from.w / 2 - 5}px`;
@@ -394,13 +409,14 @@
     const cursor = $(".d-cursor");
     const click = $(".d-click");
     const inbox = columns.inbox;
-    const rest = phone ? { x: seat.x + seat.w * 0.72, y: seat.y + seat.h * 0.86 } : { x: columns.progress.x + columns.progress.w * 0.45, y: columns.progress.y + 420 };
+    const rest = phone ? { x: seat.x + seat.w * 0.72, y: seat.y + seat.h * 0.86 } : { x: columns.progress.x + columns.progress.w * 0.45, y: SIZE.desktop.h * 0.78 };
     const typing = phone ? { x: comp.x + comp.w * 0.55, y: comp.y + comp.h + 24 } : { x: comp.x + comp.w * 0.62, y: comp.y + comp.h + 6 };
-    const watchInbox = { x: inbox.x + inbox.w * (phone ? 0.5 : 0.62), y: slot("inbox", 2).y + cardBox.h + (phone ? 10 : 40) };
+    const cardW = box(cardEls.a).w;
+    const watchInbox = { x: inbox.x + inbox.w * (phone ? 0.5 : 0.62), y: landing(2).y + height.c + (phone ? 10 : 30) };
     const cardA = slot("progress", 1);
-    const watchA = phone ? { x: cardA.x + cardBox.w * 0.7, y: cardA.y + cardBox.h + 34 } : { x: cardA.x + cardBox.w * 0.8, y: cardA.y + cardBox.h + 28 };
+    const watchA = phone ? { x: cardA.x + cardW * 0.7, y: cardA.y + height.a + 34 } : { x: cardA.x + cardW * 0.8, y: cardA.y + height.a + 24 };
     const done = slot("done", 0);
-    const watchDone = phone ? { x: done.x + cardBox.w * 0.6, y: done.y + cardBox.h + 30 } : { x: done.x + cardBox.w * 0.62, y: done.y + cardBox.h + 54 };
+    const watchDone = phone ? { x: done.x + cardW * 0.6, y: done.y + height.a + 30 } : { x: done.x + cardW * 0.62, y: done.y + height.a + 40 };
     const atComp = { x: comp.x + comp.w * 0.3, y: comp.y + comp.h * 0.42 };
     /* Every rest point keeps the whole pointer (the finger's ring, the arrow's
        tail) inside the stage, which clips whatever crosses its edge. */
@@ -432,15 +448,16 @@
         const first = index === 0;
         track(item.querySelector(".fill"), { sx: 0 }).to(from, to, { sx: 1 }, "linear");
         const on = track(item.querySelector(".on"), { o: first ? 1 : 0 });
+        /* A caption is never missing: the next one replaces it at once and
+           rises into place, and the first comes back as the board resets. */
         const cap = track(item.querySelector(".cap"), first ? {} : { o: 0, y: 6 });
         if (!first) {
           on.to(from - 150, from + 150, { o: 1 }, "ease-in-out");
-          cap.to(from, from + 350, { o: 1, y: 0 });
+          cap.to(from, from, { o: 1 }).to(from, from + 300, { y: 0 });
         }
-        if (to < AT.resetB) {
-          on.to(to - 150, to + 150, { o: 0 }, "ease-in-out");
-          cap.to(to - 250, to, { o: 0, y: -4 }, "ease-in");
-        }
+        if (to < AT.resetB) on.to(to - 150, to + 150, { o: 0 }, "ease-in-out");
+        cap.to(to, to, { o: 0, y: 6 });
+        if (first) cap.to(AT.resetB, AT.resetB, { o: 1 }).to(AT.resetB, AT.resetB + 300, { y: 0 });
       });
     }
   }

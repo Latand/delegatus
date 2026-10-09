@@ -38,7 +38,8 @@
  * build on the same driver; that the demo waits off screen and in a hidden
  * tab, scrolled on with 40% of it showing, and stands still under reduced
  * motion; that it plays with no scroll on a 1440×900 and a 1440×780 first
- * screen; that its pointer never crosses the stage's edge; and, unthrottled,
+ * screen, where at 1440×900 the typed request, the steps and some caption
+ * stay in view all loop; that its pointer never crosses the stage's edge; and, unthrottled,
  * a frame every half second and a screen recording of one loop at both widths. It fails on a
  * long task during the loop, on more than 1% dropped frames, or on a demo that
  * moves when it should not.
@@ -1218,6 +1219,45 @@ async function demoHolds(viewport: (typeof VIEWPORTS)[number]) {
       return Math.round(((Math.min(innerHeight, box.bottom) - Math.max(0, box.top)) / box.height) * 100);
     });
     if (!await advances(page)) failures.push(`${viewport.width}x${height}: the demo does not play on the first screen (${shown}% of it showing)`);
+    await context.close();
+  }
+  /* On a computer's first screen the whole story plays with no scroll: the
+     request is typed where it can be read, the steps and the demo's label stay
+     in view, and some step's caption shows at every moment of the loop. */
+  for (const lang of viewport.phone ? [] : (["en", "uk"] as Locale[])) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?lang=${lang}`, { waitUntil: "load" });
+    await page.waitForSelector(".hero .demo .d-card");
+    await settle(page, 600);
+    const story = await page.evaluate(() => {
+      const inView = (el: Element | null) => {
+        const box = el?.getBoundingClientRect();
+        return !!box && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight;
+      };
+      const showing = (el: Element) => Number(getComputedStyle(el).opacity) > 0.5;
+      const { loop, steps } = window.DLG.demo;
+      const typing = (steps[2]! + steps[3]!) / 2;
+      window.DLG.demo.seek(typing);
+      const typed = [...document.querySelectorAll(".d-typed span")].filter(showing);
+      const result = {
+        typed: typed.length > 0 && typed.every(inView),
+        composer: inView(document.querySelector(".d-comp")),
+        steps: inView(document.querySelector(".demo-steps .chip")),
+        note: inView(document.querySelector(".demo-note")),
+        uncaptioned: [] as number[],
+      };
+      for (let at = 0; at < loop; at += 50) {
+        window.DLG.demo.seek(at);
+        if (![...document.querySelectorAll(".demo-steps .cap")].some((cap) => showing(cap) && inView(cap))) result.uncaptioned.push(at);
+      }
+      window.DLG.demo.release();
+      return result;
+    });
+    const key = `${viewport.width}x${viewport.height}-${lang}`;
+    if (!story.typed || !story.composer) failures.push(`${key}: the request is typed below the first screen`);
+    if (!story.steps || !story.note) failures.push(`${key}: the demo's steps or its label sit below the first screen`);
+    if (story.uncaptioned.length) failures.push(`${key}: no caption shows at ${story.uncaptioned.length} of the loop's moments, from ${story.uncaptioned.slice(0, 8).join(", ")} ms`);
     await context.close();
   }
   return failures;

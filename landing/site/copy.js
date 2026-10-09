@@ -90,7 +90,6 @@
       "reach.phoneAlt": "Delegatus on a phone with invented data: the harbor-api board, with the task that needs a decision first.",
       "foot.does": "Give the prompt to your own Claude Code or Codex. It installs and starts Delegatus on this machine, connects itself to it and ends with a link to open. There you pick a project and create its orchestrator.",
       "foot.analytics": "This site counts visits with Cloudflare Web Analytics (no cookies), clicks on its copy buttons, demo starts and full-screen opens.",
-      "foot.needs": "macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code, Codex or both",
       "meta.title": "Delegatus: delegate everything",
       "meta.description":
         "Tell one agent what you want shipped. It runs Claude Code and Codex on a board to build and review it. Free and open source, on your machine.",
@@ -224,7 +223,6 @@
       "reach.tab3": "Звіти",
       "reach.phoneAlt": "Delegatus на телефоні з вигаданими даними: дошка harbor-api, задача, що чекає рішення, перша.",
       "foot.does": "Віддай промпт своєму Claude Code або Codex. Він встановить і запустить Delegatus на цій машині, підключиться до нього й наприкінці дасть посилання. Там ти обираєш проєкт і створюєш його оркестратора.",
-      "foot.needs": "macOS або Linux (Windows через WSL 2) · Bun 1.4+ · Claude Code, Codex або обидва",
       "meta.title": "Delegatus: делегуй усе",
       "meta.description":
         "Скажи одному агенту, що треба зробити. Claude Code і Codex пишуть і перевіряють це на дошці. Безкоштовно, з відкритим кодом, на твоїй машині.",

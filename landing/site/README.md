@@ -200,9 +200,14 @@ To create its separate read-only token in the Cloudflare dashboard:
 
 `boardDemo.js` builds the board once, in the product's dark tokens: the top
 bar, the orchestrator's place, Inbox, In progress and Done, three cards and the
-pointer. It lays the stage out at 1280×720 (on a phone, 360×606: the chat over
+pointer. It lays the stage out at 1280×384 (on a phone, 360×606: the chat over
 three narrow columns, a fingertip for the pointer) and scales it to the
-column, so positions are read once, in the stage's own pixels.
+column, so positions are read once, in the stage's own pixels. The desktop
+stage is that short so the request being typed, the steps and their caption
+all sit on a 1440×900 first screen under the headline; on a computer the bird
+perches on the install box to leave that room. A card is as tall as its whole
+title, and the three land in Inbox overlapping, each title showing above the
+next, before two of them move on.
 
 The flow is one timeline of 24 s. Every element that moves gets one Web
 Animation of that length, on `transform` and `opacity` only, repeating forever,
@@ -215,7 +220,8 @@ draw to them (the board's own idiom: a line down the gutter into a port on the
 card, a pulse when it acts), Build, Review and Verify pass on the first card,
 the PR merges and the card moves to Done, then the finished board holds.
 Under the stage, six chips light and fill with the step that plays and one
-line says what is happening; screen readers get the six steps as a list.
+line says what is happening; the next line replaces it at once, so a caption
+shows at every moment. Screen readers get the six steps as a list.
 
 It plays only with most of it on screen and the tab visible, and stops on its
 pause button. Under reduced motion it is built at the finished board, never

@@ -175,8 +175,11 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 .hero-head .install { max-width: none; }
 
 .hero .stage-wrap { margin-top: 8px; }
-/* The bird perches on the demo's top bar where it is empty, between the search and the buttons. */
+/* The bird perches on the demo's top bar where it is empty, between the search
+   and the buttons. On a computer it sits on the install box instead, so the
+   demo can start right under the headline. */
 .demo-wrap .catcher { right: 34%; }
+.install-slot > .catcher { display: none; }
 .catcher {
   position: absolute; z-index: 3;
   right: clamp(24px, 6vw, 96px); bottom: calc(100% - 14px);
@@ -193,11 +196,11 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 
 /* ---------- The hero's demo ----------
    boardDemo.js draws the board in the product's dark tokens at one size per
-   layout (1280×720, the phone 360×606) and scales it to the column, so every
+   layout (1280×384, the phone 360×606) and scales it to the column, so every
    length inside the stage is in the stage's own pixels. Nothing in it takes a
    pointer: it is a picture that plays. */
 
-.demo { position: relative; overflow: hidden; aspect-ratio: 1280 / 720; border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0; background: var(--ground); }
+.demo { position: relative; overflow: hidden; aspect-ratio: 1280 / 384; border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0; background: var(--ground); }
 .demo-stage {
   --d-secondary: #a2a2ae;
   --d-claude: #e08a6d;
@@ -279,7 +282,7 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 .d-report { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--d-secondary); }
 .d-report .ic { width: 13px; height: 13px; color: var(--green); }
 
-.d-comp { position: relative; flex: none; height: 92px; margin: 0 12px 12px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--sunken); }
+.d-comp { position: relative; flex: none; height: 80px; margin: 0 12px 12px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--sunken); }
 .d-focus { position: absolute; inset: -1px; border-radius: 12px; box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px color-mix(in oklab, var(--accent) 22%, transparent); }
 .d-ph-text { position: absolute; left: 12px; top: 10px; color: var(--product-muted); }
 .d-typed { position: relative; padding-right: 36px; }
@@ -295,14 +298,17 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 .d-colb { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; padding: 0 10px; }
 .d-empty { position: absolute; left: 0; right: 0; top: 28px; text-align: center; font-size: 12.5px; color: var(--product-muted); }
 .d-card {
-  height: 112px; padding: 11px 12px;
+  padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--raised);
   box-shadow: 0 10px 20px -14px rgb(0 0 0 / 0.7);
 }
-.d-ct { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.d-ct .ic { color: var(--product-muted); }
-.d-ct span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.d-cb { position: relative; height: 68px; margin-top: 8px; }
+.d-ct { display: flex; align-items: flex-start; gap: 8px; font-weight: 600; }
+.d-ct .ic { margin-top: 2.5px; color: var(--product-muted); }
+.d-ct span { min-width: 0; overflow-wrap: anywhere; -webkit-hyphens: auto; hyphens: auto; text-wrap: pretty; }
+.d-cb { position: relative; height: 60px; margin-top: 8px; }
+/* The inbox takes the three tasks at once and they overlap there: the later card lies on top. */
+.d-card[data-card="b"] { z-index: 1; }
+.d-card[data-card="c"] { z-index: 2; }
 .d-layer { position: absolute; inset: 0; }
 .d-l-desc { font-size: 12.5px; color: var(--d-secondary); text-wrap: pretty; }
 .d-stages { display: flex; align-items: center; gap: 4px; }
@@ -325,6 +331,7 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 .d-l-desc + .d-l-work { background: var(--raised); }
 
 .d-wires, .d-wire { position: absolute; inset: 0; }
+.d-wires, .d-click, .d-cursor { z-index: 3; }
 .d-seg { position: absolute; display: block; background: var(--accent); }
 .d-seg.h { height: 1.5px; }
 .d-seg.v { width: 1.5px; }
@@ -367,10 +374,9 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 [data-mode="phone"] .d-col h4 { height: 30px; padding: 0 8px; font-size: 11.5px; }
 [data-mode="phone"] .d-colb { gap: 6px; padding: 0 5px; }
 [data-mode="phone"] .d-empty { top: 14px; font-size: 10.5px; }
-[data-mode="phone"] .d-card { height: 64px; padding: 7px 8px; border-radius: 8px; }
+[data-mode="phone"] .d-card { padding: 7px 8px; border-radius: 8px; }
 [data-mode="phone"] .d-ct { align-items: flex-start; font-size: 11.5px; line-height: 1.3; }
 [data-mode="phone"] .d-ct .ic, [data-mode="phone"] .d-l-desc, [data-mode="phone"] .d-foot { display: none; }
-[data-mode="phone"] .d-ct span { display: -webkit-box; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 [data-mode="phone"] .d-cb { height: 14px; margin-top: 5px; }
 [data-mode="phone"] .d-st { justify-content: center; width: 14px; height: 14px; padding: 0; gap: 0; font-size: 0; }
 [data-mode="phone"] .d-sdot { width: 6px; height: 6px; }
@@ -606,7 +612,6 @@ kbd {
 .band-inner { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); column-gap: clamp(40px, 6vw, 110px); align-items: start; }
 .band-line { margin: 0; font-family: var(--display); font-weight: 600; font-size: clamp(1.6rem, 2.5vw, 2.4rem); line-height: 1.18; letter-spacing: -0.015em; text-wrap: balance; }
 .band-does { margin: 28px 0 0; max-width: 44ch; font-size: 17px; line-height: 1.55; color: var(--ink-2); text-wrap: pretty; }
-.band-needs { margin: 16px 0 0; font-size: 14.5px; color: var(--ink-2); text-wrap: pretty; }
 .band .install { box-shadow: 0 30px 60px -30px rgb(38 42 54 / 0.55); }
 .band .legacy-link { color: var(--ink-2); text-decoration-color: color-mix(in oklab, var(--ink) 35%, transparent); }
 .band .legacy-link:hover { color: var(--ink); }
@@ -622,7 +627,7 @@ kbd {
 .band-analytics { margin: 20px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.6; text-wrap: pretty; }
 .num { font-variant-numeric: tabular-nums; }
 
-/* ---------- Compatibility under the hero's install box ---------- */
+/* ---------- Compatibility under each install box ---------- */
 
 .compat {
   display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px;
@@ -630,8 +635,9 @@ kbd {
   font-size: 13.5px; line-height: 1.5;
 }
 .compat dt { color: var(--cream-3); }
-.compat dd { margin: 0; color: var(--cream-2); }
-.band .compat { display: none; }
+.compat dd { margin: 0; color: var(--cream-2); text-wrap: pretty; }
+.band .compat dt { color: var(--ink-2); }
+.band .compat dd { color: var(--ink); }
 
 /* The phone visitor's action; on a computer the prompt is the action. */
 .share { display: none; }
@@ -659,6 +665,21 @@ kbd {
 
 [data-released]:empty { display: none; }
 .band-meta .changelog { text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--ink) 35%, transparent); text-underline-offset: 4px; }
+
+/* ---------- Computer: the demo, its steps and its captions on the first screen ---------- */
+
+@media (min-width: 1101px) {
+  .hero-head { margin-bottom: 24px; }
+  h1 { font-size: clamp(2.6rem, min(5.6vw, 8.6vh), 5.6rem); }
+  :lang(uk) h1 { font-size: clamp(2.6rem, min(6vw, 9.2vh), 5.8rem); }
+  .sub { max-width: 42ch; margin-top: 20px; }
+  .hero .install-slot { position: relative; }
+  .install-slot > .catcher { display: block; left: 24px; right: auto; bottom: calc(100% - 6px); }
+  .demo-wrap .catcher { display: none; }
+  /* The terminal link shares the list's last row, which is short. */
+  .hero .legacy-wrap { margin-top: -27px; }
+  .hero .legacy-link { display: block; margin-left: auto; }
+}
 
 /* ---------- Tablet ---------- */
 
