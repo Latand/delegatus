@@ -402,7 +402,12 @@
     const done = slot("done", 0);
     const watchDone = phone ? { x: done.x + cardBox.w * 0.6, y: done.y + cardBox.h + 30 } : { x: done.x + cardBox.w * 0.62, y: done.y + cardBox.h + 54 };
     const atComp = { x: comp.x + comp.w * 0.3, y: comp.y + comp.h * 0.42 };
-    const pos = (p) => ({ x: p.x, y: p.y });
+    /* Every rest point keeps the whole pointer (the finger's ring, the arrow's
+       tail) inside the stage, which clips whatever crosses its edge. */
+    const size = SIZE[mode];
+    const reach = phone ? { left: 16, top: 16, right: 16, bottom: 16 } : { left: 2, top: 2, right: 20, bottom: 24 };
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const pos = (p) => ({ x: clamp(p.x, reach.left, size.w - reach.right), y: clamp(p.y, reach.top, size.h - reach.bottom) });
     track(cursor, pos(rest))
       .to(AT.reach, AT.create - 60, pos(createAt), GLIDE)
       .to(AT.create, AT.create + 90, { sx: 0.82, sy: 0.82 }, "ease-out").to(AT.create + 90, AT.create + 240, { sx: 1, sy: 1 })
@@ -525,10 +530,17 @@
 
   function observe() {
     new IntersectionObserver((entries) => {
-      /* It starts once most of it is in view, so the first step is seen. */
-      for (const entry of entries) onScreen = entry.isIntersecting && entry.intersectionRatio >= 0.55;
+      /* It plays once most of it is in view, or while its top edge is on screen
+         with a quarter of it showing: the hero sits partly under the fold of a
+         laptop's first screen, and its first step is at the top. Scrolled on,
+         with the top gone and less than most of it left, it pauses. */
+      for (const entry of entries) {
+        const top = entry.rootBounds ? entry.rootBounds.top : 0;
+        const topInView = entry.boundingClientRect.top >= top;
+        onScreen = entry.isIntersecting && (entry.intersectionRatio >= 0.55 || (topInView && entry.intersectionRatio >= 0.25));
+      }
       sync();
-    }, { threshold: [0, 0.55] }).observe(host);
+    }, { threshold: [0, 0.25, 0.55] }).observe(host);
     document.addEventListener("visibilitychange", sync);
     new ResizeObserver(layout).observe(host);
     phoneQuery.addEventListener("change", start);

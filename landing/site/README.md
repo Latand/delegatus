@@ -47,7 +47,9 @@ loads the page cold five times (cache off, same throttle, alternating with the
 build in `LANDING_BEFORE_DIR` when it is set) and reports the median LCP, the
 layout shift, and the bytes and requests that arrive without scrolling. It
 checks that the demo plays only in view, stops on its pause button, in a
-hidden tab and off screen, starts on an empty board and leaves nothing flying
+hidden tab, off screen and scrolled on with 40% of it showing, plays with no
+scroll on a 1440×900 and a 1440×780 first screen, keeps its pointer inside the
+stage through the loop, starts on an empty board and leaves nothing flying
 on the finished one, and stands still under reduced motion with every caption
 shown. Unthrottled, it writes a PNG every half second of one loop in both
 languages and a screen recording of the loop at each width. It fails on a long

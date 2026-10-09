@@ -36,8 +36,10 @@
  * and dropped and every main-thread task over 50 ms; the cold load (LCP and
  * bytes transferred) of this build and, with LANDING_BEFORE_DIR, of another
  * build on the same driver; that the demo waits off screen and in a hidden
- * tab and stands still under reduced motion; and, unthrottled, a frame every
- * half second and a screen recording of one loop at both widths. It fails on a
+ * tab, scrolled on with 40% of it showing, and stands still under reduced
+ * motion; that it plays with no scroll on a 1440×900 and a 1440×780 first
+ * screen; that its pointer never crosses the stage's edge; and, unthrottled,
+ * a frame every half second and a screen recording of one loop at both widths. It fails on a
  * long task during the loop, on more than 1% dropped frames, or on a demo that
  * moves when it should not.
  */
@@ -550,11 +552,13 @@ async function checkEvents() {
       try {
         await page.goto(`${base}?lang=${lang}`);
         await settle(page, 600);
-        /* The demo counts once, when it first plays in view: on load where most of it shows in the
-           first screen, otherwise once it is scrolled to. Scrolling past it again counts nothing. */
+        /* The demo counts once, when it first plays in view: on load where most of it, or its top
+           with a quarter of it, shows in the first screen, otherwise once it is scrolled to.
+           Scrolling past it again counts nothing. */
         const inView = await page.evaluate(() => {
           const box = document.querySelector(".hero .demo")!.getBoundingClientRect();
-          return (Math.min(innerHeight, box.bottom) - Math.max(0, box.top)) / box.height >= 0.55;
+          const shown = (Math.min(innerHeight, box.bottom) - Math.max(0, box.top)) / box.height;
+          return shown >= 0.55 || (box.top >= 0 && shown >= 0.25);
         });
         if (inView) {
           if (eventPoints.length !== 1) throw new Error(`${key}: a demo in view at load counted ${eventPoints.length} events`);
@@ -1177,7 +1181,43 @@ async function demoHolds(viewport: (typeof VIEWPORTS)[number]) {
       /* Nothing in the picture takes the pointer. */
       const pointer = await page.evaluate(() => getComputedStyle(document.querySelector(".demo-stage")!).pointerEvents);
       if (pointer !== "none") failures.push(`${key}: the stage takes the pointer`);
+      /* The pointer stays whole inside the stage at every moment of the loop. */
+      const clipped = await page.evaluate(() => {
+        const stage = document.querySelector(".demo-stage")!.getBoundingClientRect();
+        const cursor = document.querySelector(".d-cursor")!;
+        const out: number[] = [];
+        for (let at = 0; at < window.DLG.demo.loop; at += 100) {
+          window.DLG.demo.seek(at);
+          const box = cursor.getBoundingClientRect();
+          if (Number(getComputedStyle(cursor).opacity) <= 0.01) continue;
+          if (box.left < stage.left - 0.5 || box.top < stage.top - 0.5 || box.right > stage.right + 0.5 || box.bottom > stage.bottom + 0.5) out.push(at);
+        }
+        window.DLG.demo.release();
+        return out;
+      });
+      if (clipped.length) failures.push(`${key}: the pointer crosses the stage's edge at ${clipped.join(", ")} ms`);
+      /* Scrolled on until 40% of it shows, the top gone, it pauses. */
+      await page.evaluate(() => {
+        const box = document.querySelector(".hero .demo")!.getBoundingClientRect();
+        scrollBy(0, box.top + box.height * 0.6);
+      });
+      await settle(page, 400);
+      if (await advances(page) || await running(page)) failures.push(`${key}: the demo plays with 40% of it showing`);
     }
+    await context.close();
+  }
+  /* A laptop's first screen shows the top of the hero's demo: it plays there with no scroll. */
+  for (const height of viewport.phone ? [] : [viewport.height, 780]) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?lang=en`, { waitUntil: "load" });
+    await page.waitForSelector(".hero .demo .d-card");
+    await settle(page, 1000);
+    const shown = await page.evaluate(() => {
+      const box = document.querySelector(".hero .demo")!.getBoundingClientRect();
+      return Math.round(((Math.min(innerHeight, box.bottom) - Math.max(0, box.top)) / box.height) * 100);
+    });
+    if (!await advances(page)) failures.push(`${viewport.width}x${height}: the demo does not play on the first screen (${shown}% of it showing)`);
     await context.close();
   }
   return failures;

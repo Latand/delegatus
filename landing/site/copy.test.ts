@@ -80,3 +80,13 @@ test("every string the page and the hero's demo name exists in both languages", 
     expect(uk[key], key).toBeString();
   }
 });
+
+test("the demo's merge names the setting the FAQ says is off by default", () => {
+  const { en, uk } = strings();
+  expect(en["faq.a4"]).toContain("Merging on a passed review is off by default");
+  expect(en["demo.c6"]).toStartWith("Merging on a passed review is on here");
+  expect(uk["faq.a4"]).toContain("Мердж після успішного рев’ю за замовчуванням вимкнений");
+  expect(uk["demo.c6"]).toStartWith("Мердж після успішного рев’ю тут увімкнений");
+  const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  expect(html).toContain(`data-i18n="demo.c6">${en["demo.c6"]}</span>`);
+});
