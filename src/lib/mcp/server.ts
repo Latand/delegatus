@@ -2899,7 +2899,7 @@ export function createMcpToolService(
           phaseDurations.claim = performance.now() - claimStartedAt;
           if (record) return recoverRecord(record);
           try {
-            await tool.authorizeClaim?.(digestArgs, bound);
+            await tool.authorizeClaim?.(digestArgs, binding);
           } catch (error) {
             outcome = "failure";
             return failure(typedTool, requestId,

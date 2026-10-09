@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { feedPathAllowed } from "@/lib/externalRelay/feedAccess";
 import { historyReadBytes, readTailChunk } from "@/lib/logRead";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
@@ -33,6 +34,7 @@ export async function GET(
   req: NextRequest,
 ): Promise<NextResponse<LogChunk | ApiError>> {
   const path = req.nextUrl.searchParams.get("path") ?? "";
+  const allowed = feedPathAllowed(req);
 
   const beforeParam = req.nextUrl.searchParams.get("before");
   if (beforeParam !== null) {
@@ -42,7 +44,7 @@ export async function GET(
     } catch {
       stat = null;
     }
-    if (!path || !stat?.isFile() || !pathAllowed(path)) {
+    if (!path || !stat?.isFile() || !allowed(path)) {
       return NextResponse.json({ error: "path not allowed" }, { status: 403 });
     }
     const size = stat.size;
@@ -65,7 +67,7 @@ export async function GET(
     }
   }
 
-  const chunk = await readTailChunk(path, Number(req.nextUrl.searchParams.get("offset") ?? "0"));
+  const chunk = await readTailChunk(path, Number(req.nextUrl.searchParams.get("offset") ?? "0"), undefined, allowed);
   if (!chunk) return NextResponse.json({ error: "path not allowed" }, { status: 403 });
   return NextResponse.json(chunk);
 }

@@ -1,0 +1,224 @@
+{
+  "readings": [
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "none",
+      "text": "Owner key\n\nNot set\n\nSave\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-none-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "bound",
+      "text": "Owner key\n\nKey set · 2027-10-08T12:00:00Z\n\nSave\nRemove\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-bound-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "expired",
+      "text": "Owner key\n\nKey expired\n\nSave\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-expired-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "rejected",
+      "text": "Owner key\n\nKey refused\n\nSave\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-rejected-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "refusal",
+      "text": "Owner key\n\nKey refused\n\nSave\nCreate a key\n\nThe service refused this key. Create a new key.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "none",
+      "text": "Owner key\n\nNot set\n\nSave\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-none-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "bound",
+      "text": "Owner key\n\nKey set · 2027-10-08T12:00:00Z\n\nSave\nRemove\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-bound-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "expired",
+      "text": "Owner key\n\nKey expired\n\nSave\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-expired-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "rejected",
+      "text": "Owner key\n\nKey refused\n\nSave\nCreate a key",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-rejected-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "refusal",
+      "text": "Owner key\n\nKey refused\n\nSave\nCreate a key\n\nThe service refused this key. Create a new key.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-1440-en.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "none",
+      "text": "Ключ власника\n\nНе задано\n\nЗберегти\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-none-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "bound",
+      "text": "Ключ власника\n\nКлюч задано · 2027-10-08T12:00:00Z\n\nЗберегти\nПрибрати\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-bound-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "expired",
+      "text": "Ключ власника\n\nСтрок дії ключа минув\n\nЗберегти\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-expired-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "rejected",
+      "text": "Ключ власника\n\nКлюч відхилено\n\nЗберегти\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-rejected-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "refusal",
+      "text": "Ключ власника\n\nКлюч відхилено\n\nЗберегти\nСтворити ключ\n\nСервіс відхилив цей ключ. Створіть новий ключ.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "none",
+      "text": "Ключ власника\n\nНе задано\n\nЗберегти\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-none-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "bound",
+      "text": "Ключ власника\n\nКлюч задано · 2027-10-08T12:00:00Z\n\nЗберегти\nПрибрати\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-bound-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "expired",
+      "text": "Ключ власника\n\nСтрок дії ключа минув\n\nЗберегти\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-expired-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "rejected",
+      "text": "Ключ власника\n\nКлюч відхилено\n\nЗберегти\nСтворити ключ",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-rejected-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "refusal",
+      "text": "Ключ власника\n\nКлюч відхилено\n\nЗберегти\nСтворити ключ\n\nСервіс відхилив цей ключ. Створіть новий ключ.",
+      "overflow": false,
+      "inputType": "password",
+      "autocomplete": "off",
+      "minControlHeight": 44,
+      "frame": "variant-1-owner-key-refusal-1440-uk.png"
+    }
+  ]
+}
