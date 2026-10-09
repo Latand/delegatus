@@ -29,6 +29,7 @@ const OPERATOR: CallerAttribution = { kind: "gateway", conversationId: "conversa
 
 function harness(initialCaller: CallerAttribution = SEAT) {
   let caller = initialCaller;
+  let seatAuthorized = true;
   const posts: Record<string, unknown>[] = [];
   const store = new MemoryMcpReceiptStore();
   const domain = {
@@ -37,7 +38,7 @@ function harness(initialCaller: CallerAttribution = SEAT) {
       ? { kind: "root", conversationId: caller.conversationId }
       : caller.conversationId ? { kind: "worker", conversationId: caller.conversationId, role: caller.role } : { kind: "unidentified" },
     registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
-    authorizedSeats: () => [{ conversationId: SEAT.conversationId, path: "seat.jsonl", project: projectForCwd(sandbox) }],
+    authorizedSeats: () => seatAuthorized ? [{ conversationId: SEAT.conversationId, path: "seat.jsonl", project: projectForCwd(sandbox) }] : [],
     loadTasks: () => [],
   } as unknown as ViewerMcpDomainDependencies;
   const bindings = viewerMcpBindings(undefined, {
@@ -51,6 +52,7 @@ function harness(initialCaller: CallerAttribution = SEAT) {
   return {
     bindings, posts, store,
     as: (value: CallerAttribution) => { caller = value; },
+    revokeSeat: () => { seatAuthorized = false; },
     service: createMcpToolService(bindings, store, undefined, { recovery: viewerMcpRecoverableTools(domain) }),
   };
 }
@@ -104,6 +106,23 @@ test("the original missing confirmation and roleParams.confirm refusals retain t
     .rejects.toThrow("unknown role parameter: confirm (deployer accepts: sha, pr)");
 });
 
+test.each([
+  { confirm: undefined, roleParams: { sha: "a".repeat(40) }, reason: "deployer requires confirm: deploy" },
+  { confirm: "different", roleParams: { sha: "a".repeat(40) }, reason: "deployer requires confirm: deploy" },
+  { confirm: undefined, roleParams: { sha: "a".repeat(40), confirm: "deploy" }, reason: "unknown role parameter: confirm (deployer accepts: sha, pr)" },
+])("invalid deploy confirmation is refused before claim and dispatch: %j", async ({ confirm, roleParams, reason }) => {
+  const { service, bindings, posts, store } = harness();
+  const args = { ...deployArgs(), confirm, roleParams };
+  expect(await service.callTool("spawn_agent", args)).toMatchObject({ ok: false, error: reason });
+  expect(posts).toEqual([]);
+  expect(await store.lookup(`spawn_agent:${args.clientRequestId}`)).toBeNull();
+  await expect(bindings.spawn_agent(args)).rejects.toThrow(reason);
+  expect(posts).toEqual([]);
+  // A refused confirmation leaves the key available for the approved call.
+  expect(await service.callTool("spawn_agent", deployArgs())).toMatchObject({ ok: true, replayed: false });
+  expect(posts).toHaveLength(1);
+});
+
 test("the target project's seat passes top-level confirm to the role check and replays the same key once", async () => {
   const { service, posts } = harness();
   const args = deployArgs();
@@ -126,6 +145,35 @@ test("the operator's identified own session may confirm a deployer", async () =>
   expect(await service.callTool("spawn_agent", deployArgs())).toMatchObject({ ok: true });
   expect(posts).toHaveLength(1);
   expect(posts[0]).toHaveProperty("confirm", "deploy");
+});
+
+test("the original caller can replay and recover its deployer receipt after seat rotation, but cannot claim a new key", async () => {
+  const { service, bindings, posts, store, as, revokeSeat } = harness();
+  const args = deployArgs();
+  const first = await service.callTool("spawn_agent", args);
+  expect(first).toMatchObject({ ok: true, replayed: false });
+  revokeSeat();
+  as({ ...WORKER, conversationId: SEAT.conversationId });
+  expect(await service.callTool("spawn_agent", args)).toEqual({ ...first, replayed: true });
+  expect(await service.callTool("spawn_agent", { ...args, recoveryOnly: true }))
+    .toMatchObject({ ok: true, replayed: true, outcome: "settled" });
+  expect(await service.callTool("spawn_agent", { ...args, confirm: "different" }))
+    .toMatchObject({ ok: false, code: "idempotency_conflict" });
+  const fresh = { ...args, clientRequestId: "spawn-deployer-after-rotation" };
+  for (const recoveryOnly of [false, true]) {
+    expect(await service.callTool("spawn_agent", { ...fresh, recoveryOnly }))
+      .toMatchObject({ ok: false, code: "deployer_spawn_caller_unauthorized" });
+  }
+  expect(await store.lookup(`spawn_agent:${fresh.clientRequestId}`)).toBeNull();
+  await expect(bindings.spawn_agent(fresh)).rejects.toThrow("only the target project's designated orchestrator seat");
+  expect(posts).toHaveLength(1);
+  // Another authenticated conversation cannot read the original owner's receipt.
+  as(WORKER);
+  for (const recoveryOnly of [false, true]) {
+    expect(await service.callTool("spawn_agent", { ...args, recoveryOnly }))
+      .toMatchObject({ ok: false, code: "recovery_not_permitted" });
+  }
+  expect(posts).toHaveLength(1);
 });
 
 test.each([

@@ -2329,6 +2329,9 @@ export interface McpRecoverableTool {
   /** Resolve the server-derived caller and target for these arguments. Runs
       before the receipt store is touched; may throw {@link McpToolRefusal}. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Fresh-request admission after an absent receipt lookup, before any claim.
+      Existing receipts retain their recorded caller and digest checks. */
+  authorizeClaim?(args: McpToolArgs, binding: McpRequestBindingInput): void | Promise<void>;
   /** Read-only: what the downstream durable records say about this binding.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
   recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
@@ -2838,7 +2841,7 @@ export function createMcpToolService(
           return answerFromEvidence(evidence, true, record.result);
         };
         const claimStartedAt = performance.now();
-        if (recoveryOnly) {
+        if (recoveryOnly || tool.authorizeClaim) {
           let record: McpReceiptRecord | null;
           try {
             record = await store.lookup(key);
@@ -2847,6 +2850,15 @@ export function createMcpToolService(
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
           if (record) return recoverRecord(record);
+          try {
+            await tool.authorizeClaim?.(digestArgs, bound);
+          } catch (error) {
+            outcome = "failure";
+            return failure(typedTool, requestId,
+              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof McpToolRefusal ? error.details : undefined);
+          }
           /* Nothing has claimed this key HERE — an observation, never a
              verdict: the original may be a moment from claiming it, in this
              process or another, and a lookup that wrote anything under the
@@ -2856,13 +2868,15 @@ export function createMcpToolService(
              establishes whose work a downstream record under this key would
              be, so an answer built from it could hand one caller another's
              ids. The answer stays unknown while execution remains possible. */
-          outcome = "failure";
-          return recoveryAnswer(typedTool, requestId, {
-            outcome: "unknown",
-            evidence: "none",
-            reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
-            ids: {},
-          }, false);
+          if (recoveryOnly) {
+            outcome = "failure";
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "none",
+              reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
+              ids: {},
+            }, false);
+          }
         }
         let claim: ReceiptClaim;
         try {

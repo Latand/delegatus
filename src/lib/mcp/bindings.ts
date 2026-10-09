@@ -1472,7 +1472,7 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
   if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from a large model (Claude Opus or Fable, or a large Codex model), or the role's own row" }] });
 }
 
-/** Check the deployer's caller before the recoverable binding claims a key,
+/** Check the deployer's caller before a fresh request claims a key,
     and again at dispatch so a seat change cannot authorize a fresh launch. */
 function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dependencies?: ViewerMcpDomainDependencies): void {
   if (text(args.role) !== "deployer") return;
@@ -1492,8 +1492,18 @@ function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dep
   }
 }
 
+function requireMcpDeployerConfirmation(args: McpToolArgs): void {
+  if (text(args.role) !== "deployer") return;
+  const role = resolveSpawnRole({
+    role: "deployer", roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams,
+    confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort,
+  });
+  if (!role.ok) throw new McpToolRefusal(role.error, { status: 400 });
+}
+
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
+  requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
   if (dependencies) {
     try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
@@ -6739,7 +6749,9 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
-  requireMcpDeployerCaller(args, project, dependencies);
+  // An unidentified caller cannot own a receipt. Keep the deployer's refusal
+  // before lookup; identified owners are checked again only for fresh work.
+  if (caller.kind === "unidentified") requireMcpDeployerCaller(args, project, dependencies);
   refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
@@ -6995,6 +7007,10 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      authorizeClaim: (args, binding) => {
+        requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
+        requireMcpDeployerConfirmation(args);
+      },
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {

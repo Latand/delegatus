@@ -291,7 +291,9 @@ test("a real post-wire HTTP 400 is fenced once and an existing stranded claim re
   const liveDispatches = { count: 0 };
   const liveStore = new MemoryMcpReceiptStore();
   const live = service(registry, liveStore, routeControl(spawnDependencies(registry, cwd), liveDispatches), domainDependencies(registry));
-  const liveArgs = spawnArgs("spawn_post_wire_live_1", cwd);
+  // Missing deploy confirmation is now refused before dispatch. A reviewer
+  // without reviews still exercises the route's post-wire admission fence.
+  const liveArgs = reviewerArgsWithoutReviews("spawn_post_wire_live_1", cwd);
   const liveAnswer = await live.callTool("spawn_agent", liveArgs);
   expect(liveAnswer).toMatchObject({
     ok: false,
@@ -320,7 +322,15 @@ test("a real post-wire HTTP 400 is fenced once and an existing stranded claim re
     },
   };
   const historicalArgs = spawnArgs("spawn_post_wire_stranded_1", cwd);
-  const oldService = service(registry, historicalStore, oldControl, domainDependencies(registry, false));
+  // Reproduce the pre-validation service which admitted this historical call.
+  // The current service must recover its receipt without revalidating a claim.
+  const historicalDomain = domainDependencies(registry, false);
+  const oldBindings = viewerMcpBindings(undefined, oldControl, historicalDomain);
+  oldBindings.spawn_agent = async (_args, context) => oldControl.dispatch!("/api/spawn", {}, {}, context);
+  const oldTools = viewerMcpRecoverableTools(historicalDomain);
+  const oldService = createMcpToolService(oldBindings, historicalStore, undefined, {
+    recovery: { ...oldTools, spawn_agent: { ...oldTools.spawn_agent!, authorizeClaim: undefined } },
+  });
   const oldAnswer = await oldService.callTool("spawn_agent", historicalArgs);
   expect(oldAnswer).toMatchObject({ ok: false, code: "outcome_unknown", details: { outcome: "unknown" } });
   expect(historicalDispatches.count).toBe(1);
