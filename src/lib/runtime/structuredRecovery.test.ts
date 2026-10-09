@@ -1670,3 +1670,80 @@ test("resume waits for a short account mutation and starts one successor", async
     expect(spawns).toBe(1);
   } finally { release(); await holder; await recovery.catch(() => {}); }
 });
+
+/* docs/design/delivery-progress-and-drain.md, P4/P9 and C5. */
+test("an account authorization lost after the recovery's admission ends its launch off the loop, correlated, and starts nothing", async () => {
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  const lost = async (writerDeadlineMs?: number) => {
+    const made = sqliteRegistryFixture("llv-recovery-authorization", writerDeadlineMs === undefined ? {} : { sqliteWriterDeadlineMs: writerDeadlineMs });
+    const holder = registryLockHolder(made.sqliteFilename);
+    const registry = made.registry;
+    try {
+      const sessionId = crypto.randomUUID();
+      const cwd = path.join(made.root, sessionId);
+      const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+      fs.mkdirSync(cwd, { recursive: true });
+      fs.writeFileSync(artifactPath, "");
+      const conversation = registry.ensureConversation("codex", artifactPath, "recovery-account");
+      registry.upsert({
+        key: { engine: "codex", sessionId }, artifactPath, cwd, accountId: "recovery-account",
+        launchProfile: emptyLaunchProfile({ cwd }), status: "dead", host: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 4, protocolVersion: "v2",
+          writerClaimEpoch: 3, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+        claimEpoch: 3, claimOwner: null, pendingAction: null,
+      });
+      let launchId: string | null = null;
+      const begin = registry.beginSpawnRequestAsync.bind(registry);
+      registry.beginSpawnRequestAsync = (async (...args: Parameters<AgentRegistry["beginSpawnRequestAsync"]>) => {
+        const begun = await begin(...args);
+        if (begun.kind === "created") launchId = begun.receipt.launchId;
+        /* Another process takes the writer lock right after the admission. */
+        await holder.hold(600);
+        return begun;
+      }) as AgentRegistry["beginSpawnRequestAsync"];
+      let authorizations = 0;
+      let spawns = 0;
+      resetBlockingWaitsForTests(() => {});
+      const { value: outcome, gapMs } = await longestLoopGap(() => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+        registry,
+        client: {} as RuntimeHostClient,
+        transport: () => "structured",
+        resolveAccount: () => ({ engine: "codex", accountId: "recovery-account", kind: "managed", home: path.join(cwd, "account"), transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+        ownership: {
+          operationId: "recovery-authorization", revision: 1,
+          owns: async () => true,
+          releaseHost: async () => true,
+          authorizeAccount: () => {
+            authorizations += 1;
+            if (authorizations > 1) throw new Error("the account is no longer allowed on this project");
+          },
+        },
+        spawn: async () => { spawns += 1; throw new Error("no host may start"); },
+      }).then(() => null, (error: unknown) => error));
+      const wait = blockingWaitDiagnostics().longest.find((sample) => sample.label === "spawn.fail");
+      return { outcome, gapMs, wait, spawns, launchId: launchId!, receipt: registry.snapshot().receipts[launchId!] };
+    } finally {
+      await holder.close();
+      registry.close();
+      made.cleanup();
+    }
+  };
+
+  /* One unmeasured run first: the first recovery in a process loads its modules. */
+  await lost(150);
+  const ended = await lost();
+  expect(ended.outcome).toBeInstanceOf(Error);
+  expect((ended.outcome as Error).message).toContain("no longer allowed");
+  expect(ended.gapMs).toBeLessThan(50);
+  expect(ended.wait).toMatchObject({ synchronous: false, operationId: `spawn_message_${ended.launchId}` });
+  expect(ended.spawns).toBe(0);
+  expect(ended.receipt).toMatchObject({ state: "failed", error: "structured recovery account is no longer allowed" });
+
+  /* A refused acquisition changes nothing: the launch is left to the stale-launch convergence. */
+  const refused = await lost(150);
+  expect(refused.outcome).toBeInstanceOf(Error);
+  expect(refused.gapMs).toBeLessThan(50);
+  expect(refused.spawns).toBe(0);
+  expect(refused.receipt?.state).not.toBe("failed");
+});

@@ -23,7 +23,8 @@ import { ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal, Search } 
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
-import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
+import { attentionTotal, buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
+import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
 import { Z } from "@/components/layers";
@@ -147,7 +148,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const visible = useMemo(() => {
@@ -161,8 +162,10 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     () => partitionCrownedSummaries(activeRows, crownedProjects),
     [activeRows, crownedProjects],
   );
-  const totalLive = useMemo(() => summaries.reduce((sum, s) => sum + s.liveCount, 0), [summaries]);
-  const totalAttention = useMemo(() => summaries.reduce((sum, s) => sum + s.attentionCount, 0), [summaries]);
+  /* The Overview row sums the rows the Overview shows: an archived project
+     keeps its count on its own row in the archive section. */
+  const totalLive = useMemo(() => overviewWorkingTotal(summaries, archivedProjects), [summaries, archivedProjects]);
+  const totalAttention = useMemo(() => attentionTotal(summaries), [summaries]);
   /* First run (issue #1162): the catalog answered and named no project at all.
      Distinct from a filter query that matched none, and from a failed fetch —
      both of those keep their own treatment. */

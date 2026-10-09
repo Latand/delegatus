@@ -401,3 +401,59 @@ test("the first account listing in a restarted Viewer recovers an interrupted re
   expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(fixture.rollout);
   expect(codexRegistryJson().removals ?? []).toEqual([]);
 });
+
+/* docs/design/delivery-progress-and-drain.md, C5: account retirement runs
+   inside the accounts registry's file lock, so its registry write asks for
+   the lock once and never waits. */
+test("a removal that meets a held registry lock refuses at once and changes nothing; once the lock clears a second removal retires the account and ends its held send", async () => {
+  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  const fixture = usedCodexHome("Invented Busy");
+  const store = agentRegistry();
+  const delivery = store.holdDelivery(fixture.conversation.id, "owed on the removed account");
+  const holder = registryLockHolder(defaultRegistrySqliteFilename(store.filename));
+  try {
+    resetBlockingWaitsForTests(() => {});
+    await holder.hold(800);
+    const startedAt = performance.now();
+    const { value: refusal, gapMs } = await longestLoopGap(() => {
+      try { removeManagedCodexAccount(fixture.account.id); return null; }
+      catch (error) { return error as Error; }
+    });
+    expect(performance.now() - startedAt).toBeLessThan(400);
+    expect(gapMs).toBeLessThan(150);
+    expect(refusal?.message).toContain("busy");
+    expect(blockingWaitDiagnostics().longest.find((sample) => sample.label === "account.retire")).toMatchObject({ refused: true });
+    expect(fs.existsSync(path.join(fixture.account.home, "auth.json"))).toBe(true);
+    expect(listCodexAccounts().map((item) => item.id)).toContain(fixture.account.id);
+    expect(agentRegistry().readOnlySnapshot().heldDeliveries[delivery.id]?.state).not.toBe("failed");
+    expect(codexRegistryJson().removals ?? []).toEqual([]);
+    await Bun.sleep(850);
+    removeManagedCodexAccount(fixture.account.id);
+    expect(listCodexAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+    expect(agentRegistry().readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("failed");
+  } finally {
+    await holder.close();
+  }
+});
+
+test("removal recovery that meets a held registry lock answers busy and finishes on the next listing", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const fixture = usedCodexHome("Invented Busy Recovery");
+  await crashCodexRemovalAt(fixture.account.id, "registry-retired");
+  /* Put the registry back as it was before the crashed retirement, so
+     recovery has the retirement to redo. */
+  const store = agentRegistry();
+  expect(codexRegistryJson().removals).toHaveLength(1);
+  const holder = registryLockHolder(defaultRegistrySqliteFilename(store.filename));
+  try {
+    await holder.hold(800);
+    const busy = recoverInterruptedCodexAccountRemovals();
+    expect(busy.recovered).not.toContain(fixture.account.id);
+    await Bun.sleep(850);
+    expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
+    expect(listCodexAccounts().map((item) => item.id)).not.toContain(fixture.account.id);
+  } finally {
+    await holder.close();
+  }
+});

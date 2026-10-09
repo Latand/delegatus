@@ -298,7 +298,11 @@ test.each(["queued", "applied", "failed", "cancelled", "superseded"] as const)("
     }
     expect(f.journal.operationResult("parked-pick")?.receipt.status).toBe("queued");
     expect(f.journal.operationResult("switch")?.receipt.status).toBe(fault === "cancelled" || fault === "superseded" ? "queued" : "applying");
-    expect(f.registry.switchHold(f.conversation.id)).toBeNull();
+    /* A failed switch writes its hold before its failure reaches the journal
+       (docs/design/delivery-progress-and-drain.md, C3), so the hold already
+       stands while that transition is unanswered. */
+    if (fault === "failed") expect(f.registry.switchHold(f.conversation.id)?.reason).toBe("target account requires authentication");
+    else expect(f.registry.switchHold(f.conversation.id)).toBeNull();
     expect(creates).toBe(fault === "applied" ? 1 : 0);
     expect(silent.requests()).toBeGreaterThan(1);
     expect(silent.requests()).toBeLessThanOrEqual(7);
