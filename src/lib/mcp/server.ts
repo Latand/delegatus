@@ -3157,6 +3157,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
+    'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     "When a turn of the new agent ends, Delegatus sends you, the caller, one message from it: its title and id, how long it ran, its Verdict line first, and its final message (up to 4 KB). Briefs need no 'report back' line. Pass `notifyLauncher: false` to turn this off; the answer's `launcherNotice` says whether it is on.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -3561,6 +3562,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Codex only: catalog tier id such as priority or ultrafast; refused if the model/account does not offer it. default or standard opts out of a role tier."),
     fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier when both are present."),
     role: z.enum(ROLE_IDS).optional(),
+    confirm: z.string().optional()
+      .describe('For deployer, must be "deploy": honoured only for the target project\'s designated orchestrator seat and the operator\'s own session. Other roles ignore this field.'),
     roleParams: z.record(z.string(), z.unknown()).optional()
       .describe("Role-specific parameters. Bounded integers accept numeric strings, clamp to their declared role bounds, and report the applied value in clamped."),
     reviews: z.string().optional(),

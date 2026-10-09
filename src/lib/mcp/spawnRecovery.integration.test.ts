@@ -123,7 +123,7 @@ function domainDependencies(registry: AgentRegistry, validate = true): ViewerMcp
   return {
     registrySnapshot: () => registry.readOnlySnapshot(),
     readSpawnAdmissionFence,
-    attentionAuthority: () => ({ kind: "root", conversationId: null, role: null }),
+    attentionAuthority: () => ({ kind: "root", conversationId: "conversation_operator", role: null }),
     ...(validate ? {
       validateSpawnAdmission: async (body: Record<string, unknown>, _context?: McpToolCallContext) => {
         const response = await executeSpawnAdmissionValidation(
@@ -383,8 +383,9 @@ test("production recovery probes the exported validate route over HTTP with the 
     const args = spawnArgs("spawn_post_wire_http_1", cwd);
     const tools = viewerMcpRecoverableTools({
       ...productionDomainDependencies,
+      callerAttribution: undefined,
       registrySnapshot: () => registry.readOnlySnapshot(),
-      attentionAuthority: () => ({ kind: "root", conversationId: null, role: null }),
+      attentionAuthority: () => ({ kind: "root", conversationId: "conversation_operator", role: null }),
       recoveryPredecessors: () => [],
     });
     const bindingInput = await tools.spawn_agent!.bind(args);
@@ -439,8 +440,9 @@ test("the spawn_agent validate probe arrives as no agent caller, so without a bo
     const args = spawnArgs("spawn_parentless_http_1", cwd);
     const tools = viewerMcpRecoverableTools({
       ...productionDomainDependencies,
+      callerAttribution: undefined,
       registrySnapshot: () => registry.readOnlySnapshot(),
-      attentionAuthority: () => ({ kind: "root", conversationId: null, role: null }),
+      attentionAuthority: () => ({ kind: "root", conversationId: "conversation_operator", role: null }),
       recoveryPredecessors: () => [],
     });
     const bindingInput = await tools.spawn_agent!.bind(args);
