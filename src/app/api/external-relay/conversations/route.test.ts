@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
  * (relay-slice3.md §4.6): the list route and the feed reads admit the local
  * operator, refuse an agent's capability, and serve only the transcript a
  * conversation record names. Deleting one through the feed route stays refused.
+ * The single answers the install kept are listed beside them, per relay.
  */
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "relay-chats-route-"));
@@ -53,7 +54,7 @@ test("an install that never kept a chat conversation lists none and writes nothi
   process.env.LLV_STATE_DIR = path.join(SANDBOX, "untouched-state");
   try {
     const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }));
-    expect(await response.json()).toEqual({ relays: [], chats: [] });
+    expect(await response.json()).toEqual({ relays: [], chats: [], answers: [], retentionDays: 30 });
     expect(fs.existsSync(path.join(SANDBOX, "untouched-state", "external-relay"))).toBe(false);
   } finally { process.env.LLV_STATE_DIR = seeded; }
 });
@@ -104,6 +105,56 @@ test("the operator reads each chat's conversation with its relay, target, chat a
   /* No credential and no chat text cross this route. */
   expect(JSON.stringify(body)).not.toContain("secret_credential");
   expect(JSON.stringify(body)).not.toContain("When is the meetup?");
+});
+
+const answerRecord = (targetId: string, requestId: string, startedAt: string, over: Record<string, unknown> = {}) => ({
+  v: 1, requestId, relayId: "relay_chats", targetId, targetName: null, engine: "claude", model: "opus", claimedAt: startedAt, chatKey: null, requester: null,
+  admitted: true, profile: null, startedAt, finishedAt: startedAt, durationMs: 1000, state: "finished", outcome: "answered",
+  answer: { action: "reply", text: "Thursday at 18:30.", reply_to: "m1" }, delivery: "accepted",
+  input: { conversation: [{ id: "m1", text: "When is the meetup?" }], respond_to: "m1" }, ...over,
+});
+function keepAnswer(record: ReturnType<typeof answerRecord>) {
+  const directory = statePath(`external-relay/answers/${record.relayId}/${record.targetId}`);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${Date.parse(record.startedAt)}_${record.requestId}.json`), JSON.stringify(record));
+}
+
+test("an install whose chats hold no conversation lists its kept answers under their relay, newest first, across targets", async () => {
+  const seeded = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(SANDBOX, "answers-state");
+  try {
+    updateRelayStore((store) => ({
+      ...store,
+      relays: [{
+        id: "relay_chats", origin: "https://relay.example", api_base: "https://relay.example/v1", name: "Example relay", description: "",
+        credential: "secret_credential", owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+        pairedAt: "2026-10-01T00:00:00.000Z", paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+        targets: [{ id: "bot-1", name: "Support bot", answered_by: "install", fallback: "service", enabled: true, engine: "claude", model: "opus", effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }],
+      }],
+    }));
+    const now = Date.now();
+    const ago = (ms: number) => new Date(now - ms).toISOString();
+    keepAnswer(answerRecord("bot-1", "req_old", ago(3_600_000)));
+    keepAnswer(answerRecord("bot-1", "req_new", ago(60_000), { outcome: "declined:handoff", answer: { action: "handoff", text: "", reply_to: null } }));
+    /* A target the service no longer lists keeps its answers readable. */
+    keepAnswer(answerRecord("bot-gone", "req_mid", ago(600_000)));
+    /* Past the 30 days nothing is listed. */
+    keepAnswer(answerRecord("bot-1", "req_expired", ago(40 * 86_400_000)));
+    const response = await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }));
+    const body = await response.json();
+    expect(body.chats).toEqual([]);
+    expect(body.retentionDays).toBe(30);
+    expect(body.answers.map((row: { requestId: string; targetId: string; targetName: string | null }) => [row.requestId, row.targetId, row.targetName])).toEqual([
+      ["req_new", "bot-1", "Support bot"], ["req_mid", "bot-gone", null], ["req_old", "bot-1", "Support bot"],
+    ]);
+    expect(body.answers[0]).toMatchObject({ relayId: "relay_chats", state: "finished", outcome: "declined:handoff", delivery: "accepted", request: "When is the meetup?", answer: null });
+    expect(JSON.stringify(body)).not.toContain("secret_credential");
+
+    /* A new record in a target's directory is listed on the next read. */
+    keepAnswer(answerRecord("bot-1", "req_newest", ago(1_000), { state: "running", outcome: null, finishedAt: null, durationMs: null, answer: null, delivery: null }));
+    const again = await (await GET(new NextRequest(`${origin}/api/external-relay/conversations`, { headers: operator }))).json();
+    expect(again.answers[0]).toMatchObject({ requestId: "req_newest", state: "running", outcome: null });
+  } finally { process.env.LLV_STATE_DIR = seeded; }
 });
 
 test("an agent's capability is refused the list", async () => {

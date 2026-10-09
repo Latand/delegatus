@@ -1048,11 +1048,14 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
  * sheet) under its own name, its leaf lists one row per chat and context with
  * long target names, and a row opens the conversation in the agent window —
  * the open chats on its left, the transcript in the reader, «Read only» where
- * a composer would be, and no field to type into. 390 and 1440, en and uk,
+ * a composer would be, and no field to type into. The single answers the
+ * install kept sit in the same leaf, and `?relay=answers` is an install whose
+ * chats hold no conversation: the service is an entry for its answers alone,
+ * and an answer opens read only in the same window. 390 and 1440, en and uk,
  * light and dark. Frames to `.artifacts/external-relay`, readings to
  * `evidence/external-relay/chats.json`.
  */
-browserTest("external relay: the relay's chats in the conversation list open read only in the agent window", async () => {
+browserTest("external relay: the relay's chats and single answers in the conversation list open read only in the agent window", async () => {
   const { base, stop } = await serveFixture();
   const out = path.resolve(".artifacts/external-relay");
   fs.mkdirSync(out, { recursive: true });
@@ -1062,16 +1065,16 @@ browserTest("external relay: the relay's chats in the conversation list open rea
   const readings: Record<string, unknown>[] = [];
   const failures: string[] = [];
   try {
-    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const scheme of SCHEMES) {
+    for (const scene of ["chats", "answers"] as const) for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const scheme of SCHEMES) {
       const phone = width === 390;
-      const label = `chats-${width}-${locale}-${scheme}`;
+      const label = `${scene}-${width}-${locale}-${scheme}`;
       const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
       await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       try {
-        await page.goto(`${base}/?relay=chats`);
+        await page.goto(`${base}/?relay=${scene}`);
         if (phone) {
           await page.locator('[data-mobile2-open="projects"]').first().click();
           const entry = page.locator('[data-mobile2-project="relay-chats-relay-1"]');
@@ -1083,18 +1086,73 @@ browserTest("external relay: the relay's chats in the conversation list open rea
           await entry.waitFor();
           await entry.click();
         }
-        const rows = page.locator("[data-relay-chats-rows]");
-        await rows.waitFor();
-        await page.locator("[data-relay-chat]").first().waitFor();
+        await page.locator(scene === "chats" ? "[data-relay-chat]" : "[data-relay-answer]").first().waitFor();
+        /* The phone's project sheet and the rows settle from their entrance animation first. */
+        await page.waitForTimeout(1_000);
         const list = await page.evaluate(() => ({
           rail: (document.querySelector('[data-rail-project="relay-chats-relay-1"]') as HTMLElement | null)?.innerText.trim() ?? null,
           railDimmed: (document.querySelector('[data-rail-project="relay-chats-relay-1"]') as HTMLElement | null)?.className.includes("opacity-70") ?? null,
           rows: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-chat]")).map((row) => ({ context: row.getAttribute("data-relay-chat-context"), text: row.innerText.replace(/\s+/g, " ").trim(), height: Math.round(row.getBoundingClientRect().height) })),
           deleteButtons: document.querySelectorAll("[data-relay-chats-rows] [data-delete-file], [data-relay-chats-rows] button[aria-label*='elete'], [data-relay-chats-rows] button[aria-label*='идал']").length,
+          answers: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-answer]")).map((row) => ({
+            id: row.getAttribute("data-relay-answer"), dot: row.querySelector("[data-relay-answer-dot]")?.getAttribute("data-relay-answer-dot") ?? null,
+            text: row.innerText.replace(/\s+/g, " ").trim(), height: Math.round(row.getBoundingClientRect().height), clipped: (() => { const box = row.getBoundingClientRect(); return box.left < 0 || box.right > window.innerWidth; })(),
+          })),
+          answerDeleteButtons: document.querySelectorAll("[data-relay-answer-rows] [data-delete-file]").length,
           overflow: document.documentElement.scrollWidth > window.innerWidth,
           state: document.querySelector("[data-relay-chats-state]")?.getAttribute("data-relay-chats-state") ?? null,
         }));
         await page.screenshot({ path: path.join(out, `${label}-list.png`) });
+        if (list.answers.length !== 5 || list.answers[0]?.dot !== "accent" || list.answers[1]?.dot !== "success") failures.push(`${label}: the single answers read ${JSON.stringify(list.answers)}`);
+        if (list.answers.some((row) => row.clipped) || list.answerDeleteButtons) failures.push(`${label}: an answer row is clipped or offers to delete`);
+        if (!phone && !list.rail?.endsWith("Example relay")) failures.push(`${label}: the sidebar entry reads ${JSON.stringify(list.rail)}`);
+        if (list.overflow) failures.push(`${label}: the list scrolls sideways`);
+        if (scene === "answers") {
+          if (list.rows.length) failures.push(`${label}: an install without chat conversations lists ${list.rows.length} chat rows`);
+          /* The answered exchange, opened in the agent window. */
+          await page.locator('[data-relay-answer="req_0004"] button').click();
+          const answerReader = page.locator("[data-relay-answer-reader]");
+          await answerReader.locator("[data-relay-answer-request]").waitFor({ timeout: 15_000 });
+          if (!phone) {
+            /* A second exchange joins the window's list. */
+            await page.keyboard.press("Escape");
+            await page.locator('[data-relay-answer="req_0003"] button').click();
+            await answerReader.locator('[data-relay-answer-answer="handoff"]').waitFor({ timeout: 15_000 });
+            await page.locator('[data-open-agent-jump="answer:bot-1:req_0004"]').click();
+            await answerReader.locator('[data-relay-answer-answer="reply"]').waitFor({ timeout: 15_000 });
+          }
+          await page.waitForTimeout(300);
+          const exchange = await page.evaluate(() => {
+            const pane = document.querySelector<HTMLElement>("[data-relay-answer-reader]")!;
+            const box = pane.getBoundingClientRect();
+            return {
+              agentWindow: document.querySelector("[data-agent-window]") !== null,
+              openRows: Array.from(document.querySelectorAll<HTMLElement>("[data-open-agent]")).map((row) => row.innerText.replace(/\s+/g, " ").trim()),
+              title: pane.querySelector(".ch-title")?.textContent ?? null,
+              readOnly: pane.querySelector("[data-relay-chat-read-only]")?.textContent ?? null,
+              request: pane.querySelector("[data-relay-answer-request]")?.textContent ?? null,
+              answer: pane.querySelector("[data-relay-answer-answer]")?.textContent ?? null,
+              askedBy: pane.querySelector("[data-relay-answer-asked-by]")?.textContent ?? null,
+              inputFolded: !(pane.querySelector("details") as HTMLDetailsElement | null)?.open,
+              editable: pane.querySelectorAll("textarea, input:not([type=hidden]), [contenteditable=true]").length,
+              composer: document.querySelectorAll("[data-composer], [data-composer-bar], form[data-tmux-composer], [data-agent-control-strip]").length,
+              headerTop: Math.round(pane.querySelector(".conv-head")?.getBoundingClientRect().top ?? -1),
+              box: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+              overflow: document.documentElement.scrollWidth > window.innerWidth,
+            };
+          });
+          await page.screenshot({ path: path.join(out, `${label}-window.png`) });
+          readings.push({ label, list, window: exchange });
+          if (exchange.request !== "@helper when is the next meetup?" || exchange.answer !== "The meetup is on Thursday at 18:30 at the north pier.") failures.push(`${label}: the exchange reads ${JSON.stringify(exchange)}`);
+          if (exchange.askedBy !== (locale === "uk" ? "Member B · Учасник" : "Member B · Member") || !exchange.inputFolded) failures.push(`${label}: who asked reads ${JSON.stringify(exchange.askedBy)}, input folded ${exchange.inputFolded}`);
+          if (exchange.editable || exchange.composer) failures.push(`${label}: the exchange has a field to type into (${exchange.editable}) or a composer (${exchange.composer})`);
+          if (exchange.readOnly !== (locale === "uk" ? "Лише читання" : "Read only")) failures.push(`${label}: the read-only mark reads ${JSON.stringify(exchange.readOnly)}`);
+          if (!phone && (!exchange.agentWindow || exchange.openRows.length !== 2)) failures.push(`${label}: the agent window reads ${JSON.stringify(exchange.openRows)}`);
+          if (exchange.headerTop < 0 || exchange.headerTop > 24) failures.push(`${label}: the reader's header stands at ${exchange.headerTop}px`);
+          if (exchange.overflow) failures.push(`${label}: the page scrolls sideways`);
+          if (errors.length) failures.push(`${label}: page errors ${errors.join(" | ")}`);
+          continue;
+        }
         await page.locator("[data-relay-chat] button").first().click();
         const reader = page.locator("[data-relay-chat-reader]");
         await reader.waitFor();
@@ -1129,9 +1187,8 @@ browserTest("external relay: the relay's chats in the conversation list open rea
         if (!list.rows[0]?.text.includes(heading)) failures.push(`${label}: the first row reads ${JSON.stringify(list.rows[0])}`);
         if (list.rows.length !== 5 || list.rows[1]?.context !== "owner") failures.push(`${label}: the rows read ${JSON.stringify(list.rows)}`);
         if (list.deleteButtons) failures.push(`${label}: a relay chat row offers to delete`);
-        if (!phone && !list.rail?.endsWith("Example relay")) failures.push(`${label}: the sidebar entry reads ${JSON.stringify(list.rail)}`);
         if (!phone && list.railDimmed) failures.push(`${label}: the sidebar entry is dimmed`);
-        if (list.overflow || windowReading.overflow) failures.push(`${label}: the page scrolls sideways`);
+        if (windowReading.overflow) failures.push(`${label}: the page scrolls sideways`);
         if (!phone && (!windowReading.agentWindow || windowReading.openRows.length !== 2)) failures.push(`${label}: the agent window reads ${JSON.stringify(windowReading.openRows)}`);
         if (windowReading.editable || windowReading.composer || windowReading.controls) failures.push(`${label}: the reader has a field to type into (${windowReading.editable}), a composer (${windowReading.composer}) or agent controls (${windowReading.controls})`);
         if (windowReading.headerTop < 0 || windowReading.headerTop > 24) failures.push(`${label}: the reader's header stands at ${windowReading.headerTop}px`);

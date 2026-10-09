@@ -1126,6 +1126,20 @@ const RELAY_CHAT_FEED = `${[
 ].map((row, i) => JSON.stringify(row.type === "user"
   ? { type: "user", uuid: `relay-u-${i}`, timestamp: iso(1_800 - i * 120), sessionId: "relay-chat", message: { role: "user", content: row.text } }
   : { type: "assistant", uuid: `relay-a-${i}`, timestamp: iso(1_800 - i * 120), sessionId: "relay-chat", message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: row.text }] } })).join("\n")}\n`;
+/* The single answers the install kept (relay.md §B.9): answered, handed back,
+   refused at the member limit, failed, and one still running. */
+const RELAY_ANSWERS = [
+  { requestId: "req_0005", targetId: "bot-5", targetName: "Moderation helper for the returns and warranty chat", ago: 40, durationMs: null, state: "running", outcome: null, delivery: null, request: "@helper can I still return the blender I bought three weeks ago if the box is already gone?", answer: null },
+  { requestId: "req_0004", targetId: "bot-1", targetName: "Support bot", ago: 600, durationMs: 8_400, state: "finished", outcome: "answered", delivery: "accepted", request: "@helper when is the next meetup?", answer: "The meetup is on Thursday at 18:30 at the north pier." },
+  { requestId: "req_0003", targetId: "bot-2", targetName: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", ago: 5_400, durationMs: 3_100, state: "finished", outcome: "declined:handoff", delivery: "accepted", request: "Хто сьогодні працює на касі у Львові після шостої?", answer: null },
+  { requestId: "req_0002", targetId: "bot-4", targetName: "Пошук по базі знань для нових учасників чату магазину", ago: 9_000, durationMs: 0, state: "finished", outcome: "declined:member_limit", delivery: "accepted", request: "ще одне питання про доставку", answer: null },
+  { requestId: "req_0001", targetId: "bot-1", targetName: "Support bot", ago: 86_000, durationMs: 31_000, state: "finished", outcome: "failed:hard_cap", delivery: "unconfirmed", request: "@helper summarise everything said in this chat since Monday", answer: null },
+] as const;
+const relayAnswerRow = (row: (typeof RELAY_ANSWERS)[number]) => ({
+  relayId: "relay-1", targetId: row.targetId, targetName: row.targetName, requestId: row.requestId, startedAt: iso(row.ago),
+  finishedAt: row.state === "running" ? null : iso(row.ago - Math.round((row.durationMs ?? 0) / 1000)), durationMs: row.durationMs,
+  state: row.state, outcome: row.outcome, delivery: row.delivery, request: row.request, answer: row.answer,
+});
 const botChat = (over: Record<string, unknown>) => ({
   chatId: "-1000000000101", title: "Team Reports", type: "supergroup", username: null, isForum: false, member: true,
   alias: null, postAllowed: false, postable: false, seesAllMessages: false, readdToApply: false,
@@ -1274,7 +1288,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
        first relay, a member session running, an owner's beside its members',
        and long target names. Their transcripts are RELAY_CHAT_FEED. */
     if (url.pathname === "/api/external-relay/conversations") {
-      if (RELAY_SCENE !== "paired" && RELAY_SCENE !== "chats") return json({ relays: [], chats: [] });
+      const relays = [{ id: "relay-1", name: "Example relay", origin: "https://relay.example" }, { id: "relay-2", name: "Second relay", origin: "https://second-relay.example" }];
+      /* `answers` is an install whose chats hold no conversation: single answers only. */
+      if (RELAY_SCENE === "answers") return json({ relays, chats: [], answers: RELAY_ANSWERS.map(relayAnswerRow), retentionDays: 30 });
+      if (RELAY_SCENE !== "paired" && RELAY_SCENE !== "chats") return json({ relays: [], chats: [], answers: [], retentionDays: 30 });
       const chats = RELAY_CHATS.map((chat, index) => ({
         id: chat.id, relayId: "relay-1", relayName: "Example relay", targetId: chat.targetId, targetName: chat.targetName, chatKey: chat.chatKey, context: chat.context,
         engine: "claude", turns: 4 + index, compactions: 0, createdAt: iso(86_400), lastTurnAt: iso(120 + index * 1_500), state: index === 0 ? "running" : "idle",
@@ -1283,7 +1300,22 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           mtime: Date.now() / 1000 - 120 - index * 1_500, size: RELAY_CHAT_FEED.length, activity: index === 0 ? "live" : "idle", proc: null, pid: null,
           model: "opus", pendingQuestion: null, waitingInput: null },
       }));
-      return json({ relays: [{ id: "relay-1", name: "Example relay", origin: "https://relay.example" }, { id: "relay-2", name: "Second relay", origin: "https://second-relay.example" }], chats });
+      return json({ relays, chats, answers: RELAY_ANSWERS.map(relayAnswerRow), retentionDays: 30 });
+    }
+    const exchange = /^\/api\/external-relay\/relays\/relay-1\/targets\/([^/]+)\/answers\/([^/]+)$/.exec(url.pathname);
+    if (exchange) {
+      const row = RELAY_ANSWERS.find((item) => item.targetId === exchange[1] && item.requestId === exchange[2]);
+      if (!row) return json({ error: "not_found" }, 404);
+      const reply = row.answer ? { action: "reply", text: row.answer, reply_to: "m54" } : row.outcome === "declined:handoff" ? { action: "handoff", text: "", reply_to: null } : null;
+      return json({ answer: { ...relayAnswerRow(row), v: 1, engine: "claude", model: "opus", answer: reply, input: {
+        conversation: [
+          { id: "m53", author: { key: "member-a", name: "Member A" }, text: "Is anyone going on Thursday?" },
+          { id: "m54", author: { key: "member-b", name: "Member B" }, text: row.request },
+        ],
+        respond_to: "m54", request_text: null,
+        requester: { key: "member-b", is_admin: false, is_owner: false, is_anonymous_admin: false },
+        tools: [{ name: "search_messages", mode: "direct", effect: "read" }],
+      } } });
     }
     if (url.pathname === "/api/external-relay/pairings/pair-1" && method === "GET") {
       return json({ pairing: RELAY_SCENE === "confirm" ? { status: "awaiting_install", owner, targets: [] }

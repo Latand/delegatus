@@ -10,7 +10,8 @@ import type { FileEntry } from "@/lib/types";
  * The relay's chats in the conversation list (relay-slice3.md §4): one row per
  * chat and context in the words of the operator's language, no row offering
  * to delete, and a row opening the conversation in the agent window whose
- * reader is read only. The reader itself is BranchPane, recorded here by its
+ * reader is read only. The single answers the install kept (relay.md §B.9)
+ * sit beside them, one row per exchange, and open read only the same way. The reader itself is BranchPane, recorded here by its
  * props; the browser driver draws the real one.
  */
 
@@ -119,12 +120,91 @@ test("the leaf lists the chats with a transcript, offers no delete, and opens on
   expect(host.querySelector("[data-agent-window]")).toBeNull();
 });
 
-test("a relay with no conversation to open says so, in Ukrainian too", async () => {
+test("a relay with nothing to open says so, in Ukrainian too", async () => {
   setLocale("uk");
   const host = await mount(<RelayChatsView relayId="relay-2" payload={payload} />);
   expect(host.querySelectorAll("[data-relay-chat]")).toHaveLength(0);
+  expect(host.querySelector("[data-relay-answers]")).toBeNull();
   expect(host.querySelector("[data-relay-chats-state]")?.getAttribute("data-relay-chats-state")).toBe("empty");
-  expect(host.querySelector("[data-relay-chats-state]")?.textContent).toContain("Жоден чат ще не має розмови.");
+  expect(host.querySelector("[data-relay-chats-state]")?.textContent).toContain("Тут ще нічого не відповіли. Разова відповідь з'являється тут на 30 днів");
+});
+
+const answerRow = (requestId: string, over: Partial<NonNullable<RelayChatsPayload["answers"]>[number]> = {}): NonNullable<RelayChatsPayload["answers"]>[number] => ({
+  relayId: "relay-1", targetId: "bot-1", targetName: "Support bot", requestId, startedAt: "2026-10-09T09:30:00.000Z", finishedAt: "2026-10-09T09:30:08.000Z",
+  durationMs: 8_400, state: "finished", outcome: "answered", delivery: "accepted", request: "@helper when is the next meetup?", answer: "Thursday at 18:30.", ...over,
+});
+const exchange = {
+  v: 1, requestId: "req_1", relayId: "relay-1", targetId: "bot-1", targetName: "Support bot", engine: "claude", model: "opus",
+  startedAt: "2026-10-09T09:30:00.000Z", finishedAt: "2026-10-09T09:30:08.000Z", durationMs: 8_400, state: "finished", outcome: "answered", delivery: "accepted",
+  answer: { action: "reply", text: "The meetup is on Thursday at 18:30 at the north pier.", reply_to: "m54" },
+  input: {
+    conversation: [{ id: "m53", author: { name: "Member A" }, text: "Anyone going?" }, { id: "m54", author: { key: "b", name: "Member B" }, text: "@helper when is the next meetup?" }],
+    respond_to: "m54", request_text: null, requester: { key: "b", is_admin: false, is_owner: false, is_anonymous_admin: false }, tools: [{ name: "search_messages" }],
+  },
+};
+/* One kept answer and no chat conversation: the default install, where per-chat conversations are off. */
+const answersOnly: RelayChatsPayload = { relays: [{ id: "relay-1", name: "Example relay", origin: "https://relay.example" }], chats: [], answers: [answerRow("req_1")], retentionDays: 30 };
+
+test("a relay whose only record is a single answer is a sidebar entry, and its answers count with its chats", () => {
+  expect(relayChatsCatalog(answersOnly)).toEqual([{ project: "relay-chats-relay-1", displayName: "Example relay", conversations: 1, smt: Date.parse("2026-10-09T09:30:08.000Z") / 1000, recent: true }]);
+  /* An answer newer than every chat moves the entry up; a running one counts from when it started. */
+  const both = { ...payload, answers: [answerRow("req_2", { state: "running", outcome: null, finishedAt: null, startedAt: "2026-10-09T10:00:00.000Z" })] };
+  expect(relayChatsCatalog(both)[0]).toMatchObject({ conversations: 4, smt: Date.parse("2026-10-09T10:00:00.000Z") / 1000 });
+  expect(relayChatsCatalog({ ...answersOnly, answers: [] })).toEqual([]);
+});
+
+test("a single answer is one row of the leaf and opens read only in the agent window, with no field to type into", async () => {
+  const asked: string[] = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => { asked.push(String(input)); return Response.json({ answer: exchange }); }) as unknown as typeof fetch;
+  try {
+    const host = await mount(<RelayChatsView relayId="relay-1" payload={answersOnly} />);
+    expect(host.querySelectorAll("[data-relay-chat]")).toHaveLength(0);
+    const rows = Array.from(host.querySelectorAll<HTMLElement>("[data-relay-answer]"));
+    expect(rows.map((row) => row.getAttribute("data-relay-answer"))).toEqual(["req_1"]);
+    /* The message's start, then the outcome and the target it came through. */
+    expect(rows[0]!.textContent).toContain("@helper when is the next meetup?");
+    expect(rows[0]!.querySelector("[data-relay-answer-meta]")?.textContent).toBe("Answered · Support bot");
+    expect(rows[0]!.querySelector("[data-relay-answer-dot]")?.getAttribute("data-relay-answer-dot")).toBe("success");
+    expect(host.querySelector("[data-relay-chats-count]")?.textContent).toBe("1");
+    expect(host.querySelector("[data-relay-chats-state]")?.getAttribute("data-relay-chats-state")).toBe("end");
+    expect(host.querySelector("[data-relay-answers]")?.textContent).toContain("Each exchange is kept for 30 days and can only be read.");
+
+    await act(async () => rows[0]!.querySelector("button")!.click());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(asked).toEqual(["/api/external-relay/relays/relay-1/targets/bot-1/answers/req_1"]);
+    expect(host.querySelector("[data-agent-window]")?.getAttribute("data-agent-window")).toBe("answer:bot-1:req_1");
+    const reader = host.querySelector<HTMLElement>("[data-relay-answer-reader]")!;
+    expect(reader.querySelector(".ch-title")?.textContent).toBe("@helper when is the next meetup?");
+    expect(reader.querySelector("[data-relay-chat-read-only]")?.textContent).toBe("Read only");
+    expect(reader.querySelector("[data-relay-answer-request]")?.textContent).toBe("@helper when is the next meetup?");
+    expect(reader.querySelector('[data-relay-answer-answer="reply"]')?.textContent).toBe("The meetup is on Thursday at 18:30 at the north pier.");
+    expect(reader.querySelector("[data-relay-answer-asked-by]")?.textContent).toBe("Member B · Member");
+    expect(reader.querySelector('[data-relay-answer-outcome="answered"]')?.textContent).toBe("Answered");
+    /* The input as received sits folded under the exchange. */
+    const input = reader.querySelector("details")!;
+    expect(input.open).toBe(false);
+    expect(JSON.parse(input.querySelector("[data-relay-answer-input]")!.textContent!)).toEqual(exchange.input);
+    /* Nothing to type into and nothing to run: no composer, no field, no agent controls. */
+    expect(host.querySelectorAll("textarea, input, [contenteditable=true], form, [data-composer], [data-agent-control-strip]")).toHaveLength(0);
+    expect(panes).toHaveLength(0);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("an exchange past its days reads as no longer kept, in Ukrainian", async () => {
+  setLocale("uk");
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ error: "not_found" }, { status: 404 })) as unknown as typeof fetch;
+  try {
+    const host = await mount(<RelayChatsView relayId="relay-1" payload={{ ...answersOnly, answers: [answerRow("req_1", { outcome: "declined:handoff", request: "" })] }} />);
+    const row = host.querySelector<HTMLElement>("[data-relay-answer]")!;
+    /* No message text: the row names the kind of record and the target. */
+    expect(row.textContent).toContain("Разові відповіді · Support bot");
+    expect(row.querySelector("[data-relay-answer-dot]")?.getAttribute("data-relay-answer-dot")).toBe("neutral");
+    await act(async () => row.querySelector("button")!.click());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(host.querySelector("[data-relay-answer-gone]")?.textContent).toBe("Цей обмін більше не зберігається.");
+  } finally { globalThis.fetch = previous; }
 });
 
 test("the poll keeps nothing from a route that refuses this Viewer", async () => {

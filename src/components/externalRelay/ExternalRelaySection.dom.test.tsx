@@ -229,6 +229,38 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
   expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol", effort: null } });
 });
 
+/** Picks `value` in a select as the operator would, firing its change. */
+const choose = async (select: HTMLSelectElement | null | undefined, value: string) => {
+  expect(select).toBeTruthy();
+  await act(async () => { select!.value = value; select!.dispatchEvent(new window.Event("change", { bubbles: true })); });
+  await act(async () => settle());
+};
+
+test("the model keeps the effort only where the new model has it, and the effort and concurrency save what was picked", async () => {
+  accounts({ codex: [signedIn("work")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "codex", model: "gpt-6-astra", effort: "ultra", concurrency: 1, answered_by: "install" })] })], pending: [], status: [] };
+  route((url, init) => url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const row = await unfold(host.querySelector("[data-external-relay-target=bot-1]")!);
+  const select = (label: string) => row.querySelector<HTMLSelectElement>(`select[aria-label="${label} · Support bot"]`);
+  const patches = () => harness.calls.filter((call) => call.method === "PATCH").map((call) => [call.url, call.body]);
+
+  /* GPT-6 Sol has «ultra» too, so the effort goes along; GPT-6 Luna has no «ultra», so it falls back to the default. */
+  await choose(select("Model"), "gpt-6-sol");
+  await choose(select("Model"), "gpt-6-luna");
+  /* An effort is saved as picked, and «Default» as none. */
+  await choose(select("Effort"), "high");
+  await choose(select("Effort"), "");
+  await choose(select("At once"), "3");
+  expect(patches()).toEqual([
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6-sol", effort: "ultra" } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", model: "gpt-6-luna", effort: null } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", effort: "high" } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", effort: null } }],
+    ["/api/external-relay/relays/relay-1", { target: { id: "bot-1", concurrency: 3 } }],
+  ]);
+});
+
 test("the switch routes a target to this install or back to the service, and the card fetches nothing a chat said", async () => {
   accounts({ claude: [signedIn("main")] });
   answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus" }), target({ id: "bot-2", name: "Sales bot", engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };

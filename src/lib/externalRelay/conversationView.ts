@@ -4,16 +4,18 @@ import path from "node:path";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { FileEntry } from "@/lib/types";
 
+import { listAnswerRecords, RELAY_ANSWER_LIST_LIMIT, RELAY_ANSWER_RETENTION_DAYS, relayAnswersRoot, type RelayAnswerSummary } from "./answers";
 import { conversationCodexHome, readConversations, type RelayConversation } from "./conversations";
-import { relayChatsProject, shortChatKey, type RelayChatRow, type RelayChatsPayload } from "./relayChats";
+import { relayChatsProject, shortChatKey, type RelayAnswerRow, type RelayChatRow, type RelayChatsPayload } from "./relayChats";
 import { readRelayStore } from "./store";
 
 /*
- * The operator's read of the relay's per-chat conversations. The scanner skips
- * their transcripts (relay-slice3.md §4.6), so search, the MCP tools, flows and
- * composers never reach them; this module finds them from the conversation
- * records instead, for the relay's own operator-only route and for the
- * operator's feed reads of exactly these files. It writes nothing.
+ * The operator's read of the relay's per-chat conversations and of the single
+ * answers it kept. The scanner skips the transcripts (relay-slice3.md §4.6),
+ * so search, the MCP tools, flows and composers never reach them; this module
+ * finds them from the conversation records instead, for the relay's own
+ * operator-only route and for the operator's feed reads of exactly these
+ * files. It writes nothing.
  */
 
 const encodedCwd = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
@@ -76,12 +78,42 @@ function entryFor(record: RelayConversation, transcript: string, relayName: stri
   };
 }
 
-/** Every recorded chat conversation, newest turn first, with its relay's and target's names. */
+/* The Viewer asks every 15 s; a target's list is read again only after its
+   directory changed (a record written, settled or pruned). */
+const answerLists = new Map<string, { mtimeMs: number; rows: RelayAnswerSummary[] }>();
+function targetAnswers(relayId: string, targetId: string): RelayAnswerSummary[] {
+  const directory = path.join(relayAnswersRoot(), relayId, targetId);
+  let mtimeMs: number;
+  try { mtimeMs = fs.statSync(directory).mtimeMs; } catch { answerLists.delete(directory); return []; }
+  const cached = answerLists.get(directory);
+  if (cached?.mtimeMs === mtimeMs) return cached.rows;
+  const rows = listAnswerRecords(relayId, targetId);
+  answerLists.set(directory, { mtimeMs, rows });
+  return rows;
+}
+
+/** One relay's kept single answers, newest first, across its targets, including ones the service no longer lists. */
+function relayAnswers(relay: { id: string; targets: { id: string; name: string }[] }): RelayAnswerRow[] {
+  let kept: string[] = [];
+  try { kept = fs.readdirSync(path.join(relayAnswersRoot(), relay.id)); } catch { /* none kept */ }
+  const targetIds = [...new Set([...relay.targets.map((target) => target.id), ...kept])];
+  return targetIds
+    .flatMap((targetId) => targetAnswers(relay.id, targetId).map((row) => ({
+      relayId: relay.id,
+      targetId,
+      targetName: relay.targets.find((target) => target.id === targetId)?.name ?? null,
+      ...row,
+    })))
+    .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt) || a.requestId.localeCompare(b.requestId))
+    .slice(0, RELAY_ANSWER_LIST_LIMIT);
+}
+
+/** Every recorded chat conversation, newest turn first, and every kept single answer, with their relay's and target's names. */
 export function relayChats(): RelayChatsPayload {
   /* The Viewer asks every 15 s on every install; one that never kept a chat
-     conversation reads no relay store, which would create its file. */
+     conversation or an answer reads no relay store, which would create its file. */
   const records = readConversations();
-  if (!records.length) return { relays: [], chats: [] };
+  if (!records.length && !fs.existsSync(relayAnswersRoot())) return { relays: [], chats: [], answers: [], retentionDays: RELAY_ANSWER_RETENTION_DAYS };
   const store = readRelayStore();
   const relays = store.relays.map((relay) => ({ id: relay.id, name: relay.name, origin: relay.origin }));
   const chats: RelayChatRow[] = records.flatMap((record) => {
@@ -107,7 +139,7 @@ export function relayChats(): RelayChatsPayload {
     }];
   });
   chats.sort((a, b) => Date.parse(b.lastTurnAt) - Date.parse(a.lastTurnAt) || a.id.localeCompare(b.id));
-  return { relays, chats };
+  return { relays, chats, answers: store.relays.flatMap(relayAnswers), retentionDays: RELAY_ANSWER_RETENTION_DAYS };
 }
 
 const realpath = (candidate: string) => { try { return fs.realpathSync(candidate); } catch { return null; } };
