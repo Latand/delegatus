@@ -295,8 +295,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 259 files: 172 with asynchronous primitives and
-87 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 260 files: 172 with asynchronous primitives and
+88 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -504,6 +504,7 @@ repeated for this inventory correction.
 | `evals/roles/graders/behavior.ts` | 14 | synchronous; credential-free sandbox evaluator has a 10-second command timeout; the owning service contains interrupted descendants |
 | `evals/roles/lifecycle.test.ts` | 116 | synchronous |
 | `evals/roles/runner.ts` | 26, 50, 352, 353, 360 | synchronous; eval subprocesses have a 240-second timeout; Git/archive operations run in the owning service when exercised by tests |
+| `next.config.test.ts` | 31, 76, 85 | synchronous; build-heap and type-check probes return through their original spawnSync result before fixture deletion; interrupted descendants remain in the owning test service |
 | `scripts/ci-platform-scope.test.ts` | 120 | synchronous |
 | `scripts/deploy-checkout.test.ts` | 6 | synchronous |
 | `scripts/docker-image-scope.test.ts` | 77, 162, 168 | synchronous |
@@ -737,3 +738,8 @@ The strict audit also discovered three launch files added by current main:
 the snapshot route, journal startup and runtime-host succession tests. Their
 original handles, awaited exits and service containment are recorded in the
 updated census; the signal and missing-row rejection controls remain intact.
+
+The subsequent release-build heap merge adds synchronous probes in
+`next.config.test.ts`. Their original results are consumed before fixture
+cleanup, and the enclosing service contains interrupted descendants. The
+census includes this additional current-main file without changing audit rules.
