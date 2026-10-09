@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { createLinkTestInstalls } from "./testInstalls";
+import { meter } from "./wireMeter";
 
 const fixtures = createLinkTestInstalls();
 const { root, remote, key, install, stopInstall, request, link, sync, createOn, taskOn, captured, oldSource, seedTranscript } = fixtures;
@@ -12,6 +13,85 @@ afterEach(fixtures.stopAll);
 afterAll(fixtures.cleanup);
 const otherRemote = "code.example.test/acme/unlinked";
 const otherKey = projectIdentityFromRemote(`https://${otherRemote}`, "/")!.project;
+
+for (const boundary of ["shared", "unshared", "revoked", "scope-removed"] as const) {
+  test(`explicit recovery authenticates before resuming queued seat messages: ${boundary}`, async () => {
+    const name = `auth-recovery-${boundary}`;
+    let a = await install(`${name}-a`); const b = await install(`${name}-b`);
+    const wire = await meter(b);
+    try {
+      const id = await link(a, b, { projects: [key] }, wire.url);
+      for (const base of [a, b]) await request(base, "/test/seat", "POST", { project: key });
+      const grant = ((await request(b, "/api/links/grants")).body.grants as { id: string; label: string }[])[0]!;
+      expect((await request(b, "/test/seat-send", "POST", { project: key, machine: grant.label,
+        text: "Pending inbound recovery message.", clientMessageId: "recovery-inbound" })).status).toBe(200);
+      // Persist the inbound words, then restart before any local reservation.
+      await request(a, "/test/seat-crash?point=before");
+      await request(a, `/api/links/peers/${id}`, "POST").catch(() => null);
+      await stopInstall(a); a = await install(`${name}-a`);
+      expect((await request(a, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
+      expect((await request(a, "/test/seat-send", "POST", { project: key, machine: id,
+        text: "Queued outbound recovery message.", clientMessageId: "recovery-outbound" })).status).toBe(200);
+      const task = await createOn(a, "Recovery task must wait for sharing.");
+      seedTranscript(`${name}-a`, "Private recovery transcript."); await request(a, "/test/scan");
+      await request(b, "/test/fail-sync?on=401");
+      expect((await request(a, `/api/links/peers/${id}`, "POST")).body.error).toBe("revoked");
+      await request(b, "/test/fail-sync?on=0");
+      const beforeAutomatic = wire.requests.length;
+      await request(a, "/test/schedule");
+      expect(wire.requests).toHaveLength(beforeAutomatic);
+      expect((await request(a, "/test/seat-send", "POST", { project: key, machine: id,
+        text: "New words while revoked.", clientMessageId: "recovery-refusal" })).body.code).toBe("link_revoked");
+      // A malformed authenticated probe must leave queued words and admission fenced.
+      await request(b, "/test/bad-info?on=1");
+      const beforeBad = wire.requests.length;
+      expect((await request(a, `/api/links/peers/${id}`, "POST")).status).toBe(409);
+      expect(wire.requests.slice(beforeBad).map(part => part.toString().split("\r\n")[0])).toEqual(["GET /api/peer/v1/info HTTP/1.1"]);
+      expect((await request(a, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
+      expect((await request(a, "/test/seat-delivery")).body.commands).toBe(0);
+      expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("revoked");
+      await request(b, "/test/bad-info?on=0");
+      if (boundary === "unshared") await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [] });
+      if (boundary === "revoked") await request(b, `/api/links/grants?id=${grant.id}`, "DELETE");
+      if (boundary === "scope-removed") {
+        const file = path.join(root, `${name}-b`, "links/grants.json");
+        const grants = JSON.parse(fs.readFileSync(file, "utf8")); grants.grants[0].scopes = [];
+        fs.writeFileSync(file, JSON.stringify(grants));
+      }
+      const beforeRecovery = wire.requests.length;
+      const recovered = await request(a, `/api/links/peers/${id}`, "POST");
+      const recoveryWire = wire.requests.slice(beforeRecovery).map(part => part.toString());
+      expect(recoveryWire[0]!.split("\r\n")[0]).toBe("GET /api/peer/v1/info HTTP/1.1");
+      expect(recoveryWire[0]!.split("\r\n\r\n")[1]).toBe("");
+      if (boundary === "revoked" || boundary === "scope-removed") {
+        expect(recovered.status).toBe(409);
+        expect(recoveryWire).toHaveLength(1);
+      } else {
+        expect(recovered).toMatchObject({ status: 200 });
+        const handshake = JSON.parse(recoveryWire[1]!.split("\r\n\r\n")[1]!);
+        expect(handshake).not.toHaveProperty("tasks");
+        expect(handshake).not.toHaveProperty("push");
+        expect(handshake).not.toHaveProperty("agents");
+        expect(handshake.sm).toEqual({ v: 1 });
+        await sync(a, id);
+        expect(((await request(a, "/api/links/peers")).body.peers as { state: string }[])[0]!.state).toBe("active");
+        if (boundary === "shared") {
+          expect(await taskOn(b, task.id)).toMatchObject({ text: "Recovery task must wait for sharing." });
+          expect(((await request(b, `/api/links/agents?project=${key}`)).body.agents as { p: string }[]).some(row => row.p === key)).toBe(true);
+        } else {
+          expect(await taskOn(b, task.id)).toBeUndefined();
+          expect(recoveryWire.join("\n")).not.toContain("Queued outbound recovery message.");
+          expect(recoveryWire.join("\n")).not.toContain("Recovery task must wait for sharing.");
+        }
+      }
+      const count = boundary === "shared" ? 1 : 0;
+      for (const base of [a, b]) {
+        expect((await request(base, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(count);
+        expect((await request(base, "/test/seat-delivery")).body.commands).toBe(count);
+      }
+    } finally { wire.close(); }
+  });
+}
 
 test("linked seats exchange attributed messages in both directions with one durable delivery per retry", async () => {
   const a = await install("seat-message-a"), b = await install("seat-message-b");

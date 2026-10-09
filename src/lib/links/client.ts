@@ -10,7 +10,7 @@ import { isSharedProject, readPeers, sharedProjects, type Link, type SharedProje
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 import { ownBoardStoreId, recordSeatMessages } from "./boardLinks";
 import { linkedContext, linkedPeer } from "./linked";
-import { taskExchange, TaskSyncError } from "./taskExchange";
+import { forgetTaskExchange, taskExchange, TaskSyncError } from "./taskExchange";
 import { TASK_WIRE_VERSION } from "./taskWire";
 import { acceptAgents, agentCursors, agentPart, decodeCursor, dropAgents, encodeCursor } from "./agentFeed";
 
@@ -121,42 +121,56 @@ export async function connectPeer(input: { url: string; code: string; name?: str
   return findPeer(link.id)!;
 }
 
-export async function syncPeer(id: string): Promise<{ peer: Link; remote: SharedProject[] }> {
+export async function syncPeer(id: string, options: { recover?: boolean } = {}): Promise<{ peer: Link; remote: SharedProject[] }> {
   const previous = syncQueues.get(id);
   let release = () => {};
   const current = new Promise<void>((resolve) => { release = resolve; });
   syncQueues.set(id, current);
   try {
     if (previous) await previous;
-    return await runSyncPeer(id);
+    return await runSyncPeer(id, options.recover === true);
   } finally {
     release();
     if (syncQueues.get(id) === current) syncQueues.delete(id);
   }
 }
 
-async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProject[] }> {
+async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; remote: SharedProject[] }> {
   let peer = findPeer(id);
   if (!peer) throw new LinkError("not-found");
+  // Only an explicit operator sync can probe a saved authentication refusal.
+  // Keep the link revoked until authentication and fresh sharing both agree.
+  let recovering = peer.state === "revoked" && recover;
   const stillLinked = (): Link => {
     const current = findPeer(id);
     if (!sameLink(current, peer!)) throw new LinkError("not-found");
-    if (current.state === "revoked") throw new LinkError("revoked");
+    if (current.state === "revoked" && !recovering) throw new LinkError("revoked");
     return current;
   };
   const self = linkedContext().self;
-  let exchange = self ? taskExchange({ id, install: peer.install, store: peer.store }, self) : null;
-  exchange?.begin();
+  let exchange: ReturnType<typeof taskExchange> | null = null;
   try {
     const target = await peerTarget(peer.url);
     stillLinked();
+    if (recovering) {
+      const info = await call(target, "/api/peer/v1/info", "GET", undefined, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
+      stillLinked();
+      if (info.status === 401) throw new LinkError("revoked");
+      if (info.status !== 200 || info.body.v !== 1 || (info.body.install as { id?: unknown } | undefined)?.id !== peer.install) throw new LinkError("not-delegatus");
+      if ((info.body.feeds as { boards?: unknown } | undefined)?.boards !== 1 || !Array.isArray(info.body.scopes) || !info.body.scopes.includes("board:sync")) throw new LinkError("version");
+      // An unacknowledged page from the refused call belongs to the old
+      // agreement. Replay from durable cursors after the fresh handshake.
+      forgetTaskExchange(id);
+    }
+    exchange = self ? taskExchange({ id, install: peer.install, store: peer.store }, self) : null;
+    exchange?.begin();
     let local = sharedProjects();
     let localHash = sharedDigest(local);
     const sentKey = `${peer.url}:${id}`;
-    let send = lastSent.get(sentKey) !== localHash;
+    let send = recovering || lastSent.get(sentKey) !== localHash;
     let sent = send ? 0 : local.length;
     let received: SharedProject[] = [];
-    let remote = remoteProjects(id);
+    let remote = recovering ? [] : remoteProjects(id);
     let remoteHash = sharedDigest(remote);
     let remoteTotal: number | null = null;
     let receivingHash: string | null = null;
@@ -183,7 +197,7 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       }
       const batch = send ? local.slice(sent, sent + 100) : undefined;
       const remoteKeys = new Set(remote.map((project) => project.key));
-      const linked = new Set(local.map((project) => project.key).filter((key) => remoteKeys.has(key)));
+      const linked = new Set(recovering ? [] : local.map((project) => project.key).filter((key) => remoteKeys.has(key)));
       const agentProjectsKey = [...linked].sort().join("|");
       if (agentState.projectsKey !== agentProjectsKey) {
         agentState.projectsKey = agentProjectsKey;
@@ -300,6 +314,10 @@ async function runSyncPeer(id: string): Promise<{ peer: Link; remote: SharedProj
       // A shared list that changed in this answer can link a project whose
       // rows have not moved yet; one more call carries them.
       messagesAgreed = !send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true;
+      if (recovering && messagesAgreed) {
+        putPeer({ ...stillLinked(), state: "active", error: null });
+        recovering = false;
+      }
       const deliveryLink = linkedPeer("peer", id);
       if (messagesAgreed && deliveryLink) await drainSeatMessages(deliveryLink);
       stillLinked();

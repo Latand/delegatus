@@ -870,3 +870,31 @@ The HTTP seat-message cases run in `seatMessages.http.test.ts`, with the same
 its isolated roots and recorded child processes. Separating the functional
 message seam from the large board growth fixtures keeps those regressions
 inside the publication gate's per-file time budget without changing that budget.
+
+## 17. Explicit recovery after a temporary authentication refusal
+
+A 401 keeps the saved link revoked for scheduled exchanges, new seat sends and
+pending local message admission. The operator's **Read now** can retry its
+existing credential with a body-free authenticated `GET /api/peer/v1/info`.
+Recovery requires the same installation, the board feed and `board:sync` scope.
+A genuine revocation, missing scope or malformed answer leaves the link fenced.
+
+After successful authentication, the caller exchanges fresh sharing lists while
+the link remains revoked. That handshake exports no tasks, agent rows or queued
+message text. Once both lists agree, the link becomes active and pending messages
+are admitted against the current intersection. Outstanding task pages replay
+from durable cursors, so a missed acknowledgement from the refused exchange
+cannot break recovery when a project was unshared meanwhile.
+
+The existing temporary-denial test failed with HTTP 409 before this fix. Four
+new two-install HTTP cases also failed before it: shared recovery, removed
+sharing, revoked grant and removed scope. They retain inbound words across a
+receiver restart with zero reservations, queue outbound words and verify the
+authentication-only probe, initial sharing-only exchange, refusal boundaries,
+single delivery on recovery, and resumed task and agent feeds.
+
+This recovery fix is needed on the calling install (A). Its probe uses the
+existing peer info API, so B requires no new protocol for recovery. Both installs
+still need this branch's seat relay and export/admission fixes for both directions
+as described in §16; one updated install interoperates with an older board-only
+peer and refuses unsupported seat messaging.
