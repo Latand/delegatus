@@ -720,7 +720,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
     expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
     /* Terminal stages re-check the last fix; other stages follow the pass edge. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: pass completes; fail completes as budget spent");
+    expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
     expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge and relays the findings as unreviewed");
     expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review if the head changed");
     expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
@@ -1153,25 +1153,16 @@ test("Codex tier is published on all launch surfaces and preserved through MCP d
   });
 });
 
-test("MCP pipeline tools describe chosen budgets and retain the finite schema bound", async () => {
+test("MCP pipeline tools describe default 3 and accept an explicit higher budget", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const { tools } = await client.listTools();
     for (const name of ["create_pipeline", "pipeline_action"]) {
       const tool = tools.find((tool) => tool.name === name)!;
       expect(tool.description).toContain("defaults to 3");
-      expect(JSON.stringify(tool.inputSchema)).toContain("at creation");
-      expect(JSON.stringify(tool)).not.toContain("at most 5");
+      expect(JSON.stringify(tool.inputSchema)).toContain("default 3");
     }
   });
-  const action = { clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix" };
-  for (const [rounds, success] of [[0, false], [1, true], [6, true], [7, true], [9, true], [10, false]] as const) {
-    expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, maxRounds: rounds }).success).toBe(success);
-    expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, action: "continue-review", addRounds: rounds }).success).toBe(success);
-    expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, action: "convert-legacy-review", reviewLimit: rounds }).success).toBe(success);
-    const stage = { id: "review", kind: "run", prompt: "Review", onFail: { to: "fix", maxRounds: rounds } };
-    expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ ...action, action: "add-stage", stage }).success).toBe(success);
-    expect(TOOL_INPUT_SCHEMAS.create_pipeline.safeParse({ clientRequestId: "create-cap", task: "Review cap", repoDir: "/repo", stages: [stage] }).success).toBe(success);
-  }
+  expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
 });
 
 test("the published update_task schema advertises replaceable notes without author inputs", async () => {

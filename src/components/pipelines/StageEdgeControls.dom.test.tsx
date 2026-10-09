@@ -159,21 +159,3 @@ test("board fail edge displays the default budget and retains a selected higher 
     expect((host.querySelector('input[type="number"]') as HTMLInputElement).value).toBe("7");
   } finally { flushSync(() => root.unmount()); }
 });
-
-
-test.each(["draft", "running"] as const)("round input respects the creation-time budget in %s", (state) => {
-  const { pipeline, stage } = oneStagePipeline();
-  stage.onFail = { to: "implement", maxRounds: 7 };
-  pipeline.state = state;
-  if (state === "running") pipeline.cursor!.activatedBy = { stageId: stage.id, attempt: 1, edge: "fail" };
-  const { host, root } = mount(<StageEdgeControls pipeline={pipeline} stage={stage} />);
-  try {
-    const input = host.querySelector('input[type="number"]') as HTMLInputElement;
-    expect(input.disabled).toBe(false);
-    expect(input.max).toBe(state === "draft" ? "9" : "7");
-    if (state === "running") {
-      const target = host.querySelectorAll("select")[1] as HTMLSelectElement;
-      expect(target.disabled).toBe(true);
-    }
-  } finally { flushSync(() => root.unmount()); }
-});

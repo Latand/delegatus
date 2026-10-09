@@ -24,7 +24,7 @@ export function terminalReviewContinuationAvailable(pipeline: Pipeline): boolean
     || activation?.edge !== "pass") return false;
   const fix = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
     .find((entry) => entry.n === activation.attempt && !entry.historical);
-  if (!fix || (fix.state !== "passed" && !(fix.verdict?.status === "fail" && terminalReviewBudgetSpent(fix, true)))) return false;
+  if (fix?.state !== "passed") return false;
   const pending = pipeline.reviewPending;
   return !pending || (pending.terminalRecheck === true
     && pending.stageId === stage.id && pending.attempt === attempt.n
@@ -71,8 +71,8 @@ export function failEdgeRoundsUsed(pipeline: Pipeline, stage: PipelineStage): nu
   return edgeRoundsUsed(pipeline, { from: stage.id, to: stage.onFail.to, kind: "fail" });
 }
 
-/** The rounds a stage's fail edge may spend: its frozen `maxRounds` plus
-    historical continuation grants, which remain readable (#1938). */
+/** The rounds a stage's fail edge may spend: its frozen `maxRounds` plus every
+    round a `continue-review` granted it since (#1938). */
 export function failEdgeMaxRounds(pipeline: Pipeline, stage: PipelineStage): number {
   if (!stage.onFail) return 0;
   const granted = (pipeline.reviewGrants ?? [])
@@ -88,8 +88,8 @@ export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExha
 /** Whether this stage has already handed findings along its spent fail edge.
     Read from the stage's own attempts, so the handoff happens once per stage:
     when another stage's fail edge later loops back through this one and it
-    fails again, it parks as budget exhausted. Each historical grant
-    (#1938) records one more handoff, at the end of the rounds it added. */
+    fails again, it parks as budget exhausted. Each `continue-review` grant
+    (#1938) buys one more handoff, at the end of the rounds it added. */
 export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): boolean {
   const run = pipeline.runs.find((candidate) => candidate.stageId === stage.id);
   const handoffs = run?.attempts.filter((attempt) => !attempt.historical && attempt.budgetSpent).length ?? 0;
@@ -99,8 +99,8 @@ export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): b
 
 /** A spent advance handoff is scoped to the current gate entry. A fix from
     another gate may return through this gate and needs its own handoff (#2247).
-    The round count remains cumulative, so the terminal gate still reaches its
-    final re-check. Old records without this boundary keep their existing rule. */
+    The round count remains cumulative; a terminal advance gate completes
+    after its final fix. Old records without this boundary keep their existing rule. */
 export function advanceFailEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
   let firstAttempt = attempt.n;
   let activation = attempt.activatedBy;
@@ -196,10 +196,4 @@ export function pipelineCompletedUnreviewed(pipeline: Pick<Pipeline, "state" | "
     };
   }
   return latest?.summary ?? null;
-}
-
-
-/** The lane completed with retained findings, pending or already filed. */
-export function pipelineReviewBudgetSpent(pipeline: Pipeline): Pipeline["reviewBudgetSpent"] | null {
-  return pipeline.state === "completed" || pipeline.state === "closed" ? pipeline.reviewBudgetSpent ?? null : null;
 }

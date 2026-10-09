@@ -216,7 +216,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const elsewhere = data?.unavailable === "another-installation";
   /* The later decided round that retired this one: the operator already answered there. */
   const successor = round && !round.decision && round.supersededBy ? rounds.find((entry) => entry.id === round.supersededBy) ?? null : null;
-  const open = Boolean(round && !round.decision && !elsewhere && (!successor || reopened.has(round.id)));
+  const open = Boolean(round && !round.decision && !round.hidden && !elsewhere && (!successor || reopened.has(round.id)));
   const draft = (roundId && drafts[roundId]) || EMPTY_DRAFT;
   /* Two pictures side by side are each half a phone wide, too small to read: the phone compares on one frame. */
   const mode: PairMode = phone ? "slider" : pairMode ?? "side";
@@ -350,7 +350,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   /* A decision cannot be changed once saved, so nothing saves while speech is
      still being recorded or transcribed: the comment would go without it. The
      button and the shortcut both come through here. */
-  const savable = Boolean(round) && draft.chosen.length > 0 && !review.saving && dictation.phase === "idle";
+  const savable = open && draft.chosen.length > 0 && !review.saving && dictation.phase === "idle";
   /* A held key repeats before the first request has redrawn anything. */
   const saveInFlight = useRef(false);
   const save = async () => {
@@ -692,6 +692,11 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       )}
       {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}
     </div>
+  ) : round.hidden ? (
+    <div data-prototype-hidden={round.id} className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">
+      <span className="text-label text-secondary">{t("proto.hidden")}</span>
+      <button type="button" className={SECONDARY} data-prototype-undo-hide="" disabled={review.saving} onClick={() => void review.hide(round.id, true, phone ? "phone" : "desktop")}>{t("proto.undoHide")}</button>
+    </div>
   ) : elsewhere ? supersededLine : successor && !open ? (
     <div className="flex min-w-0 flex-1 flex-col">{supersededLine}</div>
   ) : (
@@ -724,10 +729,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             <MicButtonView {...dictation} start={startDictation} busy={review.saving} onText={insertSpoken} anchored />
           </span>
         </div>
-        <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
-          {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-          {t("proto.save")}
-        </button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <button type="button" className={SECONDARY} data-prototype-hide="" disabled={review.saving} onClick={() => void review.hide(round.id, false, phone ? "phone" : "desktop")}>{t("proto.hide")}</button>
+          <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
+            {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+            {t("proto.save")}
+          </button>
+        </div>
       </div>
       {voiceError ? <p role="alert" className="m-0 text-label font-semibold text-danger">{voiceError}</p> : null}
     </div>

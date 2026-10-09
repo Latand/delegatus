@@ -180,7 +180,7 @@ export type PipelineEdgeActivation = {
       target's pass follows the source's pass edge, except a terminal advance
       gate gets one final re-check (#2247). */
   budgetSpent?: true;
-  /** The terminal gate judges the last fix once; a fail completes with a follow-up. */
+  /** The terminal gate must judge the spent fix once more; a fail parks. */
   budgetRecheck?: true;
 };
 
@@ -679,14 +679,13 @@ export type PipelineCursorState = "pending" | "spawning" | "running" | "reviewin
 
 /** `needs_review` (#1938): a review stage's fail-edge budget was spent and the
     fix that received its last findings wrote a new head, so the current head
-    was never reviewed. The creator or operator may accept that head; its budget
-    cannot increase. */
+    was never reviewed. Not terminal: `continue-review` grants more rounds. */
 export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
 
 /** Why review budget stopped this lane: an unreviewed fix in needs_review
-    (#1938), or a historical failed terminal re-check in needs_decision. */
+    (#1938), or a failed terminal re-check in needs_decision. */
 export type PipelineReviewPending = {
-  /** A historical terminal budget re-check judged the current head and failed. */
+  /** A terminal budget re-check judged the current head and failed: fix first. */
   terminalRecheck?: true;
   /** The review stage whose fail-edge budget is spent, and its last attempt. */
   stageId: string;
@@ -705,8 +704,8 @@ export type PipelineReviewPending = {
   at: string;
 };
 
-/** One historical `continue-review` receipt (#1938), append-only. Its `rounds`
-    remain in cumulative accounting; new grants are refused. */
+/** Historical accepted budget extension, append-only. New extensions are
+    refused; existing records remain readable and their receipts replayable. */
 export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;
@@ -953,15 +952,6 @@ export type PipelineRemoteAction = {
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
 
-export interface PipelineReviewBudgetSpent {
-  stageId: string;
-  attempt: number;
-  findings: number;
-  head: string;
-  at: string;
-  followUp?: { taskId: string; title: string; at: string };
-}
-
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
@@ -1060,9 +1050,7 @@ export type Pipeline = {
   decisionAnswers?: PipelineDecisionAnswer[];
   /** Present exactly while `state` (or `pausedState`) is `needs_review` (#1938). */
   reviewPending?: PipelineReviewPending;
-  /** Failed terminal re-check completed with findings owed to a follow-up. */
-  reviewBudgetSpent?: PipelineReviewBudgetSpent;
-  /** Historical continue-review grants, oldest first (#1938). */
+  /** Accepted continue-review grants, oldest first (#1938). */
   reviewGrants?: PipelineReviewGrant[];
   /** Accepted accept-head answers, oldest first (#2187 §3.4). */
   reviewAcceptances?: PipelineReviewAcceptance[];
@@ -1222,8 +1210,7 @@ export type PatchPipelineRequest = {
   expectedRevision?: string;
   /** Answer to the settled question, up to MAX_DECISION_ANSWER_CHARS. */
   answer?: string;
-  /** for continue-review receipt replay (#1938): historical rounds granted,
-      1..MAX_FAIL_EDGE_ROUNDS. New grants are refused. */
+  /** for continue-review (#1938): review rounds to add, 1..MAX_FAIL_EDGE_ROUNDS. */
   addRounds?: number;
   /** for preview/convert-legacy-review: the finite review limit to convert to,
       1..MAX_FAIL_EDGE_ROUNDS; absent, the stage's recorded limit is used. */
@@ -1317,8 +1304,7 @@ export type PatchPipelineRequest = {
   /** for set-edge (#353): rewires `stageId`'s pass or fail edge. `to: null`
       clears it (a cleared pass edge makes the stage terminal). A stage that has
       already run keeps its pass edge frozen (history names its successor); a
-      fail target and exhaustion freeze once traversed. Once started, a gate's
-      `maxRounds` can only decrease and its fail edge cannot be cleared. */
+      fail edge freezes once traversed. `maxRounds` bounds fail-edge cycles. */
   edge?: PipelineEdgeKind;
   to?: string | null;
   maxRounds?: number;

@@ -87,7 +87,7 @@ export type PipelineListStage = {
   effort: string | null;
   access: PipelineAccess | null;
   next: string | null;
-  /** `maxRounds` includes historical continue-review grants (#1938). */
+  /** `maxRounds` includes rounds continue-review granted (#1938). */
   onFail: { to: string; maxRounds: number; onExhausted: PipelineFailEdgeExhaustion } | null;
   attempts: number;
   latestAttempt: PipelineListAttempt | null;

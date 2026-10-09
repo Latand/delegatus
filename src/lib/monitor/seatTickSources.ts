@@ -1,6 +1,9 @@
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
+import { ruleReports } from "./ruleReports";
+import { appendBridgeReports } from "@/lib/bridge/store";
+import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -462,6 +465,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  recordRuleReports?: (project: string, at: string) => void;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
@@ -640,6 +644,16 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    recordRuleReports(project, at) {
+      const seat = orchestratorSeatFor(project).active;
+      if (!seat?.conversationId) return;
+      const registry = agentRegistry().readOnlySnapshot();
+      appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
+        tasks: loadTasks(), pipelines: loadPipelinesForList(), deliveries: Object.values(registry.heldDeliveries),
+        maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: readBridgeReportLog(),
+        deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
+        deliveryProject: delivery => delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project ?? null }));
+    },
     seatTurnOutcome: async (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as never);
       const generation = conversation?.generations.at(-1);

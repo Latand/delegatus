@@ -14,6 +14,8 @@
  */
 import { createRoot } from "react-dom/client";
 
+import { ruleReports } from "@/lib/monitor/ruleReports";
+import type { BoardTask } from "@/lib/tasks/types";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
@@ -26,6 +28,7 @@ import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const params = new URLSearchParams(location.search);
 const OVERVIEW = params.has("overview");
+const RULES = params.has("rules");
 const SEAT_BESIDE = params.get("seat") === "beside";
 const LANG = params.get("lang") === "en" ? "en" : "uk";
 
@@ -184,6 +187,32 @@ const REPORTS: Array<Omit<ReportLogEntry, "cards">> = [
   { seq: 1_201, at: iso(70 * MIN), class: "question", body: "Лишити вебхук Telegram на старому домені до понеділка?" },
   { seq: 1_200, at: iso(95 * MIN), class: "status", body: "Три лейни працюють: перемикання розмов (ревʼю, раунд 1), голосові (білд), ліміт задач (чекає вашого рішення)." },
 ];
+/* Operator-selected rules over the same board and existing report renderer. */
+if (RULES) {
+  SEAT_ASKS.splice(0, 1); // A daily digest is a routine report under the seat's mandate.
+  const digest = REPORTS.find(row => row.seq === 1202)!;
+  digest.class = "completed";
+  digest.body = "t-digest-weekend Нічний дайджест завершено. Розклад застосував оркестратор.";
+  for (const id of ["lane-limit", "lane-digest"]) {
+    const lane = pipelines.find(row => row.id === id)!;
+    lane.state = "completed";
+    lane.cursor = null;
+    lane.closedAt = iso(900);
+    lane.lastPassedCommit = "b".repeat(40);
+    lane.stages.find(stage => stage.id === "review")!.onFail = { to: "implement", maxRounds: 1, onExhausted: "advance" };
+    const review = lane.runs.find(run => run.stageId === "review")!.attempts[0]!;
+    review.state = "failed";
+    review.budgetSpent = true;
+    const fix = lane.runs.find(run => run.stageId === "implement")!.attempts[0]!;
+    fix.activatedBy = { stageId: "review", attempt: review.n, edge: "fail", budgetSpent: true };
+    lane.merge = { state: "merged", prNumber: id === "lane-limit" ? 2244 : 88, mergedAt: iso(900), updatedAt: iso(900) } as Pipeline["merge"];
+    tasks.find(task => task.id === lane.taskIds[0])!.status = "done";
+  }
+  files.find(file => file.path === owed)!.stuckDelivery!.origin = { kind: "agent", conversationId: "conversation_seat", role: "orchestrator", project: B };
+  const rows = ruleReports({ project: D, seatConversationId: seatFile.conversationId!, tasks: tasks as unknown as BoardTask[], pipelines,
+    deliveries: [], maintenance: [], dismissals: [], locale: LANG, at: iso(0), deliveryProject: () => null, deliveryLost: () => false });
+  REPORTS.unshift(...rows.map((row, index) => ({ seq: 1205 + index, at: row.at!, class: row.class!, body: row.body! })));
+}
 const resolvedQuestions = new Map<number, string>([[1_201, iso(64 * MIN)]]);
 const knownCards = new Map<string, "task" | "pipeline">([...tasks.map((row) => [String(row.id), "task"] as const), ...pipelines.map((row) => [row.id, "pipeline"] as const)]);
 function reportPage(): ReportLogPage {

@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 44, and a v43 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(44);
+test("the default mandate is at version 43, and a v42 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(43);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -110,9 +110,7 @@ test("the default mandate is at version 44, and a v43 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. v40 (#2518)
      adds the ask-first bug report and the seat-to-seat rule for another
      project's work. v41 points the operator to a task's prototype review
-     instead of describing variants in prose. v42 completes spent reviews and
-     files their findings as a follow-up. v43 freezes budgets chosen at creation.
-     v44 lets the creator choose the finite budget without an extra approval. */
+     instead of describing variants in prose. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -126,8 +124,7 @@ test("the default mandate is at version 44, and a v43 seat reads as stale", () =
   expect(orchestratorMandateStale(40)).toBe(true);
   expect(orchestratorMandateStale(41)).toBe(true);
   expect(orchestratorMandateStale(42)).toBe(true);
-  expect(orchestratorMandateStale(43)).toBe(true);
-  expect(orchestratorMandateStale(44)).toBe(false);
+  expect(orchestratorMandateStale(43)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -175,9 +172,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
-  42: "06da17c971ed719c2aabd559f2978273f199dc1cd5176ed5095e13eabd24d4a7",
-  43: "ad1de2a46b878f24f3da88cea5e6ce3015cec0280c519125c3d17f0bd94afaea",
-  44: "582f2a5073705a7ce88f29449832efee92548378d8814452874aa4d7e46d9239",
+  42: "87da100ab11b67c8309e22764c89bc37c8b81922eb358e4c2adb2eef8ce82688",
+  43: "d5129dbf6a5d800bc24a3212b2fdce0f898167bbf34e66894496512e5855f967",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -456,9 +452,10 @@ test("the mandate names every attention target and uses the tool schema for shap
 /* #1026 — a fresh seat composed its first pipeline through seven sequential
    validation errors because nothing it had read named the stage shape. The
    mandate now prints that shape as the schema declares it. */
-test("the mandate names explicit graph insertion and verified terminal exhaustion (#2247)", () => {
+test("the mandate names explicit graph insertion and final-fix completion (#2247)", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('a fail completes as "budget spent"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("runs exactly N reviews and the fix of the N-th review");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("It creates no terminal re-check and no budget follow-up task");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
 });
 
@@ -848,13 +845,13 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* A GitHub issue is attached when one exists and never waited for. */
   expect(delivered).toContain("no step waits for an issue");
   /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */
-  expect(delivered).toContain("When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link)");
+  expect(delivered).toContain("Attach a useful GitHub issue with pipeline_action attach-link");
   /* Review of #2301: the merge bar names the lanes Delegatus merges
      (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
      the last fix passed, whose kept findings the seat reads. */
-  expect(delivered).toContain("or spent their budget, the project's required checks are green");
-  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed or spent their budget");
-  expect(delivered).toContain("A spent budget's kept findings become a follow-up task.");
+  expect(delivered).toContain("the last budget fix passed");
+  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
+  expect(delivered).toContain("continue-review cannot add rounds; traversed budgets cannot grow");
   /* One condition for stop-after-fix, stated once (review of #2301). */
   expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
   expect(delivered).not.toContain("kept for you to read before you merge");
@@ -919,27 +916,20 @@ test("the delivered mandate names no Viewer, and the v29 clock heading still mar
 });
 
 test("the mandate chooses an explicit review budget from consequences and probability", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("unlimited");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("More than 3 only when the operator asks");
 });
 
 test("agent-facing review skills agree with the mandate's risk budget", () => {
   for (const name of ["delegatus-conveyor", "review-loop"]) {
     const skill = fs.readFileSync(path.join(import.meta.dir, `../../../.claude/skills/${name}/SKILL.md`), "utf8");
     expect(skill).toContain("risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3.");
-    expect(skill).toContain("The default is 3.");
+    expect(skill).toContain("The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
     expect(skill).not.toMatch(/roundLimit"?:? ?5|5–7 substantive|9–13/);
-    expect(skill).toContain("Pick rounds at creation; they never grow. A spent budget merges; its findings go to a follow-up task.");
   }
   const reviewLoop = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/review-loop/SKILL.md"), "utf8");
   expect(reviewLoop).toContain('"roundLimit": 3');
-  expect(reviewLoop).toContain("Standalone flows may use unlimited review only on an explicit operator request with `roundLimit: 0`.");
-  const conveyor = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/delegatus-conveyor/SKILL.md"), "utf8");
-  expect(conveyor).not.toContain("More than 3 only when the operator asks");
-  expect(conveyor).not.toContain("clean APPROVE required");
-  expect(conveyor).not.toContain("Extend beyond 3");
-  expect(conveyor).toContain("Passed reviews or a spent budget admit merging under the project's merge setting and green required checks.");
+  expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
 });
 
 test("the versioned mandate asks for a current status note in the operator's language", () => {
@@ -963,12 +953,4 @@ test("the board walk clears only rows that ask nothing and replaces the shipped 
   const shipped = previous.replace(previous.split("\n")[0]!, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE.split("\n")[0]!);
   expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
-});
-
-test("the mandate freezes chosen rounds and merges spent budgets with a follow-up", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(44);
-  expect(orchestratorMandateStale(41)).toBe(true);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Pick rounds at creation; they never grow.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A spent budget's kept findings become a follow-up task.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain('fail parks with "budget spent');
 });

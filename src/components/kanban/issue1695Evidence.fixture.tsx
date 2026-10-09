@@ -12,10 +12,10 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
-import { StageEdgeControls } from "@/components/pipelines/StageEdgeControls";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -2627,10 +2627,13 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto");
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
+const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
 /* The Viewer's own selectors: which round waits and which a later decision retired. */
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
-  return prototypeReviewSummary(rounds)!;
+  const summary = prototypeReviewSummary(rounds)!;
+  const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
+  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2971,6 +2974,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (held) await new Promise((resolve) => setTimeout(resolve, held));
     return json({ text: L("Take the header from the two columns and keep the dense rows of the table.", "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.") });
   }
+  if (PROTO && url.pathname === "/api/attention/dismissals" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { target: DismissalTarget; undo?: boolean; surface: "desktop" | "phone" };
+    const target = body.target;
+    if (target.kind === "prototype") {
+      const at = new Date().toISOString();
+      const by = { kind: "operator" as const, surface: body.surface };
+      if (body.undo) protoHidden.delete(target.reviewId);
+      else protoHidden.set(target.reviewId, { at, by });
+      protoPublish();
+      return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
+    }
+  }
   if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
@@ -2991,8 +3006,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       protoPublish();
     }
     return json({
-      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return by ? { ...entry, supersededBy: by } : entry; }),
-      waitingReviewId: rounds.length ? protoSummary(rounds).waitingReviewId : null,
+      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return { ...entry, ...(by ? { supersededBy: by } : {}), ...(protoHidden.has(entry.id) ? { hidden: protoHidden.get(entry.id) } : {}) }; }),
+      waitingReviewId: rounds.length && !protoSummary(rounds).waitingDismissal ? protoSummary(rounds).waitingReviewId : null,
       ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
@@ -3694,19 +3709,10 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
-const reviewBudgetControlsDraft = new URLSearchParams(location.search).get("lane-state") === "draft";
-const reviewBudgetControlLane = pipeline("budget-controls", "Chosen review budget", "budget-task",
-  reviewBudgetControlsDraft ? "draft" : "running",
-  [stage("review", "verifier", null, { onFail: { to: "fix", maxRounds: 7 } }), stage("fix", "builder", "review")],
-  [{ stageId: "review", attempts: [] }, { stageId: "fix", attempts: reviewBudgetControlsDraft ? [] : [attempt(1, "running", null, { activatedBy: { stageId: "review", attempt: 1, edge: "fail" } })] }], null);
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 createRoot(document.getElementById("root")!).render(diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
-  </div>
-) : SCENARIO === "review-budget-controls" ? (
-  <div className="bg-panel p-3" style={{ width: "100%", maxWidth: 520 }}>
-    <StageEdgeControls pipeline={reviewBudgetControlLane} stage={reviewBudgetControlLane.stages[0]!} />
   </div>
 ) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>

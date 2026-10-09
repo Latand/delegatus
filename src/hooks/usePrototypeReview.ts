@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
+import { layerPrototypeDismissal, sendDismissal } from "@/components/attention/dismissalOverlay";
 import { prototypeReviewNotices, prototypeReviewSummary } from "@/lib/prototypeReview/model";
 import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -78,5 +79,34 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
   },[taskId]);
   const retry = useCallback((reviewId: string) => write({ reviewId,retry: true }),[write]);
   const save = useCallback((decision: DecidePrototypeInput) => write(decision),[write]);
-  return { data,error,saving,loading: enabled && !!taskId && data === null && error === null,refresh,save,retry };
+  const hide = useCallback(async (reviewId: string, undo: boolean, surface: "desktop" | "phone") => {
+    if (!taskId || writing.current === taskId) return false;
+    writing.current = taskId;
+    ++sequence.current;
+    const mark = { at: new Date().toISOString(), by: { kind: "operator" as const, surface } };
+    layerPrototypeDismissal(taskId, reviewId, undo ? null : mark);
+    setSnapshot(previous => ({ ...previous, saving: true, error: null }));
+    const result = await sendDismissal({ kind: "prototype", taskId, reviewId }, [], { undo, surface });
+    if (result.ok && !result.outcome.dismissed.some(subject => subject.kind === "prototype" && subject.reviewId === reviewId)) {
+      layerPrototypeDismissal(taskId, reviewId, undefined);
+      if (writing.current === taskId) writing.current = null;
+      fireTasksChanged();
+      await refresh();
+      return true;
+    }
+    if (result.ok) {
+      const hidden = undo ? undefined : { at: result.outcome.at, by: result.outcome.by };
+      layerPrototypeDismissal(taskId, reviewId, hidden ?? null);
+      if (active.current === taskId) setSnapshot(previous => ({ ...previous, saving: false,
+        data: previous.data ? { ...previous.data, waitingReviewId: undo && previous.data.summary?.waitingReviewId === reviewId ? reviewId : previous.data.waitingReviewId === reviewId ? null : previous.data.waitingReviewId,
+          rounds: previous.data.rounds.map(round => round.id === reviewId ? { ...round, hidden } : round) } : null }));
+      fireTasksChanged();
+    } else {
+      layerPrototypeDismissal(taskId, reviewId, undefined);
+      if (active.current === taskId) setSnapshot(previous => ({ ...previous, saving: false, error: result.error }));
+    }
+    if (writing.current === taskId) writing.current = null;
+    return result.ok;
+  }, [taskId, refresh]);
+  return { data,error,saving,loading: enabled && !!taskId && data === null && error === null,refresh,save,retry,hide };
 }

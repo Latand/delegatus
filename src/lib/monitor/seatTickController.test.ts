@@ -7052,7 +7052,7 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     conversationId: CONVERSATION, at,
   }));
   const attention = parseMaintenanceReport(Array.from({ length: 5 }, (_, index) =>
-    `attention: ${String(index).padStart(8, "0")} | ${"Attention ".padEnd(300, "a")} | ${"Option ".padEnd(300, "o")}`,
+    `attention: ${String(index).padStart(8, "0")} | ${"Attention ".padEnd(300, "a")} | ${"Option ".padEnd(300, "o")} | ${"Alternative ".padEnd(300, "b")} | waits: start implementation`,
   ).join("\n")).attention;
   const run: import("@/lib/boardMaintenance/types").MaintenanceRun = {
     kind: "run", runId: "maintenance-full-ledger", taskId: "maintenance-card", project: PROJECT,
@@ -8930,4 +8930,12 @@ test("recurring lane reminders leave room for lanes not yet shown (#2346)", asyn
     clock += 5 * MINUTE;
   }
   expect(shown).toEqual(new Set(lanes.map(lane => lane.id)));
+});
+
+test("rule outcomes reach the report during a seat check without needing an operator wake", async () => {
+  const rig = harness({ pipelines: [] });
+  const reported: Array<{ project: string; at: string }> = [];
+  rig.deps.sources!.recordRuleReports = (project, at) => { reported.push({ project, at }); };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(reported).toEqual([{ project: PROJECT, at: new Date(NOW).toISOString() }]);
 });

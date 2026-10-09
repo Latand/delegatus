@@ -5,16 +5,16 @@ let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 test("brief reads previous card summary, changes, questions and left-alone evidence", () => {
   held = sandbox(); const run = claim();
-  const previous = { ...run, state: "succeeded" as const, log: { ...run.log, changes: [{ at: run.claimedAt, taskId: "aabbccdd", tool: "update_task" as const, fields: ["status"], statusFrom: "assigned" as const, statusTo: "inbox" as const }], attention: [{ taskId: "aabbccdd", text: "Choose", options: ["keep", "split"] }], leftAlone: [{ taskId: "ddeeffaa", reason: "open lane" }] } };
+  const previous = { ...run, state: "succeeded" as const, log: { ...run.log, changes: [{ at: run.claimedAt, taskId: "aabbccdd", tool: "update_task" as const, fields: ["status"], statusFrom: "assigned" as const, statusTo: "inbox" as const }], attention: [{ taskId: "aabbccdd", text: "Choose", options: ["keep", "split"], nextStep: "start implementation" }], leftAlone: [{ taskId: "ddeeffaa", reason: "open lane" }] } };
   const params = { run, previous, previousCardText: "Earlier summary", seatTaskIds: [], productionLine: "fixture", evidence: [], openCount: 0, now: NOW };
   const brief = maintenanceBrief(params);
   for (const phrase of ["Earlier summary", "assigned → inbox", "Choose | keep | split", "open lane", "Confirm every decision from current state"]) expect(brief).toContain(phrase);
   expect(maintenanceBrief({ ...params, previous: null })).toContain("No earlier run");
 });
 test("report parses bounded attention and left lines, rejects malformed ids", () => {
-  const parsed = parseMaintenanceReport("attention: aabbccdd | Choose | keep | split\nleft: ddeeffaa | open lane\nattention: bad | missing\nVerdict: pass");
-  expect(parsed.attention).toEqual([{ taskId: "aabbccdd", text: "Choose", options: ["keep", "split"] }]); expect(parsed.leftAlone).toHaveLength(1); expect(parsed.verdict).toBe("pass");
-  expect(parseMaintenanceReport(Array.from({ length: 45 }, () => `attention: aabbccdd | ${"x".repeat(500)}`).join("\n")).attention).toHaveLength(40);
+  const parsed = parseMaintenanceReport("attention: aabbccdd | Choose | keep | split | waits: start implementation\nleft: ddeeffaa | open lane\nattention: bad | missing\nVerdict: pass");
+  expect(parsed.attention).toEqual([{ taskId: "aabbccdd", text: "Choose", options: ["keep", "split"], nextStep: "start implementation" }]); expect(parsed.leftAlone).toHaveLength(1); expect(parsed.verdict).toBe("pass");
+  expect(parseMaintenanceReport(Array.from({ length: 45 }, () => `attention: aabbccdd | ${"x".repeat(500)} | keep | split | waits: start implementation`).join("\n")).attention).toHaveLength(40);
 });
 test("card texts for both locales and states, item label bounded", () => {
   held = sandbox(); const run = claim();

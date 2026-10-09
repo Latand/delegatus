@@ -1426,7 +1426,7 @@ export type PipelineBoardProjection = {
 export { failEdgeRoundsUsed as stageFailEdgeRoundsUsed };
 
 /**
- * Are a stage's fail target and exhaustion frozen evidence (#353)? They freeze the instant
+ * Is a stage's fail edge frozen evidence (#353)? A fail edge freezes the instant
  * its verdict routes the cursor along it, while the target attempt is still
  * forming, so the edit control mirrors the API's guard by reading the in-flight
  * cursor activation. That keeps the picker disabled the moment the edge freezes,

@@ -398,6 +398,7 @@ export interface FileEntry {
 }
 
 export interface StuckDelivery {
+  origin?: import("@/lib/runtime/messageOrigin").MessageOrigin;
   /** Immutable reservation admission time. */
   since: string;
   attempts: number;

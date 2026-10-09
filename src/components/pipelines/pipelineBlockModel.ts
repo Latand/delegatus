@@ -232,7 +232,7 @@ export interface PipelineAnswers {
   /** The stage the answer is about: the parked stage, or the review stage. */
   stage: PipelineStage | null;
   /** The quiet answer first, then the primary one. */
-  choices: [] | [PipelineAnswer] | [PipelineAnswer, PipelineAnswer];
+  choices: [PipelineAnswer] | [PipelineAnswer, PipelineAnswer];
   /** A stop on a review (§3.4): its reason line and its plain labels. */
   stop: ReviewStop | null;
 }
@@ -241,7 +241,7 @@ export interface PipelineAnswers {
  * What a lane that needs the operator can be answered with, from the same
  * options the board's ⋯ menu reads: a decision is skipped or retried on the
  * stage the pipeline waits on, and a lane that stopped after its last fix
- * (#1938, #2187) can be accepted as is. Close stays in the ⋯.
+ * (#1938, #2187) is accepted as is or reviewed again. Close stays in the ⋯.
  */
 export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): PipelineAnswers | null {
   if (mergeNeedsYou(pipeline)) {
@@ -251,7 +251,7 @@ export function pipelineAnswers(pipeline: Pipeline, nameOf: (stage: PipelineStag
   if (pipeline.state === "needs_decision") {
     const options = pipelineActionOptions(pipeline);
     if (terminalReviewContinuationAvailable(pipeline)) {
-      return { kind: "decision", stage: parkedStage(pipeline), choices: [], stop: reviewStop(pipeline) };
+      return null;
     }
     const retry = options.find((option) => option.action === "retry-stage");
     if (!retry || retry.refusal || !retry.stageId) return null;

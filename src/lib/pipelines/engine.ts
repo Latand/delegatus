@@ -3216,7 +3216,7 @@ function advancePipeline(
   const detail = successor.handoff && !successor.recheck ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
      new head leaves a head nobody reviewed. Under the default `advance` the
-     terminal gate re-checks the fix once, while a nonterminal gate takes its
+     terminal gate completes after the final fix, while a nonterminal gate takes its
      pass edge and relays the findings as unreviewed. Only an edge that
      asked for `stop-after-fix` stops in needs_review for the operator; a fix
      that wrote nothing new moves on under either. */
@@ -3232,7 +3232,16 @@ function advancePipeline(
     return;
   }
   if (successor.next === null) {
-    completePipeline(pipeline, ports.now(), detail);
+    clearEngineTaskNote(pipeline);
+    pipeline.cursor = null;
+    pipeline.state = "completed";
+    pipeline.stateDetail = detail;
+    pipeline.pausedState = null;
+    pipeline.closedAt = ports.now();
+    /* A reap that settled while this final stage still ran never saw its host,
+       and a completed pipeline with a settled reap leaves the controller index,
+       so completion reopens it until a round has probed every attempt (#1728). */
+    if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
     return;
   }
   pipeline.cursor = {
@@ -3246,8 +3255,8 @@ function advancePipeline(
   pipeline.pausedState = null;
 }
 
-/** A spent advance fix returns to its terminal gate for one final re-check
-    (#2247). Nonterminal handoffs continue along the source's pass edge. */
+/** The final advance fix follows the gate's pass edge, including completion.
+    Explicit continuation grants retain their own validation ancestry. */
 function passSuccessor(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -3260,19 +3269,15 @@ function passSuccessor(
   const sourceAttempt = source && activation
     ? pipeline.runs.find((run) => run.stageId === source.id)?.attempts[activation.attempt - 1] ?? null
     : null;
-  const recheck = Boolean(source?.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance");
-  /* A spent edge's terminal re-check remains authoritative. The lineage return
-     applies between granted rounds and after nested repairs before exhaustion. */
   const terminalGrant = attempt ? terminalReviewGrantForAttempt(pipeline, stage, attempt) : null;
-  const grantedRecheck = recheck && terminalGrant?.stageId === source?.id;
-  if (terminalGrant && grantedRecheck && stage.next !== null && stage.next !== terminalGrant.stageId) {
-    // The last granted fix still owes its intermediate validation. Durable
-    // lineage marks the final re-check when that path reaches the reviewer.
+  if (source?.next === null && source.onFail && failEdgeExhaustion(source.onFail) === "advance"
+    && terminalGrant?.stageId === source.id && stage.next !== null && stage.next !== terminalGrant.stageId) {
+    // Explicit continuation still owes the fix's intermediate validation.
     return { next: stage.next, handoff: null };
   }
   // Retain intermediate validation, including the successor of a spent repair.
-  const next = source ? (recheck ? source.id : source.next) : stage.next;
-  if (terminalGrant && (!recheck || grantedRecheck) && (next === terminalGrant.stageId || next === null)) {
+  const next = source ? source.next : stage.next;
+  if (terminalGrant && (next === terminalGrant.stageId || next === null)) {
     return {
       next: terminalGrant.stageId,
       handoff: null,
@@ -3281,7 +3286,7 @@ function passSuccessor(
   }
 
   if (!source || !activation) return { next: stage.next, handoff: null };
-  return { next: recheck ? source.id : source.next, handoff: { source, attempt: sourceAttempt }, recheck: !!recheck };
+  return { next: source.next, handoff: { source, attempt: sourceAttempt } };
 }
 
 /** A terminal continuation owns one return to its reviewer after the complete
@@ -3390,69 +3395,6 @@ function parkForReview(
   writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
-/** Completion also clears task notes and reopens host cleanup. */
-function completePipeline(pipeline: Pipeline, now: string, detail: string | null): void {
-  clearEngineTaskNote(pipeline);
-  pipeline.cursor = null;
-  pipeline.state = "completed";
-  pipeline.stateDetail = pipeline.reviewBudgetSpent
-    ? `budget spent: ${pipeline.reviewBudgetSpent.findings} findings → follow-up after merge` : detail;
-  pipeline.pausedState = null;
-  pipeline.closedAt = now;
-  /* A reap that settled while this final stage still ran never saw its host,
-     and a completed pipeline with a settled reap leaves the controller index,
-     so completion reopens it until a round has probed every attempt (#1728). */
-  if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
-}
-
-function completeSpentReview(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, now: string): void {
-  pipeline.reviewBudgetSpent = {
-    stageId: stage.id, attempt: attempt.n, findings: attempt.verdict?.findings?.length ?? 0,
-    head: pipeline.lastPassedCommit, at: now,
-  };
-  delete pipeline.reviewPending;
-  const outer = outerTerminalReviewReturn(pipeline, stage, attempt);
-  if (outer) {
-    pipeline.cursor = {
-      stageId: outer.stageId, state: "pending", input: failEdgeInput({ verdict: attempt.verdict!, output: attempt.output ?? "" }),
-      activatedBy: { stageId: stage.id, attempt: attempt.n, edge: "pass", ...(outer.recheck ? { budgetRecheck: true as const } : {}) },
-    };
-    pipeline.state = "running";
-    pipeline.stateDetail = null;
-    pipeline.pausedState = null;
-    return;
-  }
-  completePipeline(pipeline, now, `budget spent: ${pipeline.reviewBudgetSpent.findings} findings → follow-up after merge`);
-}
-
-/** Settling an inner budget still owes the terminal review that sent it work.
-    Durable activation ancestry carries that return for fresh edges and grants. */
-function outerTerminalReviewReturn(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): { stageId: string; recheck: boolean } | null {
-  let current: PipelineStageAttempt | undefined = attempt;
-  // A returning granted review settles its nested repairs. Look for outer
-  // obligations only after crossing that grant's root on the ancestry.
-  let fulfilledGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
-  if (fulfilledGrant?.stageId !== stage.id) fulfilledGrant = null;
-  const settled = new Set([stage.id]);
-  const visited = new Set<string>();
-  while (current?.activatedBy) {
-    const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
-    const key = `${activation.stageId}:${activation.attempt}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-    const source = pipeline.stages.find(candidate => candidate.id === activation.stageId);
-    if (activation.edge === "fail" && activation.stageId === fulfilledGrant?.stageId
-      && activation.attempt === fulfilledGrant.terminalAttempt) fulfilledGrant = null;
-    if (!fulfilledGrant && activation.edge === "fail" && source?.onFail && source.next === null && !settled.has(source.id)) {
-      const grant = pipeline.reviewGrants?.find(candidate => candidate.stageId === source.id && candidate.terminalAttempt === activation.attempt);
-      return { stageId: source.id, recheck: Boolean(activation.budgetSpent || grant && terminalGrantIsLastRound(pipeline, grant)) };
-    }
-    current = pipeline.runs.find(run => run.stageId === activation.stageId)?.attempts.find(candidate => candidate.n === activation.attempt && !candidate.historical);
-    if (current?.state === "passed" || current?.verdict?.status === "fail" && terminalReviewBudgetSpent(current, true)) settled.add(activation.stageId);
-  }
-  return null;
-}
-
 /** Recover terminal parks written before resumable budget metadata existed.
     The settled verdict and its passed predecessor are the durable evidence;
     a blocked reviewer or a transport-only failure has no spent review here. */
@@ -3466,7 +3408,7 @@ function terminalReviewPendingFromAttempt(
     || !verdictRoutesAsFail({ verdict: attempt.verdict, output: attempt.output ?? "" })) return null;
   const fix = runFor(pipeline, activation.stageId)?.attempts.find((candidate) =>
     candidate.n === activation.attempt && !candidate.historical);
-  if (!fix || (fix.state !== "passed" && !(fix.verdict?.status === "fail" && terminalReviewBudgetSpent(fix, true)))) return null;
+  if (fix?.state !== "passed") return null;
   return {
     terminalRecheck: true, stageId: stage.id, attempt: attempt.n,
     fixStageId: activation.stageId, fixAttempt: fix.n,
@@ -3476,20 +3418,17 @@ function terminalReviewPendingFromAttempt(
   };
 }
 
-function reconcileTerminalReviewPending(pipeline: Pipeline, now: string): boolean {
-  if (pipeline.state !== "needs_decision" || pipelineSurvivorRefusal(pipeline)) return false;
+function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
+  if (pipeline.reviewPending || (pipeline.state !== "needs_decision" && pipeline.pausedState !== "needs_decision")) return false;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const pending = stage && attempt ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
-  if (!pending || !stage || !attempt) return false;
-  if (attempt.verdict?.status === "fail" && !attempt.decisionRequested) {
-    completeSpentReview(pipeline, stage, attempt, now);
-    return true;
-  }
-  if (pipeline.reviewPending) return false;
+  if (!pending) return false;
   pipeline.reviewPending = pending;
-  pipeline.stateDetail = reviewPendingDetail(pending);
-  writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
+  if (pipeline.state === "needs_decision") {
+    pipeline.stateDetail = reviewPendingDetail(pending);
+    writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
+  }
   return true;
 }
 
@@ -3509,15 +3448,15 @@ function terminalBudgetDecisionRefusal(
   attempt: PipelineStageAttempt | null, allowBlockedRetry = false,
 ): PipelinePatchResult | null {
   if (terminalReviewBudgetSpent(attempt, allowBlockedRetry)) {
-    return { error: "terminal review budget is spent; its rounds cannot increase", status: 409 };
+    return { error: "Review budget is fixed; resolve the retained terminal review or close the lane", status: 409 };
   }
   return null;
 }
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
   const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
-  if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check; its rounds cannot increase`;
-  return `review budget spent (onExhausted: stop-after-fix): last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}; its rounds cannot increase`;
+  if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check. review budget is fixed; resolve the retained review or close the lane`;
+  return `review budget spent (onExhausted: stop-after-fix): last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. review budget is fixed; accept the head or close the lane`;
 }
 
 /** The next stage reads the fix's output and, beside it, the findings nobody
@@ -3770,7 +3709,6 @@ function routeFailedAttempt(
       answered): nothing was reviewed, so there are no findings to hand past a
       spent budget and the edge loops and parks as it always did. */
   reviewed = true,
-  now = attempt.completedAt!,
 ): boolean {
   if (!stage.onFail) return false;
   const terminalGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
@@ -3779,9 +3717,7 @@ function routeFailedAttempt(
   if (!reviewed && terminalGrant?.stageId === stage.id) return false;
   if (attempt.activatedBy?.budgetRecheck) {
     const pending = reviewed ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
-    if (pending && parkOnExhaustedBudget && attempt.verdict?.status === "fail") {
-      completeSpentReview(pipeline, stage, attempt, now);
-    } else if (pending) {
+    if (pending) {
       pipeline.reviewPending = pending;
       park(pipeline, reviewPendingDetail(pipeline.reviewPending), attempt, { kind: "review-budget" });
     } else {
@@ -4354,8 +4290,6 @@ async function settleStageVerdict(
         failEdgeInput(parsed),
         parsed.verdict.findings?.[0] ?? "stage verdict: fail",
         parsed.verdict.status === "fail",
-        true,
-        ports.now(),
       )
     ) {
       if (decisionRoutedAsFail) attempt.decisionRequested = true;
@@ -8806,7 +8740,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, controllerPorts) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, controllerPorts) || pipelineChanged;
         pipelineChanged = rebindPipelineAttemptPaths(pipeline, controllerPorts) || pipelineChanged;
-        pipelineChanged = reconcileTerminalReviewPending(pipeline, controllerPorts.now()) || pipelineChanged;
+        pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
@@ -8988,7 +8922,7 @@ function normalizeStages(
         if (!Number.isInteger(maxRounds) || (maxRounds as number) < 1 || (maxRounds as number) > MAX_FAIL_EDGE_ROUNDS) {
           violations.push({
             field: at("onFail.maxRounds"),
-            message: `stage ${id} onFail maxRounds must be an integer 1–${MAX_FAIL_EDGE_ROUNDS} (default ${DEFAULT_FAIL_EDGE_ROUNDS})`,
+            message: `stage ${id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`,
             expected: `integer 1–${MAX_FAIL_EDGE_ROUNDS} (default ${DEFAULT_FAIL_EDGE_ROUNDS})`,
           });
           onFailValid = false;
@@ -10506,8 +10440,8 @@ export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResum
   return null;
 }
 
-/** Replay historic continuation receipts. A gate's chosen budget cannot grow;
-    no new grant or cursor is written. */
+/** New budget extensions are refused. An already accepted historical request
+    can still replay its receipt, without changing the budget or launching work. */
 function continueReview(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null,
 ): PipelinePatchResult {
@@ -10515,7 +10449,7 @@ function continueReview(
   if (refusal) return refusal;
   if (!actor) return { error: "continue-review needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
-    || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1
+    || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1 || req.addRounds! > MAX_FAIL_EDGE_ROUNDS
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
     return { error: `continue-review requires clientRequestId (up to 200 characters), addRounds (1 to ${MAX_FAIL_EDGE_ROUNDS}) and expectedRevision from get_pipeline`, status: 400 };
   }
@@ -10529,11 +10463,7 @@ function continueReview(
     }
     return { pipeline, reviewContinuation: prior, replayed: true };
   }
-  if (req.addRounds! > MAX_FAIL_EDGE_ROUNDS) return { error: `addRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`, status: 400, field: "addRounds" };
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
-    return { error: "the pipeline changed since it was read; read it again before continuing review", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
-  }
-  return { error: "review rounds are chosen at creation and cannot increase; continue-review cannot add rounds", status: 409, field: "addRounds" };
+  return { error: "Review budget is fixed after work starts; continue-review cannot add rounds.", status: 409, field: "addRounds" };
 }
 
 /**
@@ -11196,8 +11126,7 @@ export async function patchPipeline(
       /* Conversation-graph editing (#353): rewires a stage's pass or fail edge.
          Edits always shape the future, never rewrite evidence: a stage that has
          passed along its pass edge keeps it frozen (its history names its
-         successor), and a traversed fail target and exhaustion stay frozen while
-         its budget may decrease. A stage whose
+         successor), and a fail edge freezes once traversed. A stage whose
          attempt is still running has not taken its pass edge yet, so rewiring
          it decides where that attempt's pass goes (graph slice 1). Accepted in
          every state but closed. */
@@ -11233,31 +11162,24 @@ export async function patchPipeline(
         const traversed = (pipeline.cursor?.activatedBy?.edge === "fail" && pipeline.cursor.activatedBy.stageId === from.id)
           || pipeline.runs.some((run) =>
             run.attempts.some((item) => !item.historical && item.activatedBy?.edge === "fail" && item.activatedBy.stageId === from.id));
-        const frozenRefusal = { error: "fail edge target and exhaustion are frozen evidence; only lowering its review budget is allowed", status: 409 };
-        if (traversed && req.to === null) return frozenRefusal;
-        if (pipeline.state !== "draft" && from.onFail && req.to === null) {
-          return { error: "a started gate keeps its chosen review budget; lower it instead of removing it", status: 409 };
+        if (traversed && from.onFail && typeof req.maxRounds === "number" && req.maxRounds > from.onFail.maxRounds) {
+          return { error: "Review budget cannot increase after this fail edge has been traversed.", status: 409 };
         }
+        if (traversed) return { error: "fail edge has already been traversed; it is frozen evidence", status: 409 };
         if (req.to === null) {
           if (req.maxRounds !== undefined) return { error: "maxRounds requires a fail-edge target", status: 400 };
           if (req.onExhausted !== undefined) return { error: "onExhausted requires a fail-edge target", status: 400 };
           from.onFail = null;
           graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null, summary: `cleared the fail edge of ${from.id}` });
         } else {
-          const maxRounds = req.maxRounds === undefined ? from.onFail?.maxRounds ?? DEFAULT_FAIL_EDGE_ROUNDS : req.maxRounds;
+          const maxRounds = req.maxRounds === undefined ? DEFAULT_FAIL_EDGE_ROUNDS : req.maxRounds;
           if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_FAIL_EDGE_ROUNDS) {
             return { error: `maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`, status: 400 };
           }
           if (req.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(req.onExhausted)) {
             return { error: "onExhausted must be advance, stop-after-fix or park", status: 400 };
           }
-          if (pipeline.state !== "draft" && from.onFail && maxRounds > from.onFail.maxRounds) {
-            return { error: "review rounds are chosen at creation and cannot increase after the lane starts", status: 409 };
-          }
-          const onExhausted = req.onExhausted ?? from.onFail?.onExhausted;
-          const onFail: PipelineFailEdge = { to: req.to, maxRounds, ...(onExhausted !== undefined ? { onExhausted } : {}) };
-          if (traversed && (!from.onFail || onFail.to !== from.onFail.to
-            || failEdgeExhaustion(onFail) !== failEdgeExhaustion(from.onFail))) return frozenRefusal;
+          const onFail: PipelineFailEdge = { to: req.to, maxRounds, ...(req.onExhausted !== undefined ? { onExhausted: req.onExhausted } : {}) };
           const candidate = pipeline.stages.map((item) => (item.id === from.id ? { ...item, onFail } : item));
           const graphError = pipelineGraphError(candidate);
           if (graphError) return { error: graphError, status: 400 };
@@ -11529,7 +11451,6 @@ export async function patchPipeline(
       persist(); requestPipelineTick();
       return { pipeline };
     } else if (req.action === "override-stage") {
-      if (req.maxRounds !== undefined) return { error: "maxRounds applies only to set-edge fail edges", status: 400 };
       const closed = closedGraphRefusal(pipeline);
       if (closed) return closed;
       const targetId = typeof req.stageId === "string" ? req.stageId : null;

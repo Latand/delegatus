@@ -11,11 +11,10 @@ export const MAX_ROLE_PARAM_TEXT_LENGTH = 2_000;
 
 /** Conversation-graph bounds (#353, schema v3): a pipeline holds 1–8 stages
     once started (drafts may momentarily hold 0 while assembled); fail-edge
-    cycles choose up to {@link MAX_FAIL_EDGE_ROUNDS} rounds at creation, with
+    cycles run at most {@link MAX_FAIL_EDGE_ROUNDS} rounds before parking, with
     {@link DEFAULT_FAIL_EDGE_ROUNDS} mirroring the review flow's round limit. */
 export const MAX_PIPELINE_STAGES = 8;
 export const MIN_STARTED_PIPELINE_STAGES = 1;
-/** Schema bound for a finite fail-edge budget. */
 export const MAX_FAIL_EDGE_ROUNDS = 9;
 export { DEFAULT_REVIEW_ROUNDS as DEFAULT_FAIL_EDGE_ROUNDS } from "@/lib/reviewHistory/limits";
 /** Accepted graph edits a pipeline record keeps; the oldest are dropped first. */

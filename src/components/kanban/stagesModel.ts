@@ -135,7 +135,7 @@ export interface PipelineActionOption {
  * edited elsewhere, an ended pipeline takes nothing, pause and resume swap,
  * retry and skip apply to the stage a `needs_decision` pipeline waits on, and
  * taking the head as it is (`accept-head`, #2187) applies to `needs_review`.
- * New continuation grants are refused by the creation-time budget rule.
+ * New continuation grants are refused by the fixed budget rule.
  */
 export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[] {
   const ended = pipelineEnded(pipeline);

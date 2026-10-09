@@ -457,18 +457,3 @@ test("the flag on the lane row: finishes the task, finished it, and finishes it 
   const screenWaits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-a", "p-b"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
   expect(screenWaits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("завершить задачу, коли закінчаться ще 2 пайплайни");
 });
-
-
-test.each(["en", "uk"] as const)("completed spent review shows pending and filed follow-up (%s)", (locale) => {
-  for (const density of ["card", "task", "screen"] as const) {
-    setLocale(locale);
-    const pipeline = searchPipeline({ state: "completed", cursor: null, reviewBudgetSpent: { stageId: "verify", attempt: 2, findings: 2, head: "a".repeat(40), at: iso(0) } });
-    const pending = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
-    expect(pending.querySelector("[data-pipeline-budget-spent]")?.textContent).toContain("2");
-    expect(pending.querySelector("[data-pipeline-budget-spent]")?.textContent).toContain(locale === "en" ? "after merge" : "після мерджу");
-    pipeline.reviewBudgetSpent!.followUp = { taskId: "follow-up", title: "Kept findings", at: iso(0) };
-    const filed = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
-    expect(filed.querySelector("[data-pipeline-budget-spent]")?.textContent).toContain("Kept findings");
-    expect(filed.querySelector("[data-pipeline-unreviewed]")).toBeNull();
-  }
-});

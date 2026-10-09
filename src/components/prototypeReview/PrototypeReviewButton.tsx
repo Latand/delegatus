@@ -112,7 +112,7 @@ export function PhonePrototypeRow({ task, title, rowClass }: { task: BoardTask; 
       </span>
       <span className={`inline-flex shrink-0 items-center gap-1 text-label font-semibold tabular-nums ${state === "ready" ? "text-accent" : state === "unsent" ? "text-warning" : "text-muted"}`}>
         {state === "ready" ? <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" /> : null}
-        {waiting ? t(`proto.row.${state}`) : t(state === "unsent" ? "proto.row.unsent" : "proto.row.decided", { chosen: (summary.decision?.chosen ?? []).map((variant) => variant.number).join(", ") })}
+        {waiting ? t(`proto.row.${state}`) : t(state === "hidden" ? "proto.row.hidden" : state === "unsent" ? "proto.row.unsent" : "proto.row.decided", { chosen: (summary.decision?.chosen ?? []).map((variant) => variant.number).join(", ") })}
       </span>
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
     </button>

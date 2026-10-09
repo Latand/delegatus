@@ -717,38 +717,3 @@ describe("rollup reading", () => {
     ]);
   });
 });
-
-
-test.each([true, false])("spent re-check enters merge queue only with setting on (%s)", async (enabled) => {
-  const spent = lane("spent", { reviews: [{ n: 2, state: "failed" }] });
-  spent.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.verdict = { status: "fail", findings: ["P0 retained finding"] };
-  expect(mergeEligible(spent)).toBe(false);
-  spent.reviewBudgetSpent = { stageId: "review", attempt: 2, findings: 1, head: HEAD_A, at: spent.closedAt! };
-  expect(mergeEligible(spent)).toBe(true);
-  const h = harness({ setting: { enabled }, lanes: [spent], prs: [openPr(11)] });
-  await h.sweep();
-  expect(h.merge("spent")?.state).toBe(enabled ? "waiting-checks" : undefined);
-});
-
-
-test("an active merger owns the PR and auto merge leaves it alone", async () => {
-  const spent = lane("spent", { reviews: [{ n: 2, state: "failed" }] });
-  spent.reviewBudgetSpent = { stageId: "review", attempt: 2, findings: 1, head: HEAD_A, at: spent.closedAt! };
-  const merger = lane("merger", { stages: [{ id: "merge", kind: "run", role: { roleId: "merger", params: { prs: `11@${HEAD_A}` } } }] });
-  merger.state = "running";
-  const h = harness({ lanes: [spent, merger], prs: [openPr(11), openPr(12)] });
-  await h.sweep();
-  expect(h.merge("spent")).toBeUndefined();
-  expect(h.merges()).toHaveLength(0);
-});
-
-
-test("a migrated spent lane already merged outside never issues another merge", async () => {
-  const spent = lane("spent", { reviews: [{ n: 2, state: "failed" }] });
-  spent.reviewBudgetSpent = { stageId: "review", attempt: 2, findings: 1, head: HEAD_A, at: spent.closedAt! };
-  const h = harness({ lanes: [spent], prs: [openPr(11, { state: "MERGED" })] });
-  await h.sweep();
-  expect(h.merge("spent")?.state).toBe("merged");
-  expect(h.merge("spent")?.by).toBe("outside");
-  expect(h.merges()).toHaveLength(0);
-});

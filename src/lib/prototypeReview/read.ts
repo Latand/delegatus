@@ -35,16 +35,21 @@ export function taskForResponse<T extends BoardTask>(request: { headers: Headers
 }
 /** A round a later decision retired names that decision's round; it stays in
     the history and can still be decided, but nothing waits on it. */
-function withSuperseded(rounds: PrototypeRoundView[]): PrototypeRoundRead[] {
+function withSuperseded(rounds: PrototypeRoundView[], taskId: string): PrototypeRoundRead[] {
   const superseded = prototypeRoundsSuperseded(rounds);
-  return rounds.map(round => superseded.has(round.id) ? { ...round, supersededBy: superseded.get(round.id)! } : round);
+  const index = prototypeDismissals();
+  return rounds.map(round => {
+    const record = index.get(`prototype:${round.id}`);
+    return { ...round, ...(superseded.has(round.id) ? { supersededBy: superseded.get(round.id)! } : {}),
+      ...(record?.taskId === taskId ? { hidden: { at: record.at, by: record.by } } : {}) };
+  });
 }
 export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
   if (!task.prototypeReviews?.length && task.prototypeReviewReplica) {
-    const summary = currentPrototypeSummary(task.prototypeReviewReplica.summary);
-    return { taskId: task.id, rounds: withSuperseded(task.prototypeReviewReplica.rounds), summary,
+    const summary = withPrototypeReviewSummaries([task])[0]!.prototypeReview!;
+    return { taskId: task.id, rounds: withSuperseded(task.prototypeReviewReplica.rounds, task.id), summary,
       ...(task.prototypeReviewReplica.historyTruncated ? { historyTruncated: true } : {}),
-      waitingReviewId: summary.waitingReviewId, unavailable: "another-installation" };
+      waitingReviewId: summary.waitingDismissal ? null : summary.waitingReviewId, unavailable: "another-installation" };
   }
   // The media route's own test: a regular file at its place under the resolved root.
   let realRoot: string | null = null;
@@ -68,8 +73,8 @@ export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
     return { ...publicRound, variants: publicRound.variants.map(v => ({ ...v, frames: v.frames.map(({ image,original,...frame }) => ({ ...frame, image: mediaView(image), ...(original ? { original: mediaView(original) } : {}) })),
       videos: v.videos.map(video => ({ ...video, media: mediaView(video.media) })) })) };
   });
-  const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
-  return { taskId: task.id, rounds: withSuperseded(rounds), summary, waitingReviewId: summary?.waitingReviewId ?? null };
+  const summary = withPrototypeReviewSummaries([task])[0]!.prototypeReview;
+  return { taskId: task.id, rounds: withSuperseded(rounds, task.id), summary, waitingReviewId: summary?.waitingDismissal ? null : summary?.waitingReviewId ?? null };
 }
 
 function prototypeDismissals(): ReadonlyMap<string, AttentionDismissalV1> {

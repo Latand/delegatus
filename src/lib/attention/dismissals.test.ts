@@ -8,6 +8,8 @@ import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentSto
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { readPrototypeReviews, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
 
 import {
   DISMISSAL_CAPACITY,
@@ -49,6 +51,24 @@ afterEach(() => {
 
 const OPERATOR: DismissedBy = { kind: "operator", surface: "desktop" };
 const SEAT: DismissedBy = { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" };
+
+test("rule 3: hide removes a review from both waiting lists, keeps history and undo restores it; task completion alone leaves it waiting", async () => {
+  const task = { id: "task-prototype", project: "repo-fixture", status: "done", assignments: [], text: "Layout",
+    prototypeReviews: [{ id: "review-hide", title: "Layout", createdAt: "2026-09-24T09:00:00Z", source: { conversationId: null }, variants: [] }] } as unknown as BoardTask;
+  const h = harness({ tasks: [task] });
+  const target = { kind: "prototype" as const, taskId: task.id, reviewId: "review-hide" };
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toHaveLength(1);
+  await dismissAttention(target, OPERATOR, { ports: h.ports });
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toEqual([]);
+  const read = readPrototypeReviews(task);
+  expect(read.waitingReviewId).toBeNull();
+  expect(read.rounds).toHaveLength(1);
+  expect(read.rounds[0]!.hidden?.by).toEqual(OPERATOR);
+  expect(read.rounds[0]!.decision).toBeUndefined();
+  await dismissAttention(target, SEAT, { ports: h.ports, undo: true });
+  expect(readPrototypeReviews(task).waitingReviewId).toBe("review-hide");
+  expect(prototypeReviewNotices(withPrototypeReviewSummaries([task]))).toHaveLength(1);
+});
 
 function lane(id: string, state: Pipeline["state"], over: Partial<Pipeline> = {}): Pipeline {
   return {
