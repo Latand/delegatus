@@ -24045,3 +24045,47 @@ describe("idle seat interval eligibility", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+/** Registry-enriched rows use the existing read-only remote-agent surface. */
+describe("linked seats and shared-project agent activity", () => {
+  browserTest("a remote deployer stays under its task and the peer seat appears in its machine group", async () => {
+    const out = path.resolve(".artifacts/linked-seats-and-activity");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`, now = Date.now();
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [
+        { k: `a:${"1".repeat(16)}`, p: project, t: "deployer agent", ro: "deployer", e: "codex", m: "gpt-6-sol", st: "working", task: "t-search", at: now, peer: "Machine B", stale: false, asOf: now,
+          pl: { id: "pipeline-1", state: "running", stage: "release", stageState: "running" } },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "orchestrator", ro: "orchestrator", seat: 1, e: "claude", m: "claude-opus-5", st: "waiting", at: now, peer: "Machine B", stale: false, asOf: now },
+      ] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, { deployer: number; seat: number; overflow: boolean }> = {};
+    try {
+      for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents`, { width, height: 844 }, "light", "en", "reduce", width === 390);
+        try {
+          const bound = page.locator(width === 390 ? '[data-phone-kanban-column="assigned"] [data-remote-agents]' : `${card("t-search")} [data-remote-agents]`).first();
+          await bound.waitFor(); await bound.locator("summary").click();
+          expect(await bound.textContent()).toContain("deployer agent");
+          expect(await bound.textContent()).toContain("release");
+          const overflow = await bound.evaluate(node => node.scrollWidth > node.clientWidth + 1);
+          expect(overflow).toBe(false);
+          await bound.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-deployer.png`) });
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const group = page.locator(width === 390 ? '[data-phone-kanban-column="inbox"] [data-remote-agents]' : '[data-status="inbox"] [data-remote-agents]').first();
+          await group.waitFor(); await group.locator("summary").click();
+          expect(await group.textContent()).toContain("Machine B");
+          expect(await group.textContent()).toContain("orchestrator");
+          expect(pageErrors).toEqual([]);
+          readings[String(width)] = { deployer: await bound.locator("[data-remote-agent]").count(), seat: await group.locator("[data-remote-agent]").count(), overflow };
+          await page.screenshot({ path: path.join(out, `${width}-seat.png`) });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/linked-seats-and-activity/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});

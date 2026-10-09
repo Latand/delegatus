@@ -3279,6 +3279,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. Workers, pipeline stages, deputies and unidentified callers are refused. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
@@ -4101,6 +4102,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
     project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
+    machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
   ask_orchestrator_in_parallel: z.object({

@@ -75,7 +75,7 @@ old remote comes from `state/project-remotes.json`, which each machine fills
 with the remote behind every repository key it resolves, because a key's hash
 cannot be reversed. A re-pointed origin (a fork, an unrelated repository) is
 never aliased, and neither is a remote this machine never recorded, because
-every clone shares a remote id.
+every clone shares a remote id. Shared recorded GitHub remotes also check the forge's current full name once per key per 24 hours, so an unchanged clone origin canonicalizes only after matching numeric repository ids prove the rename.
 <!-- END:worktree-grouping -->
 
 <!-- BEGIN:live-state-and-publication -->

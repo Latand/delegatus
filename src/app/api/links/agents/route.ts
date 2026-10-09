@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { remoteAgents, remoteLanes } from "@/lib/links/agentFeed";
 import type { RemoteHost } from "@/components/kanban/remoteFeed";
 import { peerRows, grantRows } from "@/lib/links/protocol";
@@ -29,7 +30,7 @@ export function GET(req: NextRequest) {
     // successful exchange. Request counts/lastUsed never prove sync success.
     const failing = previous?.state === "failing" || (peer ? peer.state !== "active" : grant?.state === "failing");
     const lastCall = Math.max(previous?.lastCall ?? 0, peer?.lastCall ?? grant?.lastCall ?? 0) || null;
-    hosts[link.install] = { label: link.label, linked: true, state: failing ? "failing" : "active", lastCall };
+    hosts[link.install] = { label: link.label, linked: true, seatMessages: peerSeatMessages(link.key), state: failing ? "failing" : "active", lastCall };
   }
   const agents = project === null ? [...context.all].flatMap((key) => remoteAgents(key)) : remoteAgents(project);
   return NextResponse.json({ agents, lanes: remoteLanes(project ?? undefined), self: context.self?.id ?? null, hosts }, { headers: { "cache-control": "no-store" } });

@@ -1,3 +1,4 @@
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import crypto from "node:crypto";
 
 import {
@@ -55,6 +56,8 @@ import { isInterruptionObligationId } from "./interruptionObligations";
 import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 export interface StructuredMessageRequest {
+  /** Live authorization at fresh reservation, after runtime and lock waits. */
+  admissionGuard?: () => void;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -359,6 +362,9 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
 }
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409,
+  });
   return {
     ok: false,
     structured: true,
@@ -597,6 +603,7 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
+    if (!replay) request.admissionGuard?.();
     const generation = conversation.generations.at(-1);
     const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
@@ -607,8 +614,7 @@ async function holdDuringRuntimeSynchronization(
       if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
       conversation = reseat.value;
     }
-    /* The write lock is waited for off the event loop and kept for the write;
-       one another writer keeps past its deadline reserves nothing. */
+    /* The registry write lock is waited for off the event loop. */
     const place = async (): Promise<HeldDelivery> => {
       const held = await registry.holdDeliveryOffLoop(
         conversation.id,
@@ -618,7 +624,7 @@ async function holdDuringRuntimeSynchronization(
         refs,
         contentDigest,
         commandInput(request),
-        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
+        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard },
       );
       if (!held) throw new Error(REGISTRY_WRITER_BUSY);
       return held;
@@ -1318,6 +1324,7 @@ export async function enqueueStructuredMessage(
       content.contentDigest,
       commandInput(request),
     );
+    if (!terminalReplay) request.admissionGuard?.();
   } catch (error) {
     return deliveryFailure(error);
   }
@@ -1432,6 +1439,7 @@ export async function enqueueStructuredMessage(
         commandInput(request),
       );
       if (replay) return replay;
+      request.admissionGuard?.();
       if (rawImages.length > 0 && !publishedImages) {
         (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
         publishedImages = true;
@@ -1453,6 +1461,7 @@ export async function enqueueStructuredMessage(
         refs,
         content.contentDigest,
         commandInput(request),
+        { admissionGuard: request.admissionGuard },
       );
       if (!held) throw new Error(REGISTRY_WRITER_BUSY);
       return held;

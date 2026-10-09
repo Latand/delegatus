@@ -9110,7 +9110,7 @@ export class AgentRegistry {
     runtimeImages: readonly StructuredImageRef[] = [],
     contentDigest: string | null = null,
     commandInput: HeldDeliveryCommandInput = {},
-    admission: { recoveryIntent?: HeldDelivery["recoveryIntent"] } = {},
+    admission: { recoveryIntent?: HeldDelivery["recoveryIntent"]; admissionGuard?: () => void } = {},
   ): HeldDelivery {
     if (payloadKind === "text" && !text) throw new Error("held delivery must contain at most 32000 characters");
     if (payloadKind === "runtime-images" && runtimeImages.length === 0) {
@@ -9187,6 +9187,9 @@ export class AgentRegistry {
         contentDigest,
       );
       if (terminalReplay) return terminalReplay;
+      // The writer can wait while link authorization changes. Check inside
+      // the acquired write, only for a fresh reservation; never persist it.
+      admission.admissionGuard?.();
       const deliveryId = crypto.randomUUID();
       const held: HeldDelivery = {
         id: deliveryId,

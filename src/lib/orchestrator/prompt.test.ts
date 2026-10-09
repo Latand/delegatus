@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 41, and a v40 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(41);
+test("the default mandate is at version 42, and a v41 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(42);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -122,7 +122,8 @@ test("the default mandate is at version 41, and a v40 seat reads as stale", () =
   expect(orchestratorMandateStale(38)).toBe(true);
   expect(orchestratorMandateStale(39)).toBe(true);
   expect(orchestratorMandateStale(40)).toBe(true);
-  expect(orchestratorMandateStale(41)).toBe(false);
+  expect(orchestratorMandateStale(41)).toBe(true);
+  expect(orchestratorMandateStale(42)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -170,6 +171,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
   40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
   41: "3a2ea3525bcb81cd062e2f6388fd4540a618442b003ae9479e383f1dbb363448",
+  42: "dc731db851dc7e7952aa8b172829563fb7544214198577fdf3e32d28fca6b11d",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -592,9 +594,9 @@ test("the mandate asks before a bug report is filed, publishes only an approved 
   expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
   expect(section).toContain("Never file one another way.");
   /* Rule 2: seat to seat by default, and what lifts it. */
-  expect(section).toContain("Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context.");
-  expect(section).toContain("Never create tasks or pipelines on its board, spawn agents there or message its workers");
-  expect(section).toContain("only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them");
+  expect(section).toContain("Other projects: send_message_to_orchestrator;");
+  expect(section).toContain("tasks, pipelines, spawns and worker messages need an explicit operator request");
+  expect(section).toContain("quoted in crossProjectRequest");
 
   /* A bespoke mandate receives both required rules once. A retained heading
      cannot suppress them when its body was edited or removed. */
@@ -938,4 +940,10 @@ test("the mandate directs prototype review to the task", () => {
     expect(mandate).toContain("Prototype review: point to the task's review.");
     expect(mandate.split("Prototype review:")).toHaveLength(2);
   }
+});
+
+
+test("the mandate names linked seats and requires coordination before a shared release", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_orchestrator lists linkedSeats");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
 });

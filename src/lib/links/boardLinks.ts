@@ -8,7 +8,7 @@ import type { SharedProject } from "./state";
     and pushed to the peer store named by `store`, and the linked projects
     whose rows have fully crossed each way. */
 export type TaskCursor = { pull: [number] | [number, string] | null; pushed: [number] | [number, string] | null; pullCovered: string[]; pushCovered: string[]; boardReplayVersion?: number };
-type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number; titleRepair?: 1 };
+type BoardLink = { key: string; store: string; shared: SharedProject[]; cursor?: TaskCursor; taskWireVersion?: number; titleRepair?: 1; label?: string };
 const seed = { collection: "board_links", schemaVersion: 1, migrationId: "linked-boards-m1", key: (row: BoardLink) => row.key, loadRecords: (): BoardLink[] => [] };
 const cache = new Map<string, SqliteStateCollection<BoardLink>>();
 
@@ -108,4 +108,28 @@ export function writeTaskCursor(id: string, store: string, cursor: TaskCursor, p
     if (current && JSON.stringify(current) === JSON.stringify(next)) return;
     tx.put(next);
   });
+}
+
+/** Capability is persisted for MCP reads; idle exchanges change no row. */
+export function peerSeatMessages(key: string): boolean { return readRow(`seat-messages:${key}`)?.taskWireVersion === 1; }
+export function recordSeatMessages(key: string, capable: boolean): void {
+  const rowKey = `seat-messages:${key}`;
+  const prior = readRow(rowKey);
+  if ((prior?.taskWireVersion === 1) === capable && (prior || !capable)) return;
+  collection(true)!.boundedPatch(2, tx => {
+    const held = tx.get(rowKey);
+    if ((held?.taskWireVersion === 1) === capable && (held || !capable)) return;
+    tx.put({ key: rowKey, store: "", shared: [], taskWireVersion: capable ? 1 : 0 });
+  });
+}
+
+
+/** Keep a token-free tombstone so removal remains distinguishable from an
+ * unknown machine. Live links win resolution, including after re-pairing. */
+export function rememberRevokedSeatLink(side: "peer" | "grant", id: string, install: string, label: string): void {
+  collection(true)!.boundedPatch(2, tx => { tx.put({ key: `revoked-seat-link:${side}:${id}`, store: install, label, shared: [] }); });
+}
+export function wasSeatLinkRevoked(machine: string): boolean {
+  return collection(false)?.snapshot().some(row => row.key.startsWith("revoked-seat-link:")
+    && [row.store, row.store.slice(0, 8), row.label?.toLowerCase()].includes(machine)) ?? false;
 }

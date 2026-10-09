@@ -114,3 +114,91 @@ test("200 summaries reset in four 50-row pages, and the receiver swaps only on t
   expect(firstDelta.more).toBe(true);
   expect(changing.page(firstDelta.cursor, linked).rows).toHaveLength(50);
 });
+
+
+test("raw scan paths join registry continuity, role, task and pipeline without undefined-id matches", () => {
+  const raw = { ...file(77), conversationId: undefined } as FileEntry;
+  const snapshot = { conversations: { worker: { id: "worker", engine: "claude", agentRole: "deployer", generations: [], continuityPaths: [raw.path] } }, lineageEdges: {}, memberships: { worker: [{ kind: "pipeline", containerId: "lane", stageId: "deploy" }] } };
+  const pipeline = { id: "lane", state: "running", taskIds: ["release"], stages: [{ id: "deploy" }], runs: [{ stageId: "deploy", attempts: [{ conversationId: "worker", state: "running" }] }] };
+  const tasks = [{ id: "wrong", project: b, assignments: [{ path: "/unrelated" }] }, { id: "release", project: other, assignments: [], chosen: false }];
+  let reads = 0;
+  const feed = new AgentFeed("raw", () => [raw], () => tasks as never, () => [pipeline] as never, () => () => false,
+    { snapshot: () => { reads++; return snapshot as never; }, seats: () => [], canonical: (p: string) => p === other ? a : p });
+  const row = feed.page(null, projects).rows![0] as AgentRow;
+  expect(row).toMatchObject({ p: a, task: "release", ro: "deployer", t: "deploy stage", pl: { id: "lane", stage: "deploy", stageState: "running" } });
+  expect(reads).toBe(1);
+});
+
+test("designated old seat survives age and fifty-row priority and idle refresh reads no snapshot", () => {
+  const old = { ...file(88, a, "done"), conversationId: undefined, lastAgentWorkAt: timestamp - 172_800_000 } as FileEntry;
+  const files = [old, ...Array.from({ length: 60 }, (_, n) => file(n + 100))];
+  let reads = 0;
+  let seatReads = 0;
+  const snapshot = { conversations: { seat: { id: "seat", agentRole: "orchestrator", generations: [{ path: old.path }], continuityPaths: [] } }, lineageEdges: {}, memberships: {} };
+  const tasks: never[] = [];
+  const pipelines: never[] = [];
+  const feed = new AgentFeed("old-seat", () => files, () => tasks, () => pipelines, () => () => false,
+    { snapshot: () => { reads++; return snapshot as never; }, seats: () => { seatReads++; return [{ project: a, conversationId: "seat" }]; } });
+  const first = feed.page(null, projects);
+  expect(first.rows).toHaveLength(50);
+  expect(first.rows!.some((row) => "seat" in row && row.seat === 1 && "t" in row && row.t === "orchestrator")).toBe(true);
+  expect(feed.page(first.cursor, projects).rows).toBeUndefined();
+  expect(reads).toBe(1);
+  expect(seatReads).toBe(1);
+});
+
+test("receiver validates and retains optional role and designated seat", () => {
+  const row = { k: `a:${"d".repeat(16)}`, p: a, t: "orchestrator", e: "claude", m: "unknown", st: "waiting", at: timestamp, ro: "orchestrator", seat: 1 };
+  expect(decodeAgentRow(row, projects)).toEqual(row as never);
+  for (const extra of [{ ro: "bad role" }, { ro: "x".repeat(65) }, { seat: 0 }, { seat: true }]) expect(decodeAgentRow({ ...row, ...extra }, projects)).toBeNull();
+});
+
+
+test("raw generation paths match explicit assignment ids and lineage roles without exposing registry text", () => {
+  const raw = { ...file(99), conversationId: undefined } as FileEntry;
+  const snapshot = { conversations: { worker: { id: "worker", generations: [{ path: raw.path }], continuityPaths: [], agentRole: null } }, lineageEdges: { worker: { role: "reviewer" } }, memberships: {} };
+  const tasks = [{ id: "wrong", project: b, assignments: [{ path: "/unrelated" }] }, { id: "review", project: a, assignments: [{ conversationId: "worker" }], chosen: false }];
+  const row = new AgentFeed("direct-id", () => [raw], () => tasks as never, () => [], () => () => false,
+    { snapshot: () => snapshot as never, seats: () => [] }).page(null, projects).rows![0];
+  expect(row).toMatchObject({ task: "review", ro: "reviewer", t: "reviewer agent", p: a });
+  expect(JSON.stringify(row)).not.toContain(raw.path);
+  expect(JSON.stringify(row)).not.toContain("worker");
+});
+
+test("receiver keeps an older designated seat when trimming a project to fifty", () => {
+  const rows = Array.from({ length: 50 }, (_, n) => ({ k: `a:${n.toString(16).padStart(16, "0")}`, p: a, t: "agent", e: "codex", m: "unknown", st: "done", at: timestamp }));
+  const id = "priority-receiver";
+  expect(acceptAgents(id, { reset: true, more: true, cursor: "0000000000000000:1", rows }, projects)).toBe(true);
+  const seat = { ...rows[0], k: `a:${"e".repeat(16)}`, t: "orchestrator", at: timestamp - 172_800_000, ro: "orchestrator", seat: 1 };
+  expect(acceptAgents(id, { cursor: "0000000000000000:1", rows: [seat] }, projects)).toBe(true);
+  expect(receivedAgentRows(id)).toHaveLength(50);
+  expect(receivedAgentRows(id).find((row) => row.seat === 1)).toEqual(seat as never);
+});
+
+
+test("one conversation publishes the newest generation when multiple transcript paths are scanned", () => {
+  const project = `repo-${"a".repeat(32)}`;
+  const id = "conversation_multi";
+  const snapshot = { conversations: { [id]: { id, agentRole: "deployer", generations: [{ path: "/fixture/old.jsonl" }, { path: "/fixture/new.jsonl" }] } }, memberships: {}, lineageEdges: {} };
+  const files = [
+    { engine: "codex", path: "/fixture/new.jsonl", project, mtime: Date.now() / 1000, model: "current-model", proc: "running", activity: "live" },
+    { engine: "codex", path: "/fixture/old.jsonl", project, mtime: (Date.now() - 60_000) / 1000, model: "older-model", proc: "stopped", activity: "idle" },
+  ];
+  const feed = new AgentFeed("multi", () => files as never, () => [], () => [], () => () => true, { snapshot: () => snapshot as never, seats: () => [] });
+  const rows = feed.page(null, new Set([project])).rows as AgentRow[];
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ m: "current-model", st: "working" });
+});
+
+
+test("a designated seat is present before its transcript reaches the scan cache", () => {
+  const snapshot = { conversations: { seat: { id: "seat", engine: "codex", agentRole: "orchestrator", generations: [{ path: "/fixture/pending.jsonl", createdAt: new Date(timestamp).toISOString(), launchProfile: { model: "fixture-model" } }], turn: { state: "unknown" } } }, memberships: {}, lineageEdges: {} };
+  const files: FileEntry[] = [];
+  const tasks: never[] = [];
+  const feed = new AgentFeed("unscanned-seat", () => files, () => tasks, () => [], () => () => false,
+    { snapshot: () => snapshot as never, seats: () => [{ project: a, conversationId: "seat" }] });
+  const rows = feed.page(null, projects).rows as AgentRow[];
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ p: a, seat: 1, ro: "orchestrator", t: "orchestrator", e: "codex" });
+  expect(JSON.stringify(rows)).not.toContain("pending.jsonl");
+});

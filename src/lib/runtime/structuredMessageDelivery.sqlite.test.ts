@@ -6,6 +6,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import type { RuntimeHostClient } from "./client";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
@@ -17,6 +18,59 @@ import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./struct
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-message-sqlite-"));
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+for (const syncing of [false, true]) {
+  test(`linked admission rechecks authorization after the registry writer wait (${syncing ? "synchronizing" : "live"})`, async () => {
+    const fixture = sqliteRegistryFixture("llv-link-admission-wait");
+    const { registry, sqliteFilename } = fixture;
+    const artifactPath = "/sessions/link-admission.jsonl";
+    const conversation = registry.ensureConversation("codex", artifactPath, "default");
+    const generation = conversation.generations.at(-1)!;
+    registry.upsert({
+      key: { engine: "codex", sessionId: generation.id }, artifactPath,
+      cwd: generation.launchProfile.cwd, accountId: generation.accountId, status: "idle", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:link-fixture",
+        process: { pid: 101, startIdentity: "link-fixture" }, eventCursor: 1, protocolVersion: "v2",
+        writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "structured-host:link-fixture", pendingAction: null,
+    });
+    const holder = registryLockHolder(sqliteFilename);
+    let authorized = true;
+    let commands = 0;
+    let guardReads = 0;
+    const client = {
+      readSession: async () => ({ conversationId: conversation.id, artifactPath,
+        sessionKey: { engine: "codex", sessionId: generation.id },
+        hostKind: "codex-app-server", host: "hosted", turn: "busy",
+        capabilities: { steer: true, structuredAttention: true } }),
+      command: async () => { commands++; throw new Error("revoked message reached the host"); },
+    } as unknown as RuntimeHostClient;
+    try {
+      await holder.hold(5_000);
+      const sending = enqueueStructuredMessage({
+        path: artifactPath, conversationId: conversation.id, policy: "queue",
+        text: "Linked words awaiting authorization.", clientMessageId: "linked-writer-wait",
+        admissionGuard: () => {
+          guardReads++;
+          if (!authorized) throw new DeliveryAdmissionRefusedError("link_revoked");
+        },
+      }, { enabled: () => true, client: () => syncing ? null : client, registry: () => registry,
+        kick: () => {}, requestMigrationTick: () => {}, startupFailed: () => false, progress: null });
+      // The preliminary check has passed, while the other process owns the writer.
+      for (let tries = 0; tries < 100 && guardReads === 0; tries++) await Bun.sleep(5);
+      expect(guardReads).toBeGreaterThan(0);
+      await Bun.sleep(30);
+      authorized = false;
+      await holder.release();
+      expect(await sending).toMatchObject({ ok: false, status: 409, error: "link_revoked" });
+      expect(Object.values(registry.snapshot().heldDeliveries)).toHaveLength(0);
+      expect(Object.values(registry.snapshot().deliveryOperationOwners)).toHaveLength(0);
+      expect(commands).toBe(0);
+    } finally {
+      await holder.close(); registry.close(); fixture.cleanup();
+    }
+  });
+}
 
 test("exact-key replay after SQLite compaction and reopen never publishes another command", async () => {
   const filename = path.join(sandbox, "compacted-replay.json");
