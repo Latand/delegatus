@@ -21,6 +21,7 @@ import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
+import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
 import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
 
 /*
@@ -16163,6 +16164,114 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 600_000);
 });
 
+
+describe("#2577 automatic rotation board cards: a short title and one sentence, ids and figures folded in details", () => {
+  /* The `seat-tick-cards` scenario with only the two cards an automatic
+     rotation leaves: a failed attempt open in the Inbox and a completed one in
+     Done. Their text comes from `autoRotationCardNotice`, the builder the seat
+     tick writes with; the details carry its record and the card's
+     `monitor-ref:` line as `cardDetails` lays them out. Desktop 1440×900 and
+     phone 390×844, en and uk, light and dark. Frames go to
+     LLV_SEAT_TICK_SHOTS_DIR (default `.artifacts/seat-tick-shots`).
+
+       CHROME_BIN=… LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "#2577" */
+  const SHOTS = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots");
+  const attempt = (over: Partial<AutoRotationAttempt>): AutoRotationAttempt => ({
+    id: "seat-autorotate:atlas:3:fixture", seatEpoch: 3, conversationId: "conversation_before_fixture", startedAt: new Date(Date.now() - 9 * 60_000).toISOString(),
+    tokens: 720000, windowTokens: 1000000, thresholdPercent: 60, state: "failed", error: "successor launch failed; the predecessor was restored",
+    told: { report: true, card: true }, ...over,
+  });
+  const cardOf = (locale: "en" | "uk", a: AutoRotationAttempt, ref: string) => {
+    const notice = autoRotationCardNotice(a, locale, "UTC");
+    return { text: notice.text, details: `${notice.record}\n\nmonitor-ref: seat-auto-rotation-${ref}` };
+  };
+  const HIDDEN = ["conversation_", "monitor-ref", "seat-auto-rotation", "720", "successor", "predecessor"];
+
+  browserTest("both cards read as a title and one sentence at 1440 and 390, en and uk, light and dark", async () => {
+    fs.mkdirSync(SHOTS, { recursive: true });
+    const out = path.resolve(".artifacts/auto-rotation-cards-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const texts = {
+          rotFailed: cardOf(lang, attempt({}), "3f9a1c7e0b5d4a2c9e8f7a6b5c4d3e2f"),
+          rotDone: cardOf(lang, attempt({ state: "rotated", successorConversationId: "conversation_after_fixture", startedAt: new Date(Date.now() - 70 * 60_000).toISOString() }), "0a1b2c3d4e5f60718293a4b5c6d7e8f9"),
+        };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const [failedTitle, failedBody] = texts.rotFailed.text.split("\n");
+        const [doneTitle, doneBody] = texts.rotDone.text.split("\n");
+        for (const scheme of ["light", "dark"] as const) {
+          {
+            const label = `auto-rotation-desktop-1440-${scheme}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, scheme, lang);
+            try {
+              await page.waitForSelector(card("t-rot-failed"), { timeout: 30_000 });
+              const fold = page.locator("[data-seat-collapse]");
+              if (await fold.count()) await fold.first().click();
+              await page.mouse.move(0, 0);
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-board.png`) });
+              const read = async (id: string, name: string) => {
+                const locator = page.locator(card(id));
+                await locator.scrollIntoViewIfNeeded();
+                await locator.screenshot({ path: path.join(SHOTS, `${label}-card-${name}.png`) });
+                return locator.evaluate((element) => ({
+                  title: element.querySelector("h3.title .clamp")?.textContent ?? "",
+                  body: element.querySelector(".desc")?.textContent?.trim() ?? "",
+                  visible: (element as HTMLElement).innerText,
+                  detailsFolded: element.querySelector("[data-details-toggle]")?.getAttribute("aria-expanded") === "false",
+                }));
+              };
+              const failed = await read("t-rot-failed", "failed");
+              const done = await read("t-rot-done", "done");
+              expect(failed.title).toBe(failedTitle!); expect(failed.body).toBe(failedBody!);
+              expect(done.title).toBe(doneTitle!); expect(done.body).toBe(doneBody!);
+              for (const entry of [failed, done]) {
+                expect(entry.detailsFolded, `${label} details are folded`).toBe(true);
+                for (const hidden of HIDDEN) expect(entry.visible, `${label} shows no ${hidden}`).not.toContain(hidden);
+              }
+              readings.push({ label, failed, done, pageErrors });
+              expect(pageErrors, `${label} page errors`).toEqual([]);
+            } finally { await context.close(); }
+          }
+          {
+            const label = `auto-rotation-phone-390-${scheme}-${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, scheme, lang, "no-preference", true, 2);
+            try {
+              await page.waitForTimeout(2500);
+              const columns: Record<string, string> = {};
+              for (const tab of ["inbox", "done"] as const) {
+                await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+                await page.waitForTimeout(500);
+                await page.screenshot({ path: path.join(SHOTS, `${label}-${tab}.png`) });
+                columns[tab] = await page.locator(`[data-phone-kanban-column="${tab}"]`).innerText();
+              }
+              expect(columns.inbox).toContain(failedTitle!); expect(columns.done).toContain(doneTitle!);
+              /* Opened, the task screen shows the sentence; the record stays folded. */
+              await page.locator('[data-phone-kanban-tab="inbox"]').click();
+              await page.waitForTimeout(400);
+              await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: failedTitle! }).first().click();
+              await page.waitForTimeout(800);
+              await page.screenshot({ path: path.join(SHOTS, `${label}-failed-task-screen.png`) });
+              const screen = await page.evaluate(() => document.body.innerText);
+              expect(screen).toContain(failedBody!);
+              for (const hidden of HIDDEN) {
+                expect(columns.inbox, `${label} inbox shows no ${hidden}`).not.toContain(hidden);
+                expect(screen, `${label} task screen shows no ${hidden}`).not.toContain(hidden);
+              }
+              readings.push({ label, phone: true, columns, pageErrors });
+              expect(pageErrors, `${label} page errors`).toEqual([]);
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(SHOTS, "auto-rotation-cards-readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  }, 600_000);
+});
 
 describe("seat tick switch: four stops in the seat header and the phone's seat row, dragged, stepped and clicked", () => {
   /*

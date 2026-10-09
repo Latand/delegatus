@@ -403,23 +403,29 @@ way `seatAuthIncident.ts` keeps its words.
 - **Board card**: a seat-tick card, `ref: "seat-auto-rotation"`,
   `kind: "auto-rotation"` (new member of the union at `types.ts:1347`),
   `instance: attempt.id`. `ensureSeatTickCard` gives it a per-instance ref as
-  it does for `auth-failed` (`seatTickController.ts:297`), and `cardText`
-  (`:236-237`) gets the same one-line branch. Every rotation is an occurrence,
-  and two rotations must be two cards.
-  - Rotated: created and immediately resolved, so it lands in done as the
-    record:
-    > Оркестратора проєкту «Delegatus» автоматично ротовано: контекст 86%
-    > (863 753 з 1 000 000 токенів, за даними провайдера), поріг 60%.
-    > Попередній: conversation_…. Новий: conversation_….
+  it does for `auth-failed` (`seatTickController.ts:297`). Every rotation is an
+  occurrence, and two rotations must be two cards.
+  The card's text is a short title and one sentence in the operator's
+  language (`autoRotationCardNotice`). Conversation ids, token counts, the
+  engine's English error and the `monitor-ref:` line go to the task's
+  collapsed `details` (`cardDetails`), and the card is found again by
+  `taskMonitorRef`, which reads the text and then the details.
+  - Rotated: created and immediately resolved, so it lands in done:
+    > Оркестратора замінено
+    > Контекст досяг 60%, тож справи передано новому оркестратору.
   - Failed: created **open**:
-    > Автоматична ротація оркестратора проєкту «Delegatus» не вдалася:
-    > <error>. Контекст 86% (поріг 60%). Поточний оркестратор лишається на
-    > місці. Наступна спроба після 04:10.
+    > Ротація не вдалася
+    > Поточний оркестратор працює далі. Наступна спроба після 04:10.
+
+  Both fit the board's two-line title and two-line body clamps in a 1440 px
+  board's narrow Inbox and Done columns, so the next attempt's time stays on
+  screen.
 - **Bridge log**: `recordManagerReport({ key: attempt.id, origin: { kind:
   "agent", role: "seat-tick", conversationId: null }, project,
   targetSeatConversationId: <old seat>, class: "status" | "failed", at, body })`.
   The body comes from `renderReport`/`renderPlain` as in
-  `seatAuthRecovery.ts:84-96`, with the same sentence as the card. The non-manager
+  `seatAuthRecovery.ts:84-96`, followed by the full local audit sentence (usage,
+  old and new seat, the error). The non-manager
   origin makes it read as Delegatus speaking (`src/lib/bridge/types.ts:144`).
   Skipped when `bridgeReportsEnabled(project)` is false.
 
@@ -469,8 +475,10 @@ operator already opens from the panel's tick switch (`SeatTickBody.tsx`). It is
 the same body in the desktop popover and the phone sheet. It reuses the
 maintenance section's parts one for one: the section head and `Toggle`
 (`:644-654`), the right-aligned number input row (`:676-693`), the one Save
-(`SeatTickActions`, `:271`), and the refusal shown verbatim beside Save. No
-paragraph of explanation. Because the surface is fixed by the existing
+(`SeatTickActions`, `:271`), and the refusal shown verbatim beside Save. One
+caption line under the head says what the switch does, in the style of the
+maintenance section's caption. The failure line names no engine wording: the
+engine's error stays in the settings reply and the card's details. Because the surface is fixed by the existing
 body and the pinned rule against new chrome, there is no layout choice to offer
 as prototype variants. The rendered evidence in §9 covers the result.
 
@@ -479,8 +487,11 @@ as prototype variants. The rendered evidence in §9 covers the result.
  …
  ─────────────────────────────────────────
  AUTO-ROTATION                        [●  ]
- At % of the context window          [ 60 ]
- ⚠ Last attempt failed 03:10: <error>. Next try after 04:10.   ← only after a failure
+ When its context reaches the threshold, the orchestrator is replaced
+ with a fresh one at its next idle moment, with a handoff.
+ Rotate when context reaches, %      [ 60 ]
+ ⚠ The attempt at 03:10 did not replace the orchestrator; the current
+   one keeps working. Next try after 04:10.                    ← only after a failure
  ⚠ This orchestrator's model has no known context window…      ← only when windowKnown === false
  ─────────────────────────────────────────
  [ Save ]
@@ -511,9 +522,10 @@ Strings, en / uk (`src/lib/i18n/en.ts`, `uk.ts`, beside `seatTick.maintenance.*`
 | `seatTick.autoRotate.head` | Auto-rotation | Автоматична ротація |
 | `seatTick.autoRotate.enableAria` | Turn auto-rotation on | Увімкнути автоматичну ротацію |
 | `seatTick.autoRotate.disableAria` | Turn auto-rotation off | Вимкнути автоматичну ротацію |
-| `seatTick.autoRotate.thresholdLabel` | At % of the context window | При % контекстного вікна |
+| `seatTick.autoRotate.about` | When its context reaches the threshold, the orchestrator is replaced with a fresh one at its next idle moment, with a handoff. | Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з передачею справ. |
+| `seatTick.autoRotate.thresholdLabel` | Rotate when context reaches, % | Ротувати, коли контекст заповнено на, % |
 | `seatTick.autoRotate.thresholdPlaceholder` | {percent} | {percent} |
-| `seatTick.autoRotate.lastFailed` | Last attempt failed {time}: {error}. Next try after {next}. | Остання спроба не вдалася {time}: {error}. Наступна — після {next}. |
+| `seatTick.autoRotate.lastFailed` | The attempt at {time} did not replace the orchestrator; the current one keeps working. Next try after {next}. | Спроба о {time} не замінила оркестратора, поточний працює далі. Наступна — після {next}. |
 | `seatTick.autoRotate.windowUnknown` | This orchestrator's model has no known context window, so it cannot rotate automatically. | Для моделі цього оркестратора розмір контекстного вікна невідомий, тому автоматична ротація для нього не спрацює. |
 | `seatTick.autoRotate.setBy` | Auto-rotation set by {who} {at}{why} | Автоматичну ротацію налаштував {who} {at}{why} |
 

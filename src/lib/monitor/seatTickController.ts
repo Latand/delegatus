@@ -25,6 +25,7 @@ import {
   MONITOR_REF_PREFIX,
   monitorClientRequestId,
   monitorRefIn,
+  taskMonitorRef,
   orchestratorAlertCardText,
   seatTickRetryGuardCardText,
   seatTickSettingsCardText,
@@ -236,7 +237,8 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
-  if (card.kind === "auth-failed" || card.kind === "auto-rotation") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
+  if (card.kind === "auto-rotation") return redactBounded(card.detail, CARD_TEXT_LIMIT);
+  if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -269,6 +271,15 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     });
   }
   return seatTickRetryGuardCardText(project, card.detail, card.ref, at);
+}
+
+/** The card's agent-facing details, or undefined for a kind that keeps its
+    `monitor-ref:` line in the text. An automatic rotation's card is read by the
+    operator as a title and one sentence; its ids, figures and marker go here. */
+function cardDetails(card: SeatTickCard): string | undefined {
+  if (card.kind !== "auto-rotation") return undefined;
+  const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
+  return card.record ? `${redactBounded(card.record, CARD_TEXT_LIMIT)}\n\n${marker}` : marker;
 }
 
 /**
@@ -328,6 +339,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         : { state: absorbed ? state : undefined, result: false };
     }
     const text = cardText(project, card, at, existing);
+    const details = cardDetails(card);
     if (existing) {
       /* A card for something that HAPPENED is left exactly as it stands: its
          body carries the instant it was observed, so rewriting it would churn
@@ -335,8 +347,8 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
-      if (existing.text === text) return unchanged;
-      const updated = patchTask(state.tasks, existing.id, { text });
+      if (existing.text === text && (details === undefined || existing.details === details)) return unchanged;
+      const updated = patchTask(state.tasks, existing.id, { text, ...(details !== undefined ? { details } : {}) });
       return updated.ok
         ? { state: { tasks: updated.tasks, recentCreates: state.recentCreates }, result: true }
         /* The condition is on the board either way; only its wording is stale. */
@@ -349,9 +361,9 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
       const completed = state.tasks.findLast((task) =>
         canonicalOrchestratorProject(task.project) === project
         && task.status === "done"
-        && monitorRefIn(task.text) === card.ref);
+        && taskMonitorRef(task) === card.ref);
       if (completed) {
-        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text });
+        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text, ...(details !== undefined ? { details } : {}) });
         return reopened.ok
           ? { state: { tasks: reopened.tasks, recentCreates: state.recentCreates }, result: true }
           : { state: absorbed ? state : undefined, result: false };
@@ -360,6 +372,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const created = createTask(state.tasks, {
       project,
       text,
+      ...(details !== undefined ? { details } : {}),
       placement: "unplaced",
       /* Scope the receipt to the project, then to the occurrence where one is
          known (#1298). A repeated MCP outage reopens its completed card above. */
@@ -376,7 +389,7 @@ function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card
   return tasks.find((task) =>
     canonicalOrchestratorProject(task.project) === project
     && task.status !== "done"
-    && monitorRefIn(task.text) === card.ref);
+    && taskMonitorRef(task) === card.ref);
 }
 
 /** Whether the board already holds exactly what {@link ensureSeatTickCard}
@@ -387,7 +400,8 @@ function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, 
   if (card.state === "resolved") return !existing;
   if (!existing) return false;
   if (card.state !== "open") return true;
-  return existing.text === cardText(project, card, at, existing);
+  const details = cardDetails(card);
+  return existing.text === cardText(project, card, at, existing) && (details === undefined || existing.details === details);
 }
 
 /** An open card the per-attempt scheme left for this project (#1594), whose

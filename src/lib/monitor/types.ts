@@ -1386,6 +1386,11 @@ export interface SeatTickCard {
       project, so this is what tells a newer attempt from the one it already
       names, and what the card's attempt count moves on. */
   attempt?: string;
+  /** The agent-facing account of an `auto-rotation` card (conversation ids,
+      token counts, the engine's error). It goes to the task's collapsed
+      `details` with the card's `monitor-ref:` line, so the card itself reads
+      as `detail` alone. */
+  record?: string;
 }
 
 export interface SeatTickDecision {

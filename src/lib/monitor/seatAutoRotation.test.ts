@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autoRotationStep, type AutoRotationAttempt, type SeatContextUsage } from "./seatAutoRotation";
+import { autoRotationCardNotice, autoRotationStep, type AutoRotationAttempt, type SeatContextUsage } from "./seatAutoRotation";
 import { defaultSeatTickSettings, effectiveSeatTickSettings } from "./seatTickSettings";
 import { AUTO_ROTATE_COOLDOWN_MS } from "./seatTick";
 import { emptySeatTickState, type SeatTickSeatInput } from "./types";
@@ -72,5 +72,33 @@ describe("context auto-rotation decision", () => {
   test("unknown windows cannot trigger", () => {
     const result = autoRotationStep({ ...base, usage: { ...usage, engine: "codex", windowTokens: null } });
     expect(result.kind).toBe("none"); expect(result.detail).toContain("no context window");
+  });
+});
+
+// The board card a settled attempt leaves (#2577 UI check): a short title and
+// one plain sentence in the operator's language. Ids, token counts and the
+// engine's English error go to the record the card keeps in its details.
+describe("context auto-rotation board card", () => {
+  const attempt = (over: Partial<AutoRotationAttempt>): AutoRotationAttempt => ({
+    id: "seat-autorotate:viewer:3:2026-10-09T02:29:00.000Z", seatEpoch: 3, conversationId: "conversation_before", startedAt: "2026-10-09T02:29:00.000Z",
+    tokens: 720000, windowTokens: 1000000, thresholdPercent: 60, state: "rotated", told: { report: false, card: false }, ...over,
+  });
+  const rotated = attempt({ successorConversationId: "conversation_after" });
+  const failed = attempt({ state: "failed", error: "successor launch failed; the predecessor was restored" });
+  test.each([
+    ["en", rotated, "Orchestrator replaced\nContext reached 60%; a fresh orchestrator took over with a handoff."],
+    ["uk", rotated, "Оркестратора замінено\nКонтекст досяг 60%, тож справи передано новому оркестратору."],
+    ["en", failed, "Automatic rotation failed\nThe current orchestrator keeps working. Next try after 06:29."],
+    ["uk", failed, "Ротація не вдалася\nПоточний оркестратор працює далі. Наступна спроба після 06:29."],
+  ] as const)("%s %#: the card text", (locale, a, text) => {
+    const notice = autoRotationCardNotice(a, locale, "Europe/Kyiv");
+    expect(notice.text).toBe(text);
+    for (const hidden of ["conversation_", "720", "1000000", "successor", "monitor-ref"]) expect(notice.text).not.toContain(hidden);
+    expect(notice.record).toContain("conversation_before");
+    expect(notice.record).toContain("72% (720000 of 1000000 tokens, provider-reported)");
+  });
+  test("the record keeps the successor and the engine's error for agents", () => {
+    expect(autoRotationCardNotice(rotated, "uk", null).record).toContain("New: conversation_after.");
+    expect(autoRotationCardNotice(failed, "uk", null).record).toContain("Automatic rotation failed: successor launch failed; the predecessor was restored.");
   });
 });

@@ -1,9 +1,10 @@
 [
   {
+    "theme": "light",
     "locale": "en",
     "viewport": {
-      "width": 1280,
-      "height": 800,
+      "width": 1440,
+      "height": 900,
       "dock": 440,
       "surface": "desktop"
     },
@@ -13,6 +14,7 @@
     "width": 320
   },
   {
+    "theme": "light",
     "locale": "en",
     "viewport": {
       "width": 640,
@@ -26,6 +28,7 @@
     "width": 320
   },
   {
+    "theme": "light",
     "locale": "en",
     "viewport": {
       "width": 390,
@@ -39,10 +42,11 @@
     "width": 390
   },
   {
+    "theme": "light",
     "locale": "uk",
     "viewport": {
-      "width": 1280,
-      "height": 800,
+      "width": 1440,
+      "height": 900,
       "dock": 440,
       "surface": "desktop"
     },
@@ -52,6 +56,7 @@
     "width": 320
   },
   {
+    "theme": "light",
     "locale": "uk",
     "viewport": {
       "width": 640,
@@ -65,6 +70,91 @@
     "width": 320
   },
   {
+    "theme": "light",
+    "locale": "uk",
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "dock": 0,
+      "surface": "phone"
+    },
+    "overflow": false,
+    "clipped": [],
+    "saveReachable": true,
+    "width": 390
+  },
+  {
+    "theme": "dark",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 900,
+      "dock": 440,
+      "surface": "desktop"
+    },
+    "overflow": false,
+    "clipped": [],
+    "saveReachable": true,
+    "width": 320
+  },
+  {
+    "theme": "dark",
+    "locale": "en",
+    "viewport": {
+      "width": 640,
+      "height": 600,
+      "dock": 360,
+      "surface": "desktop"
+    },
+    "overflow": false,
+    "clipped": [],
+    "saveReachable": true,
+    "width": 320
+  },
+  {
+    "theme": "dark",
+    "locale": "en",
+    "viewport": {
+      "width": 390,
+      "height": 844,
+      "dock": 0,
+      "surface": "phone"
+    },
+    "overflow": false,
+    "clipped": [],
+    "saveReachable": true,
+    "width": 390
+  },
+  {
+    "theme": "dark",
+    "locale": "uk",
+    "viewport": {
+      "width": 1440,
+      "height": 900,
+      "dock": 440,
+      "surface": "desktop"
+    },
+    "overflow": false,
+    "clipped": [],
+    "saveReachable": true,
+    "width": 320
+  },
+  {
+    "theme": "dark",
+    "locale": "uk",
+    "viewport": {
+      "width": 640,
+      "height": 600,
+      "dock": 360,
+      "surface": "desktop"
+    },
+    "overflow": false,
+    "clipped": [],
+    "saveReachable": true,
+    "width": 320
+  },
+  {
+    "theme": "dark",
     "locale": "uk",
     "viewport": {
       "width": 390,

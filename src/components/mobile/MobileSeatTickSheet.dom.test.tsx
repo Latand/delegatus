@@ -582,7 +582,8 @@ test("an auto-rotation refusal is shown beside Save and conditional captions fol
   } };
   const root = await mount(); await openTick(root);
   expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).not.toBeNull();
-  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).toContain("fixture launch refused");
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).toContain("did not replace the orchestrator");
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).not.toContain("fixture launch refused");
   press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
   putAnswers = [{ status: 400, body: { error: "autoRotate.enabled must be a boolean" } }];
   press(save()); await settle(root);

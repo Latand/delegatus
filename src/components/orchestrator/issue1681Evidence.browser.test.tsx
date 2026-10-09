@@ -1165,7 +1165,7 @@ browserTest("#2396 rendered: the seat tick panel at 1440 and 390, light and dark
 }, 900_000);
 
 
-browserTest("context auto-rotation rendered in the shared tick panel, English and Ukrainian", async () => {
+browserTest("context auto-rotation rendered in the shared tick panel, English and Ukrainian, light and dark", async () => {
   fs.mkdirSync(OUT, { recursive: true });
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const build = await Bun.build({
@@ -1197,9 +1197,9 @@ browserTest("context auto-rotation rendered in the shared tick panel, English an
   const base = `http://127.0.0.1:${server.port}`;
   const readings: unknown[] = [];
   try {
-    for (const locale of ["en", "uk"] as const) {
-      for (const layout of [{ width: 1280, height: 800, dock: 440, surface: "desktop" }, { width: 640, height: 600, dock: 360, surface: "desktop" }, { width: 390, height: 844, dock: 0, surface: "phone" }]) {
-        const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height } });
+    for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+      for (const layout of [{ width: 1440, height: 900, dock: 440, surface: "desktop" }, { width: 640, height: 600, dock: 360, surface: "desktop" }, { width: 390, height: 844, dock: 0, surface: "phone" }]) {
+        const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: theme });
         try {
           const page = await context.newPage();
           await page.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
@@ -1210,8 +1210,13 @@ browserTest("context auto-rotation rendered in the shared tick panel, English an
           await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
           await page.waitForSelector("[data-seat-tick-auto-rotate-threshold]");
           expect(await page.locator("[data-seat-tick-auto-rotate-enabled]").getAttribute("aria-checked")).toBe("true");
-          expect(await page.locator("[data-seat-tick-auto-rotate-failed]").innerText()).toContain("fixture launch refused");
+          // The failure line speaks the operator's language and keeps the engine's error out.
+          const failed = await page.locator("[data-seat-tick-auto-rotate-failed]").innerText();
+          expect(failed).not.toContain("fixture launch refused");
+          expect(failed).toContain(locale === "en" ? "did not replace the orchestrator; the current one keeps working. Next try after" : "не замінила оркестратора, поточний працює далі. Наступна — після");
           expect((await page.locator("[data-seat-tick-auto-rotate]").innerText()).toLowerCase()).toContain(translate(locale, "seatTick.autoRotate.head").toLowerCase());
+          expect(await page.locator("[data-seat-tick-auto-rotate-about]").innerText()).toBe(translate(locale, "seatTick.autoRotate.about"));
+          expect(await page.locator("[data-seat-tick-auto-rotate] label").innerText()).toBe(translate(locale, "seatTick.autoRotate.thresholdLabel"));
           await page.locator("[data-seat-tick-auto-rotate-threshold]").fill("65");
           await page.locator("[data-seat-tick-auto-rotate]").scrollIntoViewIfNeeded();
           await page.locator("[data-seat-tick-save]").scrollIntoViewIfNeeded();
@@ -1230,7 +1235,7 @@ browserTest("context auto-rotation rendered in the shared tick panel, English an
             const hostBox = host.getBoundingClientRect();
             const save = document.querySelector("[data-seat-tick-save]")!.getBoundingClientRect();
             const clipped: string[] = [];
-            for (const selector of ["[data-seat-tick-auto-rotate-enabled]", "[data-seat-tick-auto-rotate-threshold]", "[data-seat-tick-auto-rotate-failed]", "[data-seat-tick-save]"]) {
+            for (const selector of ["[data-seat-tick-auto-rotate-enabled]", "[data-seat-tick-auto-rotate-about]", "[data-seat-tick-auto-rotate-threshold]", "[data-seat-tick-auto-rotate-failed]", "[data-seat-tick-save]"]) {
               const control = document.querySelector(selector)!;
               const box = control.getBoundingClientRect();
               if (box.left < hostBox.left - 1 || box.right > hostBox.right + 1 || box.left < -1 || box.right > innerWidth + 1
@@ -1239,11 +1244,11 @@ browserTest("context auto-rotation rendered in the shared tick panel, English an
             return { overflow: host.scrollWidth > host.clientWidth, clipped, saveReachable: save.top >= 0 && save.bottom <= innerHeight, width: hostBox.width };
           });
           expect(errors).toEqual([]); expect(geometry.overflow).toBe(false); expect(geometry.clipped).toEqual([]); expect(geometry.saveReachable).toBe(true);
-          await page.screenshot({ path: path.join(OUT, `auto-rotation-${locale}-${layout.width}.png`) });
-          readings.push({ locale, viewport: layout, ...geometry });
+          await page.screenshot({ path: path.join(OUT, `auto-rotation-${theme}-${locale}-${layout.width}.png`) });
+          readings.push({ theme, locale, viewport: layout, ...geometry });
         } finally { await context.close(); }
       }
     }
   } finally { await browser.close(); server.stop(true); }
   fs.writeFileSync(path.join(EVIDENCE, "auto-rotation.json"), `${JSON.stringify(readings, null, 2)}\n`);
-}, 180_000);
+}, 360_000);

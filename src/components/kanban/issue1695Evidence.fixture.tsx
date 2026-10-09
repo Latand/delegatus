@@ -1897,15 +1897,20 @@ if (BOARD_ORDER) {
   );
 }
 if (TICK_CARDS) {
-  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice: string; failed: string; live: string };
+  /* Each card is present when the driver sends its text. An automatic
+     rotation's card (#2577) carries its text and its folded details. */
+  type Card = { text: string; details: string };
+  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice?: string; failed?: string; live?: string; rotFailed?: Card; rotDone?: Card };
   files.splice(0, files.length, orchestrator);
   pipelines.splice(0, pipelines.length);
   tasks.splice(0, tasks.length,
-    task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" }),
+    ...(texts.notice === undefined ? [] : [task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" })]),
+    ...(texts.rotFailed ? [task("t-rot-failed", "inbox", "", "", 9 * MIN, [], texts.rotFailed)] : []),
     task("t-tick-cleanup", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 3 * 60 * MIN, [], { color: "slate", icon: "wrench" }),
-    task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    ...(texts.live === undefined ? [] : [task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" })]),
     task("t-tick-search", "assigned", L("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), "", 25 * MIN),
-    task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    ...(texts.failed === undefined ? [] : [task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" })]),
+    ...(texts.rotDone ? [task("t-rot-done", "done", "", "", 70 * MIN, [], texts.rotDone)] : []),
   );
 }
 if (PRIORITY) {

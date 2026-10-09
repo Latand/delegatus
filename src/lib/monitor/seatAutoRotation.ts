@@ -79,6 +79,36 @@ function advanceCooldown(attempt: AutoRotationAttempt, at: string): void {
   attempt.cooldownAt = new Date(Math.max(Date.parse(attempt.cooldownAt ?? attempt.startedAt), Date.parse(at))).toISOString();
 }
 
+export interface AutoRotationCardNotice {
+  /** The card's text: a short title, then one sentence on what happened and what comes next. */
+  text: string;
+  /** The agent-facing record for the card's details: ids, token counts and the engine's error. */
+  record: string;
+}
+
+/** What the board card says about a settled attempt. The operator reads a title
+    and one sentence in their language; ids, figures and the engine's English
+    error stay in the record, which the card keeps folded in its details. */
+export function autoRotationCardNotice(a: AutoRotationAttempt, locale: "en" | "uk", timeZone: string | null): AutoRotationCardNotice {
+  const usage = `${Math.round(a.tokens / a.windowTokens * 100)}% (${a.tokens} of ${a.windowTokens} tokens, provider-reported)`;
+  const retry = autoRotationRetryAt(a);
+  if (a.state === "rotated") {
+    return {
+      text: locale === "en"
+        ? `Orchestrator replaced\nContext reached ${a.thresholdPercent}%; a fresh orchestrator took over with a handoff.`
+        : `Оркестратора замінено\nКонтекст досяг ${a.thresholdPercent}%, тож справи передано новому оркестратору.`,
+      record: `Automatic rotation at the context threshold: context ${usage}; threshold ${a.thresholdPercent}%. Previous orchestrator: ${a.conversationId}. New: ${a.successorConversationId ?? "pending"}.`,
+    };
+  }
+  const next = new Intl.DateTimeFormat("en-GB", { timeZone: timeZone ?? undefined, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(retry));
+  return {
+    text: locale === "en"
+      ? `Automatic rotation failed\nThe current orchestrator keeps working. Next try after ${next}.`
+      : `Ротація не вдалася\nПоточний оркестратор працює далі. Наступна спроба після ${next}.`,
+    record: `Automatic rotation failed: ${a.error ?? "unknown error"}. Context ${usage}; threshold ${a.thresholdPercent}%. Current orchestrator ${a.conversationId} stays in charge. Next attempt after ${retry}.`,
+  };
+}
+
 type AutoRotationDecision = { kind: "none" | "wait" | "nudge" | "rotate"; detail: string | null; next: SeatAutoRotationState | undefined };
 
 /** Silence is no proof of completion. Liveness may correct a stale busy row
@@ -140,13 +170,13 @@ export async function runSeatAutoRotation(
     writeState(input.project, input.state);
     input.state = { ...input.state, accounting: readState(input.project).accounting };
   };
-  const card = (id: string, detail: string, state: "open" | "resolved") => {
-    try { return ensureCard(input.project, { ref: "seat-auto-rotation", kind: "auto-rotation", instance: id, detail, state }, at); }
+  const card = (id: string, notice: AutoRotationCardNotice | null, state: "open" | "resolved") => {
+    try { return ensureCard(input.project, { ref: "seat-auto-rotation", kind: "auto-rotation", instance: id, detail: notice?.text ?? "", record: notice?.record, state }, at); }
     catch (error) { console.error("[seat auto-rotation] card write failed", error instanceof Error ? error.name : "unknown"); return false; }
   };
   const closeFailure = () => {
     const failure = auto?.failureTold;
-    if (failure && !failure.resolved && card(failure.id, "", "resolved")) { auto = { ...auto, failureTold: { ...failure, resolved: true } }; persist(); }
+    if (failure && !failure.resolved && card(failure.id, null, "resolved")) { auto = { ...auto, failureTold: { ...failure, resolved: true } }; persist(); }
   };
   if (!input.settings.autoRotate?.enabled) { closeFailure(); return null; }
   let current = sources.seatFor(input.project).active;
@@ -209,7 +239,8 @@ export async function runSeatAutoRotation(
         a.told.report = true; persist();
       } catch (error) { console.error("[seat auto-rotation] report write failed", error instanceof Error ? error.name : "unknown"); }
     }
-    if (!a.told.card && card(a.id, detail, "open") && (a.state === "failed" || card(a.id, detail, "resolved"))) { a.told.card = true; persist(); }
+    const notice = autoRotationCardNotice(a, locale, operatorTimeZone());
+    if (!a.told.card && card(a.id, notice, "open") && (a.state === "failed" || card(a.id, notice, "resolved"))) { a.told.card = true; persist(); }
     if (a.state === "failed" && a.told.report && a.told.card && auto?.failureTold?.id !== a.id) {
       auto = { ...auto, failureTold: { seatEpoch: current?.conversationId === a.conversationId ? current.seatEpoch : a.seatEpoch, id: a.id, resolved: false } }; persist();
     }

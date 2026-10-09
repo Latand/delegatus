@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
-import { monitorRefIn } from "@/lib/monitor/cards";
+import { taskMonitorRef } from "@/lib/monitor/cards";
 import type { GithubRunner } from "@/lib/monitor/githubEvidence";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -213,7 +213,7 @@ export function reportTaskFrom(task: BoardTask & { pipelineIds: string[] }): Rep
     hiddenByOperator: task.groupHidden?.by === "operator",
     laneIds: task.pipelineIds,
     conversationIds: [...new Set(task.assignments.flatMap((assignment) => (assignment.conversationId ? [assignment.conversationId] : [])))],
-    noticeRef: monitorRefIn(task.text),
+    noticeRef: taskMonitorRef(task),
   };
 }
 

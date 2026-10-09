@@ -670,6 +670,7 @@ function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: 
         phone={phone} disabled={state.saving} attr={{ "data-seat-tick-auto-rotate-enabled": String(draft.enabled) }}
         onToggle={() => setDraft(previous => ({ ...previous, enabled: !previous.enabled }))} />
     </div>
+    <p data-seat-tick-auto-rotate-about className="text-caption leading-4 text-secondary">{t("seatTick.autoRotate.about")}</p>
     {draft.enabled ? <label className={`flex min-w-0 items-center gap-2 ${row}`}>
       <span className="min-w-0 flex-1 text-ui text-primary">{t("seatTick.autoRotate.thresholdLabel")}</span>
       <input type="number" min={value.minPercent} max={value.maxPercent} step={1} inputMode="numeric" data-seat-tick-auto-rotate-threshold
@@ -678,8 +679,9 @@ function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: 
         className={`${control} ${phone ? "w-24" : "w-20"} shrink-0 text-right tabular-nums disabled:opacity-50`} />
     </label> : null}
     {value.lastAttempt ? <p data-seat-tick-auto-rotate-failed role="status" className="min-w-0 break-words text-caption leading-4 text-warning">
+      {/* The engine's error is English and technical; the reply keeps it for agents. */}
       {t("seatTick.autoRotate.lastFailed", { time: seatTickLocalTime(value.lastAttempt.startedAt, now, locale) ?? t("seatTick.unknown"),
-        error: value.lastAttempt.error ?? t("seatTick.unknown"), next: seatTickLocalTime(value.lastAttempt.nextAttemptAt, now, locale) ?? t("seatTick.unknown") })}
+        next: seatTickLocalTime(value.lastAttempt.nextAttemptAt, now, locale) ?? t("seatTick.unknown") })}
     </p> : null}
     {value.windowKnown === false ? <p data-seat-tick-auto-rotate-window-unknown role="status" className="min-w-0 break-words text-caption leading-4 text-warning">{t("seatTick.autoRotate.windowUnknown")}</p> : null}
   </div>;

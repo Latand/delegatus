@@ -8651,7 +8651,7 @@ describe("seat auto-rotation through production seams", () => {
     rig.deps.readState = readSeatTickState; rig.deps.writeState = writeSeatTickState;
     rig.deps.reconcileSeat = () => null; delete rig.deps.ensureCard;
     rig.deps.seatAutoRotation = { rotate: (body, _deps, actor, admission) => executeOrchestratorRotation(body, command, actor, admission) };
-    const cards = () => loadTasks(statePath("tasks.json")).filter(t => t.text.includes("monitor-ref: seat-auto-rotation"));
+    const cards = () => loadTasks(statePath("tasks.json")).filter(t => (t.details ?? "").includes("monitor-ref: seat-auto-rotation"));
     const reports = () => readBridgeReportLog().reports;
     return { rig, original, spawns, command, settingsBefore, appendUsage, turn, cards, reports, registry, registryPath,
       active: () => orchestratorSeatFor(PROJECT).active!, settings: () => readSeatTickSettings(PROJECT), state: () => readSeatTickState(PROJECT),
@@ -8670,9 +8670,13 @@ describe("seat auto-rotation through production seams", () => {
     expect(JSON.stringify(f.settings())).toBe(f.settingsBefore);
     expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");
     expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("status");
-    for (const text of [f.cards()[0]!.text, f.reports()[0]!.body]) {
+    for (const text of [f.cards()[0]!.details!, f.reports()[0]!.body]) {
       expect(text).toContain("72%"); expect(text).toContain("60%"); expect(text).toContain(f.original.conversationId!); expect(text).toContain(successor.conversationId!);
     }
+    // The card reads as a title and one sentence in the operator's language
+    // (Ukrainian until one is chosen); ids, figures and the marker stay folded.
+    expect(f.cards()[0]!.text).toBe("Оркестратора замінено\nКонтекст досяг 60%, тож справи передано новому оркестратору.");
+    expect(f.cards()[0]!.details).toMatch(/\n\nmonitor-ref: seat-auto-rotation-[0-9a-f]{32}$/);
     expect(record?.detail).toContain("auto-rotation: rotated");
     for (let i = 0; i < 3; i++) { f.advance(5); await f.check(); }
     expect(f.spawns).toHaveLength(1); expect(f.cards()).toHaveLength(1); expect(f.reports()).toHaveLength(1);
@@ -8703,6 +8707,8 @@ describe("seat auto-rotation through production seams", () => {
   test("failures keep the incumbent, report once per epoch and retry after the persisted cooldown", () => fixture(async f => {
     f.refuse(500); await f.check();
     expect(f.active().conversationId).toBe(f.original.conversationId); expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("inbox");
+    expect(f.cards()[0]!.text).toMatch(/^Ротація не вдалася\nПоточний оркестратор працює далі\. Наступна спроба після \d{2}:\d{2}\.$/);
+    expect(f.cards()[0]!.details).toContain("fixture spawn refused"); expect(f.cards()[0]!.details).toContain(f.original.conversationId!);
     expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("failed");
     f.advance(59); await f.check(); expect(f.spawns).toHaveLength(1);
     // Recreate the controller dependencies over the same SQLite row.
