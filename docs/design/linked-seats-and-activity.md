@@ -817,7 +817,7 @@ caller confirms the current sharing lists before draining received messages
 and checks the current link before constructing its next outbound page. When the intersection becomes empty, a waiting
 task exchange no longer keeps the handshake running indefinitely.
 
-`src/lib/links/boardSync.test.ts` holds delivery in each direction while
+`src/lib/links/seatMessages.http.test.ts` holds delivery in each direction while
 removing sharing or revoking the link. It captures the real peer exchange and
 requires queued plaintext, task text and agent project keys to stay off the
 wire. Separate cases use legal 100-unit machine labels, including marker
@@ -863,3 +863,10 @@ side first, then the caller. The wire remains compatible with earlier builds;
 a host still running the earlier seat-message implementation retains the races
 in its own export and admission paths. An installation predating seat messages
 continues board sync and refuses unsupported messaging as described in §14.
+
+
+The HTTP seat-message cases run in `seatMessages.http.test.ts`, with the same
+`testInstalls.ts` fixture factory used by `boardSync.test.ts`. Each suite owns
+its isolated roots and recorded child processes. Separating the functional
+message seam from the large board growth fixtures keeps those regressions
+inside the publication gate's per-file time budget without changing that budget.
