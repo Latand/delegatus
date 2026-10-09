@@ -40,10 +40,10 @@ type Row =
 
 const str = (value: unknown) => (typeof value === "string" ? value : null);
 const STAGE: Record<string, string> = { proposed: "proposed", sending: "sending", awaiting_confirmation: "awaiting-confirmation", queued: "queued", delivered: "delivered", unknown: "unknown", failed: "failed", refused: "refused", cancelled: "cancelled", sent: "delivered" };
-const DELEGATION_TOOLS = new Set(["request_orchestrator_delegation", "resolve_orchestrator_confirmation"]);
 
-/** The record as rows: speech, each read call with what was passed to the voice after it, and each request with
-    its call, its delivery and its answer together. Live's own hand-off markers carry nothing to read and are left out. */
+/** The record as rows: speech, each call with what was passed to the voice after it, and each request with
+    its own call, its delivery and its answer together. A call no request row holds (the spoken answer to a
+    confirmation, a repeated request) is a row of its own. Live's own hand-off markers carry nothing to read and are left out. */
 export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
   const sorted = [...entries].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const rows: Row[] = [];
@@ -51,12 +51,15 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
   const calls = new Map<string, Extract<Row, { kind: "call" }>>();
   const tools = new Map<string, TranscriptEntry>();
   for (const entry of sorted) if (entry.kind === "tool" && str(entry.data.callId)) tools.set(entry.data.callId as string, entry);
+  /* The calls a request row shows inside itself. */
+  const folded = new Set<string>();
+  for (const entry of sorted) if (entry.kind === "request" && tools.has(str(entry.data.callId) ?? entry.id)) folded.add(str(entry.data.callId) ?? entry.id);
   for (const entry of sorted) {
     const data = entry.data;
     if (entry.kind === "utterance" || entry.kind === "reply") {
       const text = str(data.text)?.trim();
       if (text) rows.push({ kind: "speech", key: entry.id, atMs: entry.atMs, speaker: entry.kind === "utterance" ? "operator" : "companion", text });
-    } else if (entry.kind === "tool" && !DELEGATION_TOOLS.has(str(data.name) ?? "")) {
+    } else if (entry.kind === "tool" && !folded.has(str(data.callId) ?? "")) {
       const row: Row = { kind: "call", key: entry.id, atMs: entry.atMs, name: str(data.name) ?? "", status: (str(data.status) as Status) ?? "running", args: str(data.arguments) ?? "", result: str(data.result), reason: str(data.reason), handoffs: [] };
       rows.push(row);
       if (str(data.delegationId)) calls.set(data.delegationId as string, row);

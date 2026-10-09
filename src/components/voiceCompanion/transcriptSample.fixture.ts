@@ -21,7 +21,7 @@ const TEXT = {
     board: "What's on the board right now?",
     boardAnswer: "Fourteen tasks: three in the inbox, seven in progress, four done. The search lane is waiting for the merge.",
     open: "And the retry banner one, open it.",
-    refused: "I can't open that one: it belongs to another project, not the one on screen. I can read this project's tasks.",
+    refused: "I can't open that one because it belongs to another project. I can read the tasks of the project on screen.",
     long: "Right, so here's what I keep thinking about. The export settings have grown to fourteen switches, and nobody uses most of them. Last week I watched someone scroll past all of them twice before finding the archive option, and that was me. I want three presets for the common cases and one place for the rest, without breaking anything people saved before.",
     longReply: "That's the right instinct. Three presets for the common cases, the rare switches behind one advanced sheet, and the old saved keys still readable, so nothing anyone saved last month changes under them.",
     tasks: [
@@ -37,7 +37,7 @@ const TEXT = {
     board: "Що зараз на дошці?",
     boardAnswer: "Чотирнадцять задач: три у вхідних, сім у роботі, чотири готові. Смуга пошуку чекає на злиття.",
     open: "А ту, що з банером повтору, відкрий.",
-    refused: "Цю я не відкрию: вона з іншого проєкту, не з того, що на екрані. Задачі цього проєкту можу прочитати.",
+    refused: "Цю я не відкрию, бо вона з іншого проєкту. Задачі проєкту на екрані можу прочитати.",
     long: "Так, слухай, ось про що я весь час думаю. Налаштування експорту розрослися до чотирнадцяти перемикачів, і більшістю ніхто не користується. Минулого тижня я бачив, як людина двічі прогорнула їх усі, поки знайшла архівний варіант, і цією людиною був я. Хочу три пресети для типових випадків і одне місце для решти, і щоб нічого, збереженого раніше, не зламалося.",
     longReply: "Правильний хід. Три пресети для типових випадків, рідкісні перемикачі за одним розширеним аркушем, а старі збережені ключі лишаються читабельними, тож нічого, збереженого минулого місяця, під людьми не зміниться.",
     tasks: [

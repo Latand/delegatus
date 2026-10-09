@@ -121,3 +121,36 @@ test("Escape and the close control close it", async () => {
   await click(view.querySelector("[data-transcript-close]"));
   expect(closed).toBe(2);
 });
+
+test("a spoken confirmation and a retried request are lines of their own that open to their own arguments and result", async () => {
+  const { transcriptRows: rowsOf } = await import("./CompanionTranscript");
+  const json = (value: unknown) => JSON.stringify(value, null, 2);
+  const recipient = { project: "atlas", conversationId: "conversation_orchestrator", seatEpoch: 1, engine: "claude" as const };
+  const entries = [
+    { id: "tool-ask", kind: "tool" as const, atMs: 1_000, order: 0, data: { name: "request_orchestrator_delegation", callId: "ask", arguments: json({ instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." }), status: "done", result: json({ status: "awaiting_confirmation" }) } },
+    { id: "request-ask", kind: "request" as const, atMs: 1_100, order: 1, data: { callId: "ask", proposalId: "p1", instruction: "Delete the old presets", recipient, status: "sent", states: [{ atMs: 1_100, status: "proposed" }, { atMs: 5_000, status: "sent" }] } },
+    { id: "tool-yes", kind: "tool" as const, atMs: 5_000, order: 2, data: { name: "resolve_orchestrator_confirmation", callId: "yes", arguments: json({ decision: "send" }), status: "done", result: json({ status: "sent", delivery: "queued" }) } },
+    { id: "tool-retry", kind: "tool" as const, atMs: 7_000, order: 3, data: { name: "request_orchestrator_delegation", callId: "retry", arguments: json({ instruction: "Delete the old presets" }), status: "failed", result: json({ status: "refused", code: "already_requested" }) } },
+  ];
+  expect(rowsOf(entries).map((row) => row.kind)).toEqual(["request", "call", "call"]);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  await act(async () => root.render(<CompanionTranscript record={{ entries, truncated: false }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+  await act(async () => settle());
+  const calls = [...host.querySelectorAll<HTMLElement>("[data-transcript-call]")];
+  expect(calls.map((call) => call.dataset.transcriptCall)).toEqual(["request_orchestrator_delegation", "resolve_orchestrator_confirmation", "request_orchestrator_delegation"]);
+  await click(calls[1]!.querySelector("[data-transcript-toggle]"));
+  expect(calls[1]!.querySelector("[data-transcript-detail]")!.textContent).toContain('"decision": "send"');
+  expect(calls[1]!.querySelector("[data-transcript-detail]")!.textContent).toContain('"delivery": "queued"');
+  await click(calls[2]!.querySelector("[data-transcript-toggle]"));
+  expect(calls[2]!.querySelector("[data-transcript-detail]")!.textContent).toContain("already_requested");
+});
+
+test("the sample replies state the project restriction directly", () => {
+  for (const locale of ["en", "uk"] as const) {
+    const replies = sampleTranscript(locale).entries.filter((entry) => entry.kind === "reply").map((entry) => String(entry.data.text));
+    for (const reply of replies) expect(reply, `${locale}: ${reply}`).not.toMatch(/,\s+(?:not|не)\s/u);
+  }
+});

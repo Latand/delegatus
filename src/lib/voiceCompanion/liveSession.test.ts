@@ -778,6 +778,33 @@ test("a confirmation the model asked for is answered hands-free: the next delega
   await f.service.close(s.sessionId);
 });
 
+test("every recorded tool call reaches the transcript view with its own arguments and result: the request, a spoken send, a spoken cancel and a retry", async () => {
+  const { transcriptRows } = await import("../../components/voiceCompanion/CompanionTranscript");
+  for (const decision of ["send", "cancel"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Spoken.")])
+      : String(request.input[0].content).includes("waiting for the operator's answer") ? backendResponse(`resp_${index}`, [functionCall("call-answer", "resolve_orchestrator_confirmation", { decision })])
+      : backendResponse(`resp_${index}`, [functionCall(`call-ask-${index}`, "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." })]);
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, said("Tell the orchestrator to delete the old presets.", 0), delegationCreated("ask", 600));
+    await f.service.drain(s.sessionId);
+    f.provider.replay(s.providerId, said("Shall I send it?", 1_500, "output"), said(decision === "send" ? "Yes, send it." : "Leave it for now.", 4_000), delegationCreated("answer", 4_600));
+    await f.service.drain(s.sessionId);
+    // The model asks the same request once more under another call id.
+    f.provider.replay(s.providerId, said("Spoken.", 6_000, "output"), delegationCreated("retry", 6_600));
+    await f.service.drain(s.sessionId);
+    const entries = f.service.transcriptRecord(s.sessionId).entries;
+    const tools = entries.filter(entry => entry.kind === "tool");
+    expect(tools.map(entry => entry.data.name), decision).toContain("resolve_orchestrator_confirmation");
+    expect(tools.find(entry => entry.data.name === "resolve_orchestrator_confirmation")!.data.arguments, decision).toContain(decision);
+    const rows = transcriptRows(entries);
+    const shown = rows.flatMap(row => row.kind === "call" ? [{ args: row.args, result: row.result }] : row.kind === "request" ? [{ args: row.args, result: row.result }] : []);
+    for (const tool of tools) expect(shown, `${decision} ${String(tool.data.callId)}`).toContainEqual({ args: tool.data.arguments as string, result: (tool.data.result as string | undefined) ?? null });
+    await f.service.close(s.sessionId);
+  }
+});
+
 test("a backend failure after spoken confirmation reports the queued delivery", async () => {
   const f = fixture();
   f.provider.responder = (_request, index) => index === 0
@@ -883,10 +910,10 @@ test("one completed request reaches the orchestrator once whatever Live delegati
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
     expect(await again.delegate(s.sessionId, "call-after-restart", "delegation-after-restart", "Review the plan", { sourceTurn: rows[0].sourceTurn })).toEqual({ state: "sent", status: "queued" });
     expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.delivery?.clientMessageId)).toEqual([key]);
-    // The same model instruction in a later turn is structurally a repeat.
+    // The operator saying it again in a completed turn of their own is a new request; the model alone repeating one is not.
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 3_000), delegationCreated("new-turn", 3_500));
     await f.service.drain(s.sessionId);
-    expect([parallel, f.sends()]).toEqual([parallel, 1]);
+    expect([parallel, f.sends()]).toEqual([parallel, 2]);
     await f.service.close(s.sessionId);
   }
 });
@@ -916,6 +943,39 @@ test("a request already acted on never authorizes a later turn through the lookb
     f.provider.replay(s.providerId, said("Sure.", 4_000, "output"), said("Ask the orchestrator to merge the branch.", 6_000), delegationCreated("delegation_new", 6_600));
     await f.service.drain(s.sessionId);
     expect([after, f.sends()]).toEqual([after, 2]);
+    await f.service.close(s.sessionId);
+  }
+});
+
+test("an operator who asks again in a new turn sends again, also after cancelling, in English and Russian; model repeats still add nothing", async () => {
+  const cases = [
+    { locale: "en" as const, instruction: "Review the plan", first: "Ask the orchestrator to review the plan.", again: "Ask the orchestrator to review the plan again.", thanks: "Thanks." },
+    { locale: "uk" as const, instruction: "Проверить план", first: "Попроси оркестратора проверить план.", again: "Ещё раз отправь ему, пожалуйста, чтобы проверил план.", thanks: "Спасибо." },
+  ];
+  for (const c of cases) for (const cancelled of [false, true]) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    let call = 0;
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}-${call++}`, "request_orchestrator_delegation", cancelled && call === 1
+        ? { instruction: c.instruction, confirmation_reason: "Confirm?" } : { instruction: c.instruction })]);
+    const s = await f.service.start({ project: "fixture", locale: c.locale, sdp: "v=0" });
+    f.provider.replay(s.providerId, said(c.first, 0), delegationCreated("first", 500));
+    await f.service.drain(s.sessionId);
+    if (cancelled) {
+      const [held] = Object.values(f.admission.session(s.sessionId).proposals);
+      expect(held.state).toBe("pending");
+      await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, via: "tap", decision: "cancel" });
+      expect(f.sends()).toBe(0);
+    } else expect(f.sends()).toBe(1);
+    // A backchannel and the model repeating itself add nothing.
+    f.provider.replay(s.providerId, said("Done.", 1_000, "output"), said(c.thanks, 3_000), delegationCreated("repeat", 3_600));
+    await f.service.drain(s.sessionId);
+    expect([c.locale, cancelled, f.sends()]).toEqual([c.locale, cancelled, cancelled ? 0 : 1]);
+    // The operator asks again in a completed turn of their own: a new request, sent.
+    f.provider.replay(s.providerId, said("Done.", 4_000, "output"), said(c.again, 6_000), delegationCreated("again", 6_600));
+    await f.service.drain(s.sessionId);
+    expect([c.locale, cancelled, f.sends()]).toEqual([c.locale, cancelled, cancelled ? 1 : 2]);
     await f.service.close(s.sessionId);
   }
 });

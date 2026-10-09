@@ -269,6 +269,41 @@ for (const engine of ["claude", "codex"] as const) test(`voice confirmation reac
     voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
 });
 
+for (const engine of ["claude", "codex"] as const) test(`a spoken request and the same request asked again each reach ${engine} through the real relay, and a model repeat adds none`, async () => {
+  actor("voice-again", "orchestrator", engine);
+  realAdmission();
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { CompanionLiveSessions } = await import("@/lib/voiceCompanion/liveSession");
+  const { CompanionBoardReads } = await import("@/lib/voiceCompanion/boardReads");
+  const { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } = await import("@/lib/voiceCompanion/fakeProvider");
+  const { companionDeliveryPaths } = await import("@/lib/voiceCompanion/deliveryPaths");
+  const storage = new CompanionStorage();
+  storage.updateSettings({ enabled: true });
+  const provider = new FakeLiveProvider();
+  let call = 0;
+  provider.responder = (req, index) => req.input.some((item) => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
+    : backendResponse(`resp_${index}`, [functionCall(`call-${call++}`, "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+  const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths),
+    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
+    { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+  const said = (delta: string, at: number, speaker: "input" | "output" = "input") =>
+    ({ type: `session.${speaker}_transcript.delta`, event_id: `${speaker}-${at}`, delta, start_ms: at, end_ms: at + 400 });
+  const session = await service.start({ project: "voice-again", locale: "en", sdp: "v=0" });
+  provider.replay(session.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("first", 500));
+  await service.drain(session.sessionId);
+  expect(delivered).toHaveLength(1);
+  provider.replay(session.providerId, said("Done.", 1_000, "output"), said("Thanks.", 3_000), delegationCreated("repeat", 3_600));
+  await service.drain(session.sessionId);
+  expect(delivered).toHaveLength(1);
+  provider.replay(session.providerId, said("Done.", 4_000, "output"), said("Ask the orchestrator to review the plan again.", 6_000), delegationCreated("again", 6_600));
+  await service.drain(session.sessionId);
+  expect(delivered).toHaveLength(2);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map((held) => held.command.origin))
+    .toEqual([{ kind: "operator", channel: "voice-delegatus" }, { kind: "operator", channel: "voice-delegatus" }]);
+  await service.close(session.sessionId);
+});
+
 /** Keep the HTTP handler and durable reservation real; only the runtime peer
  * is private. A busy peer leaves the admitted command on the delivery queue. */
 function realAdmission() {
