@@ -1845,8 +1845,10 @@ test.each(["minimal", "production"])("safety comparison: caught-up production id
       producer: { kind: "codex-app-server", eventKey: `noise:${i}` }, payload: { text: "output" } });
   } else f.journal.compact(2);
   expect(f.journal.replay(0).reset).toBe(true);
-  publish(c.id, c.key, path, claim.fence, null, 20);
-  expect((await probe()).quiet).toBe(false); // Caught up to a missing start, with no terminal proof.
+  if (retention === "minimal") {
+    publish(c.id, c.key, path, claim.fence, null, 20);
+    expect((await probe()).quiet).toBe(false); // Caught up to a missing start, with no terminal proof.
+  }
   f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "current-turn", seq: 30, status: "completed" } as never)!);
   expect(f.journal.producerCursor("codex-app-server", `engine-host:${sessionKeyId(c.key)}:`)).toBe(30);
   publish(c.id, c.key, path, claim.fence, null, 10);
@@ -1895,6 +1897,23 @@ test("safety comparison: a retained foreign terminal cannot justify an equal own
   f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "foreign-turn", seq: 30, status: "completed" } as never)!);
   publish(c.id, c.key, c.path, claim.fence, null, 30);
   expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+});
+
+test("safety comparison: own idle can attribute a retained terminal after the preceding writer mark is pruned", async () => {
+  const c = conversation(transcript("settled")), worker = spawn();
+  const claim = claimHost(c.key, c.path, worker.identity, "live", null);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "lost-start", seq: 20 } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  await fallback();
+  f.journal.compact(1);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "lost-start", seq: 30, status: "completed" } as never)!);
+  const held = heldHost(worker.child.pid, { status: "idle", activeTurnRef: null, eventCursor: 30 });
+  await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+  expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
   release(c.key, claim);
   await exit(worker);
   expect((await probe()).quiet).toBe(true);

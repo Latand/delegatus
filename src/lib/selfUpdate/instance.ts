@@ -214,7 +214,11 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
       active.set(turn, previous === undefined || previous === null ? cursor : Math.max(previous, cursor));
       statements.set(event.scope.id, active);
     } else {
+      // Pruning can also remove the preceding writer mark. Keep that terminal
+      // as a candidate: only a later own keyed idle including its cursor can
+      // attribute it. A retained foreign writer/turn excludes the candidate.
       if (prior === owner.writerEpoch
+        || (prior === undefined && !rowEpochs.has(event.scope.id))
         || (rowKeys.get(event.scope.id) === owner.entryKey && rowEpochs.get(event.scope.id) === owner.writerEpoch)) {
         terminals.set(event.scope.id, Number(producer.slice(prefix.length)));
       }
