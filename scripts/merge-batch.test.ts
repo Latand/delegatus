@@ -954,6 +954,10 @@ function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   copyFileSync(join(import.meta.dir, "privacy-text-preparation.ts"), join(f.repo, "scripts/privacy-text-preparation.ts"));
   copyFileSync(join(import.meta.dir, "privacy-known-value-fingerprints.json"), join(f.repo, "scripts/privacy-known-value-fingerprints.json"));
   copyFileSync(join(import.meta.dir, "../src/lib/environmentIsolation.ts"), join(f.repo, "src/lib/environmentIsolation.ts"));
+  mkdirSync(join(f.repo, "src", "lib", "privacy"), { recursive: true });
+  for (const file of ["canonicalText.ts", "mailbox.ts", "staticDetectors.ts"]) {
+    copyFileSync(join(import.meta.dir, "../src/lib/privacy", file), join(f.repo, "src/lib/privacy", file));
+  }
   f.seed("scripts/privacy-publication-gate.ts", readFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "utf8"));
   symlinkSync(join(import.meta.dir, "../node_modules"), join(f.repo, "node_modules"), "dir");
 }

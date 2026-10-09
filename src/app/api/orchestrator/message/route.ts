@@ -33,12 +33,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported", admission: "refused" }, { status: 400 });
   }
   const project = canonicalOrchestratorProject(body.project);
+  const voice = body.voiceDelegatus as { sessionId?: unknown; proposalId?: unknown } | undefined;
+  if (body.voiceDelegatus !== undefined && (!voice || typeof voice.sessionId !== "string" || typeof voice.proposalId !== "string"))
+    return NextResponse.json({ code: "voice_admission_refused" }, { status: 400 });
   if (body.machine !== undefined) {
     if (typeof body.machine !== "string" || !body.machine.trim() || typeof body.clientMessageId !== "string" || !body.clientMessageId.trim() || body.clientMessageId.length > 128) {
       return NextResponse.json({ error: "machine and clientMessageId are required for a linked relay", code: "malformed", admission: "refused" }, { status: 400 });
     }
     const sender = linkedRelayCaller(req, project);
     if (!sender) return NextResponse.json({ error: "only this project's designated seat may relay over a link", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
+    if (voice) return NextResponse.json({ error: "voice delegation requires the operator's confirmed proposal", code: "voice_admission_refused", admission: "refused" }, { status: 403 });
     try {
       const link = resolveSeatMessageMachine(body.machine, project);
       if (link) return NextResponse.json(queueSeatMessage(link, project, body.text, sender.conversationId, body.clientMessageId));
@@ -49,7 +53,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const admitted = admitOrchestratorRelay(req, project,
     typeof body.conversationId === "string" ? body.conversationId : undefined,
-    body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined);
+    body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
+    voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined);
   if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
   return conversationHostPOST(new NextRequest(req.url, {
     method: "POST", headers: req.headers,
@@ -58,6 +63,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       conversationId: admitted.recipient,
       clientMessageId: body.clientMessageId,
       text: body.text,
+      ...(voice ? { voiceDelegatus: voice } : {}),
       policy: "steer-or-queue",
       images: [],
     }),

@@ -3,7 +3,7 @@ import path from "node:path";
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
 
 import { FileClaudeDeliveryLedger, type ClaudeDeliveryLedger, type ClaudeDeliveryState } from "./claudeStreamBrokerHost";
-import { messageOriginRole, type DeliveredMessageProvenance } from "./messageOrigin";
+import { messageChannel, messageOriginRole, type DeliveredMessageProvenance } from "./messageOrigin";
 
 export type { DeliveredMessageProvenance };
 
@@ -77,6 +77,7 @@ function entryProvenance(
     const role = entry.origin.kind === "agent" ? messageOriginRole(entry.origin.role) : undefined;
     return {
       origin: entry.origin.kind,
+      ...(entry.origin.kind === "operator" && messageChannel(entry.origin.channel) ? { channel: entry.origin.channel } : {}),
       ...(role ? { senderRole: role } : {}),
       ...(entry.origin.kind === "agent" && entry.origin.project ? { senderProject: entry.origin.project } : {}),
       ...(entry.origin.kind === "agent" && entry.origin.conversationId ? { senderConversationId: entry.origin.conversationId } : {}),
