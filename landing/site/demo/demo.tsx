@@ -538,6 +538,14 @@ async function closeOverlays() {
   // Let React unmount Search before reopening it. A close and open in one
   // batch preserves the failed query, so typing it again cannot retry fetch.
   if (searchWasOpen) await waitFor(() => !document.querySelector("[data-search-input]"));
+  // The accounts flyout answers Escape only from inside itself, so the
+  // Escape above leaves it docked over the next view; press its own close.
+  const accountsDialog = () => document.querySelector<HTMLElement>(`[role="dialog"][aria-label="${CSS.escape(label("accounts.titleFor", { engine: "Claude" }))}"]`);
+  const accountsClose = accountsDialog()?.querySelector<HTMLElement>(`button[aria-label="${CSS.escape(label("accounts.close"))}"]`);
+  if (accountsClose) {
+    accountsClose.click();
+    await waitFor(() => !accountsDialog());
+  }
 }
 /** The send control's hint stays up while the pointer or focus rests on it;
     once the request is on its way, the chat is what the visitor reads. Hints
