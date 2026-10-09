@@ -435,7 +435,7 @@ test("events whose lanes have finished are history, and a project holding only t
     tasks: [card({ status: "inbox" })],
     state: stateWith({ eventsThrough: 59, lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 /* And the count beside the reason says how much of it is live. "18 more" over a
@@ -521,7 +521,7 @@ test("a live event past the page waits for the check that can name it, rather th
     tasks: [card({ status: "inbox" })],
     state: stateWith({ eventsThrough: 59, lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(decision.state.eventsThrough).toBe(60);
 });
 
@@ -553,7 +553,7 @@ test("a merged batch goes quiet on its own", () => {
     tasks: [card({ status: "inbox" })],
     state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 /* It is a reason, never a route around the bound: the hourly interval applies
@@ -885,7 +885,7 @@ test("a check inside the interval is quiet rather than an error", () => {
     tasks: [card({ status: "inbox" })],
     state: stateWith({ lastWakeAt: new Date(NOW - MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 /* A tick that is off is off; nothing was read, so there is nothing to report
@@ -976,7 +976,7 @@ test("the hourly interval never wakes an empty agenda", () => {
     tasks: [card({ status: "inbox" })],
     state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 test("a signal alone is agenda enough for the interval to wake", () => {
@@ -1017,14 +1017,14 @@ test("a proposal slot that is not due leaves an idle seat quiet", () => {
   const decision = seatTickDecision(input({
     state: stateWith({ lastProposalAt: new Date(NOW - 60 * MINUTE).toISOString() }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "the board is done and the proposal slot is not due" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due" });
 });
 
 test("a proposal card still open on the board holds the next proposal off", () => {
   /* The card lands in `inbox`, which is open work, so the board is no longer
      idle and the slot cannot come round again until the operator moves it. */
   const decision = seatTickDecision(input({ tasks: [card({ status: "inbox" })] }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
 });
 
 test("a fruitless child outcome is re-sent at most twice, then becomes a card", () => {
@@ -1347,8 +1347,8 @@ test("a terminal child is a wake reason of its own, named as an item (#1465)", (
   const decision = seatTickDecision(input({ children: [finished], state: stateWith(OVERDUE_STATE) }));
   expect(decision.verdict).toMatchObject({
     kind: "wake",
-    reasons: [{ kind: "child-terminal", detail: "a spawned child finished and its outcome is unharvested" }],
-    items: [{ kind: "child", id: finished.conversationId, label: "build the exporter — spawned child finished, outcome unharvested" }],
+    reasons: [{ kind: "child-terminal", detail: "a spawned child finished and its outcome is not yet announced by a delivered seat-tick wake. Reading the transcript alone does not acknowledge this announcement" }],
+    items: [{ kind: "child", id: finished.conversationId, label: "build the exporter — spawned child finished, outcome announcement owed" }],
     deferred: 0,
   });
 });
@@ -1363,7 +1363,7 @@ test("a finished child this seat launched with notices on is the notice's, never
   expect(optedOut.verdict).toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
   /* A launch that failed before it ran never ends a turn, so no notice covers it. */
   const failed = seatTickDecision(input({ children: [{ ...finished, outcome: "failed" }], state: stateWith(OVERDUE_STATE) }));
-  expect(failed.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is unharvested" }] });
+  expect(failed.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is not yet announced by a delivered seat-tick wake. Reading the transcript alone does not acknowledge this announcement" }] });
   /* A running notified child is still open work the interval agenda names. */
   const running = seatTickDecision(input({ children: [child({ launcherNotice: true })], state: stateWith(OVERDUE_STATE) }));
   expect(running.verdict).toMatchObject({ items: [{ kind: "child", label: "build the exporter — spawned child running" }] });
@@ -1372,17 +1372,16 @@ test("a finished child this seat launched with notices on is the notice's, never
 test("a failed launch is a terminal child too, and the reason says so (#1465)", () => {
   const failed = child({ status: "terminal", outcome: "failed", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() });
   const decision = seatTickDecision(input({ children: [failed], state: stateWith(OVERDUE_STATE) }));
-  expect(decision.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is unharvested" }] });
+  expect(decision.verdict).toMatchObject({ reasons: [{ kind: "child-terminal", detail: "a spawned child failed and its outcome is not yet announced by a delivered seat-tick wake. Reading the transcript alone does not acknowledge this announcement" }] });
 });
 
-test("a settled child is due one check interval after the last wake, not the hour (#1465, #1881)", () => {
+test("a newly owed settled child is due on the next check despite a recent wake (#2346)", () => {
   const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 2 * MINUTE).toISOString() });
   const at = (minutes: number) => stateWith({ lastWakeAt: new Date(NOW - minutes * MINUTE).toISOString() });
-  /* Inside the settled-child bound the wake still waits: two wakes minutes
-     apart are the storm the bound exists to stop. */
-  expect(seatTickDecision(input({ children: [finished], state: at(4) })).verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
-  expect(seatTickDecision(input({ children: [finished], state: at(SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS / MINUTE) })).verdict)
-    .toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
+  for (const minutes of [0, 1, 4, SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS / MINUTE]) {
+    expect(seatTickDecision(input({ children: [finished], state: at(minutes) })).verdict)
+      .toMatchObject({ kind: "wake", reasons: [{ kind: "child-terminal" }] });
+  }
 });
 
 test("running children bring the interval wake to a quarter of an hour, and a still board keeps the hour (#1881)", () => {
@@ -1441,7 +1440,7 @@ test("terminal children are named oldest outcome first, and the plan records onl
   expect(decision.verdict).toMatchObject({ kind: "wake", deferred: 1 });
   const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
   expect(verdict.items.map((item) => item.id)).toEqual([child().conversationId, SECOND_CHILD]);
-  expect(verdict.reasons[0]!.detail).toBe("a spawned child finished and its outcome is unharvested and 2 more");
+  expect(verdict.reasons[0]!.detail).toBe("a spawned child finished and its outcome is not yet announced by a delivered seat-tick wake and 2 more. Reading the transcript alone does not acknowledge this announcement");
   const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "fp-2", eventsThrough: 0, terminalChildren: children.map((entry) => entry.conversationId) })!;
   expect(commit.children).toEqual([child().conversationId, SECOND_CHILD]);
 });
@@ -1473,9 +1472,9 @@ test("a proposal landing harvests nothing (#1465)", () => {
 
 test("an unknown child is neither open work nor a harvest, and the quiet line counts it (#1465)", () => {
   const decision = seatTickDecision(input({ children: [child({ status: "unknown" })], state: stateWith({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString(), lastProposalAt: new Date(NOW - MINUTE).toISOString() }) }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "the board is done and the proposal slot is not due; 1 spawned child(ren) in an unknown state" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due; 1 spawned child(ren) in an unknown state" });
   const beside = seatTickDecision(input({ children: [child({ status: "unknown" })], tasks: [card({ status: "inbox" })], state: stateWith(OVERDUE_STATE) }));
-  expect(beside.verdict).toEqual({ kind: "quiet", detail: "nothing owed; 1 spawned child(ren) in an unknown state" });
+  expect(beside.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; 1 spawned child(ren) in an unknown state" });
 });
 
 test("a stalled child wakes only once it has persisted across two consecutive checks (#1465)", () => {

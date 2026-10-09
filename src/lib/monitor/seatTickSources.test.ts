@@ -844,7 +844,7 @@ test("a project whose only pending events belong to finished lanes is quiet, and
   expect(input.events).toHaveLength(50);
 
   const decision = seatTickDecision(input);
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
+  expect(decision.verdict).toEqual({ kind: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   /* And no second wake is owed for the same backlog: the cursor is past all
      fifty on the strength of the one look that read them. */
   expect(decision.state.eventsThrough).toBe(9949);
@@ -1090,7 +1090,7 @@ test("once that pull request merges the same project is quiet again", async () =
   expect(input.pullRequestsUnavailable).toBeNull();
   expect(seatTickDecision(input).verdict).toEqual({
     kind: "quiet",
-    detail: "the board is done and the proposal slot is not due",
+    detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due",
   });
 });
 
