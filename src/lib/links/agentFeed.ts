@@ -75,7 +75,7 @@ export function decodeAgentRow(value: unknown, projects: ReadonlySet<string>): A
   const row = value as AgentRow;
   if (!/^a:[0-9a-f]{16}$/.test(row.k) || !PROJECT.test(row.p) || !projects.has(row.p) || typeof row.t !== "string" || row.t.length > 120 || /[\r\n]/.test(row.t)
     || !safeId(row.e) || !safeId(row.m) || !["working", "waiting", "done"].includes(row.st)
-    || !Number.isSafeInteger(row.at) || row.at < 0 || row.task !== undefined && !safeId(row.task)
+    || !Number.isSafeInteger(row.at) || row.at < 0 || row.at > 8_640_000_000_000_000 || row.task !== undefined && !safeId(row.task)
     || row.ro !== undefined && !safeId(row.ro) || row.seat !== undefined && row.seat !== 1
     || row.pl !== undefined && (!row.pl || typeof row.pl !== "object" || !safeId(row.pl.id) || !safeId(row.pl.state) || !safeId(row.pl.stage) || !safeId(row.pl.stageState))
     || Buffer.byteLength(JSON.stringify(row)) > 1536) return null;

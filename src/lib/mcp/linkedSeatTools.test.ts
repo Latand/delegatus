@@ -68,3 +68,10 @@ test("get_orchestrator names a linked seat, an absent seat on a capable peer, an
   recordSeatMessages(`peer:${install}`, false);
   expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [{ machine: "Other", seat: "unknown" }] });
 });
+
+test("get_orchestrator ignores a peer seat timestamp outside the JavaScript date range", async () => {
+  recordSeatMessages(`peer:${install}`, true);
+  acceptAgents(`peer:${install}`, { cursor: "0011223344556677:2", reset: true, rows: [{ k: "a:0011223344556677", p: project.project, t: "orchestrator", ro: "orchestrator", seat: 1, e: "codex", m: "fixture-model", st: "done", at: Number.MAX_SAFE_INTEGER }] }, new Set([project.project]));
+  const bindings = viewerMcpBindings(undefined, { post: async () => ({}) }, domain);
+  expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [{ machine: "Other", seat: null }] });
+});
