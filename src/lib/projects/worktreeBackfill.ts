@@ -71,6 +71,25 @@ function removed(cwd: string): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
 }
 
+/** Linked checkouts keep shared branch refs in their common Git directory. */
+function branchRefsDirectory(repo: string): string | null {
+  try {
+    let directory = path.join(repo, ".git");
+    if (fs.lstatSync(directory).isFile()) {
+      const pointer = /^gitdir:\s*(.+?)\s*$/im.exec(fs.readFileSync(directory, "utf8"))?.[1];
+      if (!pointer) return null;
+      directory = path.resolve(repo, pointer);
+    }
+    try {
+      const common = fs.readFileSync(path.join(directory, "commondir"), "utf8").trim();
+      return common ? path.resolve(directory, common) : directory;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+      return directory;
+    }
+  } catch { return null; }
+}
+
 function siblingSuffix(cwd: string, repo: string): string | null {
   const relative = path.relative(path.dirname(repo), cwd);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
@@ -103,6 +122,8 @@ export function planWorktreeBackfill(
     if (identity) repositories.set(path.resolve(entry.repo), identity);
   }
   const candidates = new Map<string, Array<[string, CatalogFile]>>();
+  const catalogEntries = Object.entries(files);
+  const hintsByFile = new Map<string, ReturnType<typeof transcriptHints>>();
   for (const [filename, file] of Object.entries(files)) {
     if (!file.cwd || !file.project.startsWith("dir-")) continue;
     const entries = candidates.get(file.cwd) ?? [];
@@ -116,30 +137,53 @@ export function planWorktreeBackfill(
     if (!path.isAbsolute(cwd) || entries.some(([, file]) => file.project !== directoryProjectId(path.resolve(cwd)))) { leave("directory-identity-mismatch"); continue; }
     if (!removed(cwd)) { leave("checkout-present-or-unreadable"); continue; }
     const held = recordedMapping(cwd, map);
-    const matches = [...repositories].filter(([repo, identity]) => (!project || identity.project === project) && (
+    const matches = [...repositories].filter(([repo]) => (
       held ? held.repo === repo : siblingSuffix(cwd, repo) !== null
     ));
     if (matches.length !== 1) { leave(matches.length ? "ambiguous-repository" : held ? "recorded-repository-not-known" : "no-known-sibling-repository"); continue; }
     const [repo, identity] = matches[0]!;
-    const checkout = held ? cwd : path.join(path.dirname(repo), path.relative(path.dirname(repo), cwd).split(path.sep)[0]!);
+    const checkout = held ? path.resolve(cwd) : path.join(path.dirname(repo), path.relative(path.dirname(repo), cwd).split(path.sep)[0]!);
     if (!held && !removed(checkout)) { leave("checkout-present-or-unreadable"); continue; }
-    const hints = entries.map(([filename]) => transcriptHints(filename));
+    // A root mapping applies to every descendant on the next scan. Validate
+    // its entire catalog footprint, including records outside dir- projects.
+    const affected = catalogEntries.filter(([, file]) => file.cwd && (
+      path.resolve(file.cwd) === checkout || path.resolve(file.cwd).startsWith(checkout + path.sep)
+    ));
+    const hints = affected.map(([filename]) => {
+      let hint = hintsByFile.get(filename);
+      if (!hint) { hint = transcriptHints(filename); hintsByFile.set(filename, hint); }
+      return hint;
+    });
+    if (hints.some(hint => hint.unreadable)) { leave("unreadable-transcript"); continue; }
     const remotes = hints.flatMap(hint => hint.remotes);
     if (remotes.some(remote => projectIdentityFromRemote(remote, repo)?.project !== identity.project)) { leave("conflicting-repository-hint"); continue; }
+    if (affected.some(([, file]) => file.project.startsWith("dir-")
+      ? file.project !== directoryProjectId(path.resolve(file.cwd!))
+      : canonicalProject(file.project) !== identity.project)) { leave("conflicting-project-identity"); continue; }
+    if (Object.entries(map).some(([mappedCwd, mapping]) => (
+      mappedCwd === checkout || mappedCwd.startsWith(checkout + path.sep)
+    ) && mapping.repo !== repo)) { leave("conflicting-recorded-worktree"); continue; }
     const branches = hints.flatMap(hint => hint.branches);
     /* Branches corroborate against repository refs, including branches whose
        checkout was removed. A branch alone never chooses a repository. */
+    const refsDirectory = branchRefsDirectory(repo);
     const branchProof = branches.some(branch => {
-      if (branch.includes("..") || path.isAbsolute(branch)) return false;
+      if (!refsDirectory || branch.includes("..") || path.isAbsolute(branch)) return false;
       try {
-        return fs.existsSync(path.join(repo, ".git", "refs", "heads", branch))
-          || fs.readFileSync(path.join(repo, ".git", "packed-refs"), "utf8").split("\n").some(line => line.endsWith(` refs/heads/${branch}`));
+        const ref = path.join(refsDirectory, "refs", "heads", branch);
+        return (fs.existsSync(ref) && fs.statSync(ref).isFile())
+          || fs.readFileSync(path.join(refsDirectory, "packed-refs"), "utf8").split("\n").some(line => line.endsWith(` refs/heads/${branch}`));
       } catch { return false; }
     });
-    const registration = { source, target: identity.project, displayName: identity.displayName };
-    if (!projectAliasesCanAccept([registration])) { leave("project-alias-conflict"); continue; }
+    if (!held && !remotes.length && !branchProof) {
+      leave(branches.length ? "unproven-branch-hint" : "missing-native-evidence"); continue;
+    }
+    const registrations = affected.filter(([, file]) => file.project.startsWith("dir-"))
+      .map(([, file]) => ({ source: file.project, target: identity.project, displayName: identity.displayName }));
+    if (!projectAliasesCanAccept(registrations)) { leave("project-alias-conflict"); continue; }
+    if (project && identity.project !== project) { leave("target-outside-project"); continue; }
     report.folded.push({ ...item, checkout, target: identity.project, repo, worktree: held?.worktree ?? path.basename(checkout),
-      reason: held ? "recorded-worktree" : remotes.length ? "sibling-name-and-repository-hint" : branchProof ? "sibling-name-and-branch-hint" : "sibling-name-only" });
+      reason: held ? "recorded-worktree" : remotes.length ? "sibling-name-and-repository-hint" : "sibling-name-and-branch-hint" });
   }
   return report;
 }

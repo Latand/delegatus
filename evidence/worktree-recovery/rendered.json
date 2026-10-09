@@ -6,28 +6,68 @@
       "lang": "en",
       "fits": true,
       "preview": true,
-      "applied": true
+      "applied": true,
+      "excludedReasons": [
+        "missing-native-evidence",
+        "unproven-branch-hint",
+        "unreadable-transcript",
+        "conflicting-repository-hint",
+        "conflicting-project-identity",
+        "conflicting-recorded-worktree",
+        "ambiguous-repository",
+        "target-outside-project"
+      ]
     },
     {
       "width": 390,
       "lang": "uk",
       "fits": true,
       "preview": true,
-      "applied": true
+      "applied": true,
+      "excludedReasons": [
+        "missing-native-evidence",
+        "unproven-branch-hint",
+        "unreadable-transcript",
+        "conflicting-repository-hint",
+        "conflicting-project-identity",
+        "conflicting-recorded-worktree",
+        "ambiguous-repository",
+        "target-outside-project"
+      ]
     },
     {
       "width": 1440,
       "lang": "en",
       "fits": true,
       "preview": true,
-      "applied": true
+      "applied": true,
+      "excludedReasons": [
+        "missing-native-evidence",
+        "unproven-branch-hint",
+        "unreadable-transcript",
+        "conflicting-repository-hint",
+        "conflicting-project-identity",
+        "conflicting-recorded-worktree",
+        "ambiguous-repository",
+        "target-outside-project"
+      ]
     },
     {
       "width": 1440,
       "lang": "uk",
       "fits": true,
       "preview": true,
-      "applied": true
+      "applied": true,
+      "excludedReasons": [
+        "missing-native-evidence",
+        "unproven-branch-hint",
+        "unreadable-transcript",
+        "conflicting-repository-hint",
+        "conflicting-project-identity",
+        "conflicting-recorded-worktree",
+        "ambiguous-repository",
+        "target-outside-project"
+      ]
     }
   ]
 }

@@ -24375,13 +24375,16 @@ describe("operator worktree recovery maintenance", () => {
     const out = path.resolve(".artifacts/worktree-recovery");
     fs.mkdirSync(out, { recursive: true });
     const calls: boolean[] = [];
+    const excludedReasons = ["missing-native-evidence", "unproven-branch-hint", "unreadable-transcript",
+      "conflicting-repository-hint", "conflicting-project-identity", "conflicting-recorded-worktree",
+      "ambiguous-repository", "target-outside-project"] as const;
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/board/maintenance/worktrees": async (request: Request) => {
         const { dryRun } = await request.json() as { dryRun: boolean };
         calls.push(dryRun);
         return Response.json({ dryRun, rescanned: !dryRun,
-          folded: [{ cwd: "/repo/widgets-review", source: "fixture", sessions: 3, reason: "sibling-name-only" }],
-          leftAlone: [{ cwd: "/repo/unrelated", source: "other", sessions: 1, reason: "no-known-sibling-repository" }],
+          folded: [{ cwd: "/repo/widgets-review", source: "fixture", sessions: 3, reason: "sibling-name-and-branch-hint" }],
+          leftAlone: excludedReasons.map((reason, index) => ({ cwd: `/repo/widgets-lane-${index}`, source: "other", sessions: 1, reason })),
         });
       },
     });
@@ -24398,14 +24401,18 @@ describe("operator worktree recovery maintenance", () => {
           await panel.locator("details").waitFor();
           expect(await panel.locator("button").count()).toBe(2);
           await panel.locator("summary").click();
-          expect(await panel.locator("li").count()).toBe(2);
+          expect(await panel.locator("li").count()).toBe(1 + excludedReasons.length);
+          const reasons = await panel.locator("li").allTextContents();
+          for (const reason of excludedReasons) {
+            expect(reasons.some(text => text.includes(translate(lang, `worktreeRecovery.reason.${reason}`)))).toBe(true);
+          }
           const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
           expect(fits).toBe(true);
           await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}-preview.png`) });
           await panel.locator("button").nth(1).click();
           await page.waitForFunction(() => document.querySelector("[data-worktree-recovery]")?.querySelectorAll("button").length === 1);
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, fits, preview: true, applied: true });
+          readings.push({ width, lang, fits, preview: true, applied: true, excludedReasons });
         } finally { await context.close(); }
       }
       expect(calls).toEqual([true, false, true, false, true, false, true, false]);

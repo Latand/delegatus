@@ -28,12 +28,16 @@ MCP receipt publication, even when a request key is supplied.
 A removed checkout must share its parent directory with a known repository
 and match one of its sibling names: `<repo>-lane-<n>`,
 `<repo>-pipeline-<id>`, `<repo>-review`, or `<repo>-v<version>-<suffix>`.
-Subdirectory cwds record the checkout root. Native transcript repository hints
-must agree; branch hints corroborate against that repository's refs. Reports
-identify whether the evidence was a recorded mapping, a repository hint, a
-branch hint, or the approved sibling name alone. Existing directories,
-ambiguous repositories, conflicting mappings and mismatched directory keys
-remain untouched. A failed rescan retains the mappings; preview and retry to
+Subdirectory cwds record the checkout root. Recovery requires a recorded mapping,
+an agreeing native transcript repository hint, or a branch hint confirmed against
+that repository's refs. A matching sibling name alone leaves the project separate.
+Every affected checkout transcript, including descendants, must be readable and
+carry no conflicting repository or project identity. One conflicting descendant
+excludes the entire checkout. Ambiguity is checked against all known repositories
+before the optional project filter is applied. Reports identify the corroborating
+evidence or the reason for exclusion. Existing directories, ambiguous repositories,
+conflicting mappings and mismatched directory keys remain untouched.
+A failed rescan retains the mappings; preview and retry to
 finish. Recovery never adds a second project naming scheme.
 
 ## Verification record
