@@ -35,12 +35,13 @@ test("conversation turns catch up service fallback messages and refresh static c
   const { conversationTurnPrompt } = await import("./prompt"); const { requestSchema } = await import("./protocol");
   const request = requestSchema.parse(sampleRequest);
   const record = reserveConversations(relay, target, "p".repeat(32), "prompt_one", ["member"])![0]!;
-  const first = conversationTurnPrompt(request, record, [], "[round]");
+  const first = conversationTurnPrompt(request, record, "[round]");
+  expect(first.prompt).toEndWith("[round]");
   const next = { ...record, seen: first.seen, staticDigest: first.digest };
   request.input.conversation.push({ id: "fallback_message", author: { key: "assistant", name: "Assistant", self: true }, sent_at: "2026-10-08T12:00:00Z", text: "Service fallback answer", reply_to: null });
-  const second = conversationTurnPrompt(request, next, [], "[round]");
+  const second = conversationTurnPrompt(request, next, "[round]");
   expect(second.prompt).toContain("Service fallback answer"); expect(second.prompt).toContain(request.input.respond_to!); expect(second.prompt).not.toContain("<service_instructions>");
-  expect(conversationTurnPrompt(request, { ...next, staticDigest: null, seen: [] }, [], "[round]").prompt).toContain("<service_instructions>");
+  expect(conversationTurnPrompt(request, { ...next, staticDigest: null, seen: [] }, "[round]").prompt).toContain("<service_instructions>");
   releaseConversation(record.id);
 });
 
