@@ -1,7 +1,7 @@
 "use client";
 
 import { Columns2, CornerDownRight, Film, GalleryHorizontalEnd, MessageCircleQuestionMark, ImageOff, Loader2, RotateCw, SquareSplitHorizontal, TriangleAlert, ZoomIn } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
@@ -15,7 +15,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { usePrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { PrototypeAnswer, PrototypeDeliveryState, PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeDeliveryState, PrototypeMediaView, PrototypeQuestion, PrototypeRoundView } from "@/lib/prototypeReview/types";
 
 import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 
@@ -282,12 +282,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   /* Arrows step through the round's pictures and digits toggle a variant,
      claimed in the window's capture phase so the board behind never moves on
-     the same press. A text field and a playing video keep their keys. */
+     the same press. A text field, a playing video and an open single-choice
+     question keep their keys: the arrows move that question's answer. */
   useEffect(() => {
     if (viewer || guard) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typing(event.target)) return;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !(event.target as HTMLElement | null)?.closest?.('[role="radiogroup"]')) {
         event.preventDefault();
         event.stopPropagation();
         show(index + (event.key === "ArrowRight" ? 1 : -1));
@@ -701,6 +702,18 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       return { questionId, options, ...(question.multiple && answer.other ? { other: true as const } : {}) };
     }) }));
   };
+  /* A single-choice group is one tab stop: the arrows move the focus and the
+     answer together, wrapping from the last choice (Other included) to the first. */
+  const stepAnswer = (event: ReactKeyboardEvent<HTMLButtonElement>, question: PrototypeQuestion, from: number) => {
+    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+    if (!forward && event.key !== "ArrowLeft" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const buttons = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+    const at = (from + (forward ? 1 : -1) + buttons.length) % buttons.length;
+    selectAnswer(question.id, at === question.options.length ? "other" : at);
+    buttons[at]?.focus();
+  };
   /* An answered or retired questionnaire no longer asks: the choices left
      unpicked fade and the "choose any" hint goes, so it reads as a record. */
   const closed = !open;
@@ -714,6 +727,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           return <button key={index} type="button" role={question.multiple ? "checkbox" : "radio"} aria-checked={checked} disabled={!open}
             {...(index === "other" ? { "data-prototype-other": question.id } : { "data-prototype-option": `${question.id}:${index}` })}
             className={`flex min-h-11 w-full items-start gap-2 rounded-control border px-2.5 py-2 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${checked ? "border-accent/50 bg-accent-soft text-accent" : closed ? "border-transparent bg-transparent text-muted opacity-60" : "border-border bg-canvas text-primary enabled:hover:border-accent/45"}`}
+            {...(question.multiple ? {} : { tabIndex: checked || (!answer?.other && !answer?.options.length && index === 0) ? 0 : -1, onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => open && stepAnswer(event, question, index === "other" ? question.options.length : index) })}
             onClick={() => selectAnswer(question.id, index)}>
             <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : null}</span>
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}</span>

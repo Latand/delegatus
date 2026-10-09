@@ -24094,6 +24094,37 @@ describe("short questionnaire rendered evidence", () => {
             const label = `${lang}-${scheme}-${taskId}`;
             await page.screenshot({ path: path.join(out, `${label}.png`) });
             readings.push({ lang, scheme, taskId, width: 1440, ...reading });
+            if (taskId === "t-search" || taskId === "t-upload") {
+              /* Arrows in a single-choice group move focus and answer together, Other included, and never the gallery. */
+              const checkedOf = (id: string) => page.locator(`[data-prototype-question="${id}"] [role="radio"]`).evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-checked") === "true"));
+              const focusedOption = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-option") ?? (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-other"));
+              const position = () => page.locator("[data-prototype-position]").first().textContent().catch(() => null);
+              const before = taskId === "t-upload" ? await position() : null;
+              await page.locator('[data-prototype-option="place:0"]').focus();
+              const places = (await checkedOf("place")).length;
+              await page.keyboard.press("ArrowRight");
+              expect((await checkedOf("place")).slice(0, 2)).toEqual([false, true]);
+              expect(await focusedOption()).toBe("place:1");
+              await page.keyboard.press("ArrowLeft");
+              expect((await checkedOf("place"))[0]).toBe(true);
+              expect(await focusedOption()).toBe("place:0");
+              await page.keyboard.press("ArrowLeft");
+              expect((await checkedOf("place"))[places - 1]).toBe(true);
+              expect((await checkedOf("place")).filter(Boolean)).toHaveLength(1);
+              expect(await focusedOption()).toBe(`place:${places - 1}`);
+              await page.keyboard.press("ArrowRight");
+              expect((await checkedOf("place"))[0]).toBe(true);
+              await page.locator('[data-prototype-option="timing:0"]').focus();
+              await page.keyboard.press("ArrowLeft");
+              expect(await focusedOption()).toBe("timing");
+              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("true");
+              expect((await checkedOf("timing")).filter(Boolean)).toHaveLength(1);
+              await page.keyboard.press("ArrowRight");
+              expect(await focusedOption()).toBe("timing:0");
+              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("false");
+              expect((await checkedOf("timing"))[0]).toBe(true);
+              if (taskId === "t-upload") expect(await position()).toBe(before);
+            }
             if (taskId === "t-links") {
               await page.locator('[data-prototype-option="place:1"]').click();
               await page.locator('[data-prototype-save]').click();
