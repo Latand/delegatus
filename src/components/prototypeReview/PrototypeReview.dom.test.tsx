@@ -99,6 +99,24 @@ test.each([false, true])("Hide and history Undo share dismissal identity and kee
   expect(calls).toEqual([false, true].map(undo => ({ target: { kind: "prototype", taskId: "task-1", reviewId: `pr_${"a".repeat(32)}` }, undo, surface: phone ? "phone" : "desktop" })));
 });
 
+test.each(["rec", "busy"] as const)("Hide keeps the voice controls available while dictation is %s", async phase => {
+  heldPhase = phase;
+  const writes: unknown[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") writes.push(url);
+    return new Response(JSON.stringify(reviewRead()));
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  const hide = document.querySelector<HTMLButtonElement>("[data-prototype-hide]")!;
+  expect(hide.disabled).toBe(true);
+  await act(async () => { hide.click(); });
+  expect(writes).toEqual([]);
+  expect(document.querySelector("[data-prototype-hidden]")).toBeNull();
+});
+
 test("the comment is saved as it was written: edge spaces and line breaks reach the save request", async () => {
   const written = "  Keep the spacing.\nAdd a button.  \n";
   const posted: Array<{ reviewId: string; chosen: number[]; comment: string }> = [];

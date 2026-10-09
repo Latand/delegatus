@@ -730,7 +730,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           </span>
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
-          <button type="button" className={SECONDARY} data-prototype-hide="" disabled={review.saving} onClick={() => void review.hide(round.id, false, phone ? "phone" : "desktop")}>{t("proto.hide")}</button>
+          <button type="button" className={SECONDARY} data-prototype-hide="" disabled={review.saving || speaking} onClick={() => void review.hide(round.id, false, phone ? "phone" : "desktop")}>{t("proto.hide")}</button>
           <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
             {t("proto.save")}
