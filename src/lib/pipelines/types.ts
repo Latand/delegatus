@@ -1028,6 +1028,7 @@ export type Pipeline = {
   /** Who cleared the lane off the queue at `dismissedAt`, attributed on the
       server (docs/design/needs-attention.md §5). Absent on a dismissal written
       before attribution existed. */
+  dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 
 import { decodeCodexStructuredUserText, encodeCodexStructuredUserText } from "./codexStructuredUserText.server";
 import { decodeCodexStructuredUserText as decodeWire } from "./codexStructuredUserText";
@@ -54,11 +55,11 @@ afterAll(() => {
 
 interface Probe {
   rpc(method: string, params?: Record<string, unknown>): Promise<{ result?: unknown; error?: { message?: string } }>;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 function startAppServer(home: string): Probe {
-  const child: ChildProcessWithoutNullStreams = spawn(codexBinary, ["app-server"], {
+  const child: ChildProcessWithoutNullStreams = ownFixtureTree(spawn(codexBinary, ["app-server"], {
     /* An ALLOWLISTED environment with an empty CODEX_HOME: no credential is
        inherited, so nothing here can authenticate even by accident. */
     env: {
@@ -72,7 +73,7 @@ function startAppServer(home: string): Probe {
     },
     cwd: home,
     stdio: ["pipe", "pipe", "pipe"],
-  });
+  }));
   let buffer = "";
   let nextId = 0;
   const pending = new Map<number, (value: { result?: unknown; error?: { message?: string } }) => void>();
@@ -105,7 +106,7 @@ function startAppServer(home: string): Probe {
         resolve({ error: { message: `${method} timed out` } });
       }, 20_000);
     }),
-    stop: () => { child.kill("SIGKILL"); },
+    stop: () => stopFixtureTree(child),
   };
 }
 
@@ -129,7 +130,7 @@ test.skipIf(!installed)("real Codex succession replays full and restricted acces
       threadId = (started.result as { thread: { id: string } }).thread.id;
       // Materialize the rollout without authentication or a provider turn.
       expect((await first.rpc("thread/inject_items", { threadId, items: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Isolated launch access fixture" }] }] })).error).toBeUndefined();
-    } finally { first.stop(); }
+    } finally { await first.stop(); }
     const successor = startAppServer(home);
     try {
       expect((await successor.rpc("initialize", { clientInfo: { name: "launch-access-probe", version: "0" } })).error).toBeUndefined();
@@ -140,7 +141,7 @@ test.skipIf(!installed)("real Codex succession replays full and restricted acces
         type: sandbox === "danger-full-access" ? "dangerFullAccess" : "workspaceWrite",
         ...(sandbox === "workspace-write" ? { networkAccess: false } : {}),
       } });
-    } finally { successor.stop(); }
+    } finally { await successor.stop(); }
   }
 }, 60_000);
 
@@ -229,7 +230,7 @@ test.skipIf(!installed)(
          on the record type alone. */
       expect(records.some((record) => record.payload?.type === "message" && record.payload?.role === "developer")).toBe(true);
     } finally {
-      probe.stop();
+      await probe.stop();
     }
   },
   120_000,

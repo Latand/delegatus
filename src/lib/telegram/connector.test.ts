@@ -1,3 +1,5 @@
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -603,11 +605,13 @@ test("stop waits through SIGKILL escalation until a TERM-resistant connector exi
   process.env.LLV_TELEGRAM_PYTHON = process.execPath;
   process.env.LLV_TELEGRAM_SERVER_BRIDGE = script;
   let childPid = 0;
+  let childIdentity: ProcessIdentity | undefined;
   try {
     const result = await ensureTelegramConnector(CONNECTOR_SESSION, {
       spawn: (spec) => {
         const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdio: "ignore" });
         childPid = child.pid ?? 0;
+        if (childPid > 0) childIdentity = captureProcessIdentity(childPid);
         return child;
       },
       probe: async () => {
@@ -645,9 +649,7 @@ test("stop waits through SIGKILL escalation until a TERM-resistant connector exi
   } finally {
     delete process.env.LLV_TELEGRAM_PYTHON;
     delete process.env.LLV_TELEGRAM_SERVER_BRIDGE;
-    if (childPid > 1) {
-      try { process.kill(childPid, "SIGKILL"); } catch { /* already gone */ }
-    }
+    if (childIdentity) await stopFixtureIdentity(childIdentity);
   }
 }, 5_000);
 
