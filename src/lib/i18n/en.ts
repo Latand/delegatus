@@ -2990,6 +2990,7 @@ export const en = {
   "orchPanel.railAria": "Orchestrator, {state}. Expand",
   "orchPanel.seatCollapse": "Collapse the orchestrator chat (O)",
   "orchPanel.seatExpand": "Expand the orchestrator chat (O)",
+  "orchPanel.seatOpenWindow": "Open in the agent window",
   "orchPanel.seatFoldWord": "Fold",
   "orchPanel.seatUnfoldWord": "Unfold",
   "orchPanel.seatUnreadReply": "New reply",
