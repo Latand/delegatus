@@ -5,7 +5,7 @@ import { AUTO_ROTATE_DEFAULT_PERCENT } from "./seatTickSettings";
 import { autoRotationRetryAt, type AutoRotationAttempt } from "./seatAutoRotation";
 import { boardMaintenanceAnswer, type BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { seatTickSettingsCardText } from "./cards";
+import { SEAT_TICK_INTERVAL_ELIGIBILITY, seatTickSettingsCardText } from "./cards";
 import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy, seatTickSettingsCardDetail } from "./seatTick";
 import {
@@ -130,6 +130,8 @@ export interface SeatTickSettingsAnswer {
     staleAfterMinutes: number | null;
     /** Fruitless wakes of one reason before the guard holds it back. */
     retryGuardWakes: number;
+    /** Absent in older Viewer responses; current answers always explain eligibility. */
+    intervalEligibility?: string;
   };
   /** The tick's own record for this project, or null when it has never
       recorded one — which is an unknown, not a quiet tick. */
@@ -176,7 +178,7 @@ function recorded(row: SeatTickProjectState): boolean {
 
 function actualState(row: SeatTickProjectState, retryGuardWakes: number): SeatTickActualState {
   const guarded = Object.entries(row.wakesWithoutChange ?? {})
-    .flatMap(([kind, wakes]) => (typeof wakes === "number" && wakes >= retryGuardWakes
+    .flatMap(([kind, wakes]) => (kind !== "interval" && typeof wakes === "number" && wakes >= retryGuardWakes
       ? [{ kind: kind as SeatTickWakeReasonKind, wakes }]
       : []));
   /* One gap, the one an operator would look at first: the pull-request source
@@ -302,6 +304,7 @@ export function seatTickSettingsAnswer(
       checkIntervalMinutes,
       staleAfterMinutes: checkIntervalMinutes === null ? null : checkIntervalMinutes * STALE_CHECKS,
       retryGuardWakes,
+      intervalEligibility: SEAT_TICK_INTERVAL_ELIGIBILITY,
     },
     state,
     stateError,

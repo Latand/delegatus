@@ -78,8 +78,10 @@ const CONVERSATION = ["conversation", "0f4c21b7729fbc9e"].join("_");
 const SUCCESSOR = ["conversation", "5b7729fbc9e0f4c2"].join("_");
 const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 const MINUTE = 60_000;
+const WALL_DATE = Date;
 
 afterEach(() => {
+  globalThis.Date = WALL_DATE;
   stopSeatTick();
   setAgentRegistryForTests(null);
 });
@@ -1285,7 +1287,7 @@ test("events belonging to a lane that has finished send nothing, and the check t
     state: { ...OVERDUE, eventsThrough: 12 },
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", delivery: null, detail: "nothing owed" });
+  expect(record).toMatchObject({ verdict: "quiet", delivery: null, detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(rig.sent).toEqual([]);
   /* And the backlog does not come back for a second, third and fourth wake:
      one look moved the cursor past all of it. */
@@ -1491,7 +1493,7 @@ test("once the pull request is merged the same project owes nothing again", asyn
     openPullRequests: [],
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", detail: "nothing owed" });
+  expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(rig.sent).toEqual([]);
 
   /* And with the board empty behind it too — one finished lane and nothing
@@ -1892,7 +1894,7 @@ test("the empty array is the one gh answer that still earns quiet", async () => 
     githubRun: async () => "[]",
   });
   const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", detail: "nothing owed" });
+  expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify" });
   expect(rig.sent).toEqual([]);
   /* And the row records the quiet, which is the claim an error never makes. */
   expect(rig.written.at(-1)!.quietSince).toBe(new Date(NOW).toISOString());
@@ -3088,7 +3090,7 @@ test("a finished child is harvested by exactly one wake, across ticks, a fresh c
   const first = childRig(fixture);
   const record = await runSeatTickCheck(fixture.project, first.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
-  expect(record!.detail).toContain("a spawned child finished and its outcome is unharvested");
+  expect(record!.detail).toContain("a spawned child finished and its outcome is not yet announced by a delivered seat-tick wake");
   expect(first.sent[0]!.text).toContain(`[child] ${child.id}`);
   expect(first.sent[0]!.text).toContain("review the exporter");
   /* The landing wrote the cursor: this child is now the seat's business. */
@@ -3136,7 +3138,7 @@ test("a launch that failed before it ran is a terminal child with a failed outco
   const record = await runSeatTickCheck(fixture.project, rig.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
   expect(record!.detail).toContain("a spawned child failed");
-  expect(rig.sent[0]!.text).toContain(`[child] ${child.id} — build the exporter — spawned child failed, outcome unharvested`);
+  expect(rig.sent[0]!.text).toContain(`[child] ${child.id} — build the exporter — spawned child failed, outcome announcement owed`);
   expect(fixture.acknowledged()).toEqual([child.id]);
   const again = childRig(fixture, { now: fixture.now + 61 * MINUTE });
   expect(await runSeatTickCheck(fixture.project, again.deps)).toMatchObject({ verdict: "quiet" });
@@ -3197,7 +3199,7 @@ test("every owed child beyond the cursor cap is named once across landings and r
     expect(rig.snapshots).toBe(0);
     expect(rig.liveness.length).toBeLessThanOrEqual(60);
     for (const message of rig.sent) {
-      for (const match of message.text.matchAll(/\[child\] (\S+) /g)) named.push(match[1]!);
+      for (const match of message.text.matchAll(/^- \[child\] (\S+) .*outcome announcement owed$/gm)) named.push(match[1]!);
     }
   }
   const unique = new Set(named);
@@ -3652,17 +3654,16 @@ test("a child finishing while a wake is unresolved dispatches nothing, and is ha
   expect(second.sent).toEqual([]);
   expect(fixture.row()).toMatchObject({ outstandingWake: { operationId: "op-flight-1" }, harvestedChildren: [] });
 
-  /* The holder delivers the first wake: it lands, and it credited no harvest. */
+  /* Once the holder lands the interval wake, the newly owed outcome can
+     dispatch in this check; the prior wake credits no child outcome. */
   const third = childRig(fixture, { wakeState: "landed" });
-  expect(await runSeatTickCheck(fixture.project, third.deps)).toMatchObject({ verdict: "quiet" });
+  expect(await runSeatTickCheck(fixture.project, third.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"] });
   expect(third.journal[0]).toMatchObject({ verdict: "landed" });
-  expect(fixture.row()).toMatchObject({ outstandingWake: null, harvestedChildren: [] });
-
-  /* The next interval carries the child. */
-  const fourth = childRig(fixture, { now: fixture.now + 61 * MINUTE });
-  expect(await runSeatTickCheck(fixture.project, fourth.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"] });
-  expect(fourth.sent[0]!.text).toContain(`[child] ${child.id}`);
+  expect(third.sent[0]!.text).toContain(`[child] ${child.id}`);
   expect(fixture.acknowledged()).toEqual([child.id]);
+  const fourth = childRig(fixture, { now: fixture.now + 61 * MINUTE });
+  expect((await runSeatTickCheck(fixture.project, fourth.deps))!.reasons).not.toContain("child-terminal");
+  expect(fourth.sent).toEqual([]);
 });
 
 /* ------------------------------------------------------------------------- *
@@ -3712,7 +3713,7 @@ test("cross-project, pipeline-owned, engine-native and unrelated conversations a
 
   const rig = childRig(fixture);
   const record = await runSeatTickCheck(fixture.project, rig.deps);
-  expect(record).toMatchObject({ verdict: "quiet", detail: "the board is done and the proposal slot is not due" });
+  expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due" });
   expect(rig.sent).toEqual([]);
   expect(rig.liveness).toEqual([]);
 });
@@ -3874,10 +3875,11 @@ test("a new turn discovered during an unknown send remains owed under the origin
     expect(fixture.row().outstandingWake!.clientMessageId).toBe(outstanding.clientMessageId);
     expect(fixture.acknowledged()).toEqual([]);
   }
-  await runSeatTickCheck(fixture.project, childRig(fixture, { now: fixture.now + 61 * MINUTE, wakeState: "landed" }).deps);
-  expect(fixture.acknowledged()).toEqual([child.id]);
+  const landed = childRig(fixture, { now: fixture.now + 61 * MINUTE, wakeState: "landed" });
+  expect(await runSeatTickCheck(fixture.project, landed.deps)).toMatchObject({ verdict: "wake", items: 1 });
+  expect(fixture.acknowledged()).toEqual([child.id, child.id]);
   const final = childRig(fixture, { now: fixture.now + 122 * MINUTE });
-  expect(await runSeatTickCheck(fixture.project, final.deps)).toMatchObject({ verdict: "wake", items: 1 });
+  expect((await runSeatTickCheck(fixture.project, final.deps))!.reasons).not.toContain("child-terminal");
   expect(fixture.acknowledged()).toEqual([child.id, child.id]);
 });
 
@@ -4470,7 +4472,7 @@ test("435 cold acknowledged children do not delay a new worker or its completion
   const named: string[] = [];
   for (let tick = 0; tick < 100 && fixture.acknowledged().length < cold.length; tick++) {
     const { rig } = await check();
-    for (const message of rig.sent) for (const match of message.text.matchAll(/\[child\] (\S+) /g)) named.push(match[1]!);
+    for (const message of rig.sent) for (const match of message.text.matchAll(/^- \[child\] (\S+) .*outcome announcement owed$/gm)) named.push(match[1]!);
   }
   expect(named.length).toBe(435);
   expect(new Set(named)).toEqual(new Set(cold.map((child) => child.id)));
@@ -6066,7 +6068,7 @@ test("one child with a failed and a finished turn is one line carrying its lates
   /* One line, and the failure is the one it carries: the wake describes the
      child by its latest state, not once per owed row. */
   expect(text.split(child.id)).toHaveLength(2);
-  expect(text).toContain(`${child.id} — iterative worker — spawned child failed, outcome unharvested`);
+  expect(text).toContain(`${child.id} — iterative worker — spawned child failed, outcome announcement owed`);
 
   /* The line stood for both rows, so the landing acknowledged both. */
   const outcomes = new SeatTickAccounting(`${fixture.stateFile}.sqlite`, fixture.project).collection.snapshot()
@@ -6119,7 +6121,7 @@ test("a child a delivered wake showed is not shown again until it ends another t
   ledger.append(generation, { kind: "turn-ended", turnId: "turn-three", status: "error", seq: 6 });
   const moved = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, designatedAt: ago(fixture, 600) } });
   expect(await runSeatTickCheck(fixture.project, moved.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
-  expect(moved.sent[0]!.text).toContain(`${child.id} — worker — spawned child failed, outcome unharvested`);
+  expect(moved.sent[0]!.text).toContain(`${child.id} — worker — spawned child failed, outcome announcement owed`);
 });
 
 test("a failure this seat's own worker just had is listed beside the history that is not (#1783)", async () => {
@@ -6138,7 +6140,7 @@ test("a failure this seat's own worker just had is listed beside the history tha
   const record = await runSeatTickCheck(fixture.project, rig.deps);
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`${recent.id} — current worker — spawned child failed, outcome unharvested`);
+  expect(text).toContain(`${recent.id} — current worker — spawned child failed, outcome announcement owed`);
   expect(text).not.toContain(historical.id);
   expect(text).toContain("(1 spawned child(ren) not listed: their last activity predates this seat's designation");
 });
@@ -6276,7 +6278,7 @@ test("a failure this seat's own worker had an hour ago is listed, once (#1783)",
      child once, which is the half a seat works from. */
   const agenda = agendaOf(text);
   expect(agenda.filter((line) => line.includes(child.id))).toEqual([
-    `- [child] ${child.id} — current worker — spawned child failed, outcome unharvested`,
+    `- [child] ${child.id} — current worker — spawned child failed, outcome announcement owed`,
   ]);
   expect(fixture.acknowledged()).toEqual([child.id]);
 
@@ -7075,7 +7077,7 @@ test("the controller keeps unpaid report reminders after the delivered agenda dr
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent).toHaveLength(round + 1);
-    expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([]);
+    expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[pipeline]")]);
     expect(rig.sent.at(-1)!.text).toContain(`key ${key}`);
   }
   log.push({ id: scopedReportId(PROJECT, key), key, seq: 1, at: new Date(NOW + 500 * MINUTE).toISOString(),
@@ -7083,7 +7085,8 @@ test("the controller keeps unpaid report reminders after the delivered agenda dr
     origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
   });
   rig.deps.sources!.now = () => NOW + 510 * MINUTE;
-  expect((await runSeatTickCheck(PROJECT, rig.deps))!.verdict).toBe("quiet");
+  expect((await runSeatTickCheck(PROJECT, rig.deps))!.reasons).toEqual(["interval"]);
+  expect(rig.sent.at(-1)!.text).not.toContain(`key ${key}`);
   expect(rig.written.at(-1)!.reportsOwed).toEqual([]);
 });
 
@@ -8938,4 +8941,329 @@ describe("seat auto-rotation through production seams", () => {
     f.advance(54); await f.check(); expect(f.spawns).toHaveLength(1);
     f.advance(1); await f.check(); expect(f.spawns).toHaveLength(2);
   }));
+});
+
+// Controller regressions for idle-seat wakes (#2346).
+function idleWakeRig(f: ChildFixture, now: () => number) {
+  globalThis.Date = new Proxy(WALL_DATE, {
+    construct(target, args) { return Reflect.construct(target, args.length ? args : [now()]); },
+    get(target, key, receiver) { return key === "now" ? now : Reflect.get(target, key, receiver); },
+  });
+  f.registry.reconcileConversations([{
+    engine: "claude", path: f.seat.path!, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "seat" }),
+    turn: { state: "idle", source: "assistant", terminalAt: new Date(now()).toISOString() },
+    observedAt: new Date(now()).toISOString(),
+  }]);
+  expect(f.registry.conversation(f.seat.conversationId as never)!.turn.state).toBe("idle");
+  const rig = childRig(f, { settings: { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 5 } });
+  rig.deps.sources!.now = now;
+  rig.deps.maintenance = null;
+  return rig;
+}
+function finishIdleWorker(f: ChildFixture, child: { id: string; path: string }, now: number) {
+  f.registry.reconcileConversations([{
+    engine: "claude", path: child.path, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "worker" }),
+    turn: { state: "idle", source: "assistant", terminalAt: new Date(now).toISOString() },
+    observedAt: new Date(now).toISOString(),
+  }]);
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  const generation = f.registry.conversation(child.id as never)!.generations[0]!.id;
+  ledger.append(generation, { kind: "turn-started", turnId: "work", seq: 1 });
+  ledger.append(generation, { kind: "turn-ended", turnId: "work", status: "completed", seq: 2 });
+}
+
+test("a new terminal child wakes an idle seat on its first check despite a recent wake (#2346)", async () => {
+  for (const checkMinutes of [5, 1]) {
+    const f = childFixture("first-check");
+    let clock = f.now;
+    const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+    f.seed({ lastWakeAt: new Date(clock + MINUTE).toISOString() });
+    clock += 2 * MINUTE;
+    finishIdleWorker(f, child, clock);
+    const finishedAt = clock;
+    clock += (checkMinutes === 5 ? 3 : 1) * MINUTE;
+    const rig = idleWakeRig(f, () => clock);
+    rig.deps.policy = { ...DEFAULT_SEAT_TICK_POLICY, checkIntervalMs: checkMinutes * MINUTE };
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.verdict).toBe("wake");
+    expect(record!.reasons).toContain("child-terminal");
+    expect(clock - finishedAt).toBeLessThanOrEqual(checkMinutes * MINUTE);
+    expect(f.acknowledged()).toEqual([child.id]);
+    clock += checkMinutes * MINUTE;
+    expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("child-terminal");
+  }
+});
+
+
+test("an idle seat keeps its five-minute cadence for unchanged running children and lanes (#2346)", async () => {
+  for (const work of ["child", "lane"] as const) {
+    const f = childFixture(`cadence-${work}`);
+    let clock = f.now;
+    const child = work === "child" ? f.spawn({ title: "worker", turn: "busy", host: "live" }) : null;
+    f.seed();
+    const rig = idleWakeRig(f, () => clock);
+    if (child) rig.deps.sources!.liveness = async ({ conversationId }) => conversationId === child.id
+      ? [{ conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as never] : [];
+    else rig.deps.sources!.pipelines = () => [pipelineRecord({ id: "running-lane", project: f.project,
+      state: "running", createdAt: new Date(f.now - MINUTE).toISOString(), movedAt: null })] as never;
+    for (let check = 0; check < 6; check++) {
+      const record = await runSeatTickCheck(f.project, rig.deps);
+      expect(record!.verdict).toBe("wake");
+      expect(record!.reasons).toContain("interval");
+      expect(rig.sent.at(-1)!.text).toContain(work === "child" ? "worker" : "running-lane");
+      expect(f.row().outstandingWake).toBeNull();
+      clock += 5 * MINUTE;
+    }
+    expect(rig.cards.filter(entry => entry.card.kind === "retry-guard")).toEqual([]);
+    expect(f.acknowledged()).toEqual([]);
+  }
+});
+
+
+test("quiet unparented and cold-inbox work explains interval eligibility in settings and the board (#2346)", async () => {
+  const { seatTickSettingsAnswer } = await import("./seatTickSettingsAnswer");
+  for (const work of ["unparented", "inbox"] as const) {
+    const f = childFixture(`excluded-${work}`);
+    const clock = f.now;
+    if (work === "unparented") f.spawn({ title: "unparented worker", turn: "busy", host: "live", parent: null });
+    f.seed();
+    const rig = idleWakeRig(f, () => clock);
+    const settings = { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 5, reason: "work check", updatedAt: new Date(clock).toISOString() };
+    rig.deps.sources!.settings = () => settings;
+    if (work === "inbox") rig.deps.sources!.tasks = () => [{ id: "cold-card", project: f.project, status: "inbox",
+      text: "operator triage", placement: "unplaced", assignments: [], createdAt: new Date(clock).toISOString(),
+      updatedAt: new Date(clock).toISOString() }] as never;
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.verdict).toBe("quiet");
+    expect(rig.sent).toEqual([]);
+    expect(record!.detail).toContain("no eligible interval agenda");
+    const answer = seatTickSettingsAnswer(f.project, false, { kind: "operator" } as never, {
+      now: () => clock, settings: () => settings, readState: () => f.row(), records: () => rig.journal,
+      policy: () => DEFAULT_SEAT_TICK_POLICY,
+    });
+    expect(JSON.stringify(answer)).toContain("unparented workers");
+    expect(answer.cardText).toMatch(/unparented workers|без батьківського зв’язку/);
+  }
+});
+
+
+test("a read and acted-on child is described by delivered-wake acknowledgement (#2346)", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const f = childFixture("handled-outcome");
+  let clock = f.now;
+  const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+  clock += MINUTE;
+  finishIdleWorker(f, child, clock);
+  f.seed();
+  setAgentRegistryForTests(f.registry);
+  fs.writeFileSync(child.path, JSON.stringify({ type: "assistant", timestamp: new Date(clock).toISOString(),
+    message: { role: "assistant", content: [{ type: "text", text: "Final: review passed." }] } }) + "\n");
+  const binding = viewerMcpBindings(undefined, undefined, {
+    selectedContext: {
+      selectedConversation: () => ({ resolve: () => ({ conversationId: child.id,
+        engine: "claude", path: child.path, project: f.project }) }),
+      pathAllowed: (candidate: string) => candidate === child.path,
+    },
+    pinnedTranscript: (candidate: string) => {
+      expect(candidate).toBe(child.path);
+      const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects",
+        root: SESSIONS, sameIdentity: () => true };
+    },
+  } as never);
+  const page = await binding.conversation_messages({ conversationId: child.id, roles: ["assistant"] });
+  expect(JSON.stringify(page.records)).toContain("Final: review passed.");
+  f.spawn({ title: "follow-up after passing review", turn: "busy", host: "live" });
+  expect(f.acknowledged()).toEqual([]);
+  const rig = idleWakeRig(f, () => clock);
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).toContain("child-terminal");
+  expect(rig.sent[0]!.text).not.toContain("outcome unharvested");
+  expect(rig.sent[0]!.text).toContain("not yet announced by a delivered seat-tick wake");
+  expect(rig.sent[0]!.text).toContain("Reading the transcript alone does not acknowledge");
+  expect(f.acknowledged()).toContain(child.id);
+  clock += 5 * MINUTE;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("child-terminal");
+});
+
+
+test("a deploy admitted before a lost reply still wakes its idle seat exactly once (#2346)", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { seatDeploymentsFor } = await import("@/lib/orchestrator/seatDeployments");
+  const f = childFixture("lost-deploy-reply");
+  let clock = f.now;
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  const revision = "a".repeat(40);
+  const key = `lost-reply-${crypto.randomUUID()}`;
+  let admissions = 0;
+  const status = { deploymentId: `deploy-${crypto.randomUUID()}`, idempotencyKey: key,
+    requestedRevision: revision, revision, phase: "building", terminal: false,
+    error: null, updatedAt: new Date(clock).toISOString() };
+  const binding = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    throw new Error("Viewer control did not reconnect after 2 attempts");
+  } }, {
+    callerAttribution: () => ({ kind: "manager", conversationId: f.seat.conversationId, role: null }),
+    callerProject: () => f.project, viewerProjects: () => [f.project],
+    authorizedSeats: () => [{ ...f.seat, project: f.project }],
+    findDeploymentByIdempotencyKey: async (originalKey: string) => {
+      expect(originalKey).toBe(key);
+      return status;
+    },
+  } as never);
+  await expect(binding.deploy_exact_sha({ revision, clientRequestId: key })).rejects.toThrow("Viewer control did not reconnect");
+  status.phase = "succeeded";
+  status.terminal = true;
+  clock += MINUTE;
+  rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+  rig.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+  const record = await runSeatTickCheck(f.project, rig.deps);
+  expect(record!.reasons).toContain("deploy-settled");
+  expect(rig.sent).toHaveLength(1);
+  clock += 5 * MINUTE;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("deploy-settled");
+  expect(admissions).toBe(1);
+});
+
+
+test("a fresh controller recovers pending original-key deployments without borrowing another admission (#2346)", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { seatDeploymentsFor } = await import("@/lib/orchestrator/seatDeployments");
+  for (const reply of ["lost", "busy", "refused"] as const) {
+    const f = childFixture(`pending-deploy-${reply}`);
+    let clock = f.now;
+    f.seed();
+    idleWakeRig(f, () => clock);
+    const revision = "b".repeat(40);
+    const key = `pending-${crypto.randomUUID()}`;
+    const status = { deploymentId: `deploy-${crypto.randomUUID()}`, idempotencyKey: key,
+      requestedRevision: revision, revision, phase: "succeeded", terminal: true,
+      error: null, updatedAt: new Date(clock).toISOString() };
+    let admissions = 0;
+    const binding = viewerMcpBindings(undefined, { post: async () => {
+      admissions++;
+      if (reply === "lost") throw new Error("Viewer control did not reconnect");
+      return { state: reply, deploymentId: status.deploymentId, revision };
+    } }, {
+      callerAttribution: () => ({ kind: "manager", conversationId: f.seat.conversationId, role: null }),
+      callerProject: () => f.project, viewerProjects: () => [f.project],
+      authorizedSeats: () => [{ ...f.seat, project: f.project }],
+      findDeploymentByIdempotencyKey: async () => { throw new Error("lookup unavailable"); },
+    } as never);
+    if (reply === "lost") await expect(binding.deploy_exact_sha({ revision, clientRequestId: key })).rejects.toThrow("did not reconnect");
+    else expect((await binding.deploy_exact_sha({ revision, clientRequestId: key })).wakeOnSettle).toBe(false);
+    expect(seatDeploymentsFor(f.seat.conversationId)).toEqual([]);
+    const fresh = idleWakeRig(f, () => clock);
+    fresh.deps.sources!.seatDeployments = seatDeploymentsFor;
+    fresh.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+    for (const lookup of ["unavailable", "unknown", "different-key", "different-sha", "accepted"] as const) {
+      fresh.deps.sources!.deploymentByKey = async originalKey => {
+        expect(originalKey).toBe(key);
+        if (lookup === "unavailable") throw new Error("ledger offline");
+        if (lookup === "unknown") return null;
+        return { ...status, idempotencyKey: lookup === "different-key" ? "another-request" : key,
+          requestedRevision: lookup === "different-sha" ? "c".repeat(40) : revision } as never;
+      };
+      const result = await runSeatTickCheck(f.project, fresh.deps);
+      if (reply === "lost" && lookup === "accepted") expect(result!.reasons).toContain("deploy-settled");
+      else expect(result!.reasons).not.toContain("deploy-settled");
+      clock += 5 * MINUTE;
+    }
+    const other = childFixture("foreign-seat");
+    other.seed();
+    const foreign = idleWakeRig(other, () => clock);
+    foreign.deps.sources!.seatDeployments = seatDeploymentsFor;
+    foreign.deps.sources!.deploymentByKey = async () => status as never;
+    foreign.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+    expect((await runSeatTickCheck(other.project, foreign.deps))!.reasons).not.toContain("deploy-settled");
+    const restarted = idleWakeRig(f, () => clock);
+    restarted.deps.sources!.seatDeployments = seatDeploymentsFor;
+    restarted.deps.sources!.deploymentByKey = async () => status as never;
+    restarted.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+    expect((await runSeatTickCheck(f.project, restarted.deps))!.reasons).not.toContain("deploy-settled");
+    expect(f.row().announcedDeploys ?? []).toEqual(reply === "lost" ? [status.deploymentId] : []);
+    expect(fresh.sent).toHaveLength(reply === "lost" ? 1 : 0);
+    expect(admissions).toBe(1);
+  }
+});
+
+
+test("the independent timer delivers a finished child while the seat has no operator turns (#2346)", async () => {
+  const { seatTickIdle } = await import("./seatTickController");
+  const f = childFixture("idle-timer");
+  let clock = f.now;
+  const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  rig.deps.sources!.activeSeats = () => [f.project];
+  rig.deps.ownsTraffic = () => true;
+  rig.deps.recordSuccessions = () => [];
+  rig.deps.sources!.liveness = async ({ conversationId }) => conversationId === child.id
+    ? [{ conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as never] : [];
+  let callback!: () => void;
+  let interval = 0;
+  const drainSweep = async () => {
+    for (let count = 0; !seatTickIdle() && count < 1000; count++) await new Promise<void>(resolve => setImmediate(resolve));
+    expect(seatTickIdle()).toBe(true);
+  };
+  expect(startSeatTick({ policy: DEFAULT_SEAT_TICK_POLICY, recordSuccessions: () => [],
+    handoffHeld: () => false, drainHeld: () => false,
+    scheduleInterval: (run, delay) => { callback = run; interval = delay; return setInterval(() => {}, 1_000_000_000); },
+    sweep: () => reconcileSeatTick(rig.deps), log: () => {},
+  })).toBe(true);
+  await drainSweep();
+  expect(rig.sent).toHaveLength(1);
+  const wakeAt = clock;
+  clock += MINUTE;
+  finishIdleWorker(f, child, clock);
+  clock = wakeAt + interval;
+  callback();
+  await drainSweep();
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.journal.at(-1)!.reasons).toContain("child-terminal");
+});
+
+
+test("delivered task obligations cannot hide a running child's recurring interval (#2346)", async () => {
+  const f = childFixture("mixed-cadence");
+  let clock = f.now;
+  const child = f.spawn({ title: "worker", turn: "busy", host: "live" });
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  rig.deps.sources!.liveness = async ({ conversationId }) => conversationId === child.id
+    ? [{ conversationId, lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } as never] : [];
+  rig.deps.sources!.tasks = () => [{ id: "assigned-card", project: f.project, status: "assigned", text: "ready work",
+    placement: "unplaced", assignments: [], createdAt: new Date(f.now).toISOString(), updatedAt: new Date(f.now).toISOString() }] as never;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).toContain("unstarted-task");
+  for (let check = 0; check < 5; check++) {
+    clock += 5 * MINUTE;
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.reasons).toEqual(["interval"]);
+    expect(rig.sent.at(-1)!.text).toContain("worker");
+    expect(agendaOf(rig.sent.at(-1)!.text).join("\n")).not.toContain("assigned-card");
+  }
+});
+
+
+test("recurring lane reminders leave room for lanes not yet shown (#2346)", async () => {
+  const f = childFixture("cadence-pages");
+  let clock = f.now;
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  const lanes = Array.from({ length: 7 }, (_, i) => pipelineRecord({ id: `live-lane-${i}`, project: f.project,
+    state: "running", createdAt: new Date(f.now - MINUTE).toISOString(), movedAt: null }));
+  rig.deps.sources!.pipelines = () => lanes as never;
+  const shown = new Set<string>();
+  for (let check = 0; check < 2; check++) {
+    const record = await runSeatTickCheck(f.project, rig.deps);
+    expect(record!.reasons).toEqual(["interval"]);
+    for (const item of agendaOf(rig.sent.at(-1)!.text)) {
+      const id = /\[pipeline\] (\S+)/.exec(item)?.[1];
+      if (id) shown.add(id);
+    }
+    clock += 5 * MINUTE;
+  }
+  expect(shown).toEqual(new Set(lanes.map(lane => lane.id)));
 });
