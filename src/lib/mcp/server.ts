@@ -3593,6 +3593,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
+    findingKey: z.string().max(400).refine(value => [...value].length <= 200).optional()
+      .describe("Opaque finding identity, at most 200 characters, unique among this project's open tasks. A recurring create increments count and lastSeenAt, replaces note (omitted clears it), preserves text, and answers the existing id with matched:true. After Done a new task links through finding.previousTaskId. Local to this install; never synced."),
+    note: z.string().nullable().optional().describe("Current situation for a keyed finding, at most 280 characters. Author and time are server-derived; omitted clears the previous note on a match."),
     project: z.string().min(1),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
@@ -3622,6 +3625,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   update_task: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
+    findingKey: z.string().max(400).refine(value => [...value].length <= 200).nullable().optional()
+      .describe("Set an opaque finding identity of at most 200 characters; null clears it and its occurrence metadata. Another open task holding it in this project refuses the update, including a reopen. Setting a new key starts count at one. Local to this install; never synced."),
     note: z.string().nullable().optional().describe("Current situation for the operator, at most 280 characters; replaces the note, null clears it. Author and updatedAt are server-derived."),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     taskId: entityIdSchema.optional().describe("Required for every update except refine; refine defaults to every pending task the calling conversation is linked to."),

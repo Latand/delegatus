@@ -1929,7 +1929,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1937,7 +1937,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   if (!result.replay) logMaintenanceWrite(maintainer, "create_task", undefined, result.task, Object.keys(result.task));
-  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
+  return { ...taskAcknowledgement(result.task, args, result.replay ? [] : Object.keys(result.task)), replay: result.replay, ...(result.matched !== undefined ? { matched: result.matched } : {}), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
 
 /**

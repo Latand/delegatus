@@ -84,6 +84,24 @@ function peerRow(base: Partial<WireTask> & { id: string }, stampMs: number, pref
     s: { text: stamp, status: stamp, look: stamp, place: stamp, links: stamp, machine: stamp, handover: stamp }, ...base };
 }
 
+test("finding identity and occurrence history stay local across linked task exchange", () => {
+  const { file } = linkedInstall();
+  const local = create(file, "Recurring error");
+  const keyed = edit(file, local.id, { findingKey: "local-reporter:key" });
+  const published = wire(keyed);
+  expect(Object.hasOwn(published, "findingKey")).toBe(false);
+  expect(Object.hasOwn(published, "finding")).toBe(false);
+  const remoteId = randomUUID();
+  const arriving = peerRow({ ...published, id: remoteId, machine: PEER }, Date.now() + 1000);
+  applyTaskRows([arriving], peerLink, file);
+  expect(find(file, remoteId)?.findingKey).toBeUndefined();
+  expect(find(file, remoteId)?.finding).toBeUndefined();
+  // A linked edit to the original task retains this install's reporter state.
+  const edited = peerRow({ ...published, text: "Peer corrected the title" }, Date.now() + 2000);
+  applyTaskRows([edited], peerLink, file);
+  expect(find(file, local.id)).toMatchObject({ text: edited.text, findingKey: keyed.findingKey, finding: keyed.finding });
+});
+
 test("prototype metadata is stamped, replicated and preserved across an older peer's text edit", () => {
   const { file } = linkedInstall();
   const local = create(file, "Prototype task");

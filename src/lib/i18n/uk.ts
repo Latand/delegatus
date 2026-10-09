@@ -3951,6 +3951,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.remote.pausedTail": "відновити можна на {host}",
   "pipelineBlock.remote.asOf": "станом на {time}",
   "kanban.remoteAgo": "{minutes} хв тому",
+  "kanban.finding.count": { one: "Помічено {count} раз", few: "Помічено {count} рази", many: "Помічено {count} разів", other: "Помічено {count} разів" },
+  "kanban.finding.lastSeen": "востаннє",
   "kanban.motion.needs-you": "Потрібні ви",
   "kanban.motion.working": "Працює",
   "kanban.motion.workingN": "Працюють · {count}",

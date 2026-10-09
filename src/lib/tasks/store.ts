@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { readFindingKey, validStoredFinding } from "./finding";
 import path from "node:path";
 
 import { isTaskNote } from "./note";
@@ -224,6 +225,11 @@ function coerceTask(value: unknown): BoardTask | null {
     createdAt: raw.createdAt!,
     updatedAt: raw.updatedAt!,
   };
+  if (task.findingKey !== undefined) {
+    const key = readFindingKey(task.findingKey);
+    if (!key.ok || key.key === undefined) delete task.findingKey;
+  }
+  if (task.findingKey === undefined || !validStoredFinding(task.finding)) delete task.finding;
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.

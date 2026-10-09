@@ -51,6 +51,53 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("finding recurrence (#2648)", () => {
+  browserTest("the existing state line shows count and last seen at 1440 and 390 in en and uk", async () => {
+    const out = path.resolve(".artifacts/finding-recurrence");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=finding-recurrence`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          const selector = width === 390 ? '[data-phone-card="task:t-finding"]' : card("t-finding");
+          const target = page.locator(selector);
+          const line = target.locator("[data-finding-recurrence]");
+          await line.waitFor();
+          await target.scrollIntoViewIfNeeded();
+          const reading = await line.evaluate(element => {
+            const bounds = element.getBoundingClientRect();
+            const container = element.closest(".motion-line")!;
+            return { text: element.textContent, dateTime: element.querySelector("time")?.getAttribute("datetime"),
+              clipped: container.scrollWidth > container.clientWidth + 1, left: bounds.left, right: bounds.right };
+          });
+          expect(reading.text).toContain(translate(lang, "kanban.finding.count", { count: 3 }));
+          expect(reading.text).toContain(translate(lang, "kanban.finding.lastSeen"));
+          expect(reading.dateTime).toBe("2026-10-09T08:00:00.000Z");
+          expect(reading.clipped).toBe(false);
+          expect(reading.left).toBeGreaterThanOrEqual(0);
+          expect(reading.right).toBeLessThanOrEqual(width);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, width, ...reading });
+          await target.screenshot({ path: path.join(out, `${lang}-${width}.png`) });
+          // A first observation adds no visible line to this quiet inbox card.
+          await page.evaluate(() => {
+            const evidence = (window as unknown as { evidence: { storedTask(id: string): { finding: { count: number } }; setTaskStatus(id: string, status: "inbox"): void } }).evidence;
+            evidence.storedTask("t-finding").finding.count = 1;
+            evidence.setTaskStatus("t-finding", "inbox");
+          });
+          await line.waitFor({ state: "detached" });
+          expect(await line.count()).toBe(0);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/finding-recurrence", { recursive: true });
+      fs.writeFileSync("evidence/finding-recurrence/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("terminal review budget continuation", () => {
   browserTest("fresh and recovered parks show the bounded grant on desktop and phone in both languages", async () => {
     const out = path.resolve(".artifacts/terminal-review-continuation");

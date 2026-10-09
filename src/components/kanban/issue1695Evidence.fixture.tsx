@@ -1602,6 +1602,9 @@ function task(id: string, status: TaskStatus, title: string, description: string
 }
 
 const tasks: BoardTask[] = [
+  ...(SCENARIO === "finding-recurrence" ? [task("t-finding", "inbox", L("Investigate the recurring timeout", "Перевірити повторний тайм-аут"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 2 * MIN, [], {
+    findingKey: "socket-timeout", finding: { count: 3, lastSeenAt: "2026-10-09T08:00:00.000Z" },
+  })] : []),
   ...(SCENARIO === "status-note" ? [task("t-note", "inbox", L("Review the route changes", "Перевірити зміни маршрутів"), L("Preserve the route contracts.", "Зберегти контракти маршрутів."), 2 * MIN, [], { note: {
     text: L("Waiting for the independent review of the changed routes and their persistence checks. The agent is verifying how updates survive concurrent writes, reloads and a restarted server before moving this task to the next stage.", "Очікує незалежного рев’ю змінених маршрутів і перевірок збереження даних. Агент перевіряє, як оновлення переживають одночасні записи, перезавантаження сторінки та перезапуск сервера, перш ніж перевести задачу до наступного етапу."),
     author: { kind: "orchestrator" }, updatedAt: iso(2 * MIN),
