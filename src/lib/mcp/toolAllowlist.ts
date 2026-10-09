@@ -315,6 +315,7 @@ const MUTATING_TOOL_READ_FIELDS: Partial<Record<McpToolName, readonly string[]>>
     seat_tick_settings: ["enabled", "wakeIntervalMinutes", "untilMinutes", "reason", "monitorPrompt", "replaceLine", "removeLine", "appendLine", "maintenance"],
     account_project_binding: ["action", "accountId", "allowedAccountIds", "bindings", "mode"],
     role_presets: ["overrides"], auto_updates: ["enabled"],
+    dismiss_attention: ["target", "undo", "reason"],
 };
 
 /** Maintenance changes only task metadata. New mutating tools fail closed. */
@@ -338,4 +339,17 @@ export function permitIssueReporterTool(tool: McpToolName, args: McpToolArgs): M
   const fields = MUTATING_TOOL_READ_FIELDS[tool];
   if (fields && !fields.some(field => args[field] !== undefined)) return ALLOWED;
   return { allowed: false, code: "issue_reporter_write_refused", error: `An issue reporter starts no agents and no pipelines, and writes only issue_report preview; ${tool} would change something else, so Delegatus refused it. Return the evidence in your preview.` };
+}
+
+/** Reads are project-scoped for seats and maintenance runs. Workers see none. */
+export function permitNeedsYouRead(
+  authority: AttentionCallerAuthority,
+  seats: readonly { conversationId: string; project: string | null }[],
+  maintainer: { conversationId: string; project: string | null; endedScheduledRun?: boolean } | null,
+  project: string | null,
+): { allowed: true } | { allowed: false; error: string } {
+  if (authority.kind === "root") return { allowed: true };
+  if (authority.kind !== "unidentified" && maintainer?.conversationId === authority.conversationId && !maintainer.endedScheduledRun && maintainer.project && (project === null || maintainer.project === project)) return { allowed: true };
+  if (authority.kind !== "unidentified" && seats.some(s => s.conversationId === authority.conversationId && s.project && (project === null || s.project === project))) return { allowed: true };
+  return { allowed: false, error: "Needs-you reads require the operator, this project's designated seat or its maintenance run" };
 }

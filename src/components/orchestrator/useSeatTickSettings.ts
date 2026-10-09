@@ -26,6 +26,7 @@ export const SEAT_TICK_POLL_MS = 60_000;
 /** The change fields the route takes. `untilMinutes` is minutes from now, as
     the `seat_tick_settings` tool's own argument is. */
 export interface SeatTickChange {
+  autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null };
   enabled?: boolean;
   /**
    * Minutes, or `null` for the default — and a `string` for an entry that is
@@ -71,7 +72,7 @@ export interface SeatTickSettingsRead {
   error: string | null;
   /** Which group of the form the refusal in `error` belongs to: the one whose
       Save was pressed, so it is shown beside the fields to correct. */
-  errorScope: "tick" | "maintenance";
+  errorScope: "tick" | "maintenance" | "autoRotate";
   refresh: () => Promise<void>;
   /** True when the record now holds the change. False when it does not, and
       also, sending nothing, when another save is still in flight. */
@@ -172,6 +173,10 @@ function optimistic(answer: SeatTickSettingsAnswer, change: SeatTickChange): Sea
   return {
     ...answer,
     ...(maintenance ? { maintenance } : {}),
+    ...(answer.autoRotate && change.autoRotate ? { autoRotate: { ...answer.autoRotate,
+      ...(change.autoRotate.enabled !== undefined ? { enabled: change.autoRotate.enabled } : {}),
+      ...(typeof change.autoRotate.thresholdPercent === "number" ? { thresholdPercent: change.autoRotate.thresholdPercent } : {}),
+      ...(change.autoRotate.thresholdPercent === null ? { thresholdPercent: answer.autoRotate.defaultPercent } : {}) } } : {}),
     settings,
     effective: {
       ...answer.effective,
@@ -193,7 +198,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState<{ project: string; answer: SeatTickSettingsAnswer } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [errorScope, setErrorScope] = useState<"tick" | "maintenance">("tick");
+  const [errorScope, setErrorScope] = useState<"tick" | "maintenance" | "autoRotate">("tick");
   /* One save at a time: two in flight would race to decide which read-back is
      the record, and the loser would put a superseded reading on screen. */
   const inFlight = useRef(false);
@@ -243,7 +248,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
   const write = useCallback(async (change: SeatTickChange): Promise<boolean> => {
     inFlight.current = true;
     setError(null);
-    setErrorScope(Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
+    setErrorScope(Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "autoRotate") ? "autoRotate" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
     const before = readings.get(project) ?? null;
     if (before) setPending({ project, answer: optimistic(before, change) });
     try {

@@ -14,13 +14,22 @@ export interface PrototypeVariantInput {
   frames?: PrototypeFrameInput[];
   videos?: PrototypeVideoInput[];
 }
+export interface PrototypeQuestion {
+  id: string;
+  text: string;
+  options: Array<{ label: string; recommended?: boolean }>;
+  multiple?: boolean;
+  other?: boolean;
+}
+export interface PrototypeAnswer { questionId: string; options: number[]; other?: true }
 export interface PublishPrototypeInput {
   clientRequestId: string;
   taskId?: string;
   title: string;
   /** Immediate files only: variant-N or vN, width, en/uk, caption. */
   dir?: string;
-  variants: PrototypeVariantInput[];
+  variants?: PrototypeVariantInput[];
+  questions?: PrototypeQuestion[];
 }
 export interface PrototypeMedia {
   id: string;
@@ -43,6 +52,8 @@ export interface PrototypeVariant {
 }
 export type PrototypeDeliveryState = "pending" | "sent" | "failed" | "uncertain" | "no-orchestrator";
 export interface PrototypeDecision {
+  answers?: PrototypeAnswer[];
+  skipped?: true;
   chosen: number[];
   comment: string;
   at: string;
@@ -66,6 +77,7 @@ export interface PrototypeReviewRound {
   publicationKey: string;
   inputDigest: string;
   variants: PrototypeVariant[];
+  questions?: PrototypeQuestion[];
   decision?: PrototypeDecision;
   mediaRemovedAt?: string;
 }
@@ -91,14 +103,17 @@ export interface PrototypeReviewRead {
 }
 export interface PrototypeReviewReplica { summary: PrototypeReviewSummary; rounds: PrototypeRoundView[]; historyTruncated?: true }
 export interface PrototypeReviewSummary {
+  asks?: "questions";
+  waitingDismissal?: { at: string; by: import("@/lib/attention/dismissalTypes").DismissedBy };
   latestReviewId: string;
   waitingReviewId: string | null;
   title: string;
   rounds: number;
   createdAt: string;
-  decision?: { chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState };
+  decision?: { answered?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState };
 }
 export interface PrototypeReviewNotice {
+  asks?: "questions";
   id: string;
   project: string;
   taskId: string;
@@ -111,4 +126,4 @@ export interface PrototypeReviewNotice {
   /** The UI focuses this task and opens this round in its review surface. */
   target: { kind: "prototype-review"; taskId: string; reviewId: string };
 }
-export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string }
+export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true }

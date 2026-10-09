@@ -60,7 +60,8 @@ test("measure every tool through the MCP service and budget common board answers
     fmt: "jsonl", parent: null, mtime: (now - i * 86400000) / 1000, size: 1024,
     activity: "live", proc: null, pid: null,
   }));
-  let settings = { ...defaultSeatTickSettings("size-board"), monitorPrompt: "Monitor open work. ".repeat(200) };
+  let settings = { ...defaultSeatTickSettings("size-board"), autoRotate: { enabled: true, thresholdPercent: 60, updatedAt: new Date(now).toISOString(),
+    setBy: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null }, why: null }, monitorPrompt: "Monitor open work. ".repeat(200) };
   const domain = {
     registrySnapshot: () => ({ conversations: {} }),
     completedFileScan: async () => ({ snapshot: { files, projectCatalog: [{ project: "size-board", displayName: "Example board", smt: 1, conversations: files.length }], complete: true } }),

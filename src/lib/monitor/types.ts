@@ -1071,6 +1071,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  autoRotation?: import("./seatAutoRotation").SeatAutoRotationState;
   authIncident?: SeatAuthIncident;
   /** Recovered credential scopes still owe their original operator notice. */
   authNoticesOwed?: SeatAuthIncident[];
@@ -1349,7 +1350,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "mcp-unavailable" | "auth-failed" | "auto-rotation";
   detail: string;
   /**
    * Whether the condition still holds.
@@ -1390,6 +1391,11 @@ export interface SeatTickCard {
       project, so this is what tells a newer attempt from the one it already
       names, and what the card's attempt count moves on. */
   attempt?: string;
+  /** The agent-facing account of an `auto-rotation` card (conversation ids,
+      token counts, the engine's error). It goes to the task's collapsed
+      `details` with the card's `monitor-ref:` line, so the card itself reads
+      as `detail` alone. */
+  record?: string;
 }
 
 export interface SeatTickDecision {

@@ -137,6 +137,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
      its own parsing at all is the assertion, because the failure this guards
      is a throw during module evaluation, before any argument is read. */
   for (const [script, argv, marker] of [
+    ["scripts/relay-switch.ts", ["status"], "chat_conversations"],
     ["scripts/rollback-runtime-host.ts", [], "no retained runtime-host rollback target"],
     ["scripts/cutover-shared-claude-projects.ts", [], "nothing to cut over"],
     ["scripts/migrate-legacy-tmux.ts", [], "only `preflight --root <transcript>`"],

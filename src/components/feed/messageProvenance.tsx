@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DeliveredMessageOccurrence, DeliveredMessageProvenance, MandateDelivery } from "@/lib/runtime/messageOrigin";
-import { messageOriginConversationId, messageOriginProject, messageOriginRole } from "@/lib/runtime/messageOrigin";
+import { messageChannel, messageOriginConversationId, messageOriginProject, messageOriginRole } from "@/lib/runtime/messageOrigin";
 import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
 import { isMemberColor, type MessageSender } from "@/lib/team/contract";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
@@ -201,6 +201,9 @@ function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   const selectedContext = parseSelectedContextRef(body.selectedContext);
   const mandate = parseMandate(body.mandate);
   const submissionId = parseSubmissionId(body.submissionId);
+  /* A channel describes how the operator's own words arrived, so an agent's
+     relay never carries one. */
+  const channel = body.origin === "operator" ? messageChannel(body.channel) : undefined;
   return {
     origin: body.origin,
     ...(senderRole ? { senderRole } : {}),
@@ -209,6 +212,7 @@ function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
     ...(selectedContext ? { selectedContext } : {}),
     ...(mandate ? { mandate } : {}),
     ...(submissionId ? { submissionId } : {}),
+    ...(channel ? { channel } : {}),
   };
 }
 
@@ -602,7 +606,7 @@ export function useDeliveredMessageProvenance(
       const mandate = provenance.mandate
         ? `mandate:${provenance.mandate.kind === "version" ? provenance.mandate.version : provenance.mandate.kind}`
         : "";
-      parts.push(`${itemSerial(item)}:${provenance.origin}:${provenance.senderRole ?? ""}:${provenance.selectedContext ? "ctx" : ""}:${mandate}`);
+      parts.push(`${itemSerial(item)}:${provenance.origin}:${provenance.senderRole ?? ""}:${provenance.selectedContext ? "ctx" : ""}:${mandate}:${provenance.channel ?? ""}`);
     }
     return parts.join("\n");
   }, [assignment]);

@@ -125,7 +125,7 @@ export class TaskExchange {
       else if (uncovered.length) this.pushScan = { p: uncovered.slice(0, SCAN_PROJECTS), after: "", full: false, at: null };
     }
     if (this.pushScan && !sameSet(linked, this.pushScan.p)) this.pushScan = null;
-    const filter = { self: this.self, skipPrefix: this.peerPrefix, includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: this.peerTaskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION };
+    const filter = { self: this.self, skipPrefix: this.peerPrefix, peerTaskWireVersion: this.peerTaskWireVersion, includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: this.peerTaskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION };
     if (this.pushScan) {
       const page = readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
       this.inflight = { kind: "scan", next: page.next, rows: page.rows.length };
@@ -264,7 +264,7 @@ export class TaskExchange {
     if (!linked.size) return false;
     if (this.pushScan || this.pushed === null || [...linked].some((key) => !this.pushCovered.has(key))) return true;
     const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked,
-      includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: this.peerTaskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION });
+      peerTaskWireVersion: this.peerTaskWireVersion, includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: this.peerTaskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION });
     if (page.kind === "resync" || page.rows.length) return true;
     if (JSON.stringify(page.cursor) !== JSON.stringify(this.pushed)) this.moved = true;
     this.pushed = page.cursor;

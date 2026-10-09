@@ -1,3 +1,5 @@
+import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { signalFixtureIdentity, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,14 +19,14 @@ import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
 type Engine = "claude" | "codex";
 
 const sandboxes: string[] = [];
-/** Pids this file started, each stopped by that pid and by nothing else. */
-const startedPids: number[] = [];
+/** Original start/boot identities, registered before readiness waits. */
+const startedIdentities: ProcessIdentity[] = [];
+const startedChildren: ReturnType<typeof spawn>[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   setBoardFileForTests(null);
-  for (const pid of startedPids.splice(0)) {
-    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
-  }
+  for (const child of startedChildren.splice(0)) await stopFixtureProcess(child);
+  for (const identity of startedIdentities.splice(0).reverse()) await stopFixtureIdentity(identity);
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -210,7 +212,8 @@ describe.each(["claude", "codex"] as const)("a %s host inside a turn outranks th
     its parent. Its identity is recorded while it still runs, as a host's is. */
 async function exitedUnreapedProcess(): Promise<{ pid: number; startIdentity: string }> {
   const parent = spawn("sh", ["-c", "sleep 300 & echo $!; exec sleep 300"], { stdio: ["ignore", "pipe", "ignore"] });
-  startedPids.push(parent.pid!);
+  startedChildren.push(parent);
+  startedIdentities.push(captureProcessIdentity(parent.pid!));
   const pid = await new Promise<number>((resolve, reject) => {
     let out = "";
     parent.stdout!.on("data", (chunk) => {
@@ -220,10 +223,11 @@ async function exitedUnreapedProcess(): Promise<{ pid: number; startIdentity: st
     parent.once("error", reject);
     parent.once("exit", () => reject(new Error("the parent exited before naming its child")));
   });
-  startedPids.push(pid);
+  const identity = captureProcessIdentity(pid);
+  startedIdentities.push(identity);
   const startIdentity = procBackend.processIdentity(pid);
   if (!startIdentity) throw new Error("expected the child to have a start identity");
-  process.kill(pid, "SIGKILL");
+  signalFixtureIdentity(identity, "SIGKILL");
   const deadline = Date.now() + 5_000;
   while (!procBackend.processExited(pid)) {
     if (Date.now() > deadline) throw new Error("the child never reached its exited state");

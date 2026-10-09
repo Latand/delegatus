@@ -56,7 +56,7 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
     moved ||= rows.length > 0;
   }
   if (object(pull)) {
-    const filter = { self: context.self, skipPrefix: link.prefix, includeBoard: typeof wire.taskWireVersion === "number" && wire.taskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: typeof wire.taskWireVersion === "number" && wire.taskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION };
+    const filter = { self: context.self, skipPrefix: link.prefix, peerTaskWireVersion: typeof wire.taskWireVersion === "number" ? wire.taskWireVersion : 0, includeBoard: typeof wire.taskWireVersion === "number" && wire.taskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: typeof wire.taskWireVersion === "number" && wire.taskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION };
     if (object(scan)) {
       const projects = new Set((scan.p as string[]).filter((key) => link.projects.has(key)));
       // The position a resync ends on is read before its first row.
