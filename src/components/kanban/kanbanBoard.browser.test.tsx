@@ -24082,6 +24082,8 @@ describe("short questionnaire rendered evidence", () => {
             expect(reading.sideways).toBeLessThanOrEqual(1);
             expect(reading.pillOverflow).toBe(0);
             expect(reading.optionHeight).toBeGreaterThanOrEqual(44);
+            for (const mark of reading.marks) expect(mark.multiple ? mark.radius < mark.width / 2 : mark.radius >= mark.width / 2).toBe(true);
+            expect(reading.marks.some(m => !m.multiple) || taskId === "t-links").toBe(true);
             expect(reading.actions.every(a => a.visible)).toBe(true);
             if (taskId === "t-upload") { expect(reading.questionWidth).toBe(360); expect(reading.stageWidth!).toBeGreaterThanOrEqual(560); }
             if (taskId === "t-search") { expect(reading.stageWidth).toBeNull(); expect(reading.questionCount).toBe(5); }

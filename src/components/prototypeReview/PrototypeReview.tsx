@@ -712,7 +712,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             {...(index === "other" ? { "data-prototype-other": question.id } : { "data-prototype-option": `${question.id}:${index}` })}
             className={`flex min-h-11 w-full items-start gap-2 rounded-control border px-2.5 py-2 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${checked ? "border-accent/50 bg-accent-soft text-accent" : "border-border bg-canvas text-primary enabled:hover:border-accent/45"}`}
             onClick={() => selectAnswer(question.id, index)}>
-            <span aria-hidden className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border text-caption font-bold ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken text-muted"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : index === "other" ? "+" : String.fromCharCode(97 + index)}</span>
+            <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border text-caption font-bold ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken text-muted"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : index === "other" ? "+" : String.fromCharCode(97 + index)}</span>
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}{recommended ? <span data-prototype-recommended="" className="ml-1.5 inline-block whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}</span>
           </button>;
         };

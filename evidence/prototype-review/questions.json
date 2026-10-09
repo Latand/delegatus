@@ -16,6 +16,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -47,6 +104,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -78,6 +172,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -109,6 +260,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -140,6 +328,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [],
     "actionsWidth": null,
     "readonly": true,
@@ -162,6 +407,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -193,6 +495,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -224,6 +563,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -255,6 +651,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Skip",
@@ -286,6 +719,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [],
     "actionsWidth": null,
     "readonly": true,
@@ -308,6 +798,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -339,6 +886,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -370,6 +954,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -401,6 +1042,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -432,6 +1110,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [],
     "actionsWidth": null,
     "readonly": true,
@@ -454,6 +1189,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -485,6 +1277,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -516,6 +1345,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -547,6 +1433,43 @@
     "questionCount": 3,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [
       {
         "text": "Пропустити",
@@ -578,6 +1501,63 @@
     "questionCount": 5,
     "optionHeight": 44,
     "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
     "actions": [],
     "actionsWidth": null,
     "readonly": true,

@@ -670,9 +670,13 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
     const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
       const b = button.getBoundingClientRect(); return { text: button.textContent, visible: b.top >= bounds.top && b.bottom <= bounds.bottom + 0.5, x: b.x, y: b.y, width: b.width };
     });
+    const marks = [...document.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
+      const box = mark.getBoundingClientRect();
+      return { multiple: mark.closest("button")!.getAttribute("role") === "checkbox", radius: parseFloat(getComputedStyle(mark).borderTopLeftRadius), width: box.width };
+    });
     return { sideways: frame.scrollWidth - frame.clientWidth, questionWidth: questions.getBoundingClientRect().width,
       stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: document.querySelectorAll("[data-prototype-question]").length,
-      optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, actions,
+      optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, marks, actions,
       actionsWidth: document.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
       readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(document.querySelector("[data-prototype-skipped]")) };
   }, phone);
