@@ -7150,6 +7150,9 @@ export function viewerMcpBindings(
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+    backfill_worktree_projects: (args, context) => viewerControlForCall(controlDependencies, context).post("/api/board/maintenance/worktrees", {
+      dryRun: args.dryRun !== false, ...(args.project ? { project: args.project } : {}),
+    }, {}, context),
     search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),

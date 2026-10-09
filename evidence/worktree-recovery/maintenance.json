@@ -1,0 +1,6 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "reachable": true,
+  "preview": true,
+  "fits": true
+}

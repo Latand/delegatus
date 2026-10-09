@@ -33,6 +33,7 @@ import { replaceConversationCatalog, type ConversationCatalogEntry } from "./con
 import {
   describeFile,
   fileDescriptionIdentity,
+  observeWorktreeResolution,
   reprojectFileDescription,
   type FileDescription,
 } from "./describe";
@@ -516,6 +517,15 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   const persistIndex = options.persist !== false || options.persistIndex === true;
   const scanToken = options.scanToken ?? beginProjectCatalogScan(persistIndex);
   const state = readState();
+  /* A warm summary still sees the cwd alive. Learn before deciding whether
+     cached project overlays are reusable, including catalog-only scans. */
+  const observed = new Set<string>();
+  await forEachCooperatively(raw, (entry) => {
+    const cwd = state.files[entry.path]?.cwd;
+    if (!cwd || observed.has(cwd)) return;
+    observed.add(cwd);
+    observeWorktreeResolution(cwd);
+  });
   const stateKey = projectResolutionStateKey();
   const nextFiles: Record<string, CachedProjectFile> = {};
   const groups = new Map<string, ProjectCatalogEntry>();

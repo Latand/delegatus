@@ -1033,3 +1033,47 @@ test("every handoff digest groups under one project, live or deleted, never a lo
   fs.mkdirSync(plain, { recursive: true });
   expect(projectInfoFromCwd(plain, "handoff-digest")?.project).not.toBe(infos[0]!.project);
 });
+
+test("first scan of a sibling worktree descendant records it before outside deletion", () => {
+  const state = useStateDirectory("outside-removal-state");
+  const repo = path.join(SANDBOX, "outside-repository");
+  const identity = createRepository(repo);
+  const checkout = repo + "-lane-12";
+  const cwd = path.join(checkout, "src", "nested");
+  fs.mkdirSync(cwd, { recursive: true });
+  /* A cached negative result must not hide a newly-linked checkout. */
+  expect(projectInfoFromCwd(cwd)?.project.startsWith("dir-")).toBe(true);
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-12")}\n`);
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
+  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-12" });
+  fs.rmSync(checkout, { recursive: true });
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
+});
+
+test("a real linked sibling removed by git survives a fresh resolver process", () => {
+  const state = useStateDirectory("git-outside-removal-state");
+  const repo = path.join(SANDBOX, "git-outside-repository");
+  const checkout = repo + "-review";
+  fs.mkdirSync(repo);
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, ...args], { env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  git("init"); git("commit", "--allow-empty", "-m", "fixture");
+  git("remote", "add", "origin", "https://example.invalid/team/widgets.git");
+  git("worktree", "add", "--detach", checkout);
+  const cwd = path.join(checkout, "src"); fs.mkdirSync(cwd);
+  const identity = projectIdentityFromRepositoryRoot(repo)!;
+  expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+  fs.rmdirSync(cwd);
+  git("worktree", "remove", checkout);
+  const script = `const { projectInfoFromCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+    + `console.log(JSON.stringify(projectInfoFromCwd(${JSON.stringify(cwd)})));`;
+  const result = spawnSync(process.execPath, ["-e", script], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});

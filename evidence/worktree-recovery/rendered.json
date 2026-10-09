@@ -1,0 +1,33 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 390,
+      "lang": "en",
+      "fits": true,
+      "preview": true,
+      "applied": true
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "fits": true,
+      "preview": true,
+      "applied": true
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "fits": true,
+      "preview": true,
+      "applied": true
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "fits": true,
+      "preview": true,
+      "applied": true
+    }
+  ]
+}

@@ -12,7 +12,8 @@ import { readStateCollectionRevisions, readStateCollectionsRows } from "@/lib/st
    project of its own named `cwd`.
    9: deleted worktrees retain a trusted parent alias after the parent
    checkout is also gone. */
-export const PROJECT_RESOLUTION_VERSION = 9;
+/* 10: catalog passes observe linked checkout ancestors before cache reuse. */
+export const PROJECT_RESOLUTION_VERSION = 10;
 
 /* Project summaries depend on the attribution facts consumed by
    persistedProjects(). Hashing these stable projections keeps controller

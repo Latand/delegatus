@@ -408,11 +408,6 @@ export function parseWorktreeGitdir(cwd: string, gitFileText: string): { repo: s
   return { repo: joinPathSegments(parts.slice(0, index - 1)), worktree };
 }
 
-/* A cwd's worktree resolution is one lstat + tiny read, but it runs on every
-   meta recompute of a live file — cache per cwd, with a short TTL so a
-   checkout that just became (or stopped being) a worktree is noticed. */
-const worktreeGitCache = globalCache<[number, { repo: string; worktree: string } | null]>("worktree-git");
-const WORKTREE_TTL_MS = 60_000;
 type ProjectInfo = {
   project: string;
   displayName: string;
@@ -612,26 +607,60 @@ export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { re
   return info;
 }
 
-/** Linked git worktrees created anywhere (`git worktree add ../foo`), not
-    only under `.claude/worktrees/`: such a checkout has a `.git` FILE whose
-    gitdir points into the main repo — the session belongs to that project.
-    A live resolution is also written to the persistent worktree map so the
-    grouping survives the checkout later being deleted. */
-function worktreeFromGitFile(cwd: string): { repo: string; worktree: string } | null {
-  const cached = worktreeGitCache.get(cwd);
-  if (cached && cached[0] > Date.now()) return cached[1];
-  let info: { repo: string; worktree: string } | null = null;
-  try {
-    const gitPath = path.join(cwd, ".git");
-    if (fs.lstatSync(gitPath).isFile()) {
-      info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
+/** Observe the checkout root even when the transcript starts in a descendant.
+    A negative observation is never cached: a folder can become a worktree
+    between catalog passes without changing its transcript bytes. */
+export function observeWorktreeResolution(cwd: string): WorktreeInfo | null {
+  for (let current = path.resolve(cwd); ; current = path.dirname(current)) {
+    try {
+      const marker = path.join(current, ".git");
+      const stat = fs.lstatSync(marker);
+      if (stat.isDirectory()) return null; // An independent nested repository.
+      if (stat.isFile()) {
+        const info = parseWorktreeGitdir(current, fs.readFileSync(marker, "utf8"));
+        if (!info) return null;
+        rememberWorktree(current, info);
+        /* A symlinked checkout must survive deletion under either spelling. */
+        const physical = fs.realpathSync.native(current);
+        rememberWorktree(physical, info);
+        persistWorktreeMap();
+        return info;
+      }
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     }
-  } catch {
-    /* no .git or cwd gone — a plain (or vanished) project dir */
+    if (path.dirname(current) === current) return null;
   }
-  worktreeGitCache.set(cwd, [Date.now() + WORKTREE_TTL_MS, info]);
-  if (info) rememberWorktree(cwd, info);
-  return info;
+}
+
+function worktreeFromGitFile(cwd: string): WorktreeInfo | null {
+  return observeWorktreeResolution(cwd);
+}
+
+/** Explicit recovery writes the same map as live observation and the sweep.
+    Refuse a competing mapping under the writer lock; never overwrite it. */
+export function recordRecoveredWorktrees(entries: Array<{ cwd: string; repo: string; worktree: string }>): void {
+  const dir = stateDir();
+  const file = path.join(dir, WORKTREE_MAP_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  withFileTransactionSync(file, "worktree-map.json is busy", () => {
+    /* Explicit recovery refuses corrupt state rather than replacing it. */
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)
+        || Object.values(raw).some(value => !value || typeof value !== "object"
+          || typeof (value as WorktreeInfo).repo !== "string" || typeof (value as WorktreeInfo).worktree !== "string")) throw new Error("Worktree map is unreadable");
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const merged = readWorktreeMapFile(file);
+    for (const { cwd, repo, worktree } of entries) {
+      const held = merged.get(cwd);
+      if (held && (held.repo !== repo || held.worktree !== worktree)) throw new Error("Worktree recovery conflicts with a recorded mapping");
+      merged.set(cwd, { repo, worktree });
+    }
+    writeJsonDurably(file, Object.fromEntries(merged), { space: 0 });
+  });
+  refreshWorktreeMap();
+  projectInfoCwdCache.clear();
 }
 
 function hasGitMarker(cwd: string): boolean {
@@ -793,7 +822,8 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   if (!cwd.trim()) return null;
   const resolutionState = requestedState ?? projectResolutionStateKey();
   const cached = projectInfoCwdCache.get(cwd);
-  if (cached && cached[0] > Date.now() && cached[1] === resolutionState) return cached[2];
+  if (cached && cached[0] > Date.now() && cached[1] === resolutionState
+    && (cached[2]?.worktree || !observeWorktreeResolution(cwd))) return cached[2];
   const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, scratchpad]);

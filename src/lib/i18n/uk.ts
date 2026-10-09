@@ -4,6 +4,26 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "worktreeRecovery.title": "Об’єднати проєкти робочих копій",
+  "worktreeRecovery.about": "Перегляньте видалені сусідні робочі копії, які можна повернути до цього репозиторію. Застосування зберігає відповідності та оновлює каталог.",
+  "worktreeRecovery.preview": "Переглянути зміни",
+  "worktreeRecovery.apply": "Застосувати зміни",
+  "worktreeRecovery.failed": "Не вдалося завершити об’єднання. Перегляньте зміни ще раз, щоб перевірити залишок.",
+  "worktreeRecovery.planned": "Буде об’єднано: {folded}; залишиться без змін: {left}.",
+  "worktreeRecovery.done": "Об’єднано: {folded}; залишено без змін: {left}. Каталог оновлено.",
+  "worktreeRecovery.details": "Відповідності та причини",
+  "worktreeRecovery.reason.directory-identity-mismatch": "Ідентичність папки не збігається",
+  "worktreeRecovery.reason.checkout-present-or-unreadable": "Робоча копія існує або її неможливо перевірити",
+  "worktreeRecovery.reason.ambiguous-repository": "Підходять кілька репозиторіїв",
+  "worktreeRecovery.reason.recorded-repository-not-known": "Збережений репозиторій недоступний",
+  "worktreeRecovery.reason.no-known-sibling-repository": "У тій самій папці немає відповідного репозиторію",
+  "worktreeRecovery.reason.conflicting-repository-hint": "У журналі вказано інший репозиторій",
+  "worktreeRecovery.reason.project-alias-conflict": "Наявна відповідність проєкту суперечить зміні",
+  "worktreeRecovery.reason.recorded-worktree": "Раніше збережена робоча копія",
+  "worktreeRecovery.reason.sibling-name-and-repository-hint": "Назва сусідньої копії та репозиторій у журналі збігаються",
+  "worktreeRecovery.reason.sibling-name-and-branch-hint": "Назва сусідньої копії та гілка репозиторію збігаються",
+  "worktreeRecovery.reason.sibling-name-only": "Назва сусідньої копії відповідає відомому репозиторію",
+
   "memory.save.failed": "Не вдалося зберегти перемикач спільної пам’яті. Спробуйте ще раз.",
   "memory.last.projectOff": "Останній хід оператора: спільну пам’ять для проєкту було вимкнено.",
   "memory.last.noKey": "Останній хід оператора: ключа OpenRouter не було.",

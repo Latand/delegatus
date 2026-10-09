@@ -4,6 +4,26 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "worktreeRecovery.title": "Recover worktree projects",
+  "worktreeRecovery.about": "Preview removed sibling checkouts that can return to this repository. Apply records the matches and refreshes the catalog.",
+  "worktreeRecovery.preview": "Preview recovery",
+  "worktreeRecovery.apply": "Apply recovery",
+  "worktreeRecovery.failed": "Recovery could not finish. Preview again to check what remains.",
+  "worktreeRecovery.planned": "Would fold {folded}; leave {left} alone.",
+  "worktreeRecovery.done": "Folded {folded}; left {left} alone. Catalog refreshed.",
+  "worktreeRecovery.details": "Matches and reasons",
+  "worktreeRecovery.reason.directory-identity-mismatch": "Folder identity does not match",
+  "worktreeRecovery.reason.checkout-present-or-unreadable": "Checkout still exists or cannot be checked",
+  "worktreeRecovery.reason.ambiguous-repository": "Multiple repositories match",
+  "worktreeRecovery.reason.recorded-repository-not-known": "Recorded repository is unavailable",
+  "worktreeRecovery.reason.no-known-sibling-repository": "No matching repository in the same folder",
+  "worktreeRecovery.reason.conflicting-repository-hint": "Transcript names a different repository",
+  "worktreeRecovery.reason.project-alias-conflict": "Existing project mapping conflicts",
+  "worktreeRecovery.reason.recorded-worktree": "Previously recorded worktree",
+  "worktreeRecovery.reason.sibling-name-and-repository-hint": "Sibling name and transcript repository agree",
+  "worktreeRecovery.reason.sibling-name-and-branch-hint": "Sibling name and repository branch agree",
+  "worktreeRecovery.reason.sibling-name-only": "Sibling name matches the known repository",
+
   "memory.save.failed": "Could not save the shared memory switch. Try again.",
   "memory.last.projectOff": "Last operator turn: shared memory was off for this project.",
   "memory.last.noKey": "Last operator turn: the OpenRouter key was missing.",
