@@ -322,7 +322,9 @@ None of these needs the operator. The code and one isolated measurement settled 
 ## 6. Integration on current main (2026-10-09)
 
 The original investigation and its line anchors above describe `e7185fec5`.
-The implementation now merges main at `08e85880b80d0b360719efbdccec89a8077015ca`.
+The implementation now merges main at `a397591a8851057baf3e0884df556fbaaf7db705`.
+Measurements used `08e85880b80d0b360719efbdccec89a8077015ca`; main advanced
+only by a seat-tick test, with identical runtime-startup production files.
 Main's #2487 already batches missing receipts into a single durable transaction.
 The remaining cost is synchronous opening and chain verification, the index
 rebuild, and recreating superseded engine receipts. The versioned pass keeps

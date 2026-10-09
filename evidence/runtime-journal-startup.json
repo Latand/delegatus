@@ -309,7 +309,7 @@
   "historicalSubject": "Original branch experiment on merge base e7185fec5 under Bun 1.3.3; retained for comparison",
   "currentMainIntegration": {
     "date": "2026-10-09",
-    "base": "08e85880b80d0b360719efbdccec89a8077015ca",
+    "base": "a397591a8851057baf3e0884df556fbaaf7db705",
     "runtime": "Bun 1.4.0, pinned in Dockerfile",
     "isolation": "synthetic state, HOME and TMPDIR below OS temporary root; private runtime sockets; ephemeral loopback ports; closed Viewer control URL; Docker stub",
     "bootProcess": "real runtime-host main.ts with a synthetic HTTP Viewer upstream",
@@ -927,8 +927,11 @@
       },
       "eslint": "0 introduced errors",
       "build": "Next.js production build and MCP bundle passed",
-      "privacy": "full post-merge publication gate with committed fingerprints and commit checking passed"
+      "privacy": "full post-merge publication gate with committed fingerprints and commit checking passed",
+      "prePush": "Privacy, TypeScript, lint, touched and Linux baseline/head comparisons, runtime verdicts, MCP build/size budgets, Viewer build/runtime, runtime-host verification, negative controls and native Codex 0.154.0/0.159.0/shared contracts all passed."
     },
-    "selfReview": "Full diff inspected against merged main: receipt/cursor atomicity, newest numeric engine cursor, chain anchor/tail verification, FULL sync, early entry authentication, runtime readiness, predecessor drain and release-generation read retained."
+    "selfReview": "Full diff inspected against merged main: receipt/cursor atomicity, newest numeric engine cursor, chain anchor/tail verification, FULL sync, early entry authentication, runtime readiness, predecessor drain and release-generation read retained.",
+    "measuredBase": "08e85880b80d0b360719efbdccec89a8077015ca",
+    "mainAdvance": "Only src/lib/monitor/seatTick.test.ts changed after measurement; runtime-startup production code is identical."
   }
 }
