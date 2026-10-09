@@ -223,6 +223,7 @@ export function buildProjectSummaries(
     const summary = summaryFor(entry.project, projectDisplayName(entry.project, entry.displayName));
     summary.conversations = Math.max(summary.conversations, entry.conversations);
     summary.smt = Math.max(summary.smt, entry.smt);
+    if (entry.recent) summary.catalogOnly = false;
   }
   /* Workflows keep their stamped project reachable even before any transcript
      exists (provisioning, a parked setup): the row must be there for the

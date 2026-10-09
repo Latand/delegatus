@@ -280,3 +280,20 @@ test("the native web search is the one tool the relay profile can add", () => {
   expect(closed[closed.indexOf("--tools") + 1]).toBe("");
   expect(closed).not.toContain("--allowedTools");
 });
+
+test("persistent flags keep the closed profile on start and resume", () => {
+  for (const engine of ["claude", "codex"] as const) for (const mode of ["start", "resume"] as const) {
+    const request = fixture(engine);
+    const session = { mode, id: "00000000-0000-0000-0000-000000000000", cwd: path.join(root, "session-cwd"), codexHome: path.join(root, "session-codex") };
+    const built = buildEphemeralCommand({ ...request, session });
+    expect(built.args).not.toContain(engine === "claude" ? "--no-session-persistence" : "--ephemeral");
+    if (engine === "claude") {
+      expect(built.args).toContain(mode === "start" ? "--session-id" : "--resume");
+      expect(built.args).toContain("--autocompact");
+    } else {
+      expect(built.env.CODEX_HOME).toBe(session.codexHome);
+      expect(built.args).toContain("--ignore-user-config");
+      if (mode === "resume") { expect(built.args.slice(0, 3)).toEqual(["exec", "resume", session.id]); expect(built.args).toContain("sandbox_mode=\"read-only\""); }
+    }
+  }
+});
