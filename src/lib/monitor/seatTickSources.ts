@@ -615,11 +615,20 @@ export async function settleRecordFromJournal(
   /* Only what {@link journalWakeState} would act on: the settlement's own
      unverified `failed` classifies as lost here and is not one. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
+  /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
+     it answers null like an undecidable verdict, and the next tick reads it
+     again. */
   try {
+    const correlation = { label: "delivery.settle", operationId: target.operationId };
     if (verdict.state === "delivered") {
-      registry.recordDeliveryOutcomeForOperation(target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered");
+      const written = await registry.deliveryWrite(correlation, () => registry.recordDeliveryOutcomeForOperation(
+        target.conversationId as ViewerConversationId, target.operationId, "delivered", null, "delivered"));
+      if (!written.acquired) return null;
     } else if (target.deliveryId) {
-      registry.recordDeliveryOutcome(target.deliveryId, "failed", receipt.reason ?? verdict.reason, "lost");
+      const deliveryId = target.deliveryId;
+      const written = await registry.deliveryWrite(correlation,
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+      if (!written.acquired) return null;
     } else {
       return null;
     }
@@ -685,8 +694,14 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!delivery) return "unknown";
       if (delivery.state === "delivered") return "too-late";
       if (delivery.state !== "held") return "unknown";
-      agentRegistry().terminalizeHeldDelivery(delivery.id, reason);
-      return "withdrawn";
+      /* Off the loop; refused, the withdrawal is undecided. The row is asked
+         again inside the write: an attempt may have claimed it while the
+         writer was held, and then it is not withdrawn. */
+      const registry = agentRegistry();
+      const operationId = registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null;
+      const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
+        () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
+      return withdrawn.acquired ? withdrawn.value : "unknown";
     },
     now: () => Date.now(),
     refreshLifecycle: (pipelines) => {

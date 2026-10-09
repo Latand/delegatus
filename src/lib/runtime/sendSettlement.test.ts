@@ -38,6 +38,8 @@ const {
   runtimeReceiptForSend,
   sendIsSettled,
   sendReceiptFor,
+  settleDueSends,
+  mirrorSettledReceipts,
 } = await import("./sendSettlement");
 const { handleRuntimeOperationQuery, handleRuntimeRetry } = await import("./http");
 const { NextRequest } = await import("next/server");
@@ -130,13 +132,18 @@ interface Fixture {
   close(): void;
 }
 
-function fixture(name: string, options: { now?: () => number; engine?: "codex" | "claude" } = {}): Fixture {
+function fixture(name: string, options: { now?: () => number; engine?: "codex" | "claude"; sqlite?: boolean } = {}): Fixture {
   const directory = fs.mkdtempSync(path.join(isolated, `${name}-`));
   const registry = new AgentRegistry(
     path.join(directory, "agent-registry.json"),
     undefined,
     undefined,
-    ...(options.now ? [{ now: options.now }] as const : []),
+    {
+      ...(options.now ? { now: options.now } : {}),
+      /* The store the Viewer runs on, where a writer in another process holds
+         a real lock. */
+      ...(options.sqlite ? { sqliteMode: "sqlite" as const, sqliteFilename: path.join(directory, "agent-registry.sqlite") } : {}),
+    },
   );
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const transcriptPath = path.join(directory, `${name}.jsonl`);
@@ -349,6 +356,275 @@ test("a dropped send settles as failed, and the fence stops the queue from deliv
     await new StructuredDeliveryQueue(stalePort, () => host).drain().catch(() => undefined);
     expect(received).toEqual([]);
     expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+  } finally {
+    active.close();
+  }
+});
+
+test("with no reader asking, the background deadline ends a dropped send and the queue never delivers it", async () => {
+  /* Incident 2026-10-06: settlement ran only when somebody read the receipt.
+     Here nobody does: the sweep the delivery controller runs on a timer is the
+     only caller, as it is with the browser closed. */
+  const active = fixture("background");
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "background-key", text: "resume the cutover" });
+    const deadlines: Array<{ operationId: string; deadlineAt: string | null; policy: string | null }> = [];
+    const young = await settleDueSends({
+      registry: active.registry,
+      client: active.client,
+      onDeadline: (id, _conversation, deadline) => deadlines.push({ operationId: id, deadlineAt: deadline?.deadlineAt ?? null, policy: deadline?.policy ?? null }),
+    });
+    /* Inside the window it is only recorded, with the deadline that will end it. */
+    expect(young.settled).toEqual([]);
+    expect(deadlines).toHaveLength(1);
+    expect(deadlines[0]!.operationId).toBe(operationId);
+    expect(deadlines[0]!.policy).toBe("settlement-window");
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).not.toBe("failed");
+
+    const swept = await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: false }]);
+    const receipt = receiptOf(active, operationId);
+    expect(receipt?.reason).toBe(SEND_LOST_REASON);
+    expect(receipt?.resend).toBe("safe");
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+
+    const { host, received } = recordingHost(active.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(active, operationId, "background-key", "resume the cutover"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+    /* A second sweep finds nothing left to end. */
+    expect((await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW })).settled).toEqual([]);
+  } finally {
+    active.close();
+  }
+});
+
+/** A second hosted conversation in the same registry and journal. */
+function secondConversation(active: Fixture, name: string): Fixture {
+  const transcriptPath = path.join(path.dirname(active.transcriptPath), `${name}.jsonl`);
+  const launchProfile = emptyLaunchProfile({ cwd: path.dirname(active.transcriptPath) });
+  active.registry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "settlement-fixture-account",
+    launchProfile,
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-08-30T10:00:00.000Z",
+  }]);
+  const conversation = Object.values(active.registry.snapshot().conversations)
+    .find((candidate) => candidate.generations.at(-1)?.path === transcriptPath);
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) throw new Error("fixture conversation is missing");
+  active.registry.upsert({
+    key: { engine: "codex", sessionId: generation.id },
+    artifactPath: transcriptPath,
+    cwd: path.dirname(transcriptPath),
+    accountId: "settlement-fixture-account",
+    launchProfile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fixture:settlement-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fixture-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  active.journal.append({
+    scope: { type: "session", id: conversation.id },
+    kind: "session-status",
+    payload: {
+      conversationId: conversation.id,
+      sessionKey: { engine: "codex", sessionId: generation.id },
+      hostKind: "codex-app-server",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath: transcriptPath,
+      capabilities: { steer: true, structuredAttention: true },
+    },
+  });
+  return { ...active, conversationId: conversation.id, generationId: generation.id, transcriptPath };
+}
+
+/** The longest gap between 5 ms ticks while `operation` runs. */
+async function longestLoopGap<T>(operation: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
+  let last = performance.now();
+  let gapMs = 0;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    gapMs = Math.max(gapMs, now - last);
+    last = now;
+  }, 5);
+  try {
+    const value = await operation();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return { value, gapMs: Math.max(gapMs, performance.now() - last) };
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** Another process holding the registry's write lock, as in the incident. */
+async function foreignWriter(active: Fixture, holdMs: number) {
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite");
+    const db = new Database(${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))});
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("locked\\n");
+    setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, ${holdMs});
+  `], { stdout: "pipe", stderr: "inherit" });
+  const reader = child.stdout.getReader();
+  const { value } = await reader.read();
+  reader.releaseLock();
+  if (!new TextDecoder().decode(value).includes("locked")) throw new Error("the foreign writer did not take the lock");
+  return child;
+}
+
+test("background settlement waits out another process's long write off the event loop, correlated with its operation, and commits once", async () => {
+  const active = fixture("foreign-writer", { sqlite: true });
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "foreign-writer-key" });
+    resetBlockingWaitsForTests(() => {});
+    const child = await foreignWriter(active, 1_500);
+    const startedAt = performance.now();
+    const { value: swept, gapMs } = await longestLoopGap(() => settleDueSends({
+      registry: active.registry, client: active.client, now: AFTER_THE_WINDOW,
+    }));
+    await child.exited;
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_000);
+    expect(gapMs).toBeLessThan(150);
+    expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: false }]);
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).toBe("failed");
+    const diagnostics = blockingWaitDiagnostics();
+    expect(diagnostics.sites["registry-lock"]).toBeUndefined();
+    const wait = diagnostics.longest.find((sample) => sample.site === "registry-lock-async");
+    expect(wait).toMatchObject({ synchronous: false, label: "delivery.settle", operationId });
+    expect(wait!.durationMs).toBeGreaterThanOrEqual(1_000);
+    /* The send was fenced in the journal before the wait began, so the queue
+       delivers nothing however long the record's write took. */
+    const { host, received } = recordingHost(active.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(active, operationId, "foreign-writer-key", "hold the cutover until I say go"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+  } finally {
+    resetBlockingWaitsForTests();
+    active.close();
+  }
+});
+
+test("a settlement whose write lock stays held past its deadline writes nothing, keeps the journal fence, and is completed by the next sweep", async () => {
+  const active = fixture("foreign-writer-deadline", { sqlite: true });
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "writer-deadline-key" });
+    const child = await foreignWriter(active, 5_600);
+    const { value: swept, gapMs } = await longestLoopGap(() => settleDueSends({
+      registry: active.registry, client: active.client, now: AFTER_THE_WINDOW,
+    }));
+    expect(gapMs).toBeLessThan(150);
+    /* Nothing was written, so nothing is reported ended. */
+    expect(swept.settled).toEqual([]);
+    expect(receiptOf(active, operationId)?.state).toBe("in-flight");
+    /* The journal already refuses the send: the fence came first. */
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+    const { host, received } = recordingHost(active.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(active, operationId, "writer-deadline-key", "hold the cutover until I say go"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+    await child.exited;
+    const again = await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(again.settled).toEqual([{ operationId, state: "failed", duplicateRisk: false }]);
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).toBe("failed");
+    expect(receiptOf(active, operationId)?.reason).toBe(SEND_LOST_REASON);
+  } finally {
+    active.close();
+  }
+}, 20_000);
+
+test("a conversation whose journal read never answers holds nobody: the other settles at once, the hung one ends unverified in bounded time, and its late answer changes nothing", async () => {
+  const first = fixture("hung-reader");
+  try {
+    const second = secondConversation(first, "hung-reader-second");
+    const hung = acceptSend(first, { clientMessageId: "hung-key", text: "resume the cutover" });
+    const free = acceptSend(second, { clientMessageId: "free-key" });
+    const release: Array<() => void> = [];
+    let hungReads = 0;
+    const client = {
+      ...first.client,
+      operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) => {
+        if (operationId === hung.operationId) {
+          hungReads += 1;
+          await new Promise<void>((resolve) => { release.push(resolve); });
+        }
+        return first.client.operationStatus(operationId, options);
+      },
+    } as RuntimeHostClient;
+    const running = new Set<string>();
+    const settledAt: Record<string, number> = {};
+    const startedAt = performance.now();
+    const ports = {
+      registry: first.registry,
+      client,
+      now: AFTER_THE_WINDOW,
+      readMs: 400,
+      running,
+      onSettled: ({ operationId }: { operationId: string }) => { settledAt[operationId] = performance.now() - startedAt; },
+    };
+    const sweep = settleDueSends(ports);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    /* The free conversation is done while the hung one's read is still open. */
+    expect(settledAt[free.operationId]).toBeLessThan(100);
+    expect(receiptOf(second, free.operationId)?.state).toBe("failed");
+    expect(receiptOf(first, hung.operationId)?.state).toBe("in-flight");
+    expect(running.has(first.conversationId)).toBe(true);
+    /* The next sweep starts on time, and leaves the conversation still being
+       settled alone: its operation is read once. */
+    const next = await settleDueSends(ports);
+    expect(next.settled).toEqual([]);
+    expect(hungReads).toBe(1);
+
+    const swept = await sweep;
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    /* Nothing answered, so nothing is proved: it ends unverified and a resend
+       stays behind verification. */
+    expect(swept.settled).toContainEqual({ operationId: hung.operationId, state: "failed", duplicateRisk: true });
+    expect(receiptOf(first, hung.operationId)?.reason).toBe(SEND_UNSETTLEABLE_REASON);
+    expect(running.size).toBe(0);
+
+    /* The late answer arrives: the queue, wired as in production, still reads
+       the durable record before it actuates and hands nothing over. */
+    for (const done of release) done();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const { host, received } = recordingHost(first.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(first, hung.operationId, "hung-key", "resume the cutover"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+    expect(receiptOf(first, hung.operationId)?.reason).toBe(SEND_UNSETTLEABLE_REASON);
+  } finally {
+    first.close();
+  }
+});
+
+test("the background deadline ends a send an executor took as unverified and keeps a resend behind verification", async () => {
+  const active = fixture("background-uncertain");
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "background-uncertain-key" });
+    active.journal.transitionOperation(operationId, "delivering", { turnId: "turn-9" });
+    const swept = await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: true }]);
+    const receipt = receiptOf(active, operationId);
+    expect(receipt?.duplicateRisk).toBe(true);
+    expect(receipt?.resend).toBe("verify-first");
   } finally {
     active.close();
   }
@@ -964,6 +1240,72 @@ test("a retry's own operation id is answerable, settles at its own deadline, and
     const reloaded = sendReceiptFor(new AgentRegistry(active.registryPath).readOnlySnapshot(), retryOperationId);
     expect(reloaded?.state).toBe("failed");
     expect(reloaded?.resend).toBe("verify-first");
+  } finally {
+    setAgentRegistryForTests(null);
+    active.close();
+  }
+});
+
+/* docs/design/delivery-progress-and-drain.md, P14 and A2: the id a terminal
+   retry mints may already name another request's row. */
+test("a terminal retry whose attempt id another request's hand-off owns is refused before any wait or command, and a retry of its own send stays idempotent", async () => {
+  const active = fixture("retry-collision");
+  const { terminalRetryOperationId } = await import("./contracts");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  try {
+    const failSend = (key: string, text: string) => {
+      const { operationId } = acceptSend(active, { clientMessageId: key, text });
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "failed", { reason: "dead-host" });
+      active.registry.recordDeliveryOutcomeForOperation(active.conversationId, operationId, "failed", "dead-host");
+      return operationId;
+    };
+    const a = failSend("retry-collision-a", "message A");
+    const taken = terminalRetryOperationId(a);
+    /* Another request's Queue-for-Codex hand-off supplied that id first. */
+    const handOff = active.registry.recordDirectAdmission({ handOff: { conversationId: active.conversationId, clientMessageId: "retry-collision-b",
+      command: { operationId: taken, kind: "send", policy: "queue" }, text: "message B", contentDigest: null,
+      evidenceText: "message B", evidenceImageCount: 0 } })!;
+    expect(handOff.command.operationId).toBe(taken);
+    const progress = new DeliveryProgressStore(null);
+    progress.note(taken, active.conversationId, { waitReason: "awaiting-turn", originalKey: "retry-collision-b" });
+    const rowBefore = structuredClone(active.registry.snapshot().deliveryOperationOwners[taken]);
+    const recordBefore = structuredClone(progress.get(taken));
+    let retries = 0;
+    const client = {
+      ...active.client,
+      retryOperation: async (operationId: string, key: string) => { retries += 1; return active.client.retryOperation(operationId, key); },
+    } as RuntimeHostClient;
+    const retry = (operationId: string) => handleRuntimeRetry(
+      new NextRequest(`http://127.0.0.1/api/runtime/operations/${operationId}`, { method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" } }),
+      operationId,
+      {
+        enabled: () => true,
+        client: () => client,
+        recover: async () => ({ target: null, path: active.transcriptPath, conversationId: active.conversationId, spawned: false }),
+        kick: () => {},
+        progress,
+      },
+    );
+    setAgentRegistryForTests(active.registry);
+    const refused = await retry(a);
+    expect(refused.status).toBe(409);
+    expect(retries).toBe(0);
+    expect(active.registry.snapshot().deliveryOperationOwners[taken]).toEqual(rowBefore);
+    expect(progress.get(taken)).toEqual(recordBefore);
+
+    /* A retry of a send whose attempt id is free is admitted once, and its
+       replay converges on the same attempt and row. */
+    const c = failSend("retry-collision-c", "message C");
+    const first = await retry(c);
+    expect(first.status).toBe(202);
+    const attempt = (await first.json() as { operationId: string }).operationId;
+    expect(attempt).toBe(terminalRetryOperationId(c));
+    const replay = await retry(c);
+    expect(replay.status).toBe(202);
+    expect((await replay.json() as { operationId: string }).operationId).toBe(attempt);
+    expect(retries).toBe(1);
+    expect(active.registry.snapshot().deliveryOperationOwners[attempt]).toMatchObject({ retryOfOperationId: c, terminalState: null });
   } finally {
     setAgentRegistryForTests(null);
     active.close();
@@ -1986,6 +2328,71 @@ test("an explicit status recovery with late canonical delivery never rearms the 
     expect(active.journal.effectBatch(100)).toEqual([]);
     expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
   } finally { active.close(); }
+});
+
+test("a late canonical acknowledgement corrects the progress record that ended uncertain, kept across reopen, and sends nothing", async () => {
+  /* Review of incident 2026-10-06: the receipt read corrected the delivery
+     record and left the progress record saying `uncertain` beside it, and
+     nothing could correct it afterwards. */
+  const { DeliveryProgressStore, deliveryProgressPath, readDeliveryProgress, setDeliveryProgressStoreForTests } = await import("./deliveryProgress");
+  const active = fixture("late-ack-progress", { engine: "claude", sqlite: true });
+  let progress = new DeliveryProgressStore(deliveryProgressPath());
+  setDeliveryProgressStoreForTests(progress);
+  try {
+    const text = "check the release";
+    const { operationId, deliveryId } = acceptSend(active, { text, clientMessageId: "late-ack-key" });
+    progress.note(operationId, active.conversationId, { waitReason: "dispatching", originalKey: "late-ack-key", attempted: true });
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    progress.settle(operationId, "uncertain", SEND_UNVERIFIED_REASON);
+    expect(progress.get(operationId)?.terminal?.state).toBe("uncertain");
+    const effectsBefore = active.journal.effectBatch(100);
+    const queuedBefore = ledger.load(active.generationId).length;
+
+    /* The recipient's own acknowledgement, bound to this operation, arrives late. */
+    const uuid = "late-canonical-user-turn";
+    ledger.confirmDelivered(active.generationId, operationId, uuid);
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid, timestamp: new Date().toISOString(), message: { role: "user", content: text } }) + "\n");
+    const response = await handleRuntimeOperationQuery(operationId, {
+      client: () => active.client,
+      rolledBack: () => false,
+      settle: (id, client) => resolveSendReceipt(id, { registry: active.registry, client }),
+    });
+    const body = await response.json() as { receipt: { status: string }; progress?: { terminal: { state: string } | null } };
+    expect(body.receipt.status).toBe("delivered");
+    expect(body.progress?.terminal?.state).toBe("delivered");
+
+    /* Nothing was rearmed or sent again. */
+    expect(active.journal.effectBatch(100)).toEqual(effectsBefore);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(ledger.load(active.generationId)).toHaveLength(queuedBefore);
+
+    progress.close();
+    setDeliveryProgressStoreForTests(null);
+    expect(readDeliveryProgress([operationId]).get(operationId)?.terminal?.state).toBe("delivered");
+    progress = new DeliveryProgressStore(deliveryProgressPath());
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "late-ack-key", terminal: { state: "delivered" } });
+    /* An acknowledgement another process read reaches the record through
+       the sweep, which reads the delivery record only. */
+    const later = acceptSend(active, { text: "second check", clientMessageId: "late-ack-elsewhere" });
+    progress.note(later.operationId, active.conversationId, { waitReason: "dispatching", originalKey: "late-ack-elsewhere" });
+    progress.settle(later.operationId, "uncertain", SEND_UNVERIFIED_REASON);
+    active.registry.recordDeliveryOutcome(later.deliveryId, "delivered");
+    mirrorSettledReceipts(active.registry, progress);
+    expect(progress.get(later.operationId)?.terminal?.state).toBe("delivered");
+    /* A proven ending is never promoted. */
+    progress.note("operation-lost", active.conversationId, { waitReason: "queued" });
+    progress.settle("operation-lost", "failed", SEND_LOST_REASON);
+    progress.settle("operation-lost", "delivered", null);
+    expect(progress.get("operation-lost")?.terminal?.state).toBe("failed");
+  } finally {
+    setDeliveryProgressStoreForTests(null);
+    progress.close();
+    active.close();
+  }
 });
 
 test("a compacted unknown Claude attempt retains its late delivered settlement", async () => {

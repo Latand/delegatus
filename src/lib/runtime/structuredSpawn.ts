@@ -392,20 +392,26 @@ function reconciledInitialMessage(
   return "pending";
 }
 
-function settleInitialMessageReservation(registry: AgentRegistry, launchId: string): void {
+/* Both first-message writes wait for the lock off the loop
+   (docs/design/delivery-progress-and-drain.md, C2). Refused, the reservation
+   stays as it was: the queue's terminal projection or the sweep settles a
+   delivered one from the journal, and a claimed one is already uncertain. */
+async function settleInitialMessageReservation(registry: AgentRegistry, launchId: string): Promise<void> {
   const clientMessageId = `spawn_${launchId}`;
   const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
     .find((delivery) => delivery.clientMessageId === clientMessageId);
   if (reservation && reservation.state !== "delivered") {
-    registry.recordDeliveryOutcome(reservation.id, "delivered");
+    await registry.deliveryWrite({ label: "delivery.settle", operationId: reservation.command.operationId },
+      () => registry.recordDeliveryOutcome(reservation.id, "delivered"));
   }
 }
 
-function markInitialMessageTimeout(registry: AgentRegistry, launchId: string, error: StructuredInitialMessageTimeoutError): void {
+async function markInitialMessageTimeout(registry: AgentRegistry, launchId: string, error: StructuredInitialMessageTimeoutError): Promise<void> {
   const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
     .find((delivery) => delivery.clientMessageId === `spawn_${launchId}`);
   if (reservation && reservation.state !== "delivered") {
-    registry.recordDeliveryOutcome(reservation.id, "delivery-uncertain", error.message);
+    await registry.deliveryWrite({ label: "delivery.settle", operationId: reservation.command.operationId },
+      () => registry.recordDeliveryOutcome(reservation.id, "delivery-uncertain", error.message));
   }
 }
 
@@ -493,7 +499,7 @@ async function failStructuredLaunchAndReap(
   reason: string,
   options: LaunchReapOptions,
 ): Promise<{ claimed: boolean; receipt: SpawnReceipt | null }> {
-  const failure = registry.failStructuredSpawn(launchId, reason);
+  const failure = await registry.failStructuredSpawnOffLoop(launchId, reason);
   if (!failure.claimed) {
     return { claimed: false, receipt: failure.receipt ?? registry.readOnlySnapshot().receipts[launchId] ?? null };
   }
@@ -778,15 +784,15 @@ export interface StructuredSpawnRecoveryOptions {
   publishFilesRevision?: typeof publishFilesRevision;
 }
 
-function failQueuedPinnedSpawn(
+async function failQueuedPinnedSpawn(
   registry: AgentRegistry,
   receipt: SpawnReceipt,
   reason: string,
-): SpawnReceipt {
+): Promise<SpawnReceipt> {
   if (receipt.transport === "structured") {
-    return registry.failStructuredSpawn(receipt.launchId, reason).receipt ?? receipt;
+    return (await registry.failStructuredSpawnOffLoop(receipt.launchId, reason)).receipt ?? receipt;
   }
-  registry.failSpawn(receipt.launchId, reason);
+  await registry.failSpawnOffLoop(receipt.launchId, reason);
   return registry.readOnlySnapshot().receipts[receipt.launchId] ?? receipt;
 }
 
@@ -894,7 +900,7 @@ async function actuateQueuedPinnedSpawn(
     }
   } catch (error) {
     if (receipt.transport === "tmux") {
-      registry.failSpawn(receipt.launchId, structuredSpawnFailureReason(error));
+      await registry.failSpawnOffLoop(receipt.launchId, structuredSpawnFailureReason(error));
       const failed = registry.readOnlySnapshot().receipts[receipt.launchId] ?? admissionClaim.receipt;
       if (!failed.pane) deleteInboxImages(tmuxImagePaths);
       if (failed.queuedPinnedSpawn && failed.admissionOwner) {
@@ -973,7 +979,7 @@ export async function terminalizeStaleStructuredSpawns(
       try {
         const supersededReason = supersededQueuedSpawnReason(snapshot, receipt);
         const recoveredReceipt = supersededReason
-          ? failQueuedPinnedSpawn(registry, receipt, supersededReason)
+          ? await failQueuedPinnedSpawn(registry, receipt, supersededReason)
           : await actuateQueuedPinnedSpawn(registry, client, receipt, options);
         if (recoveredReceipt.state === "failed" || recoveredReceipt.state === "conflicted") terminalized.push(receipt.launchId);
         else if (recoveredReceipt.state === "completed") recovered.push(receipt.launchId);
@@ -995,7 +1001,7 @@ export async function terminalizeStaleStructuredSpawns(
       if (!ownerlessPreSettlement) continue;
       examined += 1;
       try {
-        registry.failSpawn(
+        await registry.failSpawnOffLoop(
           receipt.launchId,
           `tmux spawn interrupted before durable queue publication or pane binding: ${receipt.launchId}`,
         );
@@ -1339,7 +1345,7 @@ export async function recoverPendingStructuredSpawns(
       if (staged) {
         await projectDeadStructuredSpawn(client, receipt, staged, `structured-spawn-superseded:${receipt.launchId}`);
       }
-      registry.failStructuredSpawn(receipt.launchId, supersededReason);
+      await registry.failStructuredSpawnOffLoop(receipt.launchId, supersededReason);
       continue;
     }
     if (receipt.state === "failed" && receipt.transport !== "tmux") continue;
@@ -1364,7 +1370,7 @@ export async function recoverPendingStructuredSpawns(
         if (entry?.structuredHost) {
           claimed = registry.claimStructuredHost(identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
           if (!claimed?.claimOwner) {
-            registry.failStructuredSpawn(receipt.launchId, reason);
+            await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
             continue;
           }
         }
@@ -1382,7 +1388,7 @@ export async function recoverPendingStructuredSpawns(
         }
         if (claimed) releaseAdoptionClaim(registry, claimed, true);
       }
-      registry.failStructuredSpawn(receipt.launchId, reason);
+      await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
       continue;
     }
     if (stagedLaunchRecovery(receipt)) {
@@ -1397,7 +1403,7 @@ export async function recoverPendingStructuredSpawns(
       const stagedByAnotherOperation = typeof entry?.structuredHostOperationId === "string"
         && entry.structuredHostOperationId !== receipt.launchId;
       if (stagedByAnotherOperation) {
-        registry.failSpawn(
+        await registry.failSpawnOffLoop(
           receipt.launchId,
           operation?.receipt.reason ?? `structured spawn operation ended as ${status}`,
         );
@@ -1410,7 +1416,7 @@ export async function recoverPendingStructuredSpawns(
       if (entry?.structuredHost && !ownedByFailedOperation) {
         recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
         if (!recoveryClaim?.claimOwner) {
-          registry.failSpawn(
+          await registry.failSpawnOffLoop(
             receipt.launchId,
             operation?.receipt.reason ?? `structured spawn operation ended as ${status}`,
           );
@@ -1437,7 +1443,7 @@ export async function recoverPendingStructuredSpawns(
         if (failedClaim) releaseAdoptionClaim(registry, failedClaim, false);
         throw error;
       }
-      registry.failStructuredSpawn(
+      await registry.failStructuredSpawnOffLoop(
         receipt.launchId,
         operation?.receipt.reason ?? `structured spawn operation ended as ${status}`,
       );
@@ -1496,7 +1502,7 @@ export async function recoverPendingStructuredSpawns(
       if (delivered.outcome === "held") continue;
       if (delivered.outcome !== "delivered") {
         await waitForStructuredInitialMessage(client, delivered.operationId);
-        settleInitialMessageReservation(registry, receipt.launchId);
+        await settleInitialMessageReservation(registry, receipt.launchId);
       }
     }
     /* Delivery acceptance can precede lazy Codex rollout creation. Keep the
@@ -1827,7 +1833,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
   if (delivered.outcome === "held") return "held";
   if (delivered.outcome !== "delivered") {
     await waitForStructuredInitialMessage(input.client, delivered.operationId);
-    settleInitialMessageReservation(input.registry, input.receipt.launchId);
+    await settleInitialMessageReservation(input.registry, input.receipt.launchId);
   }
 }
 
@@ -2338,7 +2344,7 @@ export async function spawnStructuredConversation(
       const terminal = await terminalHostExitReason(host);
       if (terminal) throw new Error(terminal);
       uncertainFirstMessage = true;
-      markInitialMessageTimeout(input.registry, input.receipt.launchId, error);
+      await markInitialMessageTimeout(input.registry, input.receipt.launchId, error);
       initialMessage = "held";
     }
     if (initialMessage === "held") {
@@ -2516,11 +2522,11 @@ export async function spawnStructuredConversation(
     const terminalFreshLaunch = input.receipt.purpose === "launch";
     if (projectionSucceeded || terminalFreshLaunch) {
       if (key) {
-        input.registry.failStructuredSpawn(input.receipt.launchId, failureReason, {
+        await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
           retainRegisteredHost: cleanupError !== null,
         });
       } else {
-        input.registry.failSpawn(input.receipt.launchId, failureReason);
+        await input.registry.failSpawnOffLoop(input.receipt.launchId, failureReason);
       }
     }
     if (cleanupError !== null) {
