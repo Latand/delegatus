@@ -24,7 +24,7 @@ export function terminalReviewContinuationAvailable(pipeline: Pipeline): boolean
     || activation?.edge !== "pass") return false;
   const fix = pipeline.runs.find((run) => run.stageId === activation.stageId)?.attempts
     .find((entry) => entry.n === activation.attempt && !entry.historical);
-  if (fix?.state !== "passed") return false;
+  if (!fix || (fix.state !== "passed" && !(fix.verdict?.status === "fail" && terminalReviewBudgetSpent(fix, true)))) return false;
   const pending = pipeline.reviewPending;
   return !pending || (pending.terminalRecheck === true
     && pending.stageId === stage.id && pending.attempt === attempt.n

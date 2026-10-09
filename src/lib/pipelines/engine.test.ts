@@ -13020,7 +13020,7 @@ const { pipelineCompletedUnreviewed } = await import("./failEdgeBudget");
     stage passes, and a read-write pass moves the worktree head first. */
 async function driveWithController(
   h: ReturnType<typeof movingHeadHarness>,
-  failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean) = new Set(["critique"]),
+  failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean | "needs_decision") = new Set(["critique"]),
 ): Promise<{ pipeline: Pipeline; reviews: number }> {
   const answered: FileEntry[] = [];
   const controller = new FlowPipelineController({
@@ -13043,10 +13043,11 @@ async function driveWithController(
     const attempt = stageId ? pipeline.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) : undefined;
     if (!stageId || !attempt?.agentPath || seen.has(attempt.agentPath)) continue;
     seen.add(attempt.agentPath);
-    if (typeof failing === "function" ? failing(stageId, attempt.n) : failing.has(stageId)) {
+    const verdict = typeof failing === "function" ? failing(stageId, attempt.n) : failing.has(stageId);
+    if (verdict) {
       reviews += 1;
       h.messages.set(attempt.agentPath, {
-        text: `round ${reviews} findings\n\n\`\`\`json\n{"status":"fail","findings":["P2 evidence gap ${reviews}"]}\n\`\`\``,
+        text: `round ${reviews} findings\n\n\`\`\`json\n{"status":"${verdict === "needs_decision" ? "needs_decision" : "fail"}","findings":["P2 evidence gap ${reviews}"]}\n\`\`\``,
         ts: Date.now() + 100_000_000,
       });
     } else {
@@ -21477,7 +21478,8 @@ test.each([1, 2] as const)("an inner terminal grant retains the outer review obl
   ] as never);
   const parked = seedTerminalPark((await driveWithController(h)).pipeline);
   expect((await continueReview(parked, "outer-grant", rounds)).error).toBeUndefined();
-  const innerPark = seedTerminalPark((await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && (n === 2 || n === 3))).pipeline);
+  const innerPark = (await driveWithController(h, (stageId, n) => stageId === "fix" && n === 3
+    ? "needs_decision" : stageId === "critique" || stageId === "fix" && n === 2)).pipeline;
   expect(innerPark.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "fix", fixStageId: "repair" });
   expect((await continueReview(innerPark, "inner-grant", 1)).error).toBeUndefined();
   const returned = seedTerminalPark((await driveWithController(h)).pipeline);
@@ -21718,6 +21720,61 @@ test("spent terminal review completes with findings and clears the task park not
   expect(pipeline.reviewBudgetSpent).toMatchObject({ stageId: "critique", attempt: 2, findings: 1, head: pipeline.lastPassedCommit });
   expect(pipeline.runs[1]!.attempts.at(-1)!.verdict!.findings).toEqual(["P2 evidence gap 2"]);
   expect(loadTasks()[0]!.note).toBeUndefined();
+});
+
+test.each(["fail", "pass", "needs_decision"] as const)("spending a nested terminal gate returns to the outer re-check before completing (outer verdict: %s)", async (outerVerdict) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, access: "read-only", role: { roleId: "reviewer" }, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  let { pipeline } = await driveWithController(h, (stageId, n) => stageId === "critique" && n === 2 && outerVerdict === "needs_decision"
+    ? "needs_decision" : stageId === "fix" || stageId === "critique" && (outerVerdict === "fail" || n === 1));
+  const reviews = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(2);
+  expect(reviews[1]!.activatedBy).toMatchObject({ stageId: "fix", attempt: 2, edge: "pass", budgetRecheck: true });
+  if (outerVerdict === "needs_decision") {
+    expect(pipeline.state).toBe("needs_decision");
+    const { terminalReviewContinuationAvailable } = await import("./failEdgeBudget");
+    expect(terminalReviewContinuationAvailable(pipeline)).toBe(true);
+    expect((await continueReview(pipeline, "outer-decision-after-spent-inner", 1)).error).toBeUndefined();
+    pipeline = (await driveWithController(h, new Set())).pipeline;
+  }
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.reviewBudgetSpent).toMatchObject({ stageId: outerVerdict === "fail" ? "critique" : "fix", attempt: 2 });
+  expect(pipeline.stateDetail).toContain("budget spent:");
+  const { mergeEligible } = await import("@/lib/forge/autoMerge");
+  expect(mergeEligible(pipeline)).toBe(true);
+  expect(pipeline.runs.find(run => run.stageId === "fix")!.attempts[1]!.verdict!.findings).toHaveLength(1);
+});
+
+test.each([1, 2] as const)("stored outer grants settle their owed reviews after an inner budget is spent (%i rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  // A real decision verdict leaves a resumable cursor; no completed lane is
+  // rewritten into a historical park to manufacture the continuation.
+  const decision = (await driveWithController(h, (stageId, n) => stageId === "critique" && n === 2 ? "needs_decision" : stageId === "critique")).pipeline;
+  expect(decision.state).toBe("needs_decision");
+  expect((await continueReview(decision, `stored-outer-${rounds}`, rounds)).error).toBeUndefined();
+  const stored = loadPipelines()[0]!;
+  expect(stored.reviewGrants).toMatchObject([{ stageId: "critique", rounds, terminalAttempt: 2 }]);
+  const { pipeline } = await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && (n === 2 || n === 3));
+  const reviews = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(2 + rounds);
+  expect(reviews[2]!.activatedBy).toMatchObject({ stageId: "fix", attempt: 3, edge: "pass" });
+  expect(pipeline.state).toBe("completed");
+  expect(pipeline.reviewBudgetSpent).toMatchObject({ stageId: "critique", attempt: 2 + rounds });
+  const { mergeEligible } = await import("@/lib/forge/autoMerge");
+  expect(mergeEligible(pipeline)).toBe(true);
 });
 
 

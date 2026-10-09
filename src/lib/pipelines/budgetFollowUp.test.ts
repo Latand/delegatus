@@ -10,8 +10,9 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-budget-follow-u
 const previous = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 const { budgetFollowUpInput, fileBudgetFollowUp } = await import("./budgetFollowUp");
-const { sweepBudgetFollowUps } = await import("@/lib/forge/autoMerge");
-const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+const { sweepAutoMerge, sweepBudgetFollowUps } = await import("@/lib/forge/autoMerge");
+const { loadTasks, saveTasks, mutateTasksFile, loadTasksFile } = await import("@/lib/tasks/store");
+const { createTask } = await import("@/lib/tasks/commands");
 afterAll(() => { process.env.LLV_STATE_DIR = previous; fs.rmSync(sandbox, { recursive: true, force: true }); });
 beforeEach(() => saveTasks([]));
 
@@ -64,6 +65,90 @@ test("follow-up waits for merge and records the merged head", async () => {
   lane.merge = { state: "merged", mergedHead: "b".repeat(40) } as Pipeline["merge"];
   await sweepBudgetFollowUps(ports);
   expect(loadTasks()[0]!.details).toContain("b".repeat(40));
+});
+
+test.each([false, true])("follow-up ownership survives create receipt eviction and a fresh process (legacy: %s)", async (legacy) => {
+  const lane = fixture(); const ports = portsFor(lane);
+  ports.mutate = async () => { throw new Error("lost lane write"); };
+  await expect(sweepBudgetFollowUps(ports)).rejects.toThrow("lost lane write");
+  const original = loadTasks()[0]!;
+  if (legacy) { delete original.origin; saveTasks([original]); }
+  for (let index = 0; index < 100; index++) {
+    mutateTasksFile(state => {
+      const result = createTask(state.tasks, { project: lane.project, text: `Unrelated ${index}`, placement: "unplaced", clientRequestId: `unrelated-${index}` }, state.recentCreates, { explicit: true, allowBoardOverflow: true });
+      if (!result.ok) throw new Error(result.error);
+      return { state: { tasks: result.tasks, recentCreates: result.recentCreates }, result };
+    });
+  }
+  expect(loadTasksFile().recentCreates.some(receipt => receipt.taskId === original.id)).toBe(false);
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    const { sweepBudgetFollowUps } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../forge/autoMerge.ts"))});
+    const { fileBudgetFollowUp } = await import(${JSON.stringify(path.join(import.meta.dir, "budgetFollowUp.ts"))});
+    const lane = ${JSON.stringify(lane)};
+    await sweepBudgetFollowUps({ now: Date.now, loadPipelines: () => [lane], setting: () => ({ enabled: false }), fileFollowUp: fileBudgetFollowUp, mutate: async (_id, change) => change(lane) });
+    process.stdout.write(JSON.stringify(lane.reviewBudgetSpent.followUp));
+  `], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString()).taskId).toBe(original.id);
+  expect(loadTasks().filter(task => task.details?.includes(`Lane: ${lane.id}\n`))).toHaveLength(1);
+});
+
+test.each(["custody", "blocked", "cancelled", "legacy-merged"] as const)("outside merge confirms its head before filing, across retry/restart (%s)", async (state) => {
+  const lane = fixture(); const ports = portsFor(lane, true);
+  lane.closedAt = "2026-10-01T00:00:00Z";
+  // Completed review evidence used by the merge sweep's eligibility check.
+  lane.stages = [{ id: "review", kind: "run", next: null, onFail: { to: "fix", maxRounds: 1 }, access: "read-only" }] as Pipeline["stages"];
+  lane.runs[0]!.attempts[0]!.state = "failed";
+  ports.setting = () => ({ enabled: true, changedAt: "2026-09-01T00:00:00Z", changedBy: "operator" });
+  ports.cachedState = () => "merged";
+  ports.mergerBusy = () => state === "custody";
+  if (state !== "custody") lane.merge = { state: state === "legacy-merged" ? "merged" : state, repository: "acme/widgets", prNumber: 12, mergedHead: null } as Pipeline["merge"];
+  let available = false;
+  ports.run = async () => {
+    if (!available) throw new Error("forge temporarily unavailable");
+    return JSON.stringify({ state: "MERGED", headRefOid: "b".repeat(40), mergeCommit: { oid: "c".repeat(40) }, mergedAt: "2026-10-01T01:00:00Z" });
+  };
+  await sweepAutoMerge(ports);
+  await sweepBudgetFollowUps(ports);
+  expect(loadTasks()).toHaveLength(0);
+  available = true;
+  await sweepAutoMerge(ports);
+  // Lose the lane's receipt, after confirmed merge evidence was persisted.
+  ports.mutate = async (_id, change) => {
+    const draft = structuredClone(lane);
+    const changed = change(draft);
+    if (draft.reviewBudgetSpent?.followUp) throw new Error("lost follow-up receipt");
+    if (changed) Object.assign(lane, draft);
+    return changed;
+  };
+  await expect(sweepBudgetFollowUps(ports)).rejects.toThrow("lost follow-up receipt");
+  expect(lane.merge).toMatchObject({ state: "merged", mergedHead: "b".repeat(40) });
+  expect(loadTasks()[0]!.details).toContain(`Merged head: ${"b".repeat(40)}`);
+  const originalId = loadTasks()[0]!.id;
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    const { sweepBudgetFollowUps } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../forge/autoMerge.ts"))});
+    const { fileBudgetFollowUp } = await import(${JSON.stringify(path.join(import.meta.dir, "budgetFollowUp.ts"))});
+    const lane = ${JSON.stringify(lane)};
+    await sweepBudgetFollowUps({ now: Date.now, loadPipelines: () => [lane], setting: () => ({ enabled: true }), pullRequestOf: () => ({ repository: "acme/widgets", number: 12 }), cachedState: () => "merged", fileFollowUp: fileBudgetFollowUp, mutate: async (_id, change) => change(lane) });
+    process.stdout.write(JSON.stringify(lane.reviewBudgetSpent.followUp));
+  `], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString()).taskId).toBe(originalId);
+  expect(loadTasks()).toHaveLength(1);
+});
+
+test("an outside merge read cannot populate evidence for a replacement PR", async () => {
+  const lane = fixture(); const ports = portsFor(lane, true);
+  lane.merge = { state: "blocked", repository: "acme/widgets", prNumber: 12, mergedHead: null } as Pipeline["merge"];
+  ports.cachedState = () => "merged";
+  ports.run = async () => {
+    lane.merge!.prNumber = 13;
+    return JSON.stringify({ state: "MERGED", headRefOid: "b".repeat(40) });
+  };
+  await sweepAutoMerge(ports);
+  expect(lane.merge).toMatchObject({ state: "blocked", prNumber: 13, mergedHead: null });
+  await sweepBudgetFollowUps(ports);
+  expect(loadTasks()).toHaveLength(0);
 });
 
 test("overflow keeps whole findings then points to the durable attempt", () => {

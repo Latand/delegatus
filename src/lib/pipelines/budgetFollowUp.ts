@@ -1,11 +1,12 @@
 import { operatorLocale } from "@/lib/operator/settings";
-import { createTask, type CreateTaskInput } from "@/lib/tasks/commands";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { createTask, type CreateTaskInput, type CreateTaskResult } from "@/lib/tasks/commands";
 import { mutateTasksFile } from "@/lib/tasks/store";
 import { TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT } from "@/lib/tasks/types";
 import type { Pipeline } from "./types";
 
 /** Findings remain on the attempt; a bounded board card carries whole ones. */
-export function budgetFollowUpInput(pipeline: Pipeline, mergedHead: string, locale: string): CreateTaskInput & { text: string; details: string } {
+export function budgetFollowUpInput(pipeline: Pipeline, mergedHead: string, locale: string): CreateTaskInput & { text: string; details: string; clientRequestId: string } {
   const spent = pipeline.reviewBudgetSpent;
   if (!spent) throw new Error("the lane has no spent review budget");
   const findings = pipeline.runs.find(run => run.stageId === spent.stageId)?.attempts.find(attempt => attempt.n === spent.attempt)?.verdict?.findings ?? [];
@@ -34,13 +35,26 @@ export function budgetFollowUpInput(pipeline: Pipeline, mergedHead: string, loca
   };
 }
 
-/** Task first, receipt in the lane second: retries replay the persisted create. */
+/** Task-local ownership survives eviction of the general create receipts. */
 export function fileBudgetFollowUp(pipeline: Pipeline, mergedHead: string): { taskId: string; title: string } {
   const input = budgetFollowUpInput(pipeline, mergedHead, operatorLocale() ?? "uk");
-  const outcome = mutateTasksFile(state => {
+  const outcome = mutateTasksFile<CreateTaskResult>(state => {
+    const spent = pipeline.reviewBudgetSpent!;
+    const existing = state.tasks.find(task => canonicalProject(task.project) === canonicalProject(pipeline.project)
+      && (task.origin?.kind === "pipeline" && task.origin.key === input.clientRequestId
+        || !task.origin && task.details?.startsWith(`Lane: ${pipeline.id}\n`)
+          && task.details.split("\n").includes(`Review: ${spent.stageId} attempt ${spent.attempt}`)));
+    if (existing) {
+      const owned = Boolean(existing.origin);
+      existing.origin = { kind: "pipeline", key: input.clientRequestId, refinement: "titled" };
+      return { state: owned ? undefined : state, result: { ok: true, task: existing, tasks: state.tasks, recentCreates: state.recentCreates, replay: true } };
+    }
     const result = createTask(state.tasks, input, state.recentCreates, { explicit: true, allowBoardOverflow: true });
-    if (result.ok && !result.replay) result.task.status = "assigned";
-    return { state: result.ok && !result.replay ? { tasks: result.tasks, recentCreates: result.recentCreates } : undefined, result };
+    if (result.ok) {
+      if (!result.replay) result.task.status = "assigned";
+      result.task.origin = { kind: "pipeline", key: input.clientRequestId, refinement: "titled" };
+    }
+    return { state: result.ok ? { tasks: result.tasks, recentCreates: result.recentCreates } : undefined, result };
   });
   if (!outcome.ok) throw new Error(outcome.error);
   return { taskId: outcome.task.id, title: outcome.task.text };

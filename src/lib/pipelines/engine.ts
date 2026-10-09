@@ -3138,7 +3138,8 @@ function completePipeline(pipeline: Pipeline, now: string, detail: string | null
   clearEngineTaskNote(pipeline);
   pipeline.cursor = null;
   pipeline.state = "completed";
-  pipeline.stateDetail = detail;
+  pipeline.stateDetail = pipeline.reviewBudgetSpent
+    ? `budget spent: ${pipeline.reviewBudgetSpent.findings} findings → follow-up after merge` : detail;
   pipeline.pausedState = null;
   pipeline.closedAt = now;
   /* A reap that settled while this final stage still ran never saw its host,
@@ -3153,7 +3154,40 @@ function completeSpentReview(pipeline: Pipeline, stage: PipelineStage, attempt: 
     head: pipeline.lastPassedCommit, at: now,
   };
   delete pipeline.reviewPending;
+  const outer = outerTerminalReviewReturn(pipeline, stage, attempt);
+  if (outer) {
+    pipeline.cursor = {
+      stageId: outer.stageId, state: "pending", input: failEdgeInput({ verdict: attempt.verdict!, output: attempt.output ?? "" }),
+      activatedBy: { stageId: stage.id, attempt: attempt.n, edge: "pass", ...(outer.recheck ? { budgetRecheck: true as const } : {}) },
+    };
+    pipeline.state = "running";
+    pipeline.stateDetail = null;
+    pipeline.pausedState = null;
+    return;
+  }
   completePipeline(pipeline, now, `budget spent: ${pipeline.reviewBudgetSpent.findings} findings → follow-up after merge`);
+}
+
+/** Settling an inner budget still owes the terminal review that sent it work.
+    Durable activation ancestry carries that return for fresh edges and grants. */
+function outerTerminalReviewReturn(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): { stageId: string; recheck: boolean } | null {
+  let current: PipelineStageAttempt | undefined = attempt;
+  const settled = new Set([stage.id]);
+  const visited = new Set<string>();
+  while (current?.activatedBy) {
+    const activation: PipelineStageAttempt["activatedBy"] = current.activatedBy;
+    const key = `${activation.stageId}:${activation.attempt}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    const source = pipeline.stages.find(candidate => candidate.id === activation.stageId);
+    if (activation.edge === "fail" && source?.onFail && source.next === null && !settled.has(source.id)) {
+      const grant = pipeline.reviewGrants?.find(candidate => candidate.stageId === source.id && candidate.terminalAttempt === activation.attempt);
+      if (activation.budgetSpent || grant) return { stageId: source.id, recheck: Boolean(activation.budgetSpent || grant && terminalGrantIsLastRound(pipeline, grant)) };
+    }
+    current = pipeline.runs.find(run => run.stageId === activation.stageId)?.attempts.find(candidate => candidate.n === activation.attempt && !candidate.historical);
+    if (current?.state === "passed" || current?.verdict?.status === "fail" && terminalReviewBudgetSpent(current, true)) settled.add(activation.stageId);
+  }
+  return null;
 }
 
 /** Recover terminal parks written before resumable budget metadata existed.
@@ -3169,7 +3203,7 @@ function terminalReviewPendingFromAttempt(
     || !verdictRoutesAsFail({ verdict: attempt.verdict, output: attempt.output ?? "" })) return null;
   const fix = runFor(pipeline, activation.stageId)?.attempts.find((candidate) =>
     candidate.n === activation.attempt && !candidate.historical);
-  if (fix?.state !== "passed") return null;
+  if (!fix || (fix.state !== "passed" && !(fix.verdict?.status === "fail" && terminalReviewBudgetSpent(fix, true)))) return null;
   return {
     terminalRecheck: true, stageId: stage.id, attempt: attempt.n,
     fixStageId: activation.stageId, fixAttempt: fix.n,
@@ -9924,7 +9958,7 @@ function continueReview(
   }
   const review = pipeline.stages.find((stage) => stage.id === pending.stageId);
   const fix = runFor(pipeline, pending.fixStageId)?.attempts.find((attempt) => attempt.n === pending.fixAttempt);
-  if (!review?.onFail || !fix || fix.state !== "passed") {
+  if (!review?.onFail || !fix || (fix.state !== "passed" && !(fix.verdict?.status === "fail" && terminalReviewBudgetSpent(fix, true)))) {
     return { error: "the review stage or the fix it handed off to is no longer in this pipeline", status: 409 };
   }
   const have = failEdgeMaxRounds(pipeline, review);

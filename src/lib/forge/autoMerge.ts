@@ -7,7 +7,7 @@ import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { ForgeAppWriteRefused, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
-import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeExhaustion, terminalReviewBudgetSpent } from "@/lib/pipelines/failEdgeBudget";
 import { withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
@@ -110,6 +110,7 @@ export function mergeEligible(pipeline: Pipeline): boolean {
     if (!latest) continue;
     reviewed += 1;
     if (latest.state === "passed" || latest.state === "skipped") continue;
+    if (latest.verdict?.status === "fail" && terminalReviewBudgetSpent(latest, true)) continue;
     if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
     const spent = pipeline.reviewBudgetSpent;
     if (spent?.stageId === stage.id && spent.attempt === latest.n) continue;
@@ -577,12 +578,43 @@ function mergerOwns(pipeline: Pipeline, pr: { repository: string; number: number
       && String(stage.role.params?.prs ?? "").split(",").some(pair => Number(pair.trim().split("@")[0]) === pr.number)));
 }
 
+/** Cached merge state prompts a fresh read before recording outside evidence. */
+async function recordOutsideMerge(pipeline: Pipeline, pr: { repository: string; number: number }, ports: AutoMergePorts): Promise<void> {
+  try {
+    const view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
+    if (view?.state !== "MERGED") return;
+    await ports.mutate(pipeline.id, live => {
+      if (live.state !== "completed" || live.merge?.mergedHead) return false;
+      const currentPr = live.merge ? { repository: live.merge.repository, number: live.merge.prNumber } : ports.pullRequestOf(live);
+      if (currentPr?.repository !== pr.repository || currentPr.number !== pr.number) return false;
+      const merge = live.merge ?? newMerge(live, pr, ports.setting(live.project), ports.now());
+      merge.state = "merged";
+      merge.by ??= "outside";
+      merge.mergedHead = view.headRefOid;
+      merge.mergeCommit = view.mergeCommit;
+      merge.mergedAt = view.mergedAt ?? iso(ports.now());
+      merge.reason = null;
+      merge.nextReadAt = null;
+      merge.updatedAt = iso(ports.now());
+      live.merge = merge;
+      return true;
+    });
+  } catch (error) {
+    ports.log?.(`[auto merge] ${pipeline.id}: outside merge confirmation failed`, error);
+  }
+}
+
 export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   const now = ports.now();
   for (const pipeline of ports.loadPipelines()) {
     if (pipeline.state !== "completed" || pipeline.hiddenAt) continue;
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
+    const pr = merge ? { repository: merge.repository, number: merge.prNumber } : ports.pullRequestOf(pipeline);
+    if (pr && !merge?.mergedHead && (merge?.state === "merged" || ports.cachedState(pr.repository, pr.number) === "merged")) {
+      await recordOutsideMerge(pipeline, pr, ports);
+      continue;
+    }
     if (!merge) {
       /* Only lanes that complete after the setting went on (§4.1). */
       if (!setting.enabled || !setting.changedAt || !(Date.parse(pipeline.closedAt ?? "") >= Date.parse(setting.changedAt))) continue;
@@ -599,14 +631,6 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     if (PIPELINE_MERGE_LIVE_STATES.has(merge.state) && merge.state !== "merging" && !setting.enabled) {
       await commit(ports, pipeline, (live) => { live.state = "cancelled"; live.reason = MERGE_REASONS.settingOff; live.nextReadAt = null; });
       continue;
-    }
-    if ((merge.state === "blocked" || merge.state === "cancelled") && ports.cachedState(merge.repository, merge.prNumber) === "merged") {
-      await commit(ports, pipeline, (live) => {
-        live.state = "merged";
-        live.by = "outside";
-        live.reason = null;
-        live.mergedAt = iso(now);
-      });
     }
   }
   /* One lane at a time per repository, in completion order (§4.4 rule 5). */
@@ -722,6 +746,11 @@ export async function sweepBudgetFollowUps(ports: AutoMergePorts): Promise<void>
   for (const pipeline of pipelines) {
     const spent = pipeline.reviewBudgetSpent;
     if (!spent || spent.followUp || !(laneFinishedForTasks(pipeline, ports) || pipeline.state === "closed")) continue;
+    // A cached merge has no head evidence. Confirm it before writing the task,
+    // including when a standalone merger owns the queue or polling was stopped.
+    const requiresMergedHead = pipeline.merge?.state === "merged"
+      || (pipeline.state === "completed" && ports.setting(pipeline.project).enabled && ports.pullRequestOf(pipeline) !== null);
+    if (requiresMergedHead && (pipeline.merge?.state !== "merged" || !pipeline.merge.mergedHead)) continue;
     // Legacy follow-ups were started as lanes on the same task. Their brief
     // explicitly names the source lane; unrelated work on that task is ignored.
     const existing = pipelines.find(candidate => candidate.id !== pipeline.id
