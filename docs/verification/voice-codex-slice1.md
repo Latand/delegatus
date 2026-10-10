@@ -60,16 +60,24 @@ probe did; production retains Codex's default filler.
 | Design probe | 15,841 | 5.19 s |
 | Codex default, sample 1 | 14,742 | 6.12 s |
 | `environments: []` + `baseInstructions`, sample 1 | 11,380 | 3.87 s |
+| Codex default, sample 2 | 14,739 | 3.31 s |
+| `environments: []` + `baseInstructions`, sample 2 | 11,383 | 4.38 s |
+| Codex default, mean of two calls | 14,740.5 | 4.71 s |
+| Compact configuration, mean of two calls | 11,381.5 | 4.12 s |
 
 The provider keeps `environments: []` and `baseInstructions`: the compact
 configuration answered the same fixture correctly with fewer input tokens and
-lower measured latency. This small canary compares configurations; it does not
-estimate a general latency distribution.
+lower mean measured latency. Each configuration won one latency sample. This
+small canary compares configurations; it does not estimate a general latency
+distribution.
 
 Each call records its Viewer stand-in, lease guardian and app-server PIDs in
 private evidence. Cleanup stops only those owned processes. New account
-session files and surviving helpers are both zero. Raw SDP, account material,
-logs and PID ledgers remain outside the public repository.
+session files and surviving helpers are both zero across all four calls. The
+repeat queries `mcpServerStatus/list` before thread creation and after the board
+answer: all four inventories contain zero servers. The isolated Codex logs
+contain zero `codex_apps` start/spawn events. Raw SDP, account material, logs and
+PID ledgers remain outside the public repository.
 
 ## Checks and scope
 
@@ -77,7 +85,9 @@ Tests run by explicit file path through `scripts/gate-slot.sh`, with `HOME`,
 XDG configuration, `TMPDIR` and `LLV_STATE_DIR` under one private temporary
 root, and `LLV_VIEWER_CONTROL_URL` set to a closed loopback port. TypeScript,
 changed-file ESLint and the local publication privacy gate use the project's
-gates. No runtime-host source changes are part of this slice.
+gates. The seven explicit test files cover 111 tests; the final pre-push gate
+also compares touched files against the merge base. No runtime-host source
+changes are part of this slice.
 
 The provider imports neither `codexRealtimeTranscript.ts` nor
 `CodexAppServerHost`. Transcript adaptation, spoken confirmation, sends,
