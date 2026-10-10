@@ -29,6 +29,7 @@ export type RelayToolCallRecord = {
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };
 export type RelayAnswerRecord = {
+  conversationId?: string;
   compaction?: { member: string; owner: string };
   rounds?: number;
   toolCalls?: RelayToolCallRecord[];
@@ -166,6 +167,12 @@ export function answerRecorder(base: {
         writeRecord(file, record);
       } catch (error) {
         logFailure("write", error);
+      }
+    },
+    bindConversation(conversationId: string) {
+      record = { ...record, conversationId };
+      if (begun) {
+        try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
       }
     },
     finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls" | "compaction">>) {

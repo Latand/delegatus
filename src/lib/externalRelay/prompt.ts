@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { RelayConversation } from "./conversations";
 import { callableTools, mayQuote } from "./toolLoop";
 import { offersHandoff, type ExternalRelayRequest } from "./protocol";
-const json = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
+export const json = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
 export function answerPrompt(request: ExternalRelayRequest): string {
   const input = request.input;
   const handoff = offersHandoff(request);

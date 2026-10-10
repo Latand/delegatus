@@ -1,6 +1,6 @@
 # Relay owner tier: the clone's owner gets a full Delegatus agent
 
-Status: design, 2026-10-10. Builds on `relay.md` (§A.6, §A.8, §B.4–§B.9),
+Status: implemented, 2026-10-10. Builds on `relay.md` (§A.6, §A.8, §B.4–§B.9),
 `relay-slice3.md` (per-chat conversations) and the reserved branch in
 `src/lib/externalRelay/profile.ts:4-15`. Nothing here changes the wire.
 
@@ -244,7 +244,8 @@ run gets one admission there:
 
 > An `agent` caller is admitted when `runs.json` holds a live owner run whose
 > `conversationId` is the caller's and whose target still has `ownerTier`
-> on.
+> on. The Viewer process identity must still match the run's recorded owner,
+> and the relay and target must still be enabled.
 
 So the orchestrator hears the owner exactly while the owner's request is
 being answered, and turning the switch off withdraws it mid-run. The MCP
@@ -313,8 +314,9 @@ and contents of this computer. Heartbeats still go out on their timer.
 
 ### 2.8 Cancel, time limit, lease loss, restart
 
-- `cancel()` interrupts the conversation's turn (`interruptConversation`,
-  `src/lib/delivery.ts:332`, on the receipt's transcript). A cancel that
+- `cancel()` interrupts the conversation's turn through `applyConversationAction`
+  (`src/lib/conversation/actions.ts`), using the receipt's conversation id.
+  This selects the structured host control channel for an ordinary spawn. A cancel that
   arrives before the receipt names the conversation is applied as soon as it
   does. The conversation stays on the board, and the operator can continue
   it.

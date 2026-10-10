@@ -45,6 +45,7 @@ type Target = {
   concurrency: number;
   hardCapMinutes: number;
   memberLimitPerHour?: number | null;
+  ownerTier?: boolean;
 };
 export type RelayView = {
   id: string;
@@ -505,6 +506,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: 
                 </>
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
+            {target.ownerTier === true ? <span data-external-relay-owner-tier-caption="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierOn")}</span> : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
         </button>
@@ -542,6 +544,12 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen }: 
             <MemberLimitField target={target} actions={actions} />
           </SettingLine>
           <p className="text-caption leading-4 text-muted">{t("externalRelay.target.memberLimitHint")}</p>
+          <SettingLine label={t("externalRelay.target.ownerTier")}>
+            <SettingSwitch enabled={target.ownerTier === true} size="responsive" aria-label={name("externalRelay.target.ownerTier")}
+              data-external-relay-owner-tier="" disabled={actions.busy}
+              onClick={() => actions.patchTarget(target, { ownerTier: target.ownerTier !== true })} />
+          </SettingLine>
+          <p data-external-relay-owner-tier-hint="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierHint")}</p>
           {noAccount ? (
             <p data-external-relay-no-account="" className="flex items-start gap-1.5 text-caption leading-4 text-warning">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />

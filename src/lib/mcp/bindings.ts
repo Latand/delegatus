@@ -1,3 +1,4 @@
+import { liveOwnerRelayConversation } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -6885,7 +6886,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   // root caller's general attribution also identifies it as the voice gateway.
   const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find((candidate) => candidate.conversationId === attribution.conversationId);
-  if (!seat && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+  if (!seat && !ownerRelayCaller(dependencies) && (attribution.kind !== "gateway" || !attribution.conversationId)) {
     throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation", {
       code: "orchestrator_relay_refused", retryable: false,
     });
@@ -6896,7 +6897,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
-    sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
+    sendPayload: seat ? orchestratorRelayPayload(message, seat) : attribution.kind === "agent" ? { text: message, origin: mcpSenderOrigin(dependencies) } : {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
     // Separate from direct send: equal client keys on different tools are
@@ -6917,11 +6918,17 @@ function resolveRemoteSeatMachine(machine: string, project: string, dependencies
   }
 }
 
-/** The gateway keeps its existing relay path. A seat gets messaging only:
-    auto-creation still goes through the unchanged operator-only seat route. */
+/** The Viewer binds this ordinary agent to one live owner request. */
+function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
+  const caller = attributionOf(dependencies);
+  return caller.kind === "agent" && !caller.via && !!caller.conversationId && liveOwnerRelayConversation(caller.conversationId);
+}
+
+/** Seats, the gateway and live owner relay agents can message a seat.
+    Auto-creation still goes through the unchanged operator-only seat route. */
 function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
   const caller = attributionOf(dependencies);
-  if (caller.kind === "gateway") return;
+  if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
     const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
     if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;

@@ -1060,7 +1060,7 @@ async function runLoopCase(options: {
   response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown; drop?: boolean } | Promise<{ status?: number; body?: unknown; drop?: boolean }>;
   completeResponse?: (body: unknown, attempt: number) => { status?: number; body?: unknown };
   runtime?: ToolLoopRuntime;
-  relayId?: string;
+  relayId?: string; ownerTier?: boolean;
   reverseReadArrival?: boolean;
   heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
 }) {
@@ -1105,7 +1105,7 @@ async function runLoopCase(options: {
   });
   const paired = relay(`${server.origin}/v1`);
   paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
-  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null };
+  paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null, ...(options.ownerTier !== undefined ? { ownerTier: options.ownerTier } : {}) };
   const previousSelection = accountManager.resolveHeadlessSpawn;
   const restoreFeatures = options.live ? setCodexFeatureReaderForTest(undefined) : undefined;
   if (options.live) {
@@ -1929,16 +1929,18 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
   const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
   const surfaces: Record<string, unknown> = {};
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-  async function replay(role: string) {
+  async function replay(role: string, ownerTier?: boolean) {
     const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
-    const run = await runLoopCase({ request, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
+    if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
     return { prompts: run.rounds.map((r) => hash(r.prompt)), schemas: run.rounds.map((r) => hash(JSON.stringify(r.schema))), calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
   }
   for (const role of cases) surfaces[role] = await replay(role);
   if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
   expect(surfaces).toEqual(snapshot.surfaces);
+  for (const role of cases.filter(r => r !== "owner")) expect(await replay(role, true)).toEqual(snapshot.surfaces[role]);
   const { setRelaySwitch } = await import("./switches");
   const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
   try {
@@ -1950,3 +1952,55 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
     for (const role of ["admin", "anonymous_admin", "actions_admin"]) expect(await replay(role)).toEqual(snapshot.surfaces[role]);
   } finally { fs.rmSync(switchFile, { force: true }); }
 }, 30000);
+
+
+for (const scenario of ["answer", "lease_lost", "hard_cap", "invalid_request"] as const)
+  test(`owner tier runner: ${scenario}`, async () => {
+    const { contextRequest } = await import("./request.fixture");
+    const { setRelaySwitch } = await import("./switches");
+    const { readConversations } = await import("./conversations");
+    const switchFile = path.join(path.dirname(externalRelayFile("relays")), "switches.json");
+    const bodies: Record<string, unknown>[] = [], stops: string[] = [], beats: Record<string, unknown>[] = [];
+    const id = `owner_${crypto.randomUUID()}`;
+    const server = await startTestRelay((req, body) => {
+      if (req.url?.endsWith("/heartbeat")) {
+        beats.push(body as Record<string, unknown>);
+        return scenario === "lease_lost" ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } };
+      }
+      return { body: { status: "ok" } };
+    });
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0]!.ownerTier = true;
+    const request = { ...contextRequest, request_id: id, chat: { key: "owner-group" },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: scenario === "invalid_request" ? "true" : true } } };
+    const conversationsBefore = readConversations();
+    try {
+      setRelaySwitch("chat_conversations", true);
+      const completion = await runClaimedRequest(paired, request, undefined, {
+        command: "/missing-owner-must-never-run-cli", timeoutMs: scenario === "hard_cap" ? 50 : 2000,
+        ownerPorts: {
+          launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
+          observe: async () => {
+            expect(readRunLedger().runs[0]).toMatchObject({ conversationId: "conversation_owner_runner", childPid: null });
+            if (!beats.length || scenario === "lease_lost" || scenario === "hard_cap") return { state: "running" };
+            return { state: "ended", finalText: "Owner reply" };
+          },
+          stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
+        },
+      });
+      expect(readConversations()).toEqual(conversationsBefore);
+      expect(readRunLedger().runs).toEqual([]);
+      if (scenario === "invalid_request") { expect(completion).toMatchObject({ outcome: "declined", reason: "invalid_request" }); expect(bodies).toEqual([]); }
+      else {
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toMatchObject({ cwd: os.homedir(), engine: "codex", model: "gpt-6-sol", effort: "low", accountId: "answer", clientAttemptId: `relay-owner-${id}`, mcpServers: ["viewer"], plugins: [] });
+        expect(beats.length).toBeGreaterThan(0);
+        expect(beats.every(b => !b.progress)).toBe(true);
+        const record = readAnswerRecord(paired.id, "target_1", id);
+        expect(record).toMatchObject({ profile: { webSearch: true, owner: true }, conversationId: "conversation_owner_runner" });
+        if (scenario === "answer") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply", reply_to: "m1" } }); expect(stops).toEqual([]); }
+        if (scenario === "lease_lost") { expect(completion).toBeNull(); expect(stops).toEqual(["interrupt"]); }
+        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "failed", reason: "hard_cap" }); expect(stops).toEqual(["interrupt"]); }
+      }
+    } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
+  });

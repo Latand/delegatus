@@ -673,3 +673,37 @@ test("the member limit shows the default, saves a number on leaving the field, a
   await act(async () => settle());
   expect(patches().at(-1)).toEqual({ target: { id: "bot-1", memberLimitPerHour: null } });
 });
+
+
+test("owner tier defaults off, patches in place and has a folded caption in en and uk", async () => {
+  accounts({ codex: [signedIn("work")] });
+  let current = relay({ targets: [target({ engine: "codex", model: "gpt-6-astra" })] });
+  answers.relay = { relays: [current], pending: [], status: [] };
+  route((url, init) => {
+    if (url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      current = { ...current, targets: [{ ...current.targets[0], ...body.target }] };
+      answers.relay = { relays: [current], pending: [], status: [] };
+      return jsonResponse({ relay: current });
+    }
+    return undefined;
+  });
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target]")!;
+  await unfold(row);
+  const control = row.querySelector("[data-external-relay-owner-tier]")!;
+  expect(control.getAttribute("aria-checked")).toBe("false");
+  expect(row.textContent).toContain("Full agent for the owner");
+  await click(control);
+  expect(harness.calls.filter(c => c.method === "PATCH").at(-1)?.body).toEqual({ target: { id: "bot-1", ownerTier: true } });
+  expect(control.getAttribute("aria-checked")).toBe("true");
+  await click(row.querySelector("[data-external-relay-target-fold]"));
+  expect(row.querySelector("[data-external-relay-owner-tier-caption]")?.textContent).toContain("full agent for the owner");
+  try {
+    await act(async () => setLocale("uk")); await unfold(row);
+    expect(row.textContent).toContain("Повний агент для власника");
+    expect(row.textContent).toContain("Хто власник, повідомляє сервіс");
+    await click(row.querySelector("[data-external-relay-owner-tier]"));
+    expect(row.querySelector("[data-external-relay-owner-tier]")?.getAttribute("aria-checked")).toBe("false");
+  } finally { await act(async () => setLocale("en")); }
+});
