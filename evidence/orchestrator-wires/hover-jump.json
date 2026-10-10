@@ -1,0 +1,105 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "frames": [
+    {
+      "form": "desktop",
+      "lang": "en",
+      "frame": "hover",
+      "point": {
+        "x": 713,
+        "y": 298
+      },
+      "bubble": [
+        "Redesign attachment upload for large files"
+      ],
+      "marked": [
+        "oa-port",
+        "t-upload",
+        "t-upload"
+      ],
+      "hovering": true,
+      "label": "Go to «Redesign attachment upload for large files»",
+      "width": "2.5px",
+      "dimmed": "0.35"
+    },
+    {
+      "form": "desktop",
+      "lang": "en",
+      "frame": "click",
+      "focused": true,
+      "flash": true,
+      "inside": true
+    },
+    {
+      "form": "desktop",
+      "lang": "en",
+      "frame": "keyboard",
+      "tabbed": "wire:t-upload",
+      "focused": true,
+      "flash": true
+    },
+    {
+      "form": "phone",
+      "lang": "en",
+      "frame": "tap",
+      "point": {
+        "x": 7,
+        "y": 747
+      },
+      "focused": true,
+      "inView": true,
+      "ring": 1,
+      "opened": false
+    },
+    {
+      "form": "desktop",
+      "lang": "uk",
+      "frame": "hover",
+      "point": {
+        "x": 713,
+        "y": 298
+      },
+      "bubble": [
+        "Redesign attachment upload for large files"
+      ],
+      "marked": [
+        "oa-port",
+        "t-upload",
+        "t-upload"
+      ],
+      "hovering": true,
+      "label": "Перейти до «Redesign attachment upload for large files»",
+      "width": "2.5px",
+      "dimmed": "0.35"
+    },
+    {
+      "form": "desktop",
+      "lang": "uk",
+      "frame": "click",
+      "focused": true,
+      "flash": true,
+      "inside": true
+    },
+    {
+      "form": "desktop",
+      "lang": "uk",
+      "frame": "keyboard",
+      "tabbed": "wire:t-upload",
+      "focused": true,
+      "flash": true
+    },
+    {
+      "form": "phone",
+      "lang": "uk",
+      "frame": "tap",
+      "point": {
+        "x": 7,
+        "y": 747
+      },
+      "focused": true,
+      "inView": true,
+      "ring": 1,
+      "opened": false
+    }
+  ]
+}

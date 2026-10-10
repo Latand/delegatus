@@ -1879,10 +1879,17 @@
    (`orchestratorWires.ts`). A wire is the board's pipeline edge: solid is a
    link, and a link to a running lane flows the way `.pedge.live` does. The
    layer is the board root's child on the desktop and on the phone, so these
-   rules name no board. */
+   rules name no board. A card's end of a wire rides its scrollers inside a box
+   the size of the column's visible part (docs/research/orchestrator-wires-hover-scroll.md). */
 [data-orchestrator-wires] { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
-[data-orchestrator-wires] > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-[data-orchestrator-wires] > div { position: absolute; inset: 0; }
+[data-orchestrator-wires] :is([data-oa-ride], [data-oa-shift], [data-oa-marks]) { position: absolute; inset: 0; }
+[data-orchestrator-wires] [data-oa-clip] { position: absolute; overflow: hidden; }
+[data-orchestrator-wires] [data-oa-origin] { position: absolute; }
+[data-orchestrator-wires] svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* The pointer takes a wire by a stroke wider than it, and nothing else of the layer. */
+[data-orchestrator-wires] .oa-hit { fill: none; stroke: transparent; stroke-width: 12; stroke-linecap: butt; stroke-linejoin: round; pointer-events: stroke; cursor: pointer; }
+[data-orchestrator-wires] .oa-hit:focus { outline: none; }
+[data-orchestrator-wires] .oa-anchor { position: absolute; width: 0; height: 0; }
 [data-orchestrator-wires] .oa-wire { fill: none; stroke: var(--color-accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 [data-orchestrator-wires] [data-tone="needs"] .oa-wire { stroke: var(--color-warning); }
 [data-orchestrator-wires] .oa-wire[data-stub] { stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); stroke-dasharray: 5 4; }
@@ -1893,6 +1900,12 @@
 [data-orchestrator-wires] [data-tone="needs"] .oa-port { stroke: var(--color-warning); fill: var(--color-warning-soft); }
 [data-orchestrator-wires] .oa-port[data-seat] { fill: var(--color-accent); }
 [data-orchestrator-wires] .oa-ring { fill: none; stroke: color-mix(in srgb, var(--color-accent) 60%, transparent); stroke-width: 2; }
+/* The pointer or the keyboard on a wire: that wire and both its ends stand out, the others step back. */
+[data-orchestrator-wires] [data-hover] > .oa-wire, [data-orchestrator-wires] .oa-wire[data-hover] { stroke-width: 2.5; }
+[data-orchestrator-wires] [data-hover] > .oa-port { r: 5; }
+[data-orchestrator-wires] .oa-port[data-seat][data-hover] { r: 6; }
+[data-orchestrator-wires][data-hovering] :is(g[data-wire], g[data-wire-end]):not([data-hover]) > :not(.oa-hit),
+[data-orchestrator-wires][data-hovering] :is(.oa-port[data-seat], .oa-wire[data-stub], .oa-stub):not([data-hover]) { opacity: 0.35; }
 [data-orchestrator-wires] .oa-stub { position: absolute; padding: 0 6px; border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--border-default); font: 700 var(--text-caption)/18px var(--font-sans); font-variant-numeric: tabular-nums; color: var(--color-secondary); white-space: nowrap; }
 [data-orchestrator-wires] .oa-dot { position: absolute; left: 0; top: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }
 @media (prefers-reduced-motion: reduce) {

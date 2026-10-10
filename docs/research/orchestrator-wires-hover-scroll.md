@@ -361,6 +361,37 @@ and the Windows terminal tests.
   measured). The card's piece now rides the same scroll in the same frame (§3).
   The measured twin of the port stayed on the card in every desktop sample.
 
+## As built
+
+Where the implementation differs from the design above, and what it measured:
+
+- **Coordinates.** The pieces are drawn in viewport coordinates as before, inside a
+  `[data-oa-shift]` box translated by the scroll offsets the pass read. The riders
+  subtract the live offsets, so at the moment of the pass the two cancel and from
+  there the piece moves with its scroller. This is the same result as drawing at
+  scroll-zero coordinates, and the geometry tests keep reading viewport values.
+- **Pieces.** The seat's piece (`g[data-wire]`) keeps the whole route and is cut
+  out of the column's box by an even-odd `clipPath`, which also cuts out the
+  column links and a strip's controls. The card's piece (`g[data-wire-end]`)
+  holds the gutter run from the top of the column's content, the port and the
+  hit stroke the keyboard reaches. A flowing wire's dashes and an action's growth
+  carry on across the cut.
+- **Which boxes scroll** is read once and again only after a render or a resize.
+  A scroll changes only offsets and ranges. All rider writes come after every
+  read in a pass. On the hundred-card board, a pass costs 9.0 ms on the desktop
+  against 10.2 ms for the old layer on the same machine and run, and 1.8 ms on
+  the phone against 0.9 ms (`evidence/orchestrator-wires/cost.json`).
+- **The phone's jump** lives in `SeatActionWires`: with no `onJump` from the
+  board it scrolls the card into view, focuses it and calls `ring()`.
+  `MobileKanban.tsx` is unchanged.
+- **Measured** with case 8 (`evidence/orchestrator-wires/scroll.json`, CPU ×4).
+  This branch had 0 frames off in 23–30 measured frames for each of 1440 side (en),
+  1440 top (uk), 390 (en) and 390 (uk). The old layer, run through the same case,
+  had one frame 75 px off at 1440 with the seat on top, and in an earlier run one
+  frame off with the seat at the side. Both runs against the old layer failed.
+  The lag shows in roughly one frame of thirty, so the case now measures at least
+  30 frames per form.
+
 ## Deferred — not currently justified
 
 - **A seamless seat-side junction during a horizontal board scroll or a pager

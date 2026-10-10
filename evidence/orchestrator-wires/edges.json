@@ -136,16 +136,16 @@
       "first": {
         "dots": 1,
         "rings": 1,
-        "elements": 11,
-        "animations": 3,
-        "paused": 3
+        "elements": 30,
+        "animations": 4,
+        "paused": 4
       },
       "twelfth": {
         "dots": 1,
         "rings": 1,
-        "elements": 11,
-        "animations": 3,
-        "paused": 3
+        "elements": 30,
+        "animations": 4,
+        "paused": 4
       }
     },
     {
@@ -153,8 +153,8 @@
       "frame": "hidden-tab-returned",
       "dots": 0,
       "rings": 0,
-      "elements": 9,
-      "animations": 1,
+      "elements": 28,
+      "animations": 2,
       "paused": 0
     },
     {
@@ -162,9 +162,9 @@
       "frame": "hidden-tab-one-expired",
       "dots": 1,
       "rings": 1,
-      "elements": 11,
-      "animations": 3,
-      "paused": 3,
+      "elements": 30,
+      "animations": 4,
+      "paused": 4,
       "drawn": {
         "layer": true,
         "paused": true,

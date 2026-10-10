@@ -53,12 +53,12 @@
       "overflow": false,
       "stats": {
         "updates": 8,
-        "totalMs": 18.900000035762787,
-        "maxMs": 3.800000011920929,
+        "totalMs": 105.59999966621399,
+        "maxMs": 38.799999952316284,
         "rectReads": 63,
         "wires": 3,
         "stubs": 0,
-        "elements": 23
+        "elements": 69
       }
     },
     {
@@ -79,7 +79,7 @@
           "taskId": "t-onboarding",
           "tone": "live",
           "flows": true,
-          "opacity": 0.675196,
+          "opacity": 0.679932,
           "crossed": 0,
           "corners": 0
         },
@@ -87,7 +87,7 @@
           "taskId": "t-rounds",
           "tone": "live",
           "flows": true,
-          "opacity": 0.675874,
+          "opacity": 0.665648,
           "crossed": 0,
           "corners": 2
         }
@@ -98,12 +98,12 @@
       "overflow": false,
       "stats": {
         "updates": 13,
-        "totalMs": 27.500000059604645,
-        "maxMs": 3.800000011920929,
+        "totalMs": 136.59999978542328,
+        "maxMs": 38.799999952316284,
         "rectReads": 123,
         "wires": 3,
         "stubs": 0,
-        "elements": 20
+        "elements": 66
       }
     },
     {
@@ -127,12 +127,12 @@
       "overflow": false,
       "stats": {
         "updates": 15,
-        "totalMs": 28.500000059604645,
-        "maxMs": 3.800000011920929,
+        "totalMs": 150.39999973773956,
+        "maxMs": 38.799999952316284,
         "rectReads": 140,
         "wires": 1,
         "stubs": 0,
-        "elements": 9
+        "elements": 28
       }
     },
     {
@@ -146,10 +146,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 15,
-        "totalMs": 28.500000059604645,
-        "maxMs": 3.800000011920929,
-        "rectReads": 140,
+        "updates": 16,
+        "totalMs": 151.69999980926514,
+        "maxMs": 38.799999952316284,
+        "rectReads": 145,
         "wires": 0,
         "stubs": 0,
         "elements": 0
@@ -188,12 +188,12 @@
       "overflow": false,
       "stats": {
         "updates": 8,
-        "totalMs": 4.300000011920929,
-        "maxMs": 1.100000023841858,
+        "totalMs": 8.600000262260437,
+        "maxMs": 2.399999976158142,
         "rectReads": 48,
         "wires": 1,
         "stubs": 0,
-        "elements": 10
+        "elements": 29
       }
     },
     {
@@ -217,12 +217,12 @@
       "overflow": false,
       "stats": {
         "updates": 29,
-        "totalMs": 12.299999952316284,
-        "maxMs": 1.100000023841858,
+        "totalMs": 25.100000500679016,
+        "maxMs": 2.399999976158142,
         "rectReads": 217,
         "wires": 1,
         "stubs": 0,
-        "elements": 8
+        "elements": 26
       }
     },
     {
@@ -235,7 +235,7 @@
           "taskId": "t-rounds",
           "tone": "live",
           "flows": true,
-          "opacity": 0.680607,
+          "opacity": 0.678581,
           "crossed": 0,
           "corners": 2
         }
@@ -246,12 +246,12 @@
       "overflow": false,
       "stats": {
         "updates": 73,
-        "totalMs": 30.899999916553497,
-        "maxMs": 1.100000023841858,
+        "totalMs": 61.80000078678131,
+        "maxMs": 2.399999976158142,
         "rectReads": 587,
         "wires": 1,
         "stubs": 0,
-        "elements": 8
+        "elements": 26
       }
     },
     {
@@ -275,12 +275,12 @@
       "overflow": false,
       "stats": {
         "updates": 95,
-        "totalMs": 39.09999978542328,
-        "maxMs": 1.100000023841858,
+        "totalMs": 82.50000095367432,
+        "maxMs": 2.399999976158142,
         "rectReads": 759,
         "wires": 1,
         "stubs": 0,
-        "elements": 8
+        "elements": 27
       }
     },
     {
@@ -294,10 +294,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 96,
-        "totalMs": 39.19999974966049,
-        "maxMs": 1.100000023841858,
-        "rectReads": 763,
+        "updates": 95,
+        "totalMs": 82.50000095367432,
+        "maxMs": 2.399999976158142,
+        "rectReads": 759,
         "wires": 0,
         "stubs": 0,
         "elements": 0
@@ -323,7 +323,7 @@
           "flows": true,
           "opacity": 1,
           "crossed": 0,
-          "corners": 3
+          "corners": 4
         }
       ],
       "stubs": [],
@@ -332,12 +332,12 @@
       "overflow": false,
       "stats": {
         "updates": 5,
-        "totalMs": 8.899999976158142,
-        "maxMs": 2.5,
-        "rectReads": 63,
+        "totalMs": 70.700000166893,
+        "maxMs": 45.200000047683716,
+        "rectReads": 88,
         "wires": 2,
         "stubs": 0,
-        "elements": 18
+        "elements": 51
       }
     },
     {
@@ -361,12 +361,12 @@
       "overflow": false,
       "stats": {
         "updates": 3,
-        "totalMs": 2.300000011920929,
-        "maxMs": 1.5,
+        "totalMs": 14.699999809265137,
+        "maxMs": 14.099999904632568,
         "rectReads": 15,
         "wires": 1,
         "stubs": 0,
-        "elements": 9
+        "elements": 27
       }
     },
     {
@@ -381,8 +381,8 @@
       "overflow": false,
       "stats": {
         "updates": 3,
-        "totalMs": 2.300000011920929,
-        "maxMs": 1.5,
+        "totalMs": 14.699999809265137,
+        "maxMs": 14.099999904632568,
         "rectReads": 15,
         "wires": 0,
         "stubs": 0,

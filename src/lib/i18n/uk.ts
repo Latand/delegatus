@@ -4178,6 +4178,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.shownReceipt": "«{title}» знову на дошці",
   "kanban.showFailed": "Не вдалося показати «{title}»: {error}",
   "kanban.columns": "Колонки",
+  "kanban.wire.goTo": "Перейти до «{title}»",
   "kanban.scrollTo": "Прокрутити до колонки «{column}»",
   "kanban.columnCount": "{shown} з {total}",
   "kanban.columnWorking": { one: "{count} працює", few: "{count} працюють", many: "{count} працюють", other: "{count} працюють" },

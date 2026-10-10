@@ -1,0 +1,108 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "method": "screenshots during the scroll; a blue bar on the card's top edge, the wire's port painted red",
+  "runs": [
+    {
+      "form": "desktop",
+      "placement": "side",
+      "lang": "en",
+      "cpu": 4,
+      "restGap": 19.5,
+      "samples": 55,
+      "measured": 43,
+      "off": 0,
+      "worst": 0,
+      "byHow": {
+        "wheel": 39,
+        "touch": 0,
+        "script": 3,
+        "smooth": 1
+      }
+    },
+    {
+      "form": "desktop",
+      "placement": "side",
+      "lang": "en",
+      "sideways": 200,
+      "restX": -8,
+      "across": [
+        -8,
+        -8,
+        -8,
+        -8,
+        -8,
+        -8,
+        -8,
+        -8
+      ]
+    },
+    {
+      "form": "desktop",
+      "placement": "top",
+      "lang": "uk",
+      "cpu": 4,
+      "restGap": 19.5,
+      "samples": 50,
+      "measured": 41,
+      "off": 0,
+      "worst": 0,
+      "byHow": {
+        "wheel": 37,
+        "touch": 0,
+        "script": 3,
+        "smooth": 1
+      }
+    },
+    {
+      "form": "desktop",
+      "placement": "top",
+      "lang": "uk",
+      "sideways": 196,
+      "restX": -8,
+      "across": [
+        -8,
+        -8,
+        -8,
+        -8,
+        -8,
+        -8,
+        -8,
+        -8
+      ]
+    },
+    {
+      "form": "phone",
+      "placement": "side",
+      "lang": "en",
+      "cpu": 4,
+      "restGap": 19,
+      "samples": 74,
+      "measured": 39,
+      "off": 0,
+      "worst": 0.5,
+      "byHow": {
+        "wheel": 0,
+        "touch": 32,
+        "script": 5,
+        "smooth": 2
+      }
+    },
+    {
+      "form": "phone",
+      "placement": "side",
+      "lang": "uk",
+      "cpu": 4,
+      "restGap": 19,
+      "samples": 73,
+      "measured": 39,
+      "off": 0,
+      "worst": 1,
+      "byHow": {
+        "wheel": 0,
+        "touch": 32,
+        "script": 5,
+        "smooth": 2
+      }
+    }
+  ]
+}
