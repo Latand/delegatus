@@ -363,11 +363,12 @@ guarantees for the 1.x series.
   verdict" until someone pressed retry. The release and the booting
   Delegatus now record every turn they cut. A stage cut that way is retried
   once in the same worktree, keeping uncommitted work, and its first message
-  says the previous attempt was cut and quotes what it last said; when the
-  next restart cuts that retry too, the stage parks for a decision. A stage
-  whose turn a provider failure had already ended keeps its provider recovery
-  and spends no restart retry. A spawned
-  agent whose turn was cut, including one waiting on a background command the
+  says the previous attempt was cut and quotes what it last said. Each later
+  restart that cuts a replacement gets its own fresh attempt; a replacement
+  that is interrupted again within the same start, with no restart behind
+  it, parks the stage for a decision. A stage whose turn a provider failure
+  had already ended keeps its provider recovery and spends no restart retry.
+  A spawned agent whose turn was cut, including one waiting on a background command the
   restart killed, gets one message saying so, so it re-checks what it was
   waiting for. The checkout deploy verdict lists the conversations its
   restart interrupted, with the pipeline stage when there is one; when those

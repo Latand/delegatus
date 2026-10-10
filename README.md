@@ -298,8 +298,9 @@ Every review round starts a fresh reviewer with read-only access and no
 memory of the builder's conversation, so it reads the whole diff cold. When
 the last round fails, the builder fixes those findings once more and the
 pipeline moves on, marking the fix as not re-reviewed. You can set a
-pipeline to wait for you after that fix. A pipeline stopped on a review says
-why in one line and offers **Accept as is** or **Review again**.
+pipeline to wait for you after that fix; it then stops on the fixed head and
+offers **Accept as is**. The review budget is spent, so there is no extra
+review to ask for.
 
 **Merge when the review passes**, on the **Merging and syncing** page of the
 board's ⋯ menu, is off by default.
