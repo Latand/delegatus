@@ -26,7 +26,7 @@ import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
-import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
+import { probeQuiet, type OwnerRead, type QuietBlockers, type QuietPorts } from "./quiet";
 import type { ResumeWork, Snapshot, WorkEvidence, WorkPhases } from "./types";
 import type { ObservedReads, WorkRead } from "./workReads";
 
@@ -45,22 +45,20 @@ interface Recorder {
   pipelines: readonly Pipeline[];
   flows: readonly Flow[];
   held: Partial<Record<"registryHealth" | "pipelines" | "flows", Held<unknown>>>;
-  sessions: readonly { conversationId: string; turn?: string; host?: string }[];
   index: Map<string, Phase> | null;
   ms: Record<keyof Omit<WorkPhases, "totalMs" | "judgingMs" | "readings">, number>;
   readings: Record<Phase, number>;
 }
 
 function newRecorder(): Recorder {
-  return { pipelines: [], flows: [], held: {}, sessions: [], index: null,
+  return { pipelines: [], flows: [], held: {}, index: null,
     ms: { journalMs: 0, pipelinesMs: 0, flowsMs: 0, historicalReviewersMs: 0, turnsMs: 0, otherMs: 0, yieldedMs: 0 },
     readings: { pipelines: 0, flows: 0, historicalReviewers: 0, turns: 0 } };
 }
 
-/* Which phase asked about an owner, by the identities `probeQuiet` gives
-   them. A reading is memoized per probe, so it is counted once, under the
-   most specific role it plays: a historical reviewer round, else a current
-   flow owner, else a pipeline attempt, else a journal row. */
+/* Which phase reads an owner or a custody reference, by the identities the
+   census and `probeQuiet` give them: a historical reviewer round, else a
+   current flow owner, else a pipeline attempt, else a standalone turn. */
 function ownerIndex(recorder: Recorder): Map<string, Phase> {
   const index = new Map<string, Phase>();
   const claim = (id: string | null | undefined, phase: Phase) => { if (id && !index.has(id)) index.set(id, phase); };
@@ -150,15 +148,19 @@ export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = ()
   const readPipelines = () => timed("pipelinesMs", () => (recorder.pipelines = ports.pipelines()));
   const readFlows = () => timed("flowsMs", () => (recorder.flows = ports.flows?.() ?? []));
   const readRegistryHealth = () => timed("pipelinesMs", () => (ports.registryHealth ?? pipelineRegistryHealth)());
+  const readOwner: OwnerRead = async (reference, read) => {
+    await pace();
+    recorder.index ??= ownerIndex(recorder);
+    const phase = (reference.conversationId ? recorder.index.get(reference.conversationId) : undefined)
+      ?? (reference.artifactPath ? recorder.index.get(reference.artifactPath) : undefined) ?? "turns";
+    recorder.readings[phase]++;
+    return timedAsync(`${phase}Ms`, read);
+  };
   const wrapped: QuietPorts = {
     ...ports,
     runtimeSnapshot: async () => {
       await pace();
-      return timedAsync("journalMs", async () => {
-        const runtime = await ports.runtimeSnapshot();
-        recorder.sessions = runtime.sessions;
-        return runtime;
-      });
+      return timedAsync("journalMs", () => ports.runtimeSnapshot());
     },
     pipelines: () => replay("pipelines", readPipelines),
     flows: () => replay("flows", readFlows),
@@ -169,15 +171,11 @@ export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = ()
     ...(ports.controllerIdle ? { controllerIdle: async () => { await pace(); return timedAsync("otherMs", () => ports.controllerIdle!()); } } : {}),
     ...(ports.seats ? { seats: () => timed("otherMs", () => ports.seats!()) } : {}),
     ...(ports.memoryAvailableMb ? { memoryAvailableMb: () => timed("otherMs", () => ports.memoryAvailableMb!()) } : {}),
-    ...(ports.turnLiveness ? {
-      turnLiveness: async (session, probe) => {
+    ...(ports.owners ? {
+      owners: async (sessions, probe) => {
         await pace();
-        recorder.index ??= ownerIndex(recorder);
-        const phase = recorder.index.get(session.conversationId)
-          ?? (session.artifactPath ? recorder.index.get(session.artifactPath) : undefined) ?? "turns";
-        recorder.readings[phase]++;
-        const bucket = `${phase}Ms` as const;
-        return timedAsync(bucket, () => ports.turnLiveness!(session, probe));
+        const census = await ports.owners!(sessions, probe, readOwner);
+        return { ...census, tail: (reference) => readOwner(reference, () => census.tail(reference)) };
       },
     } : {}),
   };
