@@ -9,6 +9,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 
 import { listFilesWithProjectCatalog, pinnedPathsFor } from "@/lib/scanner";
+import { ctxFor } from "@/lib/scanner/context";
 import { overlayOperatorAsks } from "@/lib/asks/overlay";
 import { overlayAttentionDismissals } from "@/lib/attention/dismissals";
 import { overlayBridgeAsks } from "@/lib/bridge/asks";
@@ -521,7 +522,13 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
         ? attributed.project ?? file.project
         : TELEGRAM_REPORT_PROJECT;
       if (conversation.projectOwnership) file.projectOwnership = { ...conversation.projectOwnership };
-      file.launchModel = profile.model ?? file.launchModel;
+      const launchModel = profile.model ?? file.launchModel;
+      if (launchModel !== file.launchModel) {
+        file.launchModel = launchModel;
+        /* The scan saw the API model. Reuse its bounded tail with the durable
+           launch mode before projecting capacity, retaining runtime priority. */
+        file.ctx = ctxFor(file);
+      }
       file.effort = profile.effort ?? file.effort;
       file.goal = profile.goal ?? file.goal;
       file.plan = profile.plan ?? file.plan;

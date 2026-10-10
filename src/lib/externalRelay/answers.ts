@@ -29,6 +29,7 @@ export type RelayToolCallRecord = {
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };
 export type RelayAnswerRecord = {
+  compaction?: { member: string; owner: string };
   rounds?: number;
   toolCalls?: RelayToolCallRecord[];
   v: 1;
@@ -167,7 +168,7 @@ export function answerRecorder(base: {
         logFailure("write", error);
       }
     },
-    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls">>) {
+    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls" | "compaction">>) {
       if (finished) return;
       finished = true;
       const now = Date.now();

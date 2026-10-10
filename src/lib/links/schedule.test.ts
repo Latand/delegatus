@@ -46,7 +46,7 @@ test("an open board of a linked project allows up to 240 calls an hour, and only
   expect(inHour(open.calls, 2)).toBeLessThanOrEqual(12);
 });
 
-test("a linked change starts a call at the next tick, and a call that moved data keeps a 10 s pace for 2 minutes", async () => {
+test("a linked change starts a call at the next tick, and a call that moved data keeps a 10 s pace for 10 minutes", async () => {
   let pending = false;
   const changed = fixture({ push: () => pending, moved: (call) => (call === 2 ? 1 : 0) });
   await changed.run(HOUR);
@@ -57,7 +57,7 @@ test("a linked change starts a call at the next tick, and a call that moved data
   pending = false;
   expect(changed.calls.length).toBe(before + 1);
   expect(changed.calls.at(-1)).toBe(HOUR);
-  // Call 2 moved data: the calls after it come every 10 s for 2 minutes.
+  // Call 2 moved data: the calls after it come every 10 s for 10 minutes.
   const burst = fixture({ moved: (call) => (call === 1 ? 1 : 0) });
   await burst.run(125_000);
   expect(burst.calls.slice(0, 13)).toEqual(Array.from({ length: 13 }, (_, index) => index * TICK_MS));
@@ -69,4 +69,22 @@ test("failures back off to 5 minutes", async () => {
   const gaps = failing.calls.slice(1).map((at, index) => at - failing.calls[index]!);
   expect(Math.max(...gaps)).toBeLessThanOrEqual(310_000);
   expect(gaps.slice(-3).every((gap) => gap >= 300_000)).toBe(true);
+});
+
+test("a queued seat message wakes an idle link without a task revision change and keeps the conversation burst for ten minutes", async () => {
+  let now = 0, pending = false;
+  const calls: number[] = [];
+  const schedule = new LinkedBoardSchedule({
+    now: () => now, links: () => [{ id: "peer", projects: new Set(["repo-a"]) }], ownRevision: () => 1,
+    hasPush: () => false, messagesPending: () => pending, boardOpen: () => false,
+    sync: async () => { calls.push(now); const moved = pending ? 1 : 0; pending = false; return { moved }; },
+  });
+  while (now < HOUR) { await schedule.tick(); now += schedule.nextDelay(); }
+  const before = calls.length; pending = true;
+  await schedule.tick();
+  expect(calls.length).toBe(before + 1);
+  const start = now;
+  while (now < start + 601_000) { now += schedule.nextDelay(); await schedule.tick(); }
+  const burst = calls.filter(at => at >= start);
+  expect(burst.slice(0, 61)).toEqual(Array.from({ length: 61 }, (_, i) => start + i * TICK_MS));
 });

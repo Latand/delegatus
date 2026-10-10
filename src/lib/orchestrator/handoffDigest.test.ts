@@ -437,6 +437,7 @@ test("#1279: a refusal from the account resolver stops the digest before any tur
    growth is checked here rather than discovered as a silently trimmed digest
    or a refused designation. */
 test("the delivered default mandate fits the delivery bound with room for a rotation's history and handoff", () => {
+  // Merged questionnaire mandate: delivered 29 370 bytes; rotation history margin 24 bytes.
   const preflight = mandatePreflight(ORCHESTRATOR_SYSTEM_PROMPT, "spawn", { mode: "standard" });
   expect(preflight.ok).toBe(true);
   /* A rotation composes core + history + handoff against the same envelope;
@@ -483,7 +484,8 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    pointer and the merged role rows, the directive measures 14 807, and with
    the applyNow pointer on the override-stage line 14 823, inside a 14 900
    byte share that still leaves more than two history budgets. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 14_900;
+// Questionnaire delivery adds 204 bytes; 16 900 bytes still hold two history budgets.
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 15_100;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));

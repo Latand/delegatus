@@ -80,7 +80,8 @@ const ALLOWED: McpToolVerdict = { allowed: true };
 /** Agent availability checks that actually consume caller authority. Health
  * probes have a separate credential-scoped allowlist for every call. */
 export function mcpToolNeedsCallerIdentity(toolName: McpToolName, args: McpToolArgs): boolean {
-  return toolName === "conversation_action" && (args.action === "archive" || args.action === "unarchive");
+  return (toolName === "conversation_action" && (args.action === "archive" || args.action === "unarchive"))
+    || (toolName === "backfill_worktree_projects" && args.dryRun === false);
 }
 
 /**
@@ -130,7 +131,9 @@ export function permitMcpTool(
       return {
         allowed: false,
         code: "tool_not_permitted",
-        error: "conversation archive actions require the operator root or a designated orchestrator seat",
+        error: toolName === "backfill_worktree_projects"
+          ? "worktree recovery apply requires the operator root or a designated orchestrator seat"
+          : "conversation archive actions require the operator root or a designated orchestrator seat",
       };
     }
   }
@@ -317,6 +320,7 @@ const MUTATING_TOOL_READ_FIELDS: Partial<Record<McpToolName, readonly string[]>>
 
 /** Maintenance changes only task metadata. New mutating tools fail closed. */
 export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (tool === "backfill_worktree_projects" && args.dryRun !== false) return ALLOWED;
   if (["create_task", "update_task", "agent_activity", "lifecycle_events"].includes(tool)) return ALLOWED;
   if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
   const fields = MUTATING_TOOL_READ_FIELDS[tool];

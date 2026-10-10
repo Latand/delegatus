@@ -1,0 +1,3612 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion",
+  "browser": "Chromium (headless)",
+  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control and from every line of the page's text; the conversation's feed, where rows arrive, is kept clear as a whole wherever a place outside it exists, and its empty part is used only when none does; in the feed a control counts along its whole track (its width over the feed's height), since rows arrive and the feed scrolls, and the host reserves the 44 px under the feed where its way-back strip appears; a lane beside the character is tried at every height from 360 to 180 px, then a lane above it, then the same with a narrower lane (240, then 216 px) where no place holds a full one, before the companion collapses to its tile, which keeps off text and controls too; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place, and is read again at 6 s",
+  "fills": {
+    "start": "the orchestrator's conversation as each scenario starts it: the reviewer's relay and the orchestrator's reply",
+    "delivered": "&delivered=1: with the delegated row and the orchestrator's answer to it",
+    "full": "&delivered=1&full=1: with eight earlier exchanges above them, filling the conversation to its whole height"
+  },
+  "controls": "a[href],button,input,select,textarea,summary,[contenteditable='true'],[draggable='true'],[role='button'],[role='link'],[role='tab'],[role='menuitem'],[role='switch'],[role='checkbox'],[role='option'],[role='separator'],[role='slider'],[role='scrollbar'],.kb .card, and every element that shows a cursor other than auto, default or text (resize handles, dragging surfaces)",
+  "required": {
+    "overlapArea": 0,
+    "pointerHits": 0,
+    "trappedLanePoints": 0,
+    "handleArea": 0,
+    "handleGap": ">= 8",
+    "textUnderCharacter": 0,
+    "textUnderLane": 0,
+    "rowTrackHits": [],
+    "tailRoomArea": 0,
+    "sameBlockInEveryLoad": true,
+    "sameBlockAt6s": true,
+    "openWithLaneWhereTheConversationStarts": true
+  },
+  "readings": {
+    "pointerHits": "points of what the companion reserves, every 4 px, that land on a control or on any cursor other than auto, default or text once the companion is out of the hit test",
+    "handleArea": "px² of elements with a resize, grab or move cursor under what the companion reserves; handleGap is the distance to the nearest",
+    "textUnderCharacter": "px² of the page's text line boxes under the character block (open) or the shape (collapsed, one that collapsed for want of room included); required to be 0 in both states. A line whose element has display: contents (a conversation's message) is read through the nearest ancestor with a box",
+    "textUnderLane": "px² of the page's text line boxes under the lane the open companion reserves; required to be 0",
+    "rowTrackHits": "controls of the orchestrator conversation's feed whose track meets the character or its lane; rowControls is how many such controls the feed held",
+    "tailRoomArea": "px² of what the companion reserves over the feed's way-back strip, or over the last 44 px of the feed while the strip is not shown"
+  },
+  "cases": [
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 83,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 432,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 432,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 574,
+        "y": 292,
+        "width": 280,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 30,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 728,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 126,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 72800,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 432,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 432,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 432,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 574,
+        "y": 292,
+        "width": 280,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 30,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 728,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 126,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 72800,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 740,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 740,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 450,
+        "y": 372,
+        "width": 280,
+        "height": 180
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 57,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 504,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 108,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 50400,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 740,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 740,
+        "y": 404,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 450,
+        "y": 372,
+        "width": 280,
+        "height": 180
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 57,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 504,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 108,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 50400,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "start",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 52,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 1,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 84,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "delivered",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 632,
+          "y": 112,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 632,
+        "y": 112,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 53,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 10,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 292,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 2,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 184,
+        "y": 576,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1372,
+          "y": 740,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 1372,
+        "y": 740,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 87,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 9,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 9,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 120,
+          "y": 476,
+          "width": 132,
+          "height": 148
+        }
+      ],
+      "blockAt6s": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "above",
+      "direction": "up",
+      "block": {
+        "x": 120,
+        "y": 476,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 12,
+        "y": 206,
+        "width": 240,
+        "height": 260
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 624,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 103,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    },
+    {
+      "fill": "full",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 916,
+          "y": 588,
+          "width": 56,
+          "height": 56
+        }
+      ],
+      "blockAt6s": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "textUnderCharacterAt6s": 0,
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 916,
+        "y": 588,
+        "width": 56,
+        "height": 56
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 55,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": [],
+      "textUnderLane": 0,
+      "rowControls": 18,
+      "rowTrackHits": [],
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
+    }
+  ]
+}

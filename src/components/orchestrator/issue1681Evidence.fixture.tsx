@@ -106,6 +106,10 @@ function baseAnswer(): SeatTickSettingsAnswer {
   const onDefault = face === "default";
   const reason = onDefault ? null : "a release afternoon, so the seat is woken on a schedule of its own";
   return {
+    autoRotate: { enabled: params.get("autoRotate") === "failed", thresholdPercent: 60, defaultPercent: 50, minPercent: 50, maxPercent: 90,
+      windowKnown: true, updatedAt: ago(5), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, why: null,
+      lastAttempt: params.get("autoRotate") === "failed" ? { id: "fixture-attempt", seatEpoch: 1, conversationId: "conversation_fixture", startedAt: ago(5),
+        tokens: 720000, windowTokens: 1000000, thresholdPercent: 60, state: "failed", error: "fixture launch refused", told: { report: true, card: true }, nextAttemptAt: ago(-55) } : null },
     maintenance: maintenance(),
     project: PROJECT,
     changed: false,

@@ -1,3 +1,4 @@
+import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
@@ -24,6 +25,7 @@ import {
   MONITOR_REF_PREFIX,
   monitorClientRequestId,
   monitorRefIn,
+  taskMonitorRef,
   orchestratorAlertCardText,
   seatTickRetryGuardCardText,
   seatTickSettingsCardText,
@@ -117,6 +119,7 @@ import type {
 
 export interface SeatTickControllerDependencies {
   seatAuth?: SeatAuthRecoveryPorts;
+  seatAutoRotation?: SeatAutoRotationPorts;
   maintenance?: BoardMaintenanceController | null;
   sources?: SeatTickSources;
   /** Records the identity successions seated projects owe (#1874); the sweep
@@ -234,6 +237,7 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
+  if (card.kind === "auto-rotation") return redactBounded(card.detail, CARD_TEXT_LIMIT);
   if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
@@ -269,6 +273,15 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
   return seatTickRetryGuardCardText(project, card.detail, card.ref, at);
 }
 
+/** The card's agent-facing details, or undefined for a kind that keeps its
+    `monitor-ref:` line in the text. An automatic rotation's card is read by the
+    operator as a title and one sentence; its ids, figures and marker go here. */
+function cardDetails(card: SeatTickCard): string | undefined {
+  if (card.kind !== "auto-rotation") return undefined;
+  const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
+  return card.record ? `${redactBounded(card.record, CARD_TEXT_LIMIT)}\n\n${marker}` : marker;
+}
+
 /**
  * One board card per condition, found by its `monitor-ref:` line rather than by
  * a receipt — so the idempotency survives a restart, and an operator who edits
@@ -292,9 +305,9 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
  * very outage was carded by an earlier check.
  */
 function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
-  // Authentication notices are separate occurrences. An older owed card can
+  // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if (card.kind === "auth-failed" && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -326,6 +339,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         : { state: absorbed ? state : undefined, result: false };
     }
     const text = cardText(project, card, at, existing);
+    const details = cardDetails(card);
     if (existing) {
       /* A card for something that HAPPENED is left exactly as it stands: its
          body carries the instant it was observed, so rewriting it would churn
@@ -333,23 +347,23 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
-      if (existing.text === text) return unchanged;
-      const updated = patchTask(state.tasks, existing.id, { text });
+      if (existing.text === text && (details === undefined || existing.details === details)) return unchanged;
+      const updated = patchTask(state.tasks, existing.id, { text, ...(details !== undefined ? { details } : {}) });
       return updated.ok
         ? { state: { tasks: updated.tasks, recentCreates: state.recentCreates }, result: true }
         /* The condition is on the board either way; only its wording is stale. */
         : unchanged;
     }
-    if (card.kind === "mcp-unavailable" && card.state === "open") {
+    if ((card.kind === "mcp-unavailable" || card.kind === "auto-rotation") && card.state === "open") {
       /* A recovered outage has a completed card and a durable create receipt.
          Reopen that project's card on a later outage of the same seat: creating
          with the old receipt would replay the completed task instead. */
       const completed = state.tasks.findLast((task) =>
         canonicalOrchestratorProject(task.project) === project
         && task.status === "done"
-        && monitorRefIn(task.text) === card.ref);
+        && taskMonitorRef(task) === card.ref);
       if (completed) {
-        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text });
+        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text, ...(details !== undefined ? { details } : {}) });
         return reopened.ok
           ? { state: { tasks: reopened.tasks, recentCreates: state.recentCreates }, result: true }
           : { state: absorbed ? state : undefined, result: false };
@@ -358,6 +372,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const created = createTask(state.tasks, {
       project,
       text,
+      ...(details !== undefined ? { details } : {}),
       placement: "unplaced",
       /* Scope the receipt to the project, then to the occurrence where one is
          known (#1298). A repeated MCP outage reopens its completed card above. */
@@ -374,7 +389,7 @@ function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card
   return tasks.find((task) =>
     canonicalOrchestratorProject(task.project) === project
     && task.status !== "done"
-    && monitorRefIn(task.text) === card.ref);
+    && taskMonitorRef(task) === card.ref);
 }
 
 /** Whether the board already holds exactly what {@link ensureSeatTickCard}
@@ -385,7 +400,8 @@ function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, 
   if (card.state === "resolved") return !existing;
   if (!existing) return false;
   if (card.state !== "open") return true;
-  return existing.text === cardText(project, card, at, existing);
+  const details = cardDetails(card);
+  return existing.text === cardText(project, card, at, existing) && (details === undefined || existing.details === details);
 }
 
 /** An open card the per-attempt scheme left for this project (#1594), whose
@@ -1486,6 +1502,7 @@ async function check(
   // Outcomes are visible even when the seat needs no wake or operator answer.
   sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
+  const autoRotateDetail = await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
   if (seatTickDecision(input).verdict.kind === "proactive") {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
@@ -1764,7 +1781,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, authDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, authDetail, autoRotateDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;

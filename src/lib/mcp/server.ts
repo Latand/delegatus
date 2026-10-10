@@ -65,6 +65,7 @@ export const MCP_TOOL_NAMES = [
   "list_conversations",
   "search_transcripts",
   "search_memory",
+  "backfill_worktree_projects",
   "get_conversation",
   "conversation_deliverability",
   "conversation_messages",
@@ -113,6 +114,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "backfill_worktree_projects",
   "spawn_agent",
   "send_message",
   "create_task",
@@ -2332,6 +2334,9 @@ export interface McpRecoverableTool {
   /** Resolve the server-derived caller and target for fresh admission. Runs
       before receipt access unless bindForRecovery authenticates that access first. */
   bind(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Fresh-request admission after an absent receipt lookup, before any claim.
+      Existing receipts retain their recorded caller and digest checks. */
+  authorizeClaim?(args: McpToolArgs, binding: McpRequestBindingInput): void | Promise<void>;
   /** Authenticate recovery without resolving a mutable target name. Existing
       receipts supply their own target; absent receipts still run bind before admission. */
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
@@ -2558,7 +2563,8 @@ export function createMcpToolService(
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Explicit keys continue through the unchanged claim/replay path below.
-      if (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool)) {
+      if ((typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+        || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
         try {
@@ -2886,7 +2892,7 @@ export function createMcpToolService(
             }
           }
         }
-        if (recoveryOnly) {
+        if (recoveryOnly || tool.authorizeClaim) {
           let record: McpReceiptRecord | null;
           try {
             record = await store.lookup(key);
@@ -2895,6 +2901,15 @@ export function createMcpToolService(
           }
           phaseDurations.claim = performance.now() - claimStartedAt;
           if (record) return recoverRecord(record);
+          try {
+            await tool.authorizeClaim?.(digestArgs, binding);
+          } catch (error) {
+            outcome = "failure";
+            return failure(typedTool, requestId,
+              error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
+              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof McpToolRefusal ? error.details : undefined);
+          }
           /* Nothing has claimed this key HERE — an observation, never a
              verdict: the original may be a moment from claiming it, in this
              process or another, and a lookup that wrote anything under the
@@ -2904,13 +2919,15 @@ export function createMcpToolService(
              establishes whose work a downstream record under this key would
              be, so an answer built from it could hand one caller another's
              ids. The answer stays unknown while execution remains possible. */
-          outcome = "failure";
-          return recoveryAnswer(typedTool, requestId, {
-            outcome: "unknown",
-            evidence: "none",
-            reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
-            ids: {},
-          }, false);
+          if (recoveryOnly) {
+            outcome = "failure";
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown",
+              evidence: "none",
+              reason: "no claim exists for this clientRequestId yet; nothing was claimed, dispatched or read on its behalf, and the original call may still be on its way, so look it up again under the same key",
+              ids: {},
+            }, false);
+          }
         }
         let claim: ReceiptClaim;
         try {
@@ -3230,6 +3247,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
+    'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
     "Pass `taskId` to admit the agent onto an existing board task (#1720), reviewers included. A launch that names none joins the tasks held by the parent it names (`parentConversationId`, `src` or `parent`) and by the conversation it `reviews`; naming neither, or when neither holds a task, it is given a placeholder task of its own — a duplicate card.",
     "When a turn of the new agent ends, Delegatus sends you, the caller, one message from it: its title and id, how long it ran, its Verdict line first, and its final message (up to 4 KB). Briefs need no 'report back' line. Pass `notifyLauncher: false` to turn this off; the answer's `launcherNotice` says whether it is on.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -3301,6 +3319,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
   search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. A unit ending in ~ matched loosely, by a compound term's parts near each other or by an identifier prefix: its fragment decides whether the hit is on topic. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
+  backfill_worktree_projects: "Explicit operator maintenance to fold removed sibling worktree projects into their known repository. dryRun defaults to true and writes nothing, including no MCP receipt. dryRun:false records worktree mappings and project aliases, migrates board projects and rescans. Optional project narrows the target repository. Reports folded and leftAlone entries with reasons. Scheduled maintenance may preview only; apply requires the operator root or a designated orchestrator acting on the operator request.",
   search_memory: "Search the local read-only index of Claude and Codex memories, global instructions and single-fact skills. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
@@ -3334,8 +3353,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
-  publish_prototype_review: "Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
-  read_prototype_review: "Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
+  publish_prototype_review: "questions (3–7): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id, and skipped:true means the operator took the recommendations. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
     "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
     "With target, clear one conversation reason, parked lane, report question or waiting prototype round; task targets include the waiting round. Only the operator's root/gateway session and this project's designated seat may clear. Its maintainer may read and cannot clear; workers and unidentified callers are refused. Update decisions stay answer-only.",
@@ -3352,6 +3371,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. Workers, pipeline stages, deputies and unidentified callers are refused. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
@@ -3634,6 +3654,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Codex only: catalog tier id such as priority or ultrafast; refused if the model/account does not offer it. default or standard opts out of a role tier."),
     fast: z.boolean().optional().describe("Codex speed: true means priority; must agree with serviceTier when both are present."),
     role: z.enum(ROLE_IDS).optional(),
+    confirm: z.string().optional()
+      .describe('For deployer, must be "deploy": honoured only for the target project\'s designated orchestrator seat and the operator\'s own session. Other roles ignore this field.'),
     roleParams: z.record(z.string(), z.unknown()).optional()
       .describe("Role-specific parameters. Bounded integers accept numeric strings, clamp to their declared role bounds, and report the applied value in clamped."),
     reviews: z.string().optional(),
@@ -3862,6 +3884,11 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     order: z.enum(["relevance", "newest"]).optional().describe("relevance (default): rank conversations by coverage, with linked fragments. newest: messages newest first, every unit required."),
     cursor: z.string().min(1).optional().describe("Opaque cursor returned by the preceding page for this query and project."),
     limit: boundedNumericInput("search_transcripts", "limit").describe("Integer 1..100; default 6 conversations for relevance, 20 messages for newest. Numeric strings coerce and out-of-range values clamp."),
+  }).passthrough(),
+  backfill_worktree_projects: z.object({
+    clientRequestId: clientRequestIdSchema.optional(),
+    dryRun: z.boolean().optional().describe("Defaults to true. Set false only for an explicit operator-requested recovery."),
+    project: z.string().regex(/^repo-[0-9a-f]{32}$/).optional(),
   }).passthrough(),
   search_memory: z.object({
     clientRequestId: clientRequestIdSchema.max(256, "clientRequestId must be at most 256 characters for the bounded memory response"),
@@ -4188,6 +4215,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
     project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
+    machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
   ask_orchestrator_in_parallel: z.object({
@@ -4219,6 +4247,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
+      .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
     maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
       .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
     clientRequestId: clientRequestIdSchema,

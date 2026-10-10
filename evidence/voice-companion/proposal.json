@@ -1,0 +1,725 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&script=proposal | &script=voiceConfirm",
+  "rule": "a request to the orchestrator is sent at once; this card appears only when the model asked to confirm first, with its reason. The instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus. It is answered aloud, and the two buttons are the second way",
+  "cases": [
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30,
+          "labelContrast": 16.7
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30,
+          "labelContrast": 5.17
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30,
+          "labelContrast": 12.84
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30,
+          "labelContrast": 5.68
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30,
+          "labelContrast": 16.7
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30,
+          "labelContrast": 5.17
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30,
+          "labelContrast": 12.84
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30,
+          "labelContrast": 5.68
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 222,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30,
+          "labelContrast": 16.7
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30,
+          "labelContrast": 5.17
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 574,
+        "y": 292,
+        "width": 280,
+        "height": 260
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 122,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30,
+          "labelContrast": 12.84
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30,
+          "labelContrast": 5.68
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 574,
+        "y": 292,
+        "width": 280,
+        "height": 260
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 3,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": false
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 109,
+        "bodyRoomPx": 122,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30,
+          "labelContrast": 16.7
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30,
+          "labelContrast": 5.17
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 450,
+        "y": 372,
+        "width": 280,
+        "height": 180
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 1,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 0,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": true
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 45,
+        "bodyRoomPx": 56,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30,
+          "labelContrast": 12.84
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30,
+          "labelContrast": 5.68
+        }
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 450,
+        "y": 372,
+        "width": 280,
+        "height": 180
+      },
+      "textUnderLane": 0,
+      "asItStands": {
+        "reason": {
+          "total": 1,
+          "shown": 1,
+          "cut": 0
+        },
+        "instruction": {
+          "total": 3,
+          "shown": 1,
+          "cut": 0
+        },
+        "hint": {
+          "total": 1,
+          "shown": 0,
+          "cut": 0
+        },
+        "cutLines": 0,
+        "cue": {
+          "shown": true
+        },
+        "hintOrCue": true,
+        "buttons": [
+          true,
+          true
+        ],
+        "bodyPx": 45,
+        "bodyRoomPx": 56,
+        "reasonAndFirstLinePx": 45,
+        "canHold": true
+      }
+    }
+  ],
+  "spokenAnswer": [
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "asked": {
+        "reason": "Deleting the old presets cannot be undone.",
+        "instruction": "Delete the old export presets: every preset saved before the three new ones.",
+        "dispatches": 0
+      },
+      "answer": "Yes, send it.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1,
+      "sentShownIn": "card"
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "asked": {
+        "reason": "Видалення старих пресетів не можна скасувати.",
+        "instruction": "Видали старі пресети експорту: усі, збережені до трьох нових.",
+        "dispatches": 0
+      },
+      "answer": "Так, надсилай.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1,
+      "sentShownIn": "card"
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "asked": {
+        "reason": "Видалення старих пресетів не можна скасувати.",
+        "instruction": "Видали старі пресети експорту: усі, збережені до трьох нових.",
+        "dispatches": 0
+      },
+      "answer": "Так, надсилай.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1,
+      "sentShownIn": "card"
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "asked": {
+        "reason": "Deleting the old presets cannot be undone.",
+        "instruction": "Delete the old export presets: every preset saved before the three new ones.",
+        "dispatches": 0
+      },
+      "answer": "Yes, send it.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1,
+      "sentShownIn": "card"
+    }
+  ]
+}

@@ -294,6 +294,7 @@ export type ExternalRelayProgress = {
   at: string;
 };
 export type ExternalRelayCompletion =
+  | { lease_id: string; outcome: "compacted"; reason: CompactReason; detail: string | null; duration_ms: number }
   | {
       lease_id: string;
       outcome: "answered";
@@ -313,3 +314,17 @@ export type ExternalRelayCompletion =
       reason: string;
       detail: string | null;
     };
+
+export const compactRequestSchema = z.object({ request_id: id, lease_id: leaseId,
+  kind: z.literal("compact"), target_id: id, claimed_at: time, liveness: livenessSchema,
+  chat: z.object({ key: chatKey }), input: z.object({ requester: requesterSchema }) });
+export type CompactRequest = z.infer<typeof compactRequestSchema>;
+export type CompactReason = "compacted" | "started_fresh" | "nothing_to_compact";
+export const compactCompletionSchema = z.union([
+  z.object({ lease_id: leaseId, outcome: z.literal("compacted"),
+    reason: z.enum(["compacted", "started_fresh", "nothing_to_compact"]), detail: boundedString(200).nullable(), duration_ms: z.number().int().nonnegative() }),
+  z.object({ lease_id: leaseId, outcome: z.literal("declined"),
+    reason: z.enum(["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff", "member_limit"]),
+    detail: boundedString(200).nullable(), retry_after_s: z.number().int().nonnegative().nullable() }),
+  z.object({ lease_id: leaseId, outcome: z.literal("failed"), reason: z.enum(["agent_error", "invalid_answer", "profile_violation", "hard_cap", "install_restarted", "cancelled"]), detail: boundedString(200).nullable() }),
+]);

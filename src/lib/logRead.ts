@@ -50,7 +50,8 @@ async function startsRecord(fh: fs.FileHandle, offset: number): Promise<boolean>
  * batch response splits one byte budget across many files, and a file that
  * ran out of budget gets an idle chunk at its current offset so the client
  * simply catches up on the next tick. Returns null for a path outside the
- * whitelisted roots (or one that is not a file).
+ * whitelisted roots (or one that is not a file); a route that admits more
+ * than the roots passes its own `allowed`.
  *
  * The bounded catch-up only ever skips whole records (#1498). An agent
  * reading a rendered frame appends one record larger than the window — the
@@ -61,14 +62,14 @@ async function startsRecord(fh: fs.FileHandle, offset: number): Promise<boolean>
  * any jump; only a subscriber on a record boundary with ordinary records
  * behind it is jumped to the live window, as before.
  */
-export async function readTailChunk(pathname: string, offsetInput: number, budget = MAX_CHUNK): Promise<LogChunk | null> {
+export async function readTailChunk(pathname: string, offsetInput: number, budget = MAX_CHUNK, allowed: (pathname: string) => boolean = pathAllowed): Promise<LogChunk | null> {
   let stat;
   try {
     stat = await fs.stat(pathname);
   } catch {
     stat = null;
   }
-  if (!pathname || !stat?.isFile() || !pathAllowed(pathname)) return null;
+  if (!pathname || !stat?.isFile() || !allowed(pathname)) return null;
   const size = stat.size;
 
   let offset = offsetInput;

@@ -26,6 +26,8 @@ import type { PrototypeWorld } from "./world";
 import type { PublishPrototypeInput, PrototypeReviewRead } from "./types";
 import { MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 
+import { questions } from "./questionnaire.fixture";
+
 const roots: string[] = [];
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);
 const MP4 = Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypisom"),Buffer.alloc(12)]);
@@ -37,7 +39,7 @@ function request(url: string, body?: unknown) {
   return new NextRequest(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 async function source() { const root = await fs.mkdtemp(path.join(process.env.HOME!, "prototype-source-")); roots.push(root); return root; }
-async function fullInput(key = "full"): Promise<PublishPrototypeInput> {
+async function fullInput(key = "full"): Promise<PublishPrototypeInput & { variants: NonNullable<PublishPrototypeInput["variants"]> }> {
   const root = await source();
   await fs.writeFile(path.join(root,"new.png"),PNG); await fs.writeFile(path.join(root,"original.png"),Buffer.concat([PNG,Buffer.from("original")]));
   await fs.writeFile(path.join(root,"clip.mp4"),MP4); await fs.writeFile(path.join(root,"clip.webm"),WEBM);
@@ -358,4 +360,78 @@ test("no task answer hands a review to a capability caller: an assignment that c
   expect(JSON.stringify(operator)).not.toContain("prototype-decision:");
   // The review's own read is untouched.
   expect((await read()).rounds[0]!.decision!.comment).toBe("Private review comment");
+});
+
+
+test("questions-only publication and answers round trip through operator and agent reads", async () => {
+  const input = { clientRequestId: "questions-roundtrip", taskId: "task-prototype", title: "Before work", questions };
+  expect(TOOL_INPUT_SCHEMAS.publish_prototype_review.safeParse(input).success).toBe(true);
+  const published = await publishPOST(request("/publish", input));
+  expect(published.status).toBe(200);
+  const body = await published.json();
+  expect(body).toMatchObject({ questions: 3, variants: 0, frames: 0, videos: 0 });
+  expect((await read()).rounds[0]!.questions).toEqual(questions);
+  const agentRead = async () => (await (await reviewReadPOST(request("/read", { taskId: "task-prototype" }))).json()) as PrototypeReviewRead;
+  expect((await agentRead()).rounds[0]!.questions).toEqual(questions);
+  const answers = [{ questionId: "place", options: [1] }, { questionId: "scope", options: [1,0] }, { questionId: "timing", options: [], other: true }];
+  const comment = "  Use the existing path.\nStart immediately.  ";
+  const answer = { reviewId: body.reviewId, chosen: [], answers, comment };
+  expect((await reviewPOST(request("/review", answer), "task-prototype")).status).toBe(200);
+  const expected = [{ questionId: "place", options: [1] }, { questionId: "scope", options: [0,1] }, { questionId: "timing", options: [], other: true }];
+  for (const result of [await read(), await agentRead()]) {
+    expect(result.rounds[0]!.decision).toMatchObject({ answers: expected, chosen: [], comment });
+    expect(result.rounds[0]!.decision).not.toHaveProperty("skipped");
+    expect(result.waitingReviewId).toBeNull();
+  }
+  expect(prototypeReviewNotices(loadTasks())).toEqual([]);
+  expect((await reviewPOST(request("/review", answer), "task-prototype")).status).toBe(200);
+  expect((await reviewPOST(request("/review", { ...answer, answers: expected.map(a => a.questionId === "place" ? { ...a, options: [0] } : a) }), "task-prototype")).status).toBe(409);
+});
+
+
+test("question answer validation refuses incomplete and forged payloads without a save or send", async () => {
+  const id = await publish({ clientRequestId: "validation", taskId: "task-prototype", title: "Before work", questions });
+  let sends = 0;
+  const delivery = { recover: async () => null, send: async () => { sends++; return { state: "sent" as const }; }, retry: async () => ({ state: "sent" as const }) };
+  const answers = questions.map(q => ({ questionId: q.id, options: [0] }));
+  const invalid = [
+    { answers: answers.slice(0,2) },
+    { answers: answers.map(a => a.questionId === "place" ? { ...a, options: [0,1] } : a) },
+    { answers: answers.map(a => ({ ...a, options: [9] })) },
+    { answers: [answers[0],answers[0],answers[2]] },
+    { answers: answers.map(a => a.questionId === "place" ? { ...a, options: [], other: true } : a), comment: "Other" },
+    { answers: answers.map(a => a.questionId === "timing" ? { ...a, options: [], other: true } : a) },
+    { answers, skip: true }, { skip: false },
+  ];
+  for (const patch of invalid) {
+    expect((await reviewPOST(request("/review", { reviewId: id, chosen: [], comment: "", ...patch }), "task-prototype", undefined, delivery)).status).toBe(400);
+    expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toBeUndefined();
+  }
+  const variantId = await publish(await fullInput("no-questions"));
+  expect((await reviewPOST(request("/review", { reviewId: variantId, chosen: [1], comment: "", answers }), "task-prototype", undefined, delivery)).status).toBe(400);
+  expect(sends).toBe(0);
+});
+
+test("skip takes server recommendations and delivers one durable answer message", async () => {
+  const world = { ...prototypeWorld, orchestrator: () => "conversation_seat" };
+  const id = await publish({ clientRequestId: "skip", taskId: "task-prototype", title: "Before work", questions }, world);
+  const sent: string[] = [];
+  const delivery = { recover: async () => null, send: async (_request: NextRequest, decision: import("./types").PrototypeDecision) => { sent.push(decision.delivery.text); return { state: "sent" as const }; }, retry: async () => ({ state: "sent" as const }) };
+  const payload = { reviewId: id, chosen: [], comment: "", skip: true };
+  expect((await reviewPOST(request("/review", payload), "task-prototype", world, delivery)).status).toBe(200);
+  expect((await read()).rounds[0]!.decision).toMatchObject({ skipped: true, answers: questions.map(q => ({ questionId: q.id, options: [0] })), delivery: { state: "sent" } });
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("Answers: skipped, use your recommendations.");
+  for (const q of questions) expect(sent[0]).toContain(q.options[0]!.label + " (recommended)");
+  expect((await reviewPOST(request("/review", payload), "task-prototype", world, delivery)).status).toBe(200);
+  expect(sent).toHaveLength(1);
+});
+
+test("oversized questionnaire answers are refused before saving or dispatching", async () => {
+  const longQuestions = Array.from({ length: 7 }, (_, i) => ({ id: `q${i}`, text: "П".repeat(300), options: [{ label: "А".repeat(120), recommended: true }, { label: "Б".repeat(120) }] }));
+  const id = await publish({ clientRequestId: "oversized", taskId: "task-prototype", title: "Before work", questions: longQuestions });
+  const result = await reviewPOST(request("/review", { reviewId: id, chosen: [], answers: longQuestions.map(q => ({ questionId: q.id, options: [0] })), comment: "Я".repeat(16000) }), "task-prototype");
+  expect(result.status).toBe(400);
+  expect((await result.json()).error).toContain("shorten the comment");
+  expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toBeUndefined();
 });

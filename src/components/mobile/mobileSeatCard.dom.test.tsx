@@ -738,7 +738,7 @@ test("the seat's own state moves the row with no reload: rotation advisory, then
   expect(card(host).hasAttribute("data-mobile2-seat-rotation")).toBe(false);
 
   /* The context reading crosses the rotation line — same mount, same row. */
-  await rerender([conversation({}), { ...orchestrator, ctx: { pct: 71 } } as unknown as FileEntry]);
+  await rerender([conversation({}), { ...orchestrator, ctx: { pct: 71, usedTokens: 710_000, windowTokens: 1_000_000, source: "runtime", confidence: "exact", observedAt: "" } } as unknown as FileEntry]);
   expect(card(host).getAttribute("data-mobile2-seat-rotation")).toBe("strongly_recommend");
   expect(card(host).getAttribute("data-mobile2-seat-state")).toBe("live");
 

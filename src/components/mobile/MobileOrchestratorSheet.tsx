@@ -1154,7 +1154,7 @@ function SeatIdentity({
   const planName = row?.plan?.trim() ?? "";
   const plan = planName ? t("mobile2.seat.plan", { plan: planName.charAt(0).toUpperCase() + planName.slice(1) }) : null;
   const context = designated?.context ?? boardContext(file);
-  const percent = context?.percent ?? null;
+  const percent = context?.estimated ? null : context?.percent ?? null;
   const left = percent === null ? null : Math.max(0, 100 - percent);
   const window = context?.limit ?? null;
   const telegramLine = telegramActionLine(t, designated?.telegram);
@@ -1216,7 +1216,7 @@ function SeatIdentity({
       <div className="flex min-w-0 items-center gap-2" data-mobile2-seat-context={left === null ? "unknown" : String(left)}>
         <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.seat.context")}</span>
         {left === null ? (
-          <span className="text-label text-muted">{t("mobile2.seat.contextUnknown")}</span>
+          <span className="text-label text-muted">{context?.estimated ? t("orchPanel.ctxUnconfirmed") : t("mobile2.seat.contextUnknown")}</span>
         ) : (
           <>
             <MobileMeter left={left} className="max-w-[140px] flex-1" label={t("mobile2.seat.contextAria", { percent: String(left) })} />

@@ -1,7 +1,7 @@
 "use client";
 
-import { Columns2, CornerDownRight, Film, GalleryHorizontalEnd, ImageOff, Loader2, RotateCw, SquareSplitHorizontal, TriangleAlert, ZoomIn } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Columns2, CornerDownRight, Film, GalleryHorizontalEnd, MessageCircleQuestionMark, ImageOff, Loader2, RotateCw, SquareSplitHorizontal, TriangleAlert, ZoomIn } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
@@ -15,7 +15,9 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { usePrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeAnswer, PrototypeDeliveryState, PrototypeMediaView, PrototypeQuestion, PrototypeRoundView } from "@/lib/prototypeReview/types";
+
+import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 
 import { markPrototypeReviewSeen } from "./prototypeReviewStore";
 
@@ -35,8 +37,8 @@ interface Slide {
   video?: PrototypeMediaView;
 }
 
-interface Draft { chosen: number[]; comment: string }
-const EMPTY_DRAFT: Draft = { chosen: [], comment: "" };
+interface Draft { chosen: number[]; comment: string; answers: PrototypeAnswer[] }
+const initialDraft = (round: PrototypeRoundView | null): Draft => ({ chosen: [], comment: "", answers: recommendedAnswers(round?.questions ?? []) });
 
 /** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
 const when = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
@@ -200,7 +202,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const field = useRef<HTMLTextAreaElement>(null);
   const strip = useRef<HTMLDivElement>(null);
 
-  const rounds = data?.rounds ?? [];
+  const rounds = useMemo(() => data?.rounds ?? [], [data?.rounds]);
   const round = rounds.find((entry) => entry.id === picked)
     ?? rounds.find((entry) => entry.id === reviewId)
     ?? rounds.find((entry) => entry.id === data?.waitingReviewId)
@@ -217,7 +219,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   /* The later decided round that retired this one: the operator already answered there. */
   const successor = round && !round.decision && round.supersededBy ? rounds.find((entry) => entry.id === round.supersededBy) ?? null : null;
   const open = Boolean(round && !round.decision && !round.hidden && !elsewhere && (!successor || reopened.has(round.id)));
-  const draft = (roundId && drafts[roundId]) || EMPTY_DRAFT;
+  const draft = (roundId && drafts[roundId]) || initialDraft(round);
   /* Two pictures side by side are each half a phone wide, too small to read: the phone compares on one frame. */
   const mode: PairMode = phone ? "slider" : pairMode ?? "side";
 
@@ -227,8 +229,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const setDraft = useCallback((change: (held: Draft) => Draft, target: string | null = roundId) => {
     if (!target) return;
-    setDrafts((held) => ({ ...held, [target]: change(held[target] ?? EMPTY_DRAFT) }));
-  }, [roundId]);
+    setDrafts((held) => ({ ...held, [target]: change(held[target] ?? initialDraft(rounds.find(r => r.id === target) ?? null)) }));
+  }, [roundId, rounds]);
   const toggle = useCallback((number: number) => {
     setDraft((held) => ({ ...held, chosen: held.chosen.includes(number) ? held.chosen.filter((own) => own !== number) : [...held.chosen, number].sort((a, b) => a - b) }));
   }, [setDraft]);
@@ -270,7 +272,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      the tap on the microphone to the last word landing in the field: while it
      is transcribed the field may be empty, and closing then would unmount the
      review before the answer has anywhere to go. */
-  const unsaved = rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
+  const answersChanged = rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!)));
+  const unsaved = answersChanged || rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
+  /* The guard names what is lost: changed answers, else the comment. */
+  const guardKind = answersChanged ? "answers" : "comment";
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
     else if (unsaved) setGuard(true);
@@ -280,12 +285,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   /* Arrows step through the round's pictures and digits toggle a variant,
      claimed in the window's capture phase so the board behind never moves on
-     the same press. A text field and a playing video keep their keys. */
+     the same press. A text field, a playing video and an open single-choice
+     question keep their keys: the arrows move that question's answer. */
   useEffect(() => {
     if (viewer || guard) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || typing(event.target)) return;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !(event.target as HTMLElement | null)?.closest?.('[role="radiogroup"]')) {
         event.preventDefault();
         event.stopPropagation();
         show(index + (event.key === "ArrowRight" ? 1 : -1));
@@ -350,21 +356,29 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   /* A decision cannot be changed once saved, so nothing saves while speech is
      still being recorded or transcribed: the comment would go without it. The
      button and the shortcut both come through here. */
-  const savable = open && draft.chosen.length > 0 && !review.saving && dictation.phase === "idle";
+  const hasQuestions = Boolean(round?.questions?.length);
+  const hasVariants = Boolean(round?.variants.length);
+  let answersValid = !hasQuestions;
+  if (hasQuestions) {
+    try { normalizePrototypeAnswers(round!.questions!, draft.answers, draft.comment); answersValid = true; } catch { answersValid = false; }
+  }
+  const canSend = open && !review.saving && dictation.phase === "idle";
+  const savable = Boolean(round) && (hasQuestions ? answersValid : draft.chosen.length > 0) && canSend;
   /* A held key repeats before the first request has redrawn anything. */
   const saveInFlight = useRef(false);
-  const save = async () => {
-    if (!round || !savable || saveInFlight.current) return;
+  const save = async (skip = false) => {
+    if (!round || !(skip ? hasQuestions && canSend : savable) || saveInFlight.current) return;
     saveInFlight.current = true;
     try {
-      const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment });
+      const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment,
+        ...(hasQuestions ? skip ? { skip: true as const } : { answers: draft.answers } : {}) });
       if (saved) setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
     } finally {
       saveInFlight.current = false;
     }
   };
 
-  const title = t("proto.title");
+  const title = t(hasQuestions && !hasVariants ? "proto.questions" : "proto.title");
   const variantSlides = variant ? slides.filter((entry) => entry.variant === variant) : [];
   const firstOf = (target: Variant) => slides.findIndex((entry) => entry.variant === target);
 
@@ -678,16 +692,74 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </div>
   ) : null;
 
+  const selectAnswer = (questionId: string, option: number | "other") => {
+    if (!open) return;
+    const question = round!.questions!.find(q => q.id === questionId)!;
+    setDraft(held => ({ ...held, answers: held.answers.map(answer => {
+      if (answer.questionId !== questionId) return answer;
+      if (option === "other") {
+        const other = !answer.other;
+        return { questionId, options: question.multiple ? answer.options : [], ...(other ? { other: true as const } : {}) };
+      }
+      const options = question.multiple ? answer.options.includes(option) ? answer.options.filter(i => i !== option) : [...answer.options, option].sort((a,b) => a-b) : [option];
+      return { questionId, options, ...(question.multiple && answer.other ? { other: true as const } : {}) };
+    }) }));
+  };
+  /* A single-choice group is one tab stop: the arrows move the focus and the
+     answer together, wrapping from the last choice (Other included) to the first. */
+  const stepAnswer = (event: ReactKeyboardEvent<HTMLButtonElement>, question: PrototypeQuestion, from: number) => {
+    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+    if (!forward && event.key !== "ArrowLeft" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const buttons = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+    const at = (from + (forward ? 1 : -1) + buttons.length) % buttons.length;
+    selectAnswer(question.id, at === question.options.length ? "other" : at);
+    buttons[at]?.focus();
+  };
+  /* An answered or retired questionnaire no longer asks: the choices left
+     unpicked fade and the "choose any" hint goes, so it reads as a record. */
+  const closed = !open;
+  const questionBlock = !hasQuestions ? null : (
+    <section data-prototype-questions="" aria-label={t("proto.questions")} className={`flex min-h-0 min-w-0 flex-col gap-3 ${phone ? "px-4 py-2" : `overflow-y-auto p-4 ${hasVariants ? "w-[360px] shrink-0 border-l border-border" : "flex-1"}`}`}>
+      {hasVariants ? <p data-prototype-questions-label="" className="m-0 text-label font-semibold text-secondary">{t("proto.questions")}</p> : null}
+      {round!.questions!.map((question, at) => {
+        const answer = (round!.decision?.answers ?? draft.answers).find(a => a.questionId === question.id);
+        const choice = (index: number | "other", label: string, recommended = false) => {
+          const checked = index === "other" ? Boolean(answer?.other) : Boolean(answer?.options.includes(index));
+          return <button key={index} type="button" role={question.multiple ? "checkbox" : "radio"} aria-checked={checked} disabled={!open}
+            {...(index === "other" ? { "data-prototype-other": question.id } : { "data-prototype-option": `${question.id}:${index}` })}
+            className={`flex min-h-11 w-full items-start gap-2 rounded-control border px-2.5 py-2 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${checked ? "border-accent/50 bg-accent-soft text-accent" : closed ? "border-transparent bg-transparent text-muted opacity-60" : "border-border bg-canvas text-primary enabled:hover:border-accent/45"}`}
+            {...(question.multiple ? {} : { tabIndex: checked || (!answer?.other && !answer?.options.length && index === 0) ? 0 : -1, onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => open && stepAnswer(event, question, index === "other" ? question.options.length : index) })}
+            onClick={() => selectAnswer(question.id, index)}>
+            <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : null}</span>
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}</span>
+            {recommended ? <span data-prototype-recommended="" className="shrink-0 self-start whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}
+          </button>;
+        };
+        return <fieldset key={question.id} data-prototype-question={question.id} className="m-0 min-w-0 rounded-control border border-border bg-card p-3">
+          <legend className="sr-only">{question.text}</legend>
+          <div className="mb-2 flex items-start gap-1.5"><span data-prototype-question-number="" className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span><p className="m-0 min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{question.text}</p></div>
+          {question.multiple && !closed ? <p data-prototype-hint="" className="m-0 mb-2 text-label text-muted">{t("proto.q.multiple")}</p> : null}
+          <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className="flex flex-col gap-1.5">
+            {question.options.map((option, index) => choice(index, option.label, option.recommended))}
+            {question.other ? choice("other", t("proto.q.other")) : null}
+          </div>
+        </fieldset>;
+      })}
+    </section>
+  );
+
   const footer = !round ? null : round.decision ? (
     <div data-prototype-decision={round.id} className="flex min-w-0 flex-1 flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-label font-semibold text-secondary">{t("proto.chosen")}</span>
+        <span {...(round.decision.skipped ? { "data-prototype-skipped": "" } : {})} className="text-label font-semibold text-secondary">{t(!hasQuestions ? "proto.chosen" : round.decision.skipped ? "proto.q.skipped" : "proto.q.answered")}</span>
         {chosenChips(round.decision.chosen)}
         <time dateTime={round.decision.at} className="ml-auto shrink-0 text-caption tabular-nums text-muted">{when(round.decision.at, locale)}</time>
       </div>
       {round.decision.comment ? (
         <p data-prototype-comment="" className="m-0 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-control border border-border bg-canvas px-2.5 py-1.5 text-ui text-primary">{round.decision.comment}</p>
-      ) : (
+      ) : hasQuestions ? null : (
         <p className="m-0 text-label text-muted">{t("proto.noComment")}</p>
       )}
       {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}
@@ -702,10 +774,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   ) : (
     <div data-prototype-decide={round.id} className="flex min-w-0 flex-1 flex-col gap-2">
       {supersededLine}
-      <div className="flex min-h-6 flex-wrap items-center gap-1.5">
+      {hasVariants && (!hasQuestions || draft.chosen.length > 0) ? <div className="flex min-h-6 flex-wrap items-center gap-1.5">
         <span className="text-label font-semibold text-secondary">{t("proto.chosen")}</span>
         {draft.chosen.length ? chosenChips(draft.chosen) : <span className="text-label text-muted">{t(phone ? "proto.chooseFirstPhone" : "proto.chooseFirst")}</span>}
-      </div>
+      </div> : null}
       <div className={`flex gap-2 ${phone ? "flex-col" : "items-end"}`}>
         <div className={`flex min-w-0 flex-1 rounded-control border border-border bg-canvas focus-within:border-accent/60 ${recording ? "flex-col gap-1.5 p-2" : "items-end gap-1 py-1 pl-2.5 pr-1"}`}>
           <textarea
@@ -715,7 +787,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             readOnly={Boolean(dictation.liveText)}
             data-prototype-comment-field=""
             aria-label={t("proto.comment")}
-            placeholder={t("proto.commentPlaceholder")}
+            placeholder={t(hasQuestions ? "proto.q.commentPlaceholder" : "proto.commentPlaceholder")}
             className={`max-h-32 min-h-[2.75rem] resize-none bg-transparent text-body text-primary outline-none placeholder:text-muted [field-sizing:content] ${recording ? "w-full" : "min-w-0 flex-1 self-center"}`}
             onChange={(event) => setDraft((held) => ({ ...held, comment: event.target.value }))}
             onKeyDown={(event) => {
@@ -729,24 +801,26 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             <MicButtonView {...dictation} start={startDictation} busy={review.saving} onText={insertSpoken} anchored />
           </span>
         </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+        <div data-prototype-actions="" className={hasQuestions ? phone ? "grid shrink-0 grid-cols-2 gap-2" : "flex shrink-0 justify-end gap-2" : "flex shrink-0 flex-wrap justify-end gap-2"}>
           <button type="button" className={SECONDARY} data-prototype-hide="" disabled={review.saving || speaking} onClick={() => void review.hide(round.id, false, phone ? "phone" : "desktop")}>{t("proto.hide")}</button>
+          {hasQuestions ? <button type="button" className={SECONDARY} data-prototype-skip="" aria-label={t("proto.skipAria")} disabled={!canSend} onClick={() => void save(true)}>{t("proto.skip")}</button> : null}
           <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-            {t("proto.save")}
+            {t(hasQuestions ? "proto.answer" : "proto.save")}
           </button>
         </div>
       </div>
+      {hasQuestions && !answersValid ? <p role="status" className="m-0 text-label text-muted">{t(draft.answers.some(a => a.other) && !draft.comment.trim() ? "proto.q.otherNeedsComment" : "proto.q.answerAll")}</p> : null}
       {voiceError ? <p role="alert" className="m-0 text-label font-semibold text-danger">{voiceError}</p> : null}
     </div>
   );
 
   const guardDialog = guard ? (
     <div className={`${phone ? `fixed ${Z.overlay}` : "absolute z-[2]"} inset-0 flex items-center justify-center bg-black/40 p-4`} onClick={(event) => { if (event.target === event.currentTarget) setGuard(false); }}>
-      <div role="alertdialog" aria-modal="true" aria-label={t("proto.guard.title")} data-prototype-guard="" className="flex w-full max-w-[360px] flex-col gap-3 rounded-surface border border-border bg-raised p-4 shadow-2">
+      <div role="alertdialog" aria-modal="true" aria-label={t(`proto.guard.${guardKind}.title`)} data-prototype-guard="" className="flex w-full max-w-[360px] flex-col gap-3 rounded-surface border border-border bg-raised p-4 shadow-2">
         <div>
-          <p className="m-0 text-body font-semibold text-primary">{t("proto.guard.title")}</p>
-          <p className="m-0 mt-1 text-label text-secondary">{t("proto.guard.body")}</p>
+          <p className="m-0 text-body font-semibold text-primary">{t(`proto.guard.${guardKind}.title`)}</p>
+          <p className="m-0 mt-1 text-label text-secondary">{t(`proto.guard.${guardKind}.body`)}</p>
         </div>
         <div className="flex justify-end gap-2">
           <button type="button" autoFocus className={SECONDARY} data-prototype-guard-keep="" onClick={() => setGuard(false)}>{t("proto.guard.keep")}</button>
@@ -782,12 +856,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             <div data-prototype-context="" className="sticky top-0 z-[2] flex flex-col gap-1.5 bg-raised px-4 py-1">
               <p data-prototype-context-line="" className="m-0 text-label text-muted"><span className="font-semibold text-secondary">{round?.title ?? ""}</span>{round ? " · " : ""}{taskTitle}</p>
               {roundTabs}
-              {waitingBody ? null : variantChips}
+              {waitingBody || !hasVariants ? null : variantChips}
             </div>
             {waitingBody ?? (
               <>
-                {variantWords}
-                {stage}
+                {hasVariants ? variantWords : null}
+                {hasVariants ? stage : null}
+                {questionBlock}
               </>
             )}
           </div>
@@ -807,10 +882,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         if (event.target === event.currentTarget) requestClose();
       }}
     >
-      <div ref={dialog} role="dialog" aria-modal="true" aria-label={t("proto.dialogAria", { title: taskTitle })} tabIndex={-1} className="relative flex h-[min(88vh,960px)] w-[min(1240px,calc(100vw-48px))] min-h-0 flex-col overflow-hidden rounded-surface border border-border bg-card shadow-2 outline-none">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-label={t("proto.dialogAria", { title: taskTitle })} tabIndex={-1} className={`relative flex h-[min(88vh,960px)] ${hasQuestions ? hasVariants ? "w-[min(1560px,calc(100vw-48px))]" : "w-[min(760px,calc(100vw-48px))]" : "w-[min(1240px,calc(100vw-48px))]"} min-h-0 flex-col overflow-hidden rounded-surface border border-border bg-card shadow-2 outline-none`}>
         {viewer ? null : <DialogLayer containerRef={dialog} onClose={requestClose} />}
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5">
-          <GalleryHorizontalEnd className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+          {hasQuestions ? <MessageCircleQuestionMark className="h-4 w-4 shrink-0 text-accent" aria-hidden /> : <GalleryHorizontalEnd className="h-4 w-4 shrink-0 text-accent" aria-hidden />}
           <div className="min-w-0 flex-1">
             <h2 className="m-0 truncate text-body font-bold text-primary">{round?.title ?? title}</h2>
             <p className="m-0 truncate text-label text-muted">{title} · {taskTitle}</p>
@@ -829,15 +904,16 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         {banners}
         {waitingBody ? <div className="min-h-0 flex-1">{waitingBody}</div> : (
           <div className="flex min-h-0 flex-1">
-            <aside aria-label={t("proto.variants")} className="flex w-[264px] shrink-0 flex-col border-r border-border">
+            {hasVariants ? <aside aria-label={t("proto.variants")} className="flex w-[264px] shrink-0 flex-col border-r border-border">
               <p className="m-0 flex shrink-0 items-baseline gap-1.5 px-3 pb-1 pt-2.5 text-label font-semibold text-secondary">
                 {t("proto.variants")} <span className="text-caption tabular-nums text-muted">{round?.variants.length ?? 0}</span>
               </p>
               <ul data-prototype-variants="" className="m-0 flex min-h-0 flex-1 list-none flex-col gap-0.5 overflow-y-auto p-1.5">
                 {round?.variants.map(variantRow)}
               </ul>
-            </aside>
-            {stage}
+            </aside> : null}
+            {hasVariants ? stage : null}
+            {questionBlock}
           </div>
         )}
         {footer ? <footer className="flex shrink-0 border-t border-border px-4 py-3">{footer}</footer> : null}

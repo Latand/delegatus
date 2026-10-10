@@ -1,3 +1,7 @@
+import { peerSeatMessages } from "@/lib/links/boardLinks";
+import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
+import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { readDeliveryProgress } from "@/lib/runtime/deliveryProgress";
@@ -105,7 +109,7 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import {
@@ -1303,7 +1307,7 @@ function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string
   if (!model) return;
   if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
   const roleId = text(args.role) || fallbackRole;
-  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams }) : null;
+  const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
   let engine: "claude" | "codex" | "copilot" | null = null;
   if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
@@ -1455,7 +1459,7 @@ export function requestAttentionOperationKey(clientRequestId: string): string {
 function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority" | "registrySnapshot">): void {
   const roleId = text(args.role);
   const role = roleId
-    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, engine: args.engine, model: args.model, effort: args.effort })
+    ? resolveSpawnRole({ role: roleId, roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams, confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort })
     : null;
   /* An unresolvable role is the route's to refuse, with its own words. */
   if (role && !role.ok) return;
@@ -1477,7 +1481,38 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
   if (refusal) throw new McpToolRefusal(refusal, { violations: [{ field: roleId ? "roleParams" : "model", message: refusal, expected: "size=trivial on a brief from a large model (Claude Opus or Fable, or a large Codex model), or the role's own row" }] });
 }
 
+/** Check the deployer's caller before a fresh request claims a key,
+    and again at dispatch so a seat change cannot authorize a fresh launch. */
+function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dependencies?: ViewerMcpDomainDependencies): void {
+  if (text(args.role) !== "deployer") return;
+  let allowed = false;
+  try {
+    const caller = dependencies ? attributionOf(dependencies) : null;
+    if (dependencies && caller?.conversationId && !caller.via) {
+      allowed = caller.kind === "gateway" || (caller.kind === "manager"
+        && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
+    }
+  } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
+  if (!allowed) {
+    throw new McpToolRefusal("only the target project's designated orchestrator seat or the operator's own session may launch a deployer", {
+      code: "deployer_spawn_caller_unauthorized", status: 403,
+    });
+  }
+}
+
+function requireMcpDeployerConfirmation(args: McpToolArgs): void {
+  if (text(args.role) !== "deployer") return;
+  const role = resolveSpawnRole({
+    role: "deployer", roleParams: defaultMcpSpawnRoleParams(args) ?? args.roleParams,
+    confirm: args.confirm, engine: args.engine, model: args.model, effort: args.effort,
+  });
+  if (!role.ok) throw new McpToolRefusal(role.error, { status: 400 });
+}
+
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
+  requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
   if (dependencies) {
     try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
@@ -1666,7 +1701,7 @@ async function sendMessage(
  */
 async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
   const operationId = required(args, "operationId");
-  const receipt = await resolveSendReceipt(operationId);
+  const receipt = operationId.startsWith("seatmsg_") ? seatMessageReceipt(operationId) : await resolveSendReceipt(operationId);
   if (!receipt) {
     throw new McpToolRefusal(
       "no accepted send is recorded under that operationId",
@@ -3077,6 +3112,13 @@ function conversationMessagesSince(value: unknown): string | undefined {
   return value;
 }
 
+/** Narrow read path for the voice companion. No MCP inventory or caller
+ * supplied path, role, cursor or expansion flags cross this boundary. */
+export async function voiceConversationTail(conversationId: string, dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> = productionDomainDependencies): Promise<Array<{ role: string; text: string }>> {
+  const result = await conversationMessages({ conversationId, kinds: ["message"], roles: ["user", "assistant"], limit: 4, maxChars: 320 }, dependencies);
+  return (result.records ?? []) as Array<{ role: string; text: string }>;
+}
+
 async function conversationMessages(
   args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext">,
@@ -4059,9 +4101,15 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const project = canonicalOrchestratorProject(required(args, "project"));
   const full = fullAnswer(args);
   const { active, pending, history } = orchestratorSeatFor(project);
+  const remote = await readRemoteAgentRows(project);
+  const linkedSeats = linkedContext().links.filter(link => link.projects.has(project)).map(link => {
+    const row = remote.rows.find(row => row.install === link.install && row.seat === 1);
+    return { machine: link.label, install: link.install, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
+      : peerSeatMessages(link.key) ? null : "unknown" };
+  });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
   const base = full ? {
-    project,
+    project, linkedSeats,
     mergeOnReview: mergeOnReviewEnabled(project),
     bridgeReports: bridgeReportsEnabled(project),
     ...reportFields(project, dependencies),
@@ -4082,7 +4130,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       successorConversationId: revocation.successorConversationId ?? null,
     })),
   } : {
-    project,
+    project, linkedSeats,
     /* #2187 §4.1: whether finished lanes here merge on their own. */
     mergeOnReview: mergeOnReviewEnabled(project),
     /* #2146: whether this project's bridge reports are on; off, file none. */
@@ -4128,7 +4176,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
     }
   }
   const facts = readOrchestratorTranscriptFacts(transcriptPath, session);
-  const windowPolicy = contextWindowPolicyFor(engine, model);
+  const windowPolicy = contextWindowPolicyFor(engine, model, facts);
   const context = contextReading({ policy: windowPolicy, facts });
 
   let liveness: { lifecycle: string; hostState: string; silentForMs: number | null } | null = null;
@@ -4186,14 +4234,14 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
          from a pure function. Nothing on this code path spawns, delivers,
          designates, revokes, interrupts, or calls the control plane at all —
          crossing the threshold changes what this payload SAYS and nothing
-         else. Rotation happens only through an explicit rotate_orchestrator. */
+         else. The opted-in seat tick reads context usage independently. */
       ...rotationRecommendation({
         context,
         facts,
         activity: liveness?.lifecycle === "gone" ? "dead" : liveness?.lifecycle ?? null,
         policy: windowPolicy,
       }),
-      note: "recommendation only — rotation never happens automatically; call rotate_orchestrator explicitly",
+      note: ROTATION_NOTE,
     },
   });
 }
@@ -4257,6 +4305,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
   if (args.enabled !== undefined) change.enabled = args.enabled as boolean;
   if (args.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = args.wakeIntervalMinutes as number | null;
@@ -4315,6 +4364,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const verbose = args.verbose === true || args.full === true;
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
+  delete settingsWithoutPrompt.autoRotate;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4374,6 +4424,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
+    autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
+      ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
+      ...autoRotationFailureAnswer(project) },
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
@@ -4897,6 +4950,25 @@ async function sendMessageToOrchestrator(
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
+  const machine = bound?.target.identity?.startsWith("machine:") ? bound.target.identity.slice(8) : text(args.machine);
+  if (machine) {
+    const link = resolveRemoteSeatMachine(machine, project, dependencies);
+    if (link) {
+      try {
+        return await dispatchControl(control)("/api/orchestrator/message", {
+          project, machine: link.install, text: requiredMessageText(args),
+          clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
+        }, callerCapabilityHeaders());
+      } catch (error) {
+        if (error instanceof McpDispatchVerdictError && error.details.admission === "refused" && typeof error.details.operationId !== "string") {
+          const details = { ...error.details };
+          delete details.admission;
+          throw new McpDispatchNotExecutedError(error.message, details);
+        }
+        throw error;
+      }
+    }
+  }
   let seat = orchestratorSeatFor(project).active;
   let recipient = bound ? bound.target.identity : seat?.conversationId;
   let created = false;
@@ -6819,10 +6891,11 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     });
   }
   const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
+  const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
-    target: { project, identity: project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
+    target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
     sendPayload: seat ? orchestratorRelayPayload(message, seat) : {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
@@ -6830,6 +6903,18 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     // different logical instructions, even when their message text is equal.
     downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
   };
+}
+
+function resolveRemoteSeatMachine(machine: string, project: string, dependencies: ViewerMcpDomainDependencies) {
+  const caller = attributionOf(dependencies);
+  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find(seat => seat.conversationId === caller.conversationId && seat.project && canonicalOrchestratorProject(seat.project) === project);
+  if (!seat || caller.via) throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
+  try { return resolveSeatMessageMachine(machine, project); }
+  catch (error) {
+    if (error instanceof SeatMessageRefusal) throw new McpToolRefusal(error.message, { code: error.code, outcome: "not-executed", nextAction: "new-request-permitted" });
+    throw error;
+  }
 }
 
 /** The gateway keeps its existing relay path. A seat gets messaging only:
@@ -6890,6 +6975,9 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
+  // An unidentified caller cannot own a receipt. Keep the deployer's refusal
+  // before lookup; identified owners are checked again only for fresh work.
+  if (caller.kind === "unidentified") requireMcpDeployerCaller(args, project, dependencies);
   refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
@@ -6915,6 +7003,11 @@ async function recoverSend(
   }
   if (binding.toolName === "send_message_to_orchestrator" && !binding.sendPayload) {
     return { outcome: "unknown", evidence: "delivery-record", reason: "the relay binding has no authenticated send payload", ids: {}, ownership: "unknown" };
+  }
+  if (binding.toolName === "send_message_to_orchestrator" && binding.target.identity?.startsWith("machine:")) {
+    const found = recoverSeatMessage(binding.target.identity.slice(8), binding.downstreamKey);
+    return found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
+      : { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
   }
   if (!binding.target.identity) {
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };
@@ -7145,6 +7238,10 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      authorizeClaim: (args, binding) => {
+        requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
+        requireMcpDeployerConfirmation(args);
+      },
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
@@ -7199,6 +7296,9 @@ export function viewerMcpBindings(
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+    backfill_worktree_projects: (args, context) => viewerControlForCall(controlDependencies, context).post("/api/board/maintenance/worktrees", {
+      dryRun: args.dryRun !== false, ...(args.project ? { project: args.project } : {}),
+    }, {}, context),
     search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),

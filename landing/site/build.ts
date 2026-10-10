@@ -83,7 +83,7 @@ fs.writeFileSync(path.join(dist, "demo/index.html"), `<!doctype html>
 `);
 
 /* The page, with its repository-relative references rewritten to local copies. */
-for (const file of ["index.html", "styles.css", "copy.js", "mascot.js", "main.js"]) {
+for (const file of ["index.html", "styles.css", "copy.js", "boardDemo.js", "mascot.js", "main.js"]) {
   let text = fs.readFileSync(path.join(here, file), "utf8");
   for (const match of text.matchAll(/\.\.\/\.\.\/public\/brand\/([\w.-]+)/g)) {
     fs.copyFileSync(path.join(repo, "public/brand", match[1]!), path.join(dist, "brand", match[1]!));

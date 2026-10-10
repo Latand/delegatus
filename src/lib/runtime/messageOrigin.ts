@@ -29,12 +29,14 @@ export interface MessageOrigin {
   /** Captured from the sending conversation at admission, never from message text. */
   project?: string;
   conversationId?: string;
+  /** Server-stamped surface of the operator's confirmed instruction. */
+  channel?: MessageChannel;
 }
 
 /** Compare durable authorship without depending on object property order. */
 export function sameMessageOrigin(left: MessageOrigin | undefined, right: MessageOrigin | undefined): boolean {
   return left?.kind === right?.kind && left?.role === right?.role
-    && left?.project === right?.project && left?.conversationId === right?.conversationId;
+    && left?.project === right?.project && left?.conversationId === right?.conversationId && left?.channel === right?.channel;
 }
 
 /**
@@ -71,6 +73,20 @@ export interface DeliveredMessageProvenance {
    * absence binds nothing — never "probably this one".
    */
   submissionId?: string;
+  /**
+   * The surface an operator's message was spoken through (#2519). Today the
+   * one value is the voice companion, whose confirmed delegation is the
+   * operator's own instruction and reads apart from a typed one. Presentation
+   * only: it grants no authority and names no agent. Nothing stamps it yet;
+   * the feed draws it when delivery evidence carries it.
+   */
+  channel?: MessageChannel;
+}
+
+export type MessageChannel = "voice-delegatus";
+
+export function messageChannel(value: unknown): MessageChannel | undefined {
+  return value === "voice-delegatus" ? value : undefined;
 }
 
 /**
@@ -142,5 +158,6 @@ export function parseMessageOrigin(value: unknown): MessageOrigin | null {
   const role = body.kind === "agent" ? messageOriginRole(body.role) : undefined;
   const project = body.kind === "agent" ? messageOriginProject(body.project) : undefined;
   const conversationId = body.kind === "agent" ? messageOriginConversationId(body.conversationId) : undefined;
-  return { kind: body.kind, ...(role ? { role } : {}), ...(project ? { project } : {}), ...(conversationId ? { conversationId } : {}) };
+  const channel = body.kind === "operator" ? messageChannel(body.channel) : undefined;
+  return { kind: body.kind, ...(role ? { role } : {}), ...(project ? { project } : {}), ...(conversationId ? { conversationId } : {}), ...(channel ? { channel } : {}) };
 }
