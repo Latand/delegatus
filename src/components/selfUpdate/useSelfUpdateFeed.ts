@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Snapshot } from "@/lib/selfUpdate/types";
+import { openEventStream, type EventStream } from "@/lib/streamMux/client";
 
 /* The Snapshot feed for the Update surface (#2007): server-sent events, and
    after two failed connections a read of /api/self-update every second
@@ -50,7 +51,7 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
   const [live, setLive] = useState<Live>("connecting");
   const [offline, setOffline] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const source = useRef<EventSource | null>(null);
+  const source = useRef<EventStream | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closed = useRef(false);
   /* Reads overlap and finish in any order: a poll every second can outlast
@@ -85,20 +86,20 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
     const connect = () => {
       if (closed.current) return;
       if (typeof EventSource === "undefined") { startPolling(); return; }
-      const events = new EventSource(`/api/self-update/events${suffix}`);
+      const events = openEventStream(`/api/self-update/events${suffix}`);
       source.current = events;
       events.addEventListener("state", (event) => {
         errors = 0;
         setLive("sse");
         stopPolling();
         const ticket = selfUpdateTicket();
-        try { accept(JSON.parse((event as MessageEvent<string>).data) as Snapshot, ticket); } catch { /* next event */ }
+        try { accept(JSON.parse(event.data) as Snapshot, ticket); } catch { /* next event */ }
       });
       events.addEventListener("snapshot-error", (event) => {
         errors = 0;
         setLive("sse");
         if (!current(selfUpdateTicket())) return;
-        try { setFailure((JSON.parse((event as MessageEvent<string>).data) as { error?: string }).error ?? ""); } catch { setFailure(""); }
+        try { setFailure((JSON.parse(event.data) as { error?: string }).error ?? ""); } catch { setFailure(""); }
       });
       events.addEventListener("error", () => {
         errors += 1;
