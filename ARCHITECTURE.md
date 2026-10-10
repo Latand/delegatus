@@ -59,8 +59,11 @@ binary detection, `tailscale status --json` parsing, foreground
 requests through unchanged. When a remote request arrives, it accepts a matching
 `llv_auth` cookie or a matching `?k=` query parameter; valid query-key requests
 are redirected with `k` stripped and an HttpOnly cookie set. The matcher is
-`/((?!_next/static|favicon.ico).*)`, so static chunks and favicon bypass the
-token gate.
+`/((?!_next/static|favicon.ico|api/streams$).*)`, so static chunks and favicon
+bypass the token gate. `/api/streams` calls the proxy itself, for its own
+request and again for each channel as it opens, because Next reads a proxied
+POST body in full before the route sees it and that route stops reading its
+control body at 256 KiB.
 
 `src/lib/sameOrigin.ts` protects mutating API routes from browser cross-origin
 requests. Its allowed hosts are the loopback names plus

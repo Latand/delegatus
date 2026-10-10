@@ -73,6 +73,11 @@ type StructuredConversationRecovery = typeof import("./structuredRecovery")["rec
 export interface StructuredDeliveryHost {
   key: SessionKey;
   host: ObservableEngineHost;
+  /** The writer epoch of the entry this host was registered under, read once
+      at registration and carried through a controller swap. A host publishes
+      only while its entry is still at that epoch, so a registration that
+      outlives its claim never publishes under a successor's fence. */
+  writerEpoch?: number | null;
 }
 
 interface HostAttachment {
@@ -90,6 +95,7 @@ interface HostAttachment {
 interface HostRegistration {
   key: SessionKey;
   host: ObservableEngineHost;
+  writerEpoch?: number | null;
   attachment: HostAttachment | null;
   cancelled: boolean;
 }
@@ -521,7 +527,7 @@ type RegistrySessionProjection = Pick<RuntimeSession,
   | "cwd"
   | "artifactPath"
   | "capabilities"
-  | "activeTurnId"> & { producerKind: string; entryUpdatedAt: string | null };
+  | "activeTurnId"> & { writerClaim: null; producerKind: string; entryUpdatedAt: string | null };
 
 /** The one runtime projection a conversation's current durable registry row
     supports. A coexisting tmux host wins because it is also the transport
@@ -568,6 +574,9 @@ function registrySessionProjection(
       runtimeSettings: runtimeSettingsCapability(sessionKey.engine),
     },
     activeTurnId: null,
+    /* A copy of the registry names no writer, so no writer's fence survives
+       onto a row this copy relabels (docs/design/update-drain-liveness.md, R5). */
+    writerClaim: null,
     producerKind: structuredKind ?? "structured-delivery-controller",
     entryUpdatedAt: entry?.updatedAt ?? null,
   };
@@ -656,6 +665,10 @@ async function publishHostState(
     return;
   }
   if (!state) return;
+  /* A successor claimed this row after the host was registered: its writer
+     publishes for the row now (docs/design/update-drain-liveness.md, R5). */
+  if (typeof adopted.writerEpoch === "number" && entry.structuredHost
+    && entry.structuredHost.writerClaimEpoch !== adopted.writerEpoch) return;
   /* #1629: the voice ledger's only authoritative retirement signal for a spoken
      turn no tool call ever claimed. This listener already fires on every change
      to the projected active turn, and it runs in the process that holds the
@@ -1349,7 +1362,7 @@ export async function bindStructuredDeliveryQueue(
    * reports to its caller.
    */
   const republishRegistration = async (
-    registration: { key: SessionKey; host: ObservableEngineHost },
+    registration: StructuredDeliveryHost,
   ): Promise<{ conversationId: string | null; published: boolean }> => {
     const unclaimed = { conversationId: null, published: false } as const;
     const entry = entryForHost(registry, registration);
@@ -1431,7 +1444,8 @@ export async function bindStructuredDeliveryQueue(
       && current.parentConversationId === payload.parentConversationId
       && current.cwd === payload.cwd
       && current.artifactPath === payload.artifactPath
-      && current.activeTurnId === null) return;
+      && current.activeTurnId === null
+      && (current.writerClaim ?? null) === null) return;
     projectionRevision += 1;
     const event: RuntimeEventInput = {
       scope: { type: "session", id: conversationId },
@@ -1627,6 +1641,8 @@ export async function bindStructuredDeliveryQueue(
     const key = sessionKeyId(item.key);
     const current = registrations.get(key);
     const publicationEntry = entryForHost(registry, item);
+    /* A carried-over seat keeps the epoch it was registered at. */
+    if (item.writerEpoch === undefined) item = { ...item, writerEpoch: publicationEntry?.structuredHost?.writerClaimEpoch ?? null };
     /* A durable tmux host makes this adapter historical for the current
        generation. Publish the legacy verdict without probing or registering
        the adapter: an unreadable pane surface says nothing about host death,
@@ -1757,7 +1773,8 @@ export async function bindStructuredDeliveryQueue(
        registration of the same host sees a seat that is already filled in and
        stands down instead of installing a second subscription and pump. */
     const registration: HostRegistration = seat
-      ?? { key: item.key, host: item.host, attachment: null, cancelled: false };
+      ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, attachment: null, cancelled: false };
+    registration.writerEpoch ??= item.writerEpoch;
     registration.attachment = { unsubscribe, stopEvents };
     seatRegistration(key, registration);
     if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
@@ -1813,11 +1830,11 @@ export async function bindStructuredDeliveryQueue(
   for (const item of inherited) {
     const id = sessionKeyId(item.key);
     if (registrations.has(id)) continue;
-    seatRegistration(id, { key: item.key, host: item.host, attachment: null, cancelled: false });
+    seatRegistration(id, { key: item.key, host: item.host, writerEpoch: item.writerEpoch, attachment: null, cancelled: false });
   }
   state.activeHosts = hosts;
   state.registerActiveHost = register;
-  state.activeRegistrations = () => [...registrations.values()].map(({ key, host }) => ({ key, host }));
+  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch }) => ({ key, host, writerEpoch }));
   state.republishActiveHost = async (key) => {
     const registration = registrations.get(sessionKeyId(key));
     if (!registration) return false;
@@ -2091,6 +2108,12 @@ export function hasStructuredDeliveryController(registry: AgentRegistry): boolea
 
 export function hasStructuredDeliveryHost(key: SessionKey): boolean {
   return state.activeHosts?.has(sessionKeyId(key)) ?? false;
+}
+
+/** The hosts this Viewer holds, by session key. The update drain asks each
+    one about its own key's host only (docs/design/update-drain-liveness.md, R5). */
+export function structuredDeliveryHeldHosts(): ReadonlyMap<string, EngineHost> {
+  return state.activeHosts ?? new Map();
 }
 
 /**

@@ -72,7 +72,8 @@ export function useAutosizePinned(
     return () => {
       placeholder?.disconnect();
       resize?.disconnect();
-      cancelAnimationFrame(frame);
+      /* Only a resize schedules a frame: with none scheduled (or no ResizeObserver at all) there is nothing to cancel. */
+      if (frame) cancelAnimationFrame(frame);
     };
   }, [ref, maxPx, minPx, pinned, active, field]);
 }

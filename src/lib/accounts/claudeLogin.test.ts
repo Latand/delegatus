@@ -17,7 +17,7 @@ type ClaudeLoginPorts = import("./claudeLogin").ClaudeLoginPorts;
 
 class FakeChild extends EventEmitter { pid = 4242; stdout = new EventEmitter(); stderr = new EventEmitter(); writes: string[] = []; stdin = { write: (text: string) => { this.writes.push(text); return true; }, end: () => undefined }; }
 let child: FakeChild; let signals: string[]; let inheritedChildAlive: boolean;
-function ports(): ClaudeLoginPorts { return { spawn: () => child as never, kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") inheritedChildAlive = false; }, pidStartToken: () => inheritedChildAlive ? "start-1" : null, isExpectedClaude: () => true, waitForExit: async () => undefined, status: async () => ({ loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" }), now: () => 1_000, setTimeout: (fn, ms) => { if (ms <= 2_000) fn(); return {} as NodeJS.Timeout; }, clearTimeout: () => undefined }; }
+function ports(): ClaudeLoginPorts { return { spawn: () => child as never, kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") inheritedChildAlive = false; }, pidStartToken: () => inheritedChildAlive ? "start-1" : null, isExpectedClaude: () => true, waitForExit: async () => !inheritedChildAlive, status: async () => ({ loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" }), now: () => 1_000, setTimeout: (fn, ms) => { if (ms <= 2_000) fn(); return {} as NodeJS.Timeout; }, clearTimeout: () => undefined }; }
 beforeEach(() => { fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); resetAccountCollectionsForTests(); child = new FakeChild(); signals = []; inheritedChildAlive = true; });
 afterAll(() => { if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = OLD_STATE; if (OLD_HOME === undefined) delete process.env.LLV_CLAUDE_HOME; else process.env.LLV_CLAUDE_HOME = OLD_HOME; fs.rmSync(SANDBOX, { recursive: true, force: true }); });
 
@@ -208,9 +208,151 @@ test("input is admitted only after the browser prompt and persists verification 
 test("restart reconciliation rejects PID reuse and preserves only an interrupted safe DTO", async () => {
   seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-restart-one", accountId: "work", phase: "awaiting_browser", pid: 4242, startToken: "old-start", generation: 3, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
   const supervisor = new ClaudeLoginSupervisor({ ...ports(), pidStartToken: () => "new-process" });
-  await supervisor.whenRecovered();
+  await supervisor.recoverAfterRestart();
   expect(signals).toEqual([]);
   expect(supervisor.get("operation-restart-one")).toEqual(expect.objectContaining({ phase: "interrupted", loginUrl: null, acceptsCode: false }));
+});
+
+test("a supervisor another process builds leaves a live sign-in waiting for its code", async () => {
+  const account = createManagedClaudeAccount("Second process");
+  const viewer = new ClaudeLoginSupervisor({
+    ...ports(),
+    kill: (_pid, signal) => { signals.push(signal); child.emit("close", null, signal); },
+    status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
+  });
+  const operation = viewer.start(account.id);
+  child.stdout.emit("data", "Open https://claude.ai/authorize?state=second-process");
+  expect(viewer.get(operation.operationId)).toEqual(expect.objectContaining({ phase: "awaiting_code", acceptsCode: true }));
+
+  /* An agent's MCP server or a scanner worker loads this module, and with it
+     a supervisor over the same state.sqlite, while the operator is on
+     Claude.ai. Building it must not touch the operation the Viewer owns. */
+  const other = new ClaudeLoginSupervisor(ports());
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  expect(signals).toEqual([]);
+  expect(other.forAccount(account.id)).toEqual(expect.objectContaining({ operationId: operation.operationId, phase: "awaiting_code" }));
+  expect(viewer.get(operation.operationId)).toEqual(expect.objectContaining({ phase: "awaiting_code", acceptsCode: true }));
+  expect(await viewer.input(operation.operationId, "authorizationCode#state")).toEqual(expect.objectContaining({ phase: "verifying" }));
+  expect(child.writes).toEqual(["authorizationCode#state\n"]);
+});
+
+test("Viewer activation recovers a sign-in the previous Viewer left, once, before controllers start", async () => {
+  const { completeViewerRuntimeActivation } = await import("@/lib/viewerInstrumentation");
+  const { recoverClaudeLoginsAtStartup, setClaudeLoginSupervisorForTests } = await import("./claudeLogin");
+  seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-activation", accountId: "work", phase: "awaiting_code", pid: 4242, startToken: "start-1", generation: 4, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
+  const supervisor = new ClaudeLoginSupervisor(ports());
+  setClaudeLoginSupervisorForTests(supervisor);
+  const order: string[] = [];
+  try {
+    await completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => { order.push("capability"); },
+      publishHotStateActivation: () => { order.push("fence"); },
+      runClaudeLoginRecovery: async () => { order.push("login-recovery"); await recoverClaudeLoginsAtStartup(); },
+      startStructuredHosts: null,
+      startControllers: async () => {
+        expect(supervisor.get("operation-activation")).toEqual(expect.objectContaining({ phase: "interrupted" }));
+        order.push("controllers");
+      },
+      publishViewerReleaseReady: () => { order.push("ready"); },
+    });
+    expect(order).toEqual(["capability", "fence", "login-recovery", "controllers", "ready"]);
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    await recoverClaudeLoginsAtStartup();
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  } finally { setClaudeLoginSupervisorForTests(null); }
+});
+
+test("Viewer activation finishes when an inherited sign-in ignores SIGTERM: it is killed within a bounded wait", async () => {
+  const { completeViewerRuntimeActivation } = await import("@/lib/viewerInstrumentation");
+  const { realClaudeLoginPorts, recoverClaudeLoginsAtStartup, setClaudeLoginSupervisorForTests } = await import("./claudeLogin");
+  const { spawn } = await import("node:child_process");
+  /* A real stand-in launched the way a wrapped CLI runs (`bun <claude> auth
+     login --claudeai`), so the production fence adopts it, and it ignores
+     SIGTERM. The unbounded exit wait held activation on it forever. */
+  const standIn = path.join(SANDBOX, "term-resistant", "claude");
+  fs.mkdirSync(path.dirname(standIn), { recursive: true });
+  fs.writeFileSync(standIn, 'process.on("SIGTERM", () => { console.log("TERM ignored"); });\nconsole.log("ready");\nsetInterval(() => {}, 1_000);\n');
+  const resistant = spawn(process.execPath, [standIn, "auth", "login", "--claudeai"], { stdio: ["ignore", "pipe", "ignore"] });
+  const pid = resistant.pid ?? 0;
+  const exited = new Promise<void>((resolve) => resistant.once("exit", () => resolve()));
+  let output = "";
+  resistant.stdout?.on("data", (chunk) => { output += String(chunk); });
+  let startToken: string | null = null;
+  try {
+    for (let i = 0; i < 500 && !output.includes("ready"); i += 1) await Bun.sleep(10);
+    startToken = realClaudeLoginPorts.pidStartToken(pid);
+    expect(startToken).not.toBeNull();
+    expect(realClaudeLoginPorts.isExpectedClaude(pid)).toBe(true);
+    const account = createManagedClaudeAccount("Resistant");
+    seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-resistant", accountId: account.id, phase: "awaiting_code", pid, startToken, generation: 6, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
+    const sent: string[] = [];
+    const supervisor = new ClaudeLoginSupervisor({
+      ...realClaudeLoginPorts,
+      kill: (target, signal) => { sent.push(signal); realClaudeLoginPorts.kill(target, signal); },
+      status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
+    });
+    setClaudeLoginSupervisorForTests(supervisor);
+    const order: string[] = [];
+    const activation = completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => {},
+      publishHotStateActivation: () => {},
+      runClaudeLoginRecovery: async () => { await recoverClaudeLoginsAtStartup(); order.push("login-recovery"); },
+      startStructuredHosts: null,
+      startControllers: async () => { order.push("controllers"); },
+      publishViewerReleaseReady: () => { order.push("ready"); },
+    });
+    const finished = await Promise.race([activation.then(() => true), Bun.sleep(8_000).then(() => false)]);
+
+    expect({ finished, sent }).toEqual({ finished: true, sent: ["SIGTERM", "SIGKILL"] });
+    expect(output).toContain("TERM ignored");
+    expect(order).toEqual(["login-recovery", "controllers", "ready"]);
+    expect(realClaudeLoginPorts.pidStartToken(pid)).not.toBe(startToken);
+    expect(supervisor.get("operation-resistant")).toEqual(expect.objectContaining({ phase: "interrupted", result: expect.objectContaining({ code: "interrupted" }) }));
+  } finally {
+    setClaudeLoginSupervisorForTests(null);
+    if (startToken !== null && realClaudeLoginPorts.pidStartToken(pid) === startToken) resistant.kill("SIGKILL");
+    await exited;
+  }
+}, 20_000);
+
+test("a pid that stops being the login during the TERM grace is never sent SIGKILL", async () => {
+  seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-reused", accountId: "work", phase: "awaiting_code", pid: 4242, startToken: "start-1", generation: 7, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
+  let token = "start-1";
+  const waits: number[] = [];
+  const supervisor = new ClaudeLoginSupervisor({
+    ...ports(),
+    pidStartToken: () => token,
+    // The grace ends with the pid alive again under another start token.
+    waitForExit: async (_pid, _startToken, timeoutMs) => { waits.push(timeoutMs); token = "start-reused"; return false; },
+  });
+
+  await supervisor.recoverAfterRestart();
+
+  expect(signals).toEqual(["SIGTERM"]);
+  expect(waits).toEqual([2_000]);
+  expect(supervisor.get("operation-reused")).toEqual(expect.objectContaining({ phase: "interrupted" }));
+});
+
+test("an inherited sign-in still running after SIGKILL settles interrupted without reading the account", async () => {
+  const account = createManagedClaudeAccount("Unkillable");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+  seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-unkillable", accountId: account.id, phase: "verifying", pid: 4242, startToken: "start-1", generation: 8, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
+  const waits: number[] = [];
+  let statusReads = 0;
+  const supervisor = new ClaudeLoginSupervisor({
+    ...ports(),
+    kill: (_pid, signal) => { signals.push(signal); },
+    waitForExit: async (_pid, _startToken, timeoutMs) => { waits.push(timeoutMs); return false; },
+    status: async () => { statusReads += 1; return { loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" }; },
+  });
+
+  await supervisor.recoverAfterRestart();
+
+  expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  expect(waits).toEqual([2_000, 2_000]);
+  expect(statusReads).toBe(0);
+  expect(supervisor.get("operation-unkillable")).toEqual(expect.objectContaining({ phase: "interrupted" }));
 });
 
 test("malformed persisted operations are discarded so recovery cannot block a fresh login", () => {
@@ -228,8 +370,6 @@ test("batched Claude login projection loads durable state once", async () => {
     load: () => { loads += 1; return []; },
     save: () => undefined,
   });
-  await supervisor.whenRecovered();
-  loads = 0;
 
   expect(supervisor.forAccounts(["one", "two"])).toEqual(new Map([["one", null], ["two", null]]));
   expect(loads).toBe(1);
@@ -416,13 +556,13 @@ test("restart sends TERM and KILL, awaits the resistant child exit, then verifie
       signals.push(signal);
       if (signal === "SIGKILL") inheritedChildAlive = false;
     },
-    waitForExit: async () => { calls.push("wait"); },
+    waitForExit: async () => { calls.push("wait"); return !inheritedChildAlive; },
     status: async () => {
       calls.push("status");
       return { loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" };
     },
   });
-  await supervisor.whenRecovered();
+  await supervisor.recoverAfterRestart();
   expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   expect(calls).toEqual(["kill:SIGTERM", "wait", "kill:SIGKILL", "wait", "status"]);
   expect(supervisor.get("operation-restart-two")).toEqual(expect.objectContaining({ phase: "authenticated" }));
@@ -441,7 +581,7 @@ test("a restart with a safe credential file remains interrupted when Claude stat
     },
   });
 
-  await restarted.whenRecovered();
+  await restarted.recoverAfterRestart();
 
   expect(statusHomes).toEqual([account.home]);
   expect(restarted.get("operation-restart-twelve")).toEqual(expect.objectContaining({ phase: "interrupted", result: expect.objectContaining({ code: "interrupted" }) }));
@@ -451,7 +591,7 @@ test("a retry after recovery supersedes the recovered operation", async () => {
   const account = createManagedClaudeAccount("Recovered retry");
   seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-restart-nine", accountId: account.id, phase: "awaiting_browser", pid: 4242, startToken: "old-start", generation: 9, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
   const restarted = new ClaudeLoginSupervisor(ports());
-  await restarted.whenRecovered();
+  await restarted.recoverAfterRestart();
 
   const retry = restarted.start(account.id);
 
@@ -471,7 +611,7 @@ test("a successful login requires a safe credential file and survives restart as
   fs.writeFileSync(credentials, "{}", { mode: 0o600 });
   seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-restart-three", accountId: account.id, phase: "verifying", pid: 4242, startToken: "start-1", generation: 9, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
   const restarted = new ClaudeLoginSupervisor(ports());
-  await restarted.whenRecovered();
+  await restarted.recoverAfterRestart();
   expect(restarted.get("operation-restart-three")).toEqual(expect.objectContaining({ phase: "authenticated" }));
 });
 
@@ -581,7 +721,7 @@ test("restart recovery rechecks Keychain evidence after provider status", async 
         load: () => [{ operationId: "fixture-recovery", accountId: candidate.id, phase: "verifying", pid: 4242, startToken: "old-start", generation: 1, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }],
         save: () => undefined,
       });
-      await supervisor.whenRecovered();
+      await supervisor.recoverAfterRestart();
       expect(supervisor.get("fixture-recovery")?.phase).toBe(becomesUnknown ? "interrupted" : "authenticated");
       expect(signals).toEqual([]);
     } finally { read.mockRestore(); }

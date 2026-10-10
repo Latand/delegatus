@@ -1,6 +1,7 @@
 "use client";
 
 import type { LogTailStreamResult } from "@/lib/logTailStream";
+import { openEventStream, type EventStream } from "@/lib/streamMux/client";
 import type { LogChunk } from "@/lib/types";
 
 const POLL_MS = 1200;
@@ -36,7 +37,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDueAt = Number.POSITIVE_INFINITY;
 /** When the stream last (re)connected — what "settled" is measured from. */
 let streamStartedAt = Number.NEGATIVE_INFINITY;
-let source: EventSource | null = null;
+let source: EventStream | null = null;
 let inFlight = false;
 let kickPending = false;
 let kickScheduled = false;
@@ -176,7 +177,7 @@ function startSse(): void {
   const reqs = active.map((sub, i) => ({ id: String(i), path: sub.path, offset: sub.getOffset() }));
   connectedSubs = new Map(reqs.map((req, i) => [req.id, active[i]]));
   const url = `/api/logs/stream?subs=${encodeURIComponent(JSON.stringify(reqs))}`;
-  const nextSource = new EventSource(url);
+  const nextSource = openEventStream(url);
   source = nextSource;
   let opened = false;
   nextSource.addEventListener("open", () => { opened = true; });
@@ -185,7 +186,7 @@ function startSse(): void {
     if (generation !== sseGeneration || nextSource !== source) return;
     let payload: { id?: unknown; chunk?: unknown };
     try {
-      payload = JSON.parse((event as MessageEvent<string>).data) as { id?: unknown; chunk?: unknown };
+      payload = JSON.parse(event.data) as { id?: unknown; chunk?: unknown };
     } catch {
       return;
     }
