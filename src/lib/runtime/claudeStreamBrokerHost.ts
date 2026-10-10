@@ -242,6 +242,8 @@ export interface ClaudeStreamBrokerHostOptions {
   claudeProjectsDir?: string;
   spawnPolicyBaseSettingsPath?: string | null;
   allowSubagents?: boolean;
+  /** No automatic memory: no shared-memory hook and Claude's auto memory off. */
+  cleanMemory?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   mcpStatePath?: string;
@@ -834,6 +836,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       try {
         settings = applyClaudeSpawnPolicy(options.claudeConfigDir, {
           allowSubagents: options.allowSubagents,
+          cleanMemory: options.cleanMemory,
           baseSettingsPath: options.spawnPolicyBaseSettingsPath,
           providerAccount: options.providerAccount,
           publicationEnv: options.env ?? process.env,

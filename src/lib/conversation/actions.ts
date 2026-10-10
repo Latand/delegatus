@@ -19,6 +19,8 @@ export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "
 export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 
 export type ConversationActionRequest = {
+  actor?: import("@/lib/accounts/accountOverrides").AccountChoiceActor;
+  controlOrigin?: import("@/lib/runtime/messageOrigin").MessageOrigin;
   operationId?: string;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
@@ -139,6 +141,8 @@ export async function applyConversationAction(
       conversationId: conversation?.id ?? request.conversationId,
       action: request.action,
       operationId: request.operationId,
+      ...(request.actor ? { actor: request.actor } : {}),
+      ...(request.controlOrigin ? { controlOrigin: request.controlOrigin } : {}),
       ...(request.action === "kill" && request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
       ...(request.action === "kill" && request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}),
       ...(request.action === "permission" ? { decision: request.decision, requestId: request.requestId } : {}),

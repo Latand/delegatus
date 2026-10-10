@@ -305,7 +305,7 @@ async function dispatchRuntimeCommand(
   const client = dependencies.client();
   try {
     const byOperator = operatorBrowserRequest(request);
-    if (command.kind === "send" || command.kind === "steer" || command.kind === "inject") {
+    if (command.kind === "send" || command.kind === "steer" || command.kind === "inject" || command.kind === "interrupt" || command.kind === "kill") {
       const origin = byOperator ? { kind: "operator" as const }
         : person.kind === "agent" ? (() => {
           try { return agentMessageOrigin((dependencies.registry ?? agentRegistry)().readOnlySnapshot(), person.conversationId); }

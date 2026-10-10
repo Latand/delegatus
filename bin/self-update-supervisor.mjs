@@ -135,7 +135,19 @@ function writeJsonAtomic(file, value) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, file);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { renameSync(temporary, file); break; }
+      catch (error) {
+        // A concurrent reader or NTFS scanner can briefly deny replacement.
+        // The final healthy/requestId write may have no later flush, so
+        // dropping it leaves terminal custody waiting on "starting" forever.
+        // Retain the prior atomic record throughout this bounded retry.
+        if (process.platform !== "win32" || attempt === 100 || !["EPERM", "EBUSY"].includes(error.code)) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+    }
+  } finally { rmSync(temporary, { force: true }); }
 }
 
 function emptyProcess() {

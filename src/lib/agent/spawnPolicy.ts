@@ -403,6 +403,9 @@ export function applyClaudeSpawnPolicy(
   home: string,
   options: {
     allowSubagents?: boolean;
+    /** A clean launch (src/lib/memory/eligibility.ts): no shared-memory hook,
+        and Claude's own auto memory off in the settings and their env. */
+    cleanMemory?: boolean;
     baseSettingsPath?: string | null;
     providerAccount?: boolean;
     /** Installation publication settings from the launch's original env. */
@@ -448,7 +451,7 @@ export function applyClaudeSpawnPolicy(
 
   const preToolUse = withoutManagedHandlers(hooks.PreToolUse);
   let memoryHook: ReturnType<typeof installMemoryHook> = null;
-  try { memoryHook = installMemoryHook(home, options.publicationEnv ?? process.env, options.memoryQueuePath ?? null); } catch { /* optional memory must never stop a launch */ }
+  try { if (!options.cleanMemory) memoryHook = installMemoryHook(home, options.publicationEnv ?? process.env, options.memoryQueuePath ?? null); } catch { /* optional memory must never stop a launch */ }
   const promptHooks = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : [];
   if (!options.allowSubagents) {
     const script = `#!/bin/sh\nprintf '%s\\n' ${shellQuote(NATIVE_SUBAGENT_DENY_MESSAGE)} >&2\nexit 2\n`;
@@ -490,8 +493,10 @@ export function applyClaudeSpawnPolicy(
   atomicWrite(result.settingsPath, JSON.stringify({
     ...settingsWithoutMcp,
     ...approvalSettings,
+    ...(options.cleanMemory ? { autoMemoryEnabled: false } : {}),
     // Claude reapplies settings.env after startup, over the child's launch env.
-    env: { ...(record(settingsWithoutMcp.env) ?? {}), ...publicationIdentity },
+    env: { ...(record(settingsWithoutMcp.env) ?? {}), ...publicationIdentity,
+      ...(options.cleanMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
     hooks: { ...hooks, PreToolUse: preToolUse,
       ...(memoryHook ? { UserPromptSubmit: [...promptHooks, { hooks: [memoryHook] }] } : {}) },
   }, null, 2) + "\n", 0o600);

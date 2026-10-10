@@ -1,8 +1,8 @@
+import { fixtureBoardReads } from "./boardReads.fixture";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CompanionBoardReads } from "./boardReads";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-registry-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -12,22 +12,21 @@ const { CompanionAdmission } = await import("./admission");
 const { COMPANION_TOOL_REGISTRY, COMPANION_TOOLS, runCompanionTool } = await import("./tools");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-test("all nine declarations execute through one allowlist, parameter schema and project fence", async () => {
+test("all declarations execute through one allowlist, parameter schema and project fence", async () => {
   let ended = false;
   const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected delivery"); } });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
-  const reads = new CompanionBoardReads({ tasks: () => [{ id: "task-a", project: "fixture", text: "A task", status: "open" }, { id: "task-b", project: "foreign", text: "Foreign", status: "open" }],
+  const reads = fixtureBoardReads({ tasks: () => [{ id: "task-a", project: "fixture", text: "A task", status: "open" }, { id: "task-b", project: "foreign", text: "Foreign", status: "open" }],
     pipelines: () => [{ id: "pipeline-a", project: "fixture", task: "A pipeline", state: "running", stages: [], runs: [] }],
     activity: async () => [{ conversationId: "conversation_a", project: "fixture", title: "Agent", lifecycle: "running" }], messages: async () => [{ role: "assistant", text: "Checked it" }] });
   const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
-    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
+    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",reviewId:"review-a",mediaId:"frame-a"}, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
     resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {
     expect(await runCompanionTool(context, tool.name, args[tool.name])).toBeDefined();
-    await expect(runCompanionTool({ ...context, project: "foreign" }, tool.name, args[tool.name])).rejects.toThrow("PROJECT_REFUSED");
-    await expect(runCompanionTool(context, tool.name, { ...args[tool.name], project: "foreign" })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+    await expect(runCompanionTool(context, tool.name, { ...args[tool.name], arbitrary: "foreign" })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   }
   expect(ended).toBe(true);
   await expect(runCompanionTool(context, "send_message", {})).rejects.toThrow("TOOL_NOT_ALLOWED");
@@ -43,7 +42,7 @@ test("the delegation tool sends at once; the model's own flag asks first, and th
   const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => ({ project: "fixture", conversationId: "conversation_seat", seatEpoch: 1, engine: "claude" }), reports: () => [],
     send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; } });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
-  const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const call = (callId: string, name: string, args: Record<string, unknown>, confirmationProposalId?: string) =>
     runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: `delegation-${callId}`, confirmationProposalId, admission, reads, endConversation: () => undefined }, name, args);
   // The default, with the flag null or left out: delivered before the tool answers, and a replayed call adds nothing.
@@ -78,7 +77,7 @@ test("a delayed spoken answer stays bound to the proposal included in its backen
   const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => ({ project: "fixture", conversationId: "conversation_seat", seatEpoch: 1, engine: "claude" }), reports: () => [],
     send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; } });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
-  const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const a = await admission.delegate(session.id, "call-a", "delegation-a", "Delete the old presets", { confirmation: "A needs confirmation." });
   const b = await admission.delegate(session.id, "call-b", "delegation-b", "Deploy the new release", { confirmation: "B needs confirmation." });
   expect(a.state).toBe("awaiting"); expect(b.state).toBe("awaiting");
@@ -103,7 +102,7 @@ test("the model resolves a pending voice confirmation without a server-side cons
     send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; },
   });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
-  const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
   admission.input(session.id, { itemId: "request", text: "Ask the orchestrator to review the plan.", final: true, turn: 1 });
   const request = await runCompanionTool({ project: "fixture", sessionId: session.id, callId: "proposal", delegationId: "request", sourceTurn: 1,
     admission, reads, endConversation: () => undefined }, "request_orchestrator_delegation",
@@ -137,7 +136,7 @@ test("the model resolves a pending voice confirmation without a server-side cons
 test("asking first is the model's judgment in the schema: an optional reason, and no list of words anywhere in the registry", () => {
   const tool = COMPANION_TOOLS.find(row => row.name === "request_orchestrator_delegation")!;
   expect(tool.parameters.properties.confirmation_reason).toMatchObject({ type: ["string", "null"] });
-  expect(tool.parameters.required).toEqual(["instruction", "confirmation_reason", "asked_again"]);
+  expect(tool.parameters.required).toEqual(["project", "instruction", "confirmation_reason", "asked_again"]);
   expect(tool.parameters.properties.asked_again).toMatchObject({ type: ["string", "null"] });
   expect(tool.description).toContain("delivered at once");
   expect(tool.description).toContain("your own judgment");
@@ -172,4 +171,17 @@ test("every delegation refusal code has a concrete sentence", async () => {
     expect(reason.length).toBeGreaterThan(15);
     expect(reason).not.toContain("This request was refused");
   }
+});
+
+
+test("read filters reject widened schemas and malformed boolean, integer and status values", async () => {
+  const storage = new CompanionStorage();
+  const admission = new CompanionAdmission(storage,{recipient:()=>null,reports:()=>[],send:async()=>{throw new Error("unexpected send");}});
+  const session = admission.create({project:"fixture",locale:"en",authority:"live-model"});
+  const reads = fixtureBoardReads({tasks:()=>[],pipelines:()=>[],activity:async()=>[],messages:async()=>[]});
+  const context = {project:"fixture",sessionId:session.id,callId:"read",delegationId:"read",admission,reads,endConversation:()=>undefined};
+  for(const args of [{openOnly:"true"},{limit:11},{limit:1.5},{statuses:["running"]},{ids:Array(21).fill("task-a")},{query:"x".repeat(121)},{full:true}])
+    await expect(runCompanionTool(context,"list_tasks",args)).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+  expect(await runCompanionTool(context,"list_tasks",{openOnly:true,statuses:["inbox"],limit:10,query:null,ids:null,cursor:null,project:null})).toMatchObject({total:0});
+  admission.retire(session.id);
 });

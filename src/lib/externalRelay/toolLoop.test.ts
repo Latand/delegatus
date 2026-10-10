@@ -1,8 +1,135 @@
 import { expect, test } from "bun:test";
 import { callBody, callableReads, callableTools, canonical, createToolLoop, mayQuote } from "./toolLoop";
-import { x1Bodies, x1Errors, x1Request, x1Results } from "./toolLoop.fixture";
+import { ownerRequest, x1Bodies, x1Errors, x1Request, x1Results } from "./toolLoop.fixture";
+import { setRelaySwitch } from "./switches";
 import { startTestRelay } from "./testRelay";
 import type { PairedRelay } from "./store";
+
+test("the service's owner index stays authoritative and excludes non-owner and anonymous requesters", async () => {
+  const request = ownerRequest();
+  const ownerTools = () => callableTools(request).filter((tool) => tool.name.startsWith("owner_"));
+  // I8 omits new owner tools when negotiation is OFF; the client interprets
+  // offered items without maintaining an operation list of its own.
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    expect(ownerTools()).toHaveLength(14);
+    for (const role of ["member", "admin", "anonymous_admin", "admin_owner_member"]) {
+      request.input.requester = x1Request(role).input.requester;
+      expect(ownerTools()).toHaveLength(0);
+    }
+    request.input.requester = x1Request("owner").input.requester;
+    const controller = new AbortController();
+    const loop = createToolLoop({ features: [] } as unknown as PairedRelay, request,
+      { signal: controller.signal, ack: async () => true, lose: () => controller.abort() });
+    expect(loop.tools.filter((tool) => tool.name.startsWith("owner_"))).toHaveLength(14);
+    await loop.runCalls([actionCall("owner_me")], 1);
+    expect(loop.results[0]).toMatchObject({ code: "not_permitted" });
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+});
+
+async function ownerLoopCase(handler: Parameters<typeof startTestRelay>[0]) {
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  const request = ownerRequest();
+  const controller = new AbortController();
+  const server = await startTestRelay(handler);
+  const waits: number[] = [];
+  const loop = createToolLoop({ api_base: `${server.origin}/v1`, credential: "x".repeat(43), features: ["relay_owner_tools"] } as PairedRelay,
+    request, { signal: controller.signal, ack: async () => true, lose: () => controller.abort() }, { sleep: async (ms) => { waits.push(ms); } });
+  return { loop, controller, waits, close: async () => { setRelaySwitch("relay:owner_tools:enabled", false); await server.close(); } };
+}
+const ownerOk = (body: unknown, calls_remaining = 15) => {
+  const call = body as { call_id: string; tool: string };
+  return { ...x1Results.action_ok, call_id: call.call_id, tool: call.tool, audience: "owner", calls_remaining };
+};
+const owner429 = (seconds = 7) => ({ status: 429, body: { error: { code: "rate_limited", message: "rate limited", retry_after_s: seconds } } });
+
+for (const seconds of [1, 7, 60]) test(`E3 ${seconds}s ceiling caches the pure refusal and refunds owner debit`, async () => {
+  const posts: unknown[] = [];
+  const run = await ownerLoopCase((_req, body) => { posts.push(body); return owner429(seconds); });
+  try {
+    const call = actionCall("owner_create_grid", { body: { name: "Grid A" } });
+    await run.loop.runCalls([call], 1);
+    expect(run.waits).toEqual([seconds * 1000, seconds * 1000, seconds * 1000]);
+    expect(posts).toHaveLength(4); expect(new Set(posts.map((p) => JSON.stringify(p))).size).toBe(1);
+    expect(run.loop.callsLeft()).toBe(16); expect(run.loop.actionSent).toBe(false); expect(run.loop.sawUnknown).toBe(false);
+    await run.loop.runCalls([call], 2);
+    expect(posts).toHaveLength(4); expect(run.loop.callsLeft()).toBe(16); expect(run.loop.results).toHaveLength(1);
+  } finally { await run.close(); }
+});
+
+for (const refusal of ["rate_limited", "malformed", "too_large"])
+for (const first of ["transport", "malformed", "pending", "unavailable", "unknown_429"]) test(`E3 ${refusal} after ${first} preserves owner uncertainty and its debit`, async () => {
+  let posts = 0;
+  const run = await ownerLoopCase((_req, body) => {
+    if (++posts > 1) return refusal === "rate_limited" ? owner429() : x1Errors[refusal]!;
+    if (first === "transport") return { drop: true };
+    if (first === "malformed") return { body: {} };
+    if (first === "unknown_429") return { status: 429, body: { error: { code: "other", retry_after_s: 7 } } };
+    return { body: { ...ownerOk(body), status: first === "pending" ? "pending" : "denied", output: "", retry_after_s: 1,
+      ...(first === "unavailable" ? { code: "unavailable" } : {}) } };
+  });
+  try {
+    await run.loop.runCalls([actionCall("owner_create_grid", { body: { name: "Grid A" } })], 1);
+    expect(run.loop.callsLeft()).toBe(0); expect(run.loop.actionSent).toBe(true); expect(run.loop.sawUnknown).toBe(true);
+    expect(run.loop.results[0]).toMatchObject({ status: "outcome_unknown" });
+  } finally { await run.close(); }
+});
+
+for (const refusal of ["malformed", "too_large"]) test(`E3 after a pure ${refusal} refusal releases the owner marker without refunding that debit`, async () => {
+  const posts: unknown[] = [];
+  const run = await ownerLoopCase((_req, body) => {
+    posts.push(body);
+    return (body as { tool: string }).tool === "owner_create_grid" ? x1Errors[refusal]! : owner429();
+  });
+  try {
+    const first = actionCall("owner_create_grid", { body: { name: "Grid A" } });
+    const second = actionCall("owner_attach_grid_chats", { grid_id: "00000000-0000-0000-0000-000000000000", body: {} });
+    await run.loop.runCalls([first], 1);
+    expect(run.loop.callsLeft()).toBe(15); expect(run.loop.actionSent).toBe(false);
+    await run.loop.runCalls([second], 2);
+    expect(posts).toHaveLength(5); expect(run.waits).toEqual([7000, 7000, 7000]);
+    expect(run.loop.callsLeft()).toBe(15); expect(run.loop.actionSent).toBe(false); expect(run.loop.sawUnknown).toBe(false);
+    await run.loop.runCalls([first], 3);
+    await run.loop.runCalls([second], 4);
+    expect(posts).toHaveLength(5); expect(run.loop.callsLeft()).toBe(15); expect(run.loop.results).toHaveLength(2);
+  } finally { await run.close(); }
+});
+
+for (const status of ["ok", "error"] as const) test(`a pure E3 refund preserves an earlier admitted owner ${status} and never replenishes its debit`, async () => {
+  const run = await ownerLoopCase((_req, body) => {
+    const call = body as { tool: string };
+    return call.tool === "owner_create_grid" ? { body: { ...ownerOk(body), status } } : owner429();
+  });
+  try {
+    await run.loop.runCalls([actionCall("owner_create_grid", { body: { name: "Grid A" } })], 1);
+    await run.loop.runCalls([actionCall("owner_attach_grid_chats", { grid_id: "00000000-0000-0000-0000-000000000000", body: {} })], 2);
+    expect(run.loop.callsLeft()).toBe(15); expect(run.loop.actionSent).toBe(true); expect(run.loop.sawUnknown).toBe(false);
+  } finally { await run.close(); }
+});
+
+test("owner calls share the sixteen-call budget with three reads and one action per round", async () => {
+  let posts = 0;
+  const run = await ownerLoopCase((_req, body) => ({ body: { ...ownerOk(body, 16 - ++posts),
+    effect: (body as { tool: string }).tool === "owner_get_clone" ? "read" : "action" } }));
+  try {
+    for (let round = 1; round <= 4; round++) await run.loop.runCalls([
+      actionCall("owner_create_grid", { body: { name: `Grid ${round}` } }),
+      ...[1, 2, 3].map((n) => actionCall("owner_get_clone", { bot_id: round * 10 + n })),
+    ], round);
+    expect(posts).toBe(16); expect(run.loop.callsLeft()).toBe(0);
+    await run.loop.runCalls([actionCall("owner_create_grid", { body: { name: "Grid 5" } })], 5);
+    expect(posts).toBe(16); expect(run.loop.results.at(-1)).toMatchObject({ code: "too_many_calls" });
+  } finally { await run.close(); }
+});
+
+test("owner outputs share the 65536-byte result budget", async () => {
+  const run = await ownerLoopCase((_req, body) => ({ body: { ...ownerOk(body), effect: "read", output: "x".repeat(16000) } }));
+  try {
+    await run.loop.runCalls([1, 2, 3, 4].map((n) => actionCall("owner_get_clone", { bot_id: n })), 1);
+    await run.loop.runCalls([actionCall("owner_get_clone", { bot_id: 5 })], 2);
+    expect(run.loop.callsLeft()).toBe(0); expect(run.loop.results.at(-1)).toMatchObject({ code: "quota_exhausted", output: "" });
+  } finally { await run.close(); }
+});
 
 test("X1 role indexes admit exactly the direct reads for their audience", () => {
   for (const [role, count] of Object.entries({ member: 6, admin: 18, owner: 22, anonymous_admin: 18, admin_owner_member: 6, actions_admin: 18 }))

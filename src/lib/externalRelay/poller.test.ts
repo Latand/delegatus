@@ -8,6 +8,8 @@ import {
   ensureExternalRelayPollers,
   refreshExternalRelayPollers,
   refreshRelayTargets,
+  refreshRelayDescriptorFeatures,
+  relayClaimCapabilities,
   refreshTargetsForRead,
   relayPollerStatus,
   stopExternalRelayPollers,
@@ -18,6 +20,7 @@ import { startTestRelay } from "./testRelay";
 import { noteRelayOutcome, noteRelayProgress } from "./activity";
 import { sampleRequest } from "./request.fixture";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
+import { setRelaySwitch } from "./switches";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -43,6 +46,73 @@ afterAll(() => {
   stopExternalRelayPollers();
   for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("F4 requires the local switch and latest descriptor, and refresh removes withdrawn features", async () => {
+  let features = ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"];
+  let descriptorReads = 0;
+  const server = await startTestRelay(() => {
+    descriptorReads++;
+    return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
+      api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features } };
+  });
+  const paired: PairedRelay = { id: "features", origin: server.origin, api_base: `${server.origin}/v1`, name: "Test", description: "",
+    credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    pairedAt: "2026-01-01T00:00:00Z", paused: true, targets: [], limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } };
+  const before = JSON.stringify(relayClaimCapabilities(paired));
+  try {
+    updateRelayStore((store) => ({ ...store, relays: [paired] }));
+    await refreshRelayDescriptorFeatures(paired.id);
+    let current = readRelayStore().relays[0]!;
+    expect(current.features).toEqual(features);
+    expect(JSON.stringify(relayClaimCapabilities(current))).toBe(before);
+    setRelaySwitch("relay:owner_tools:enabled", true);
+    expect(relayClaimCapabilities(current).features.at(-1)).toBe("relay_owner_tools");
+    expect(relayClaimCapabilities(paired).features).not.toContain("relay_owner_tools");
+    expect(await refreshRelayDescriptorFeatures(paired.id, 300_000)).toBe("skipped");
+    expect(descriptorReads).toBe(1);
+    features = ["requester_context", "relay_tool_calls", "relay_tool_actions"];
+    await refreshRelayDescriptorFeatures(paired.id);
+    current = readRelayStore().relays[0]!;
+    expect(current.features).toEqual(features);
+    expect(relayClaimCapabilities(current).features).not.toContain("relay_owner_tools");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); await server.close(); }
+});
+
+test("the real claim loop adds F4 after descriptor refresh only while the local switch is ON", async () => {
+  const previous = readRelayStore().relays;
+  try {
+    for (const enabled of [false, true]) {
+      const order: string[] = [];
+      let claim: unknown;
+      const server = await startTestRelay((req, body) => {
+        if (req.url?.endsWith("/targets")) { order.push("targets"); return { body: { targets: [] } }; }
+        if (req.url === "/.well-known/delegatus-relay.json") {
+          order.push("descriptor");
+          return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+            api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+            limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+            features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"] } };
+        }
+        order.push("claim"); claim = body; stopExternalRelayPollers(); return { status: 204 };
+      });
+      try {
+        setRelaySwitch("relay:owner_tools:enabled", enabled);
+        updateRelayStore((store) => ({ ...store, relays: [{ id: `owner_loop_${enabled}`, origin: server.origin,
+          api_base: `${server.origin}/v1`, name: "Test", description: "", credential: "x".repeat(43),
+          owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+          pairedAt: "2026-01-01T00:00:00Z", paused: false, targets: [],
+          limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } }] }));
+        ensureExternalRelayPollers();
+        const deadline = Date.now() + 2000;
+        while (!claim && Date.now() < deadline) await Bun.sleep(5);
+        expect(order).toEqual(enabled ? ["targets", "descriptor", "claim"] : ["targets", "claim"]);
+        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions",
+          ...(enabled ? ["relay_owner_tools"] : [])], slots: [] });
+      } finally { stopExternalRelayPollers(); await server.close(); }
+    }
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); updateRelayStore((store) => ({ ...store, relays: previous })); }
 });
 test("boot sweep settles dead owners, keeps live owners, and removes run directories", async () => {
   let completed = 0;

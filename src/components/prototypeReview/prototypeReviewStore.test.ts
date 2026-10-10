@@ -32,3 +32,8 @@ test("a decided review says so, and a message that did not arrive is marked", ()
   expect(prototypeButtonState(decided("failed"), new Set())).toBe("unsent");
   expect(prototypeButtonState(decided("uncertain"), new Set())).toBe("unsent");
 });
+
+test("a hidden undecided review keeps its history button without a waiting state", () => {
+  expect(prototypeButtonState({ ...waiting, waitingDismissal: { at: "2026-10-09T10:00:00Z", by: { kind: "operator" } } }, new Set())).toBe("hidden");
+  expect(prototypeButtonState(waiting, new Set())).toBe("ready");
+});

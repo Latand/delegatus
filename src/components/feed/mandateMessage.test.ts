@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, ORCHESTRATOR_PROTOTYPE_DIRECTIVE, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
 
 import { mandateMessage } from "./mandateMessage";
 
@@ -18,6 +18,8 @@ const HANDOFF = [
   "",
   "No open board tasks are recorded for this project.",
 ].join("\n");
+/** What the card's handoff section shows: the handoff under its own label. */
+const HANDOFF_BODY = HANDOFF.split("\n").slice(1).join("\n").trim();
 
 test("a mandate with no rotation is one section, counted whole", () => {
   const message = mandateMessage(ORCHESTRATOR_SYSTEM_PROMPT);
@@ -27,17 +29,24 @@ test("a mandate with no rotation is one section, counted whole", () => {
 
 test("a rotation handoff becomes its own section, and never leaks into the mandate", () => {
   const message = mandateMessage(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${HANDOFF}`);
-  expect(message.handoff).toContain("## Handoff from your predecessor");
   expect(message.handoff).toContain("conv-A");
   expect(message.mandate).not.toContain("## Handoff from your predecessor");
   /* The count describes the whole delivered message, sections included. */
   expect(message.lines).toBeGreaterThan(message.mandate.split("\n").length);
 });
 
+test("the handoff section opens on its own words, because the card's label already names it", () => {
+  /* Under «Rotation handoff» the body used to start with «Handoff from your
+     predecessor (rotation)» — the same fact twice in a row. */
+  const message = mandateMessage(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${HANDOFF}`);
+  expect(message.handoff!.startsWith("You are replacing orchestrator conversation conv-A")).toBe(true);
+  expect(message.handoff).not.toContain("## Handoff from your predecessor");
+});
+
 test("the compact rotation history section splits the same way", () => {
   const history = "## Rotation history\n\n- seat 3 to seat 4 on 2026-08-20";
   const message = mandateMessage(`${ORCHESTRATOR_SYSTEM_PROMPT}\n\n${history}`);
-  expect(message.handoff).toBe(history);
+  expect(message.handoff).toBe("- seat 3 to seat 4 on 2026-08-20");
   expect(message.mandate).not.toContain("## Rotation history");
 });
 
@@ -58,10 +67,13 @@ test("a bespoke rotation keeps the appended status directive in the mandate, not
   const delivered = orchestratorMandateForDelivery(`${bespoke}\n\n${HANDOFF}`);
   const message = mandateMessage(delivered);
 
-  expect(message.handoff).toBe(HANDOFF);
+  expect(message.handoff).toBe(HANDOFF_BODY);
   expect(message.handoff).not.toContain("## Initial visible status");
   expect(message.mandate).toContain(bespoke);
   expect(message.mandate).toContain(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE);
+  /* The prototype-review directive is appended without a heading, right after
+     the handoff; it is the mandate's too. */
+  expect(message.mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
   expect(message.lines).toBe(delivered.split("\n").length);
 });
 
@@ -73,5 +85,7 @@ test("handoffs stacked by successive rotations stay one disclosure", () => {
 
   expect(message.handoff).toContain("conv-A");
   expect(message.handoff).toContain("conv-B");
+  /* Only the opening heading goes; the next one separates the two rotations. */
+  expect(message.handoff!.split("## Handoff from your predecessor")).toHaveLength(2);
   expect(message.mandate).toBe(ORCHESTRATOR_SYSTEM_PROMPT.trim());
 });

@@ -32,6 +32,8 @@ import {
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
+import { LESSON_MATCH_MIN_CHARS } from "@/lib/memory/roleConsolidate";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -61,6 +63,7 @@ export const MCP_TOOL_NAMES = [
   "create_pipeline",
   "pipeline_action",
   "stage_report",
+  "leave_lesson",
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
@@ -126,6 +129,10 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      recorded rather than replace it a second time, and that record outlives
      this process. */
   "stage_report",
+  /* Appends the calling attempt's lessons to role memory. A replayed
+     clientRequestId must answer with the rules the first call left rather than
+     leave them a second time. */
+  "leave_lesson",
   "link_task_to_pipeline",
   "deploy_exact_sha",
   "flow_action",
@@ -261,6 +268,8 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
 export interface McpToolCallContext {
+  /** Trusted read projection; never accepted from serialized tool arguments. */
+  redactText?: (text: string) => string;
   signal?: AbortSignal;
   deadlineAt?: number;
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
@@ -3315,11 +3324,18 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
+    "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
+  ].join(" "),
+  leave_lesson: [
+    "Leave what this pipeline stage taught you as learned rules (role memory) for the agents who come after you; the answer to an accepted stage_report asks for it.",
+    "Give one to three lessons, each an abstract rule (a class of mistake or situation and what to do about it) with a one-line why and a scope: role (the next agent of your role on this project, or of the role you name), project (every role on this project) or machine (every project on this machine). Or give none with one line saying why.",
+    "The server resolves the calling conversation to its own attempt and records every piece of provenance itself. Reviewers, verifiers, the issue reporter and review-gate stages leave no lessons, and no rule may be addressed to them. A project with learned rules switched off refuses the call.",
+    "Rules are kept on this machine only. Write no names of people, accounts, emails, tokens, ids or absolute paths; the answer names any such text it sees as a hint and stores the rule.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
   search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. A unit ending in ~ matched loosely, by a compound term's parts near each other or by an identifier prefix: its fragment decides whether the hit is on topic. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
-  backfill_worktree_projects: "Explicit operator maintenance to fold removed sibling worktree projects into their known repository. dryRun defaults to true and writes nothing, including no MCP receipt. dryRun:false records worktree mappings and project aliases, migrates board projects and rescans. Optional project narrows the target repository. Reports folded and leftAlone entries with reasons. Scheduled maintenance may preview only; apply requires the operator root or a designated orchestrator acting on the operator request.",
+  backfill_worktree_projects: "Read-only diagnostic for the automatic worktree project recovery that runs at Viewer startup and after full catalog rescans. dryRun defaults to true and writes nothing, including no MCP receipt. dryRun:false is refused. Optional project narrows the target repository. Reports corroborated folded candidates and leftAlone entries with reasons.",
   search_memory: "Search the local read-only index of Claude and Codex memories, global instructions and single-fact skills. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
@@ -3448,6 +3464,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
 };
 
 const clientRequestIdSchema = z.string().min(1).describe("Stable idempotency key for this logical call.");
+/** Lesson text limits count code points, as the role memory store does; a
+    UTF-16 bound would refuse valid text in supplementary scripts. */
+const lessonTextSchema = (min: number, max: number) => z.string()
+  .refine((value) => { const length = lessonTextLength(value); return length >= min && length <= max; }, { message: `must be ${min}–${max} characters (Unicode code points)` });
 /* #1490: the one recovery switch. Excluded from the argument digest, so the
    same logical call with and without it is one call. */
 const recoveryOnlySchema = z.boolean().optional()
@@ -3800,7 +3820,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     pipelineId: entityIdSchema,
     /* #774: was `z.string().min(1)` while the route admitted a fixed set. */
-    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review (#1938): the creator or operator adds an explicit bounded addRounds grant to the same lane. A needs_review lane reviews its unreviewed head; a needs_decision lane parked by a failed terminal budget re-check sends its retained findings to fix first, then runs a fresh reviewer on the new head for the granted rounds. Failed heads are never accepted by this action. Requires addRounds and expectedRevision from get_pipeline. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
+    action: z.enum(PIPELINE_ACTIONS).describe("resolve-decision: the pipeline creator answers a settled needs_decision question, reserving a fresh attempt of the same stage. Requires answer, expectedStageId, expectedAttempt and expectedRevision from get_pipeline. Reuse clientRequestId only for the identical answer. continue-review: new addRounds grants are refused because the review budget is fixed after work starts. Previously accepted requests can replay their receipts without increasing the budget. accept-head (#2187): the creator or operator takes that unreviewed head as it is, and the lane follows the review stage's pass edge or completes; refused outside needs_review. Requires expectedRevision from get_pipeline. retry-merge (#2187): a completed lane whose automatic merge stopped (merge.state blocked or cancelled) goes back into its repository's merge queue; refused while the project's merge setting is off. preview-legacy-review: read-only; answers how a legacy review-loop stage would convert into a reviewer run stage plus one fix stage, or every reason it cannot, with a recommended finite reviewLimit. convert-legacy-review: the creator or operator applies that conversion explicitly; requires expectedRevision, and stageId, reviewLimit and implementerStageId when the preview asks for them; reuse clientRequestId only to replay it. revert-legacy-review: restores the original definition while nothing has run under the conversion; requires stageId and expectedRevision."),
     stageId: z.string().min(1).optional().describe("The stage a graph edit, a legacy-review conversion or a retry-stage names. retry-stage: the stage the pipeline waits on, retried whatever ended its attempt; without launchId it is sent as expectedStageId with that stage's current attempt as expectedAttempt, so a stage or attempt that moved on is refused with STAGE_CHANGED."),
     stage: pipelineStageSchema.optional().describe("add-stage: the complete stage definition. Keeps next and onFail as supplied unless after explicitly selects a pass edge to insert into."),
     after: z.string().min(1).optional().describe("add-stage only: splice into this stage's pass edge. That stage points to the new stage, which inherits its former next; every other edge stays unchanged. Independent of index."),
@@ -3823,7 +3843,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     "prompt": z.string().optional().describe("override-stage: replacement prompt."),
     launchId: z.string().min(1).optional().describe("retry-stage only, optional, and only for an attempt whose launch failed: the launchId get_pipeline with stageId answers for it, sent with stageId. The engine then retries only a failed or conflicted launch receipt, so omit it for an agent that started and then failed or parked. A launch that is no longer the current attempt's is refused."),
     answer: z.string().min(1).max(12_000).optional(),
-    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("continue-review only: explicit additional review rounds, 1..MAX_FAIL_EDGE_ROUNDS. For a failed terminal budget re-check, each granted round fixes retained findings then runs a fresh review; the last failed review parks in needs_decision and requires another grant. A needs_review lane reviews its current head first; stop-after-fix hands the last failed review to one fix and parks a new unreviewed head in needs_review."),
+    addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("Legacy continue-review field: new additional rounds are refused; retained only to replay an already accepted historical request"),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow, or 3 when none is recorded. More than 3 requires an explicit value."),
     implementerStageId: z.string().min(1).optional().describe("preview/convert-legacy-review only: the run stage whose role the fix stage copies, when more than one run passes into the review."),
     expectedRevision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
@@ -3860,6 +3880,16 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
+  leave_lesson: z.object({
+    clientRequestId: clientRequestIdSchema,
+    lessons: z.array(z.object({
+      scope: z.enum(["role", "project", "machine"]).describe("role: the next agent of a role on this project (yours unless role names another); project: every role on this project; machine: every project on this machine."),
+      role: z.enum(ROLE_IDS).optional().describe("With scope role only: the role the rule is for, when another role would have prevented or caught the problem earlier."),
+      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe(`One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it. ${RULE_MIN_CHARS}–${RULE_MAX_CHARS} characters.`),
+      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters; at least ${LESSON_MATCH_MIN_CHARS} letters or digits, as the rule needs too.`),
+    })).max(MAX_LESSONS_PER_ATTEMPT).optional(),
+    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe(`When this stage taught nothing new: one line saying why, at most ${WHY_MAX_CHARS} characters.`),
+  }),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,

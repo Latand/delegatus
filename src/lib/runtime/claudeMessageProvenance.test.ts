@@ -7,6 +7,8 @@ import type { RegistryFile } from "@/lib/agent/registry";
 
 import { claudeMessageProvenance } from "./claudeMessageProvenance";
 import { FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
+import { ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
+import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { captureSelectedContext } from "@/lib/selection/selectedContext";
 
 /**
@@ -171,4 +173,55 @@ test("voice channel survives a reopened Claude delivery ledger into feed provena
   const reopened = new FileClaudeDeliveryLedger(directory);
   expect(claudeMessageProvenance(TRANSCRIPT, { ledger: reopened, registrySnapshot: () => emptySnapshot() })["voice-engine-message"])
     .toEqual({ origin: "operator", channel: "voice-delegatus" });
+});
+
+const noSeats = () => ({ schemaVersion: 1, nextSeatEpoch: 1, seats: {}, pending: {}, history: [], revocations: [], rollbacks: {} });
+function rotationSeats(custom = false, historical = false) {
+  const seat = {
+    project: "atlas", promptVersion: 44, mandate: custom ? "A custom mandate" : ORCHESTRATOR_SYSTEM_PROMPT,
+    intent: { clientRequestId: "rotation-fixture", launchId: "rotation-launch" },
+  } as OrchestratorSeat;
+  return { ...noSeats(), seats: historical ? {} : { atlas: seat }, history: historical ? [{ seat }] : [] } as unknown as ReturnType<typeof import("@/lib/orchestrator/seats").readOrchestratorSeatFile>;
+}
+
+for (const custom of [false, true]) for (const historical of [false, true]) {
+  test(`rotation UUID retains ${custom ? "custom" : "v44"} mandate from ${historical ? "history" : "active seat"} with stamped operator origin`, () => {
+    const ledger = newLedger();
+    ledger.recordQueued(SESSION_ID, { id: "spawn_message_rotation-launch", text: "Mandate", origin: { kind: "operator", channel: "voice-delegatus" }, selectedContext: REFERENCE }, "turn-started");
+    ledger.confirmDelivered(SESSION_ID, "spawn_message_rotation-launch", "rotation-uuid");
+    const snapshot = emptySnapshot({ deliveryOperationOwners: {
+      "spawn_message_rotation-launch": { clientMessageId: "spawn_rotation-launch", conversationId: "conversation_successor" },
+    } as unknown as RegistryFile["deliveryOperationOwners"] });
+    let reads = 0;
+    const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => snapshot, orchestratorSeats: () => { reads++; return rotationSeats(custom, historical); } });
+    expect(map["rotation-uuid"]).toEqual({ origin: "operator", channel: "voice-delegatus", selectedContext: REFERENCE, submissionId: "spawn_rotation-launch", mandate: custom ? { kind: "custom" } : { kind: "version", version: 44 } });
+    expect(reads).toBe(1);
+  });
+}
+
+test("pruned first-launch ownership still names the recorded seat, while unrelated root launches remain operator messages", () => {
+  const ledger = newLedger();
+  for (const launch of ["rotation-launch", "ordinary-launch"]) {
+    ledger.recordQueued(SESSION_ID, { id: `spawn_message_${launch}`, text: "Same words" }, "turn-started");
+    ledger.confirmDelivered(SESSION_ID, `spawn_message_${launch}`, launch);
+  }
+  const snapshot = emptySnapshot({ conversations: { conversation_successor: { generations: [{ path: TRANSCRIPT }], delegationDepth: 0 } } as unknown as RegistryFile["conversations"] });
+  const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => snapshot, orchestratorSeats: () => rotationSeats() });
+  expect(map["rotation-launch"]).toEqual({ origin: "operator", mandate: { kind: "version", version: 44 } });
+  expect(map["ordinary-launch"]).toEqual({ origin: "operator" });
+});
+
+test("reserved adoption identity keeps the card when the seat store is unavailable, without classifying an operator paste", () => {
+  const ledger = newLedger();
+  for (const id of ["adopt-operation", "paste-operation"]) {
+    ledger.recordQueued(SESSION_ID, { id, text: "Same mandate words", origin: { kind: "operator" } }, "turn-started");
+    ledger.confirmDelivered(SESSION_ID, id, id);
+  }
+  const snapshot = emptySnapshot({ deliveryOperationOwners: {
+    "adopt-operation": { clientMessageId: "orchmandate_fixture", conversationId: "conversation_successor" },
+    "paste-operation": { clientMessageId: "operator-paste", conversationId: "conversation_successor" },
+  } as unknown as RegistryFile["deliveryOperationOwners"] });
+  const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => snapshot, orchestratorSeats: () => { throw new Error("unavailable"); } });
+  expect(map["adopt-operation"]).toEqual({ origin: "operator", submissionId: "orchmandate_fixture", mandate: { kind: "unqualified" } });
+  expect(map["paste-operation"]).toEqual({ origin: "operator", submissionId: "operator-paste" });
 });

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { useVoiceCompanion, type VoiceCompanionHook } from "./useVoiceCompanion";
 import { useVoiceCompanionSettings, type VoiceCompanionSettingsHook } from "./useVoiceCompanionSettings";
@@ -59,5 +59,41 @@ test("typed hooks start only on request, reset a new session, release ownership,
     expect(JSON.stringify(seen.settings!.settings)).not.toContain("synthetic-credential");
   } finally { await act(async () => { root.unmount(); }); globalThis.fetch = originalFetch; }
   expect(closes).toBe(1);
+  expect(listeners.size).toBe(0);
+});
+
+
+test("context switches keep hook state on the same call and cleanup only on unmount", async () => {
+  const contexts: Array<string | null> = [];
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let starts = 0, disposals = 0, seq = 0;
+  const emit = (payload: import("@/lib/voiceCompanion/contract").Payload) => {
+    for (const listener of listeners) listener({ ...payload, version: 1, sessionId: "held", generation: 1, seq: ++seq, eventId: `held-${seq}`, atMs: seq } as CompanionEvent);
+  };
+  const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    start: async () => { starts++; emit({ type: "session.ready", mode: "simulated" }); emit({ type: "transcript.final", speaker: "operator", itemId: "input", text: "Still here" }); },
+    setProject: async project => { contexts.push(project); }, command: async () => {}, close: async () => {}, dispose: async () => { disposals++; } };
+  let voice!: VoiceCompanionHook;
+  function Harness({ project }: { project: string | null }) {
+    const current = useVoiceCompanion(adapter);
+    voice = current;
+    const { setProject } = current;
+    useEffect(() => { void setProject(project); }, [project, setProject]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(<Harness project="first" />));
+    await act(async () => voice.start({ locale: "en", project: "first" }));
+    const lines = voice.state.lines;
+    for (const project of ["second", null, "third"]) {
+      await act(async () => root.render(<Harness project={project} />));
+      expect(voice.state.lines).toBe(lines);
+      expect(voice.state.phase).toBe("idle");
+      expect([starts, disposals]).toEqual([1, 0]);
+    }
+    expect(contexts).toEqual(["first", "second", null, "third"]);
+  } finally { await act(async () => root.unmount()); }
+  expect(disposals).toBe(1);
   expect(listeners.size).toBe(0);
 });

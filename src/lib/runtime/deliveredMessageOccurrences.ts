@@ -131,7 +131,7 @@ export function orchestratorMandateDeliveries(file: OrchestratorSeatFile): Map<s
  * an unreadable, compacted or simply absent seat record costs the QUALIFIER
  * and never the card.
  */
-function mandateForDelivery(
+export function mandateForDelivery(
   clientMessageId: string | null | undefined,
   mandates: ReadonlyMap<string, MandateDelivery>,
 ): MandateDelivery | null {

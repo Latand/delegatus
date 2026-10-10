@@ -12,6 +12,8 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { StructuredControlResult } from "@/lib/runtime/structuredControls";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineRuntimeSeat, PipelineRuntimeSwitch, EffectivePipelineRole } from "./types";
+import { learnedRulesReserve } from "@/lib/memory/roleLaunch";
+import { withoutStoredLessons } from "@/lib/memory/roleStore";
 
 export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
@@ -47,16 +49,32 @@ export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAt
 }
 export { switchOperationKey };
 
-export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = []): Promise<boolean> {
+export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = [], operatorOnly = false): Promise<boolean> {
   let cursor = 0;
   while (true) {
-    const page = await client.effectBatch(["runtime.kill-boundary"], cursor);
+    const page = await client.effectBatch(operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"], cursor);
     for (const effect of page) {
       if (effect.payload.conversationId !== conversationId || typeof effect.payload.operationId !== "string" || ignoredOperationIds.includes(effect.payload.operationId)) continue;
+      // Admission time survives receipt compaction in both modes. Ordinary
+      // switch checks read completed physical kills; recovery reads stop intent.
+      const admittedAt = typeof effect.payload.admittedAt === "string" ? Date.parse(effect.payload.admittedAt) : NaN;
+      if (Number.isFinite(admittedAt) && admittedAt < Date.parse(since)) continue;
+      if (!operatorOnly && Number.isFinite(admittedAt)) return true;
+      if (operatorOnly && effect.payload.origin === "system") continue;
+      if (operatorOnly && effect.payload.origin === "unknown") throw new Error("legacy stop authorship is unavailable; continuation is fenced");
+      if (operatorOnly && effect.payload.origin === "operator" && (effect.payload.originAuthenticated === true || effect.payload.originAuthenticated === 1) && typeof effect.payload.admittedAt === "string"
+        && Number.isFinite(Date.parse(effect.payload.admittedAt))) {
+        if (Date.parse(effect.payload.admittedAt) >= Date.parse(since)) return true;
+        continue;
+      }
       const receipt = (await client.operationStatus(effect.payload.operationId))?.receipt;
       if (!receipt) throw new Error("runtime kill boundary has no retained receipt; continuation is fenced");
       // Millisecond timestamps cannot order a tie; terminal kill wins it.
-      if (Date.parse(receipt.admittedAt ?? receipt.at) >= Date.parse(since)) return true;
+      if (Date.parse(receipt.admittedAt ?? receipt.at) >= Date.parse(since)) {
+        if (operatorOnly && receipt.origin === "system") continue;
+        if (operatorOnly && (receipt.origin !== "operator" || receipt.originAuthenticated !== true)) throw new Error("runtime kill authorship is unavailable; continuation is fenced");
+        return true;
+      }
     }
     if (page.length < 100) return false;
     const next = Math.max(...page.map(effect => effect.eventSeq));
@@ -180,7 +198,7 @@ export async function driveRuntimeSwitch(
         record.phase = "switching"; await persist();
       } else {
         const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: record.from.conversationId,
-          launchId: record.from.launchId, agentPath: record.from.agentPath, paneId: null }, { operationId: switchOperationKey(record, "stop") });
+          launchId: record.from.launchId, agentPath: record.from.agentPath, paneId: null }, { operationId: switchOperationKey(record, "stop"), automatic: true });
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           if (stopped.outcome === "unconfirmed" || stopped.outcome === "unresolved") {
             const detail = "detail" in stopped ? stopped.detail : stopped.error;
@@ -250,7 +268,8 @@ export async function driveRuntimeSwitch(
           const result = await ports.exec("git", args, pipeline.worktreeDir);
           tail.push(result.code === 0 ? result.stdout.split("\n").slice(0,40).join("\n") : "Git observation unavailable");
         }
-        const content = hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`);
+        /* The transcript tail can hold the learned rules the attempt started with; they stay out of the checkout. */
+        const content = withoutStoredLessons(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
         const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, ports.exec);
         const digest = crypto.createHash("sha256").update(content).digest("hex");
         const file = path.join(directory, `runtime-handoff-${digest}.md`);
@@ -258,7 +277,7 @@ export async function driveRuntimeSwitch(
         const suffix = `\nContinuing on a new runtime. Read the complete handoff: ${file}\n${content.slice(0,4000)}`;
         // Externalize the bound brief if its framing and the handoff exceed the transport limit.
         let brief = input.prompt;
-        if (Buffer.byteLength(brief + suffix) > 32000) {
+        if (Buffer.byteLength(brief + suffix) > 32000 - learnedRulesReserve(input.learnedRules)) {
           const briefFile = path.join(directory, `runtime-brief-${crypto.createHash("sha256").update(brief).digest("hex")}.md`);
           writeArtifact(briefFile, brief); brief = `Read the complete stage brief: ${briefFile}`;
         }
@@ -268,7 +287,7 @@ export async function driveRuntimeSwitch(
       }
       const receipt = record.launch?.launchId ? ports.spawnReceipt(record.launch.launchId) : null;
       if (!receipt && record.launch?.launchId && expired) {
-        const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: record.launch.conversationId, launchId: record.launch.launchId, agentPath: null, paneId: null }, { operationId: switchOperationKey(record, "stop-launch") });
+        const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: record.launch.conversationId, launchId: record.launch.launchId, agentPath: null, paneId: null }, { operationId: switchOperationKey(record, "stop-launch"), automatic: true });
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") { await park("runtime switch launch could not be proven stopped"); return; }
         await rollback("runtime switch launch receipt unavailable after budget"); return;
       }
@@ -276,7 +295,7 @@ export async function driveRuntimeSwitch(
         if (["failed", "conflicted"].includes(receipt.state) || stagedLaunchRecovery(receipt)?.stopped || expired) {
           if (receipt.staged || receipt.state === "path-pending") {
             ports.failStageLaunch?.(receipt.launchId, receipt.conversationId!, "runtime switch launch exceeded its budget");
-            const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: receipt.conversationId, launchId: receipt.launchId, agentPath: receipt.transcript, paneId: receipt.paneId }, { operationId: switchOperationKey(record, "stop-launch") });
+            const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: receipt.conversationId, launchId: receipt.launchId, agentPath: receipt.transcript, paneId: receipt.paneId }, { operationId: switchOperationKey(record, "stop-launch"), automatic: true });
             if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") { await park("runtime switch launch could not be proven stopped"); return; }
           }
           await rollback(receipt.error ?? "runtime switch launch failed"); return;

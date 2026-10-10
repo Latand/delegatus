@@ -1,9 +1,9 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { fixtureBoardReads } from "./boardReads.fixture";
+import { afterAll, beforeEach, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } from "./fakeProvider";
-import { CompanionBoardReads } from "./boardReads";
 import type { BackendRequest } from "./sessionConfig";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-live-"));
@@ -17,18 +17,18 @@ const { SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD, BACKEND_RESPONSE_RESE
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 
-const noReads = () => new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+const noReads = () => fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
 function fixture(key = "synthetic-credential") {
   const storage = new CompanionStorage();
   storage.updateSettings({ enabled: true });
   let sends = 0;
   const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
     send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => [] });
-  const reads = new CompanionBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "open" }],
+  const reads = fixtureBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }],
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const provider = new FakeLiveProvider();
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false });
-  return { storage, admission, provider, service, sends: () => sends };
+  return { storage, admission, provider, reads, service, sends: () => sends };
 }
 /** Answers a first round with the given calls and every later round with speech. */
 const calling = (...calls: Array<ReturnType<typeof functionCall>>) => (request: BackendRequest, index: number) =>
@@ -268,7 +268,7 @@ test("a backend request with no answer keeps its whole reservation as incomplete
   expect(f.storage.settings().usageUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD + BACKEND_RESPONSE_RESERVE_USD, 6);
 });
 
-test("a correlated orchestrator report is replayed to its own card and sent for speech; concurrent unrelated reports are ignored", async () => {
+test("a correlated orchestrator report is replayed to its own card and sent for speech; concurrent unrelated reports are spoken once", async () => {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   let reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const recipient = { project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "codex" as const };
@@ -282,14 +282,40 @@ test("a correlated orchestrator report is replayed to its own card and sent for 
   const delivery = admission.session(s.sessionId).proposals[proposal.proposalId].delivery!;
   const report = { id: "report-a", seq: 1, project: "fixture", at: "2026-10-06T00:00:00Z", class: "completed" as const, body: "The plan has been reviewed",
     correlatesDirective: delivery.clientMessageId, origin: { kind: "manager" as const, conversationId: recipient.conversationId, role: "orchestrator" as const } };
-  reports = [{ ...report, id: "unrelated", correlatesDirective: "other-message" }, report];
+  reports = [{ ...report, id: "unrelated", seq:2, correlatesDirective: "other-message" }, report];
   expect((await service.events(s.sessionId, 0)).filter(row => row.type === "orchestrator.answer")).toMatchObject([{ reportId: "report-a" }]);
   await service.events(s.sessionId, 0);
   const commentary = provider.commands.filter(row => row.type === "session.commentary.append");
-  expect(commentary).toHaveLength(1);
+  expect(commentary).toHaveLength(2);
   expect(commentary[0]).toMatchObject({ delegation_id: null });
   expect(commentary[0].content).toContain("The plan has been reviewed");
   await service.close(s.sessionId);
+});
+
+test("reports name their own project's orchestrator after the view switches", async () => {
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+  let reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const recipient = (project: string) => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" as const });
+  const admission = new CompanionAdmission(storage, { recipient, reports: project => reports.filter(report => report.project === project),
+    send: async () => ({ status: "queued", operationId: "operation-project-report" }) });
+  const provider = new FakeLiveProvider();
+  const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { key: () => "synthetic-credential", timers: false });
+  const session = await service.start({ project: "Alpha", locale: "en", sdp: "v=0" });
+  const proposal = admission.propose(session.sessionId, "project-report", "source", "Review the plan")!;
+  await service.command(session.sessionId, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
+  const delivery = admission.session(session.sessionId).proposals[proposal.proposalId].delivery!;
+  await service.context(session.sessionId, "Beta");
+  const report = (project: string, seq: number, directive?: string) => ({ id: `report-${project}`, project, seq, class: "completed" as const,
+    at: "2026-10-10T00:00:00Z", body: "The plan has been reviewed.", ...(directive ? { correlatesDirective: directive } : {}),
+    origin: { kind: "manager" as const, conversationId: recipient(project).conversationId, role: "orchestrator" as const } });
+  reports = [report("Alpha", 1, delivery.clientMessageId), report("Beta", 2)];
+  await service.events(session.sessionId, 0);
+  await service.events(session.sessionId, 0);
+  const commentary = provider.commands.filter(command => command.type === "session.commentary.append");
+  expect(commentary).toHaveLength(2);
+  expect(commentary[0]!.content).toContain('project "Alpha"');
+  expect(commentary[1]!.content).toContain('project "Beta"');
+  await service.close(session.sessionId);
 });
 
 test("a spoken answer stays within the 500 tokens one commentary append takes, keeps its delegation and ends on a whole sentence", async () => {
@@ -358,7 +384,7 @@ test("the active credential reflected in a transcript, a tool, a proposal, a rep
   await service.close(s.sessionId);
   expect(answered).toContain("orchestrator.answer");
   expect(answered).toContain("tool.called");
-  for (const surface of [answered, stateFile(), transcriptFiles(), JSON.stringify(service.transcriptRecord(s.sessionId)), JSON.stringify(await service.events(s.sessionId, 0)), JSON.stringify(provider.commands.filter(row => row.type === "session.commentary.append"))])
+  for (const surface of [JSON.stringify(provider.requests), answered, stateFile(), transcriptFiles(), JSON.stringify(service.transcriptRecord(s.sessionId)), JSON.stringify(await service.events(s.sessionId, 0)), JSON.stringify(provider.commands.filter(row => row.type === "session.commentary.append"))])
     expect(surface).not.toContain(KEY);
 });
 
@@ -1090,3 +1116,390 @@ test("the session record survives 800 fragments, keeps each segment once, and st
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   expect(stateFile()).not.toContain('"arguments"');
 }, 20_000);
+
+
+test("open work takes two reads and repeated reads across backend delegations use the call ledger", async () => {
+  const f = fixture();
+  const actual = spyOn(f.reads,"read");
+  f.provider.responder = (request,index) => request.input.some(item=>item.type === "function_call_output")
+    ? backendResponse(`resp_${index}`,[message("One open task.")])
+    : backendResponse(`resp_${index}`, index === 0 ? [functionCall("open-tasks","list_tasks",{openOnly:true}),functionCall("open-pipelines","list_pipelines",{state:["open"]})] : [functionCall("tasks-again","list_tasks",{openOnly:true})]);
+  const s = await f.service.start({project:"fixture",locale:"uk",sdp:"v=0"});
+  f.provider.replay(s.providerId,said("Що зараз відкрито?",0),delegationCreated("board-open",600));
+  await f.service.drain(s.sessionId);
+  expect(actual).toHaveBeenCalledTimes(2);
+  const first = f.provider.requests[1].input.filter(item=>item.type === "function_call_output").map(item=>JSON.parse(item.output as string));
+  expect(first[0]).toMatchObject({total:1,shown:1,rows:[{title:"Review the plan",state:"inbox"}]});
+  f.provider.replay(s.providerId,said("А які задачі відкриті?",1000),delegationCreated("board-followup",1600));
+  await f.service.drain(s.sessionId);
+  expect(actual).toHaveBeenCalledTimes(2);
+  expect(f.provider.requests[2].input[0].content).toContain("Reads earlier in this call");
+  expect(f.provider.requests[2].input[0].content).toContain("Review the plan: inbox");
+  expect(JSON.parse(f.provider.requests[3].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({repeated:true});
+  await f.service.close(s.sessionId); actual.mockRestore();
+});
+
+
+test("an explicit refresh reads changed persisted tasks immediately and repeated refreshes reuse that observation", async () => {
+  const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const at = "2026-10-10T00:00:00.000Z";
+  const taskFile = path.join(root, "refresh-tasks.json");
+  saveTasks([{ id: "task-refresh", project: "fixture", text: "Review the plan", status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], taskFile);
+  const f = fixture();
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] } });
+  const reads = new CompanionBoardReads({ ...paths, resolveProject: () => "fixture" });
+  const actual = spyOn(reads, "read");
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  let refresh = false;
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+    ? backendResponse(`resp_refresh_${index}`, [message("Here is the current board.")])
+    : backendResponse(`resp_refresh_${index}`, [functionCall(`tasks-${index}`, "list_tasks", { openOnly: true, refresh }),
+      functionCall(`tasks-repeat-${index}`, "list_tasks", { openOnly: true, refresh })]);
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const read = async (id: string) => {
+    f.provider.replay(s.providerId, delegationCreated(id, 1));
+    await service.drain(s.sessionId);
+    return f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").map(item => JSON.parse(item.output as string));
+  };
+  try {
+    expect((await read("initial"))[0]).toMatchObject({ total: 1 });
+    saveTasks(loadTasks(taskFile).map(task => ({ ...task, status: "done" })), taskFile);
+    expect((await read("ordinary-repeat"))[0]).toMatchObject({ total: 1, repeated: true });
+    refresh = true;
+    const fresh = await read("operator-refresh");
+    expect(fresh[0]).toMatchObject({ total: 0, rows: [] });
+    expect(fresh[1]).toMatchObject({ total: 0, repeated: true });
+    expect(actual).toHaveBeenCalledTimes(2);
+  } finally { await service.close(s.sessionId); actual.mockRestore(); }
+});
+
+test("prototype frame bytes reach backend vision while tool output and transcript carry only references", async () => {
+  const f = fixture();
+  f.provider.responder = calling(functionCall("frame-call","view_prototype_frame",{taskId:"task_fixture",reviewId:"review-a",mediaId:"frame-a"}));
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  f.provider.replay(s.providerId,delegationCreated("frame-request",1));
+  await f.service.drain(s.sessionId);
+  const vision = f.provider.requests[1].input.find(item=>Array.isArray(item.content))!;
+  expect((vision.content as Array<Record<string,unknown>>)[1]).toMatchObject({type:"input_image",image_url:expect.stringContaining("data:image/png;base64,"),detail:"high"});
+  const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string;
+  expect(output).toContain("frame-a"); expect(output).not.toContain("base64");
+  expect(JSON.stringify(f.service.transcriptRecord(s.sessionId))).not.toContain("iVBORw");
+  expect(f.sends()).toBe(0); await f.service.close(s.sessionId);
+});
+
+async function credentialReadFixture(options: { taskText?: (key: string) => string; messages?: (key: string) => string[] } = {}) {
+  const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const key = ["Zr9QvB", "private", "credential", "Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5"].join("-");
+  const pieces = key.match(/.{1,6}/g)!.join(" ");
+  const at = "2026-10-10T00:00:00.000Z";
+  const taskFile = path.join(root, "credential-reads.json");
+  const description = "Keep the complete safe description. ".repeat(160);
+  const round = { id: `pr_${"a".repeat(32)}`, taskId: "task-credential", project: "fixture", title: "Safe prototype review", createdAt: at,
+    source: { conversationId: null }, publicationKey: "fixture-publication", inputDigest: "b".repeat(64),
+    variants: [{ number: 1, name: "Safe variant", description, frames: [], videos: [] }],
+    questions: [{ id: "choice", text: "Which variant?", options: [{ label: "Safe variant", recommended: true }] }],
+    decision: { chosen: [1], comment: `Keep this safe decision. ${pieces} Keep the final sentence.`, at,
+      delivery: { state: "sent" as const, clientMessageId: "fixture-choice", conversationId: null, text: "Private delivery context" } } };
+  saveTasks([{ id: round.taskId, project: "fixture", text: options.taskText?.(key) ?? `Safe task ${pieces} ready`, status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, prototypeReviews: [round] },
+    { id: "task-closed", project: "fixture", text: "Closed task", status: "done", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], taskFile);
+  const transcriptPath = path.join(root, "clipping-reads.jsonl");
+  const texts = options.messages?.(key) ?? [];
+  fs.writeFileSync(transcriptPath, texts.map((text,index) => JSON.stringify({ type: "assistant", uuid: `clipping-${index}`, timestamp: at,
+    message: { role: "assistant", content: [{ type: "text", text }] } })).join("\n") + "\n");
+  const f = fixture(key);
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] }, transcript: {
+      selectedContext: { selectedConversation: () => ({ resolve: id => id === "conversation_clipping" ? { conversationId: id, engine: "claude", path: transcriptPath, project: "fixture" } : null,
+        readTail: () => null }), pathAllowed: candidate => candidate === transcriptPath },
+      pinnedTranscript: candidate => {
+        if (candidate !== transcriptPath) return undefined;
+        const descriptor = fs.openSync(candidate,"r");
+        return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true };
+      },
+    } });
+  const reads = new CompanionBoardReads({ ...paths, resolveProject: () => "fixture" });
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => key, timers: false, closeTimeoutMs: 20 });
+  return { ...f, service, reads, key, description, round, transcriptPath, taskFile, paths };
+}
+
+async function expectCredentialReadSurfacesSafe(f: Awaited<ReturnType<typeof credentialReadFixture>>, sessionId: string) {
+  const { withoutSeparators } = await import("./redaction");
+  const surfaces = [JSON.stringify(f.provider.requests), JSON.stringify(f.provider.commands),
+    JSON.stringify(await f.service.events(sessionId, 0)), JSON.stringify(f.service.transcriptRecord(sessionId)), stateFile(), transcriptFiles()];
+  for (const surface of surfaces) {
+    expect(withoutSeparators(surface)).not.toContain(f.key);
+    expect(withoutSeparators(surface)).not.toContain(f.key.slice(0,6));
+  }
+}
+
+test("whole prototype review masks active credential fragments before backend input and keeps the complete safe review", async () => {
+  const f = await credentialReadFixture();
+  f.provider.responder = (request, index) => {
+    const output = request.input.find(item => item.type === "function_call_output");
+    return backendResponse(`resp_review_${index}`, output ? [message(String(output.output))]
+      : [functionCall("review-credential", "read_prototype_review", { taskId: f.round.taskId })]);
+  };
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, delegationCreated("review-credential", 1));
+    await f.service.drain(s.sessionId);
+    const output = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(output.item.rounds[0]).toMatchObject({ variants: [{ number: 1, name: "Safe variant", description: f.description }], questions: f.round.questions,
+      decision: { chosen: [1], comment: "Keep this safe decision. [redacted] Keep the final sentence." } });
+    expect(output.truncated).toBe(false);
+    await expectCredentialReadSurfacesSafe(f, s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("filtered task reads mask active credential fragments before backend input, speech, browser events and transcripts", async () => {
+  const f = await credentialReadFixture();
+  f.provider.responder = (request, index) => {
+    const output = request.input.find(item => item.type === "function_call_output");
+    return backendResponse(`resp_filtered_${index}`, output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall("filtered-credential", "list_tasks", { statuses: ["inbox"], openOnly: true, query: "Safe task", ids: [f.round.taskId] })]);
+  };
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, delegationCreated("filtered-credential", 1));
+    await f.service.drain(s.sessionId);
+    const output = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(output).toMatchObject({ total: 1, shown: 1, rows: [{ title: "Safe task [redacted] ready", state: "inbox" }] });
+    expect(spoken(f).at(-1)?.content).toContain("Safe task [redacted] ready");
+    await expectCredentialReadSurfacesSafe(f, s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("cached follow-up context and repeated reads retain safe speech without reconstructing active credentials", async () => {
+  const f = await credentialReadFixture();
+  const actual = spyOn(f.reads, "read");
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+    ? backendResponse(`resp_cached_${index}`, [message("Safe task ready.")])
+    : backendResponse(`resp_cached_${index}`, [functionCall(`cached-${index}`, "list_tasks", { openOnly: true })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    for (const id of ["first-read", "cached-follow-up"]) {
+      f.provider.replay(s.providerId, delegationCreated(id, 1));
+      await f.service.drain(s.sessionId);
+    }
+    expect(actual).toHaveBeenCalledTimes(1);
+    expect(f.provider.requests[2].input[0].content).toContain("Safe task [redacted] ready: inbox");
+    expect(JSON.parse(f.provider.requests[3].input.find(item => item.type === "function_call_output")!.output as string)).toMatchObject({ repeated: true });
+    await expectCredentialReadSurfacesSafe(f, s.sessionId);
+  } finally { await f.service.close(s.sessionId); actual.mockRestore(); }
+});
+
+for (const boundary of ["clip", "newline"] as const) test(`task ${boundary} boundaries mask complete source before shared compact projections and cached follow-ups`, async () => {
+  const f = await credentialReadFixture({ taskText: key => "x".repeat(154) + (boundary === "clip" ? key : key.slice(0,6) + "\n" + key.slice(6)) + " tail" });
+  const actual = spyOn(f.reads,"read");
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_boundary_${index}`, output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`boundary-${index}`,"list_tasks",{openOnly:true,statuses:["inbox"],query:"tail",ids:[f.round.taskId],limit:1})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    for (const id of ["boundary-first","boundary-cached"]) {
+      f.provider.replay(s.providerId,delegationCreated(id,1)); await f.service.drain(s.sessionId);
+    }
+    expect(actual).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({total:1,shown:1,more:0,rows:[{state:"inbox"}]});
+    expect(f.provider.requests[2].input[0].content).toContain("Reads earlier in this call");
+    expect(JSON.parse(f.provider.requests[3].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({repeated:true});
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+    const { loadTasks } = await import("@/lib/tasks/store");
+    expect(loadTasks(f.taskFile)[0].text).toContain(boundary === "clip" ? f.key : f.key.slice(0,6)+"\n"+f.key.slice(6));
+  } finally { await f.service.close(s.sessionId); actual.mockRestore(); }
+});
+
+test("paged real conversation reads mask keys across maxChars and newline boundaries on every voice surface", async () => {
+  const f = await credentialReadFixture({messages:key=>["Earlier safe reply", "x".repeat(314)+key+" tail", key.slice(0,6)+"\n"+key.slice(6)+" safe reply"]});
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_messages_${index}`,output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`messages-${index}`,"conversation_messages",{conversationId:"conversation_clipping",roles:["assistant"],since:"2026-10-10T00:00:00Z",limit:2})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"uk",sdp:"v=0"});
+  try {
+    for (const id of ["messages-first","messages-cached"]) {
+      f.provider.replay(s.providerId,delegationCreated(id,1)); await f.service.drain(s.sessionId);
+    }
+    const output = JSON.parse(f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string);
+    const nextCursor = output.nextCursor;
+    expect(typeof nextCursor).toBe("string");
+    expect(nextCursor.length).toBeLessThanOrEqual(3000);
+    expect(output).toMatchObject({shown:2,truncated:true,rows:[{excerpt:"[redacted] safe reply"},{}]});
+    const next = await f.reads.read("fixture","conversation_messages",f.reads.normalize("fixture","conversation_messages",{conversationId:"conversation_clipping",roles:["assistant"],since:"2026-10-10T00:00:00Z",limit:2,cursor:nextCursor}),[f.key]);
+    expect(next).toMatchObject({shown:1,truncated:false,rows:[{excerpt:"Earlier safe reply"}]});
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+for (const order of ["newest","relevance"] as const) test(`real ${order} search masks full source before match windows, titles and voice excerpts`, async () => {
+  const f = await credentialReadFixture({messages:key=>["cobalt "+"z".repeat(481)+key.slice(0,6)+"\n"+key.slice(6)+" tail", "cobalt "+key.slice(0,6)+"\n"+key.slice(6)+" end"]});
+  const { indexTranscriptSources } = await import("@/lib/search/transcriptSearch");
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const stat = fs.statSync(f.transcriptPath);
+  await indexTranscriptSources([{path:f.transcriptPath,project:"fixture",engine:"claude",size:stat.size,mtimeMs:stat.mtimeMs}],{complete:true});
+  replaceConversationCatalog([{path:f.transcriptPath,root:"claude-projects",name:"fixture",project:"fixture",projectName:"Fixture",title:"x".repeat(93)+f.key,firstPrompt:"",engine:"claude",kind:"session",fmt:"claude",mtime:0,size:stat.size}]);
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_search_${index}`,output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`search-${index}`,"search_transcripts",{query:"cobalt",order})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    for (const id of ["search-first","search-cached"]) {
+      f.provider.replay(s.providerId,delegationCreated(id,1)); await f.service.drain(s.sessionId);
+    }
+    const { withoutCredentials, withoutLocalPaths } = await import("./redaction");
+    const projected = await f.paths.call("search_transcripts",{project:"fixture",query:"cobalt",order,limit:6},text=>withoutLocalPaths(withoutCredentials(text,[f.key])));
+    expect(JSON.stringify(projected)).not.toContain(f.key.slice(0,6));
+    expect(JSON.stringify(projected)).toContain("[redacted]");
+    const output = JSON.parse(f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string);
+    expect(output.shown).toBeGreaterThan(0); expect(output.total).toBeGreaterThan(0);
+    expect(JSON.stringify(output)).toContain("cobalt");
+    expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(4000);
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); replaceConversationCatalog([]); }
+});
+
+test("tool replay masks parsed newline fragments and pairs opaque call references while the original filter still selects", async () => {
+  const f = await credentialReadFixture({taskText:key=>`Safe task ${key.slice(0,6)}\n${key.slice(6)} ready`});
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_replay_${index}`,output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`call-${f.key}`,"list_tasks",{query:f.key.slice(0,6)+"\n"+f.key.slice(6),openOnly:true})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    f.provider.replay(s.providerId,delegationCreated("replay-mask",1)); await f.service.drain(s.sessionId);
+    const call = f.provider.requests[1].input.find(item=>item.type === "function_call")!;
+    const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!;
+    expect(call.call_id).toMatch(/^voice_call_[a-f0-9]{32}$/);
+    expect(output.call_id).toBe(call.call_id);
+    expect(JSON.parse(call.arguments as string)).toEqual({query:"[redacted]",openOnly:true});
+    expect(JSON.parse(output.output as string)).toMatchObject({total:1,shown:1,rows:[{title:"Safe task [redacted] ready"}]});
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("refused provider arguments scrub parameter names as well as values before replay and storage", async () => {
+  const f = await credentialReadFixture();
+  const parameter = f.key.slice(0,6)+"\n"+f.key.slice(6);
+  f.provider.responder = (request,index) => {
+    const call = request.input.find(item=>item.type === "function_call");
+    return backendResponse(`resp_parameter_${index}`,call ? [message(call.arguments as string)]
+      : [functionCall("untrusted-parameter","list_tasks",{openOnly:true,[parameter]:parameter})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    f.provider.replay(s.providerId,delegationCreated("parameter-mask",1)); await f.service.drain(s.sessionId);
+    const call = f.provider.requests[1].input.find(item=>item.type === "function_call")!;
+    const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!;
+    expect(JSON.parse(call.arguments as string)).toEqual({openOnly:true,"[redacted]":"[redacted]"});
+    expect(JSON.parse(output.output as string)).toMatchObject({code:"INVALID_TOOL_ARGUMENTS"});
+    expect(f.sends()).toBe(0);
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+for (const locale of ["en","uk"] as const) test(`${locale} starting and switched project labels are scrubbed before backend context and echoed speech`, async () => {
+  const key = ["Zr9QvB","label","private","0123456789abcdef"].join("-");
+  const privatePath = ["","home","fixture-private","label.txt"].join("/");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  for (const project of ["fixture","project-label"]) expect(persistProjectAliases([{source:project,target:project,displayName:`Project ${key} ${key.slice(0,6)}\n${key.slice(6)} ${privatePath}`}])).toBe(true);
+  const f = fixture(key);
+  f.provider.responder = (request,index) => backendResponse(`resp_label_${index}`,[message(String(request.input[0].content))]);
+  const s = await f.service.start({project:"fixture",locale,sdp:"v=0"});
+  try {
+    f.provider.replay(s.providerId,delegationCreated("starting-label",1)); await f.service.drain(s.sessionId);
+    await f.service.context(s.sessionId,"project-label");
+    f.provider.replay(s.providerId,delegationCreated("switched-label",2)); await f.service.drain(s.sessionId);
+    expect(f.admission.session(s.sessionId)).toMatchObject({project:"fixture",currentProject:"project-label"});
+    for (const request of f.provider.requests) expect(request.input[0].content).toContain("Project currently in view: Project [redacted] [redacted] [path].");
+    const surfaces = [JSON.stringify(f.provider.requests),JSON.stringify(f.provider.commands),JSON.stringify(await f.service.events(s.sessionId,0)),JSON.stringify(f.service.transcriptRecord(s.sessionId)),stateFile(),transcriptFiles()];
+    for (const surface of surfaces) { expect(surface).not.toContain(key);expect(surface).not.toContain(key.slice(0,6));expect(surface).not.toContain("fixture-private"); }
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("current-view context updates the same provider call and a named project targets its own orchestrator", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const at = "2026-10-10T12:00:00.000Z";
+  const taskFile = path.join(root, "context-store", "tasks.json");
+  replaceConversationCatalog(["Alpha","Beta"].map((projectName,index)=>({path:path.join(root,`${index}.jsonl`),root:"claude-projects" as const,name:"fixture",project:`project-${index}`,projectName,title:"Fixture",firstPrompt:"",engine:"claude" as const,kind:"session",fmt:"claude" as const,mtime:0,size:0})));
+  saveTasks([0,1].map(index=>({id:`task-${index}`,project:`project-${index}`,text:`Project ${index} task`,status:"inbox" as const,placement:"unplaced" as const,assignments:[],createdAt:at,updatedAt:at})), taskFile);
+  const storage = new CompanionStorage(); storage.updateSettings({enabled:true});
+  const sent:string[]=[];
+  const admission = new CompanionAdmission(storage,{recipient:project=>({project,conversationId:`conversation_${project}`,seatEpoch:1,engine:"claude"}),send:async binding=>{sent.push(binding.delivery.recipient.project);return {status:"delivered",operationId:"operation-a"};},reports:()=>[]});
+  const provider = new FakeLiveProvider();
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] } }));
+  const service = new CompanionLiveSessions(storage,admission,reads,provider,{key:()=>"synthetic-credential",timers:false});
+  provider.responder = (request,index)=>request.input.some(item=>item.type === "function_call_output") ? backendResponse(`resp_${index}`,[message("Done.")]) : backendResponse(`resp_${index}`,[functionCall(`tasks-${index}`,"list_tasks",{openOnly:true})]);
+  const s = await service.start({project:"project-0",locale:"en",sdp:"v=0"});
+  await service.context(s.sessionId,"project-1");
+  provider.replay(s.providerId,delegationCreated("read-beta",1));await service.drain(s.sessionId);
+  expect(JSON.parse(provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({rows:[{title:"Project 1 task"}]});
+  await service.context(s.sessionId,null);
+  provider.responder = calling(functionCall("send-alpha","request_orchestrator_delegation",{project:"Alpha",instruction:"Review the Alpha plan"}));
+  provider.replay(s.providerId,said("Ask Alpha's orchestrator to review the plan.",1000),delegationCreated("send-named",1600));await service.drain(s.sessionId);
+  expect(sent).toEqual(["project-0"]);
+  expect(provider.sessions).toHaveLength(1);expect(provider.attached).toBe(1);
+  expect(admission.session(s.sessionId)).toMatchObject({project:"project-0",currentProject:null});
+  expect(provider.commands.filter(row=>row.type === "session.instructions.append")).toHaveLength(2);
+  expect(provider.refused).toEqual([]);
+  await service.close(s.sessionId);replaceConversationCatalog([]);
+});
+
+test("backend response ids are counted once and retained token receipts reprice exactly", async () => {
+  const { backendUsageUsd } = await import("./usage");
+  const f = fixture();
+  f.provider.responder = ()=>backendResponse("resp_same",[message("Done.")]);
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  f.provider.replay(s.providerId,delegationCreated("first",1));await f.service.drain(s.sessionId);
+  f.provider.replay(s.providerId,delegationCreated("second",2));await f.service.drain(s.sessionId);
+  const receipts = Object.values(f.admission.session(s.sessionId).usage!.responses);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({responseId:"resp_same",tokens:{input:100,cached:50,cacheWrite:0,output:20}});
+  const tokens = receipts[0].tokens!;
+  expect(receipts[0].usd).toBe(backendUsageUsd({input_tokens:tokens.input,input_tokens_details:{cached_tokens:tokens.cached,cache_write_tokens:tokens.cacheWrite},output_tokens:tokens.output}));
+  await f.service.close(s.sessionId);
+});
+
+
+test("an older read refreshes after the reuse window and missing usage for a known response is upgraded once", async () => {
+  let now = 0;
+  const storage = new CompanionStorage(()=>now);storage.updateSettings({enabled:true});
+  const admission = new CompanionAdmission(storage,{recipient:()=>null,reports:()=>[],send:async()=>{throw new Error("unexpected send");}},()=>now);
+  const provider = new FakeLiveProvider();
+  const reads = fixtureBoardReads({tasks:()=>[],pipelines:()=>[],activity:async()=>[],messages:async()=>[]});
+  const actual = spyOn(reads,"read");
+  const service = new CompanionLiveSessions(storage,admission,reads,provider,{key:()=>"synthetic-credential",now:()=>now,timers:false});
+  provider.responder = calling(functionCall("tasks","list_tasks",{openOnly:true}));
+  const s = await service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  provider.replay(s.providerId,delegationCreated("first-read",1));await service.drain(s.sessionId);
+  now = 120001;
+  provider.replay(s.providerId,delegationCreated("later-read",120002));await service.drain(s.sessionId);
+  expect(actual).toHaveBeenCalledTimes(2);
+  provider.responder = (_request,index)=>backendResponse("resp_recovered",[message("Done.")],index === 4 ? {} : {input_tokens:100,output_tokens:20});
+  provider.replay(s.providerId,delegationCreated("incomplete-receipt",120003));await service.drain(s.sessionId);
+  provider.replay(s.providerId,delegationCreated("recovered-receipt",120004));await service.drain(s.sessionId);
+  const receipts=Object.values(admission.session(s.sessionId).usage!.responses).filter(row=>row.responseId === "resp_recovered");
+  expect(receipts).toHaveLength(1);expect(receipts[0]).toMatchObject({complete:true,tokens:{input:100,cached:0,cacheWrite:0,output:20}});
+  await service.close(s.sessionId);actual.mockRestore();
+  expect(storage.settings().incomplete).toBe(false);
+});

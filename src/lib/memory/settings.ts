@@ -21,3 +21,10 @@ export function sharedMemoryEnabled(project: string): boolean {
 export function setSharedMemoryEnabled(project: string, enabled: boolean) {
   writeJsonDurably(statePath("shared-memory-settings.json"), { ...settings(), [canonicalProject(project)]: enabled });
 }
+
+/** Role memory is always on (operator, 2026-10-07: no per-project switch). The
+    one way to stop it, for safety, is the installation's own setting
+    `LLV_ROLE_MEMORY=off`, which stops both the requests and the injection. */
+export function roleMemoryEnabled(): boolean {
+  return process.env.LLV_ROLE_MEMORY?.trim().toLowerCase() !== "off";
+}

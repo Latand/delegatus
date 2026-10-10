@@ -509,6 +509,9 @@ export type PipelineStageAttempt = {
     /** Present only on compatibility records written by the continuation implementation. */
     clientMessageId?: string;
     lastRecordAt: number | null;
+    /** Verified prompt ordinal before termination; retained across uncertain
+        reads and later boots so a delivered operator prompt still fences it. */
+    promptBoundary?: number;
     replacementAttempt?: number;
     replacedAttempt?: number;
     /** Set once a stop this recovery issued ended a live host: the evidence
@@ -704,8 +707,8 @@ export type PipelineReviewPending = {
   at: string;
 };
 
-/** One accepted `continue-review` (#1938), append-only. `rounds` adds to the
-    review stage's fail-edge `maxRounds`, which itself stays frozen evidence. */
+/** Historical accepted budget extension, append-only. New extensions are
+    refused; existing records remain readable and their receipts replayable. */
 export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;

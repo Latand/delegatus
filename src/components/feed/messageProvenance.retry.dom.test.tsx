@@ -50,7 +50,8 @@ const deliveredEntry: FeedEntry = {
 function Probe({ path, items, probe }: { path: string | null; items: readonly FeedEntry[]; probe: Item }) {
   const lookup: ProvenanceLookup = useDeliveredMessageProvenance(path, items);
   const resolved = lookup.forItem(probe);
-  return <span id="probe">{resolved ? resolved.origin : "unresolved"}</span>;
+  const id = probe.kind === "sysmsg" ? probe.deliveredMessage?.engineMessageId : null;
+  return <span id="probe" data-first-read-pending={lookup.messageReadPending(id)} data-message-pending={lookup.messagePending(id)}>{resolved ? resolved.origin : "unresolved"}</span>;
 }
 
 const realFetch = globalThis.fetch;
@@ -132,6 +133,59 @@ test("an id with no evidence stops at the bounded schedule instead of polling fo
   expect(calls()).toBe(3);
   expect(probe.text()).toBe("unresolved");
   await probe.unmount();
+});
+
+test("the first empty answer releases ordinary rows while the delayed ledger join still waits", async () => {
+  setMessageProvenanceRetryScheduleForTests([10]);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    const retry = calls > 1;
+    if (retry) await gate;
+    return { ok: true, json: async () => ({ messages: retry ? { [ENGINE_MESSAGE_ID]: { origin: "operator" } } : {}, occurrences: [] }) };
+  }) as unknown as typeof fetch;
+  const container = dom.document.createElement("div"), root = createRoot(container as unknown as Element);
+  const pending = () => [container.querySelector("#probe")?.getAttribute("data-first-read-pending"), container.querySelector("#probe")?.getAttribute("data-message-pending")];
+  try {
+    await act(async () => root.render(<Probe path={TRANSCRIPT_PATH} items={[deliveredEntry]} probe={deliveredEntry.item} />));
+    expect(pending()).toEqual(["false", "true"]);
+    await act(async () => { await sleep(30); });
+    expect(calls).toBe(2);
+    expect(pending()).toEqual(["false", "true"]);
+    await act(async () => { release(); });
+    expect(pending()).toEqual(["false", "false"]);
+    expect(probeText(container)).toBe("operator");
+  } finally { release(); await act(async () => root.unmount()); }
+});
+
+test("a first answer is scoped to the native id and the transcript path", async () => {
+  setMessageProvenanceRetryScheduleForTests([10_000]);
+  let release: () => void = () => {};
+  let gate = Promise.resolve();
+  globalThis.fetch = (async () => {
+    await gate;
+    return { ok: true, json: async () => ({ messages: {}, occurrences: [] }) };
+  }) as unknown as typeof fetch;
+  const container = dom.document.createElement("div"), root = createRoot(container as unknown as Element);
+  const pending = () => container.querySelector("#probe")?.getAttribute("data-first-read-pending");
+  try {
+    await act(async () => root.render(<Probe path={TRANSCRIPT_PATH} items={[deliveredEntry]} probe={deliveredEntry.item} />));
+    expect(pending()).toBe("false");
+    gate = new Promise<void>((resolve) => { release = resolve; });
+    const otherPath = "/sessions/other-provenance.jsonl";
+    await act(async () => root.render(<Probe path={otherPath} items={[deliveredEntry]} probe={deliveredEntry.item} />));
+    expect(pending()).toBe("true");
+    await act(async () => { release(); });
+    expect(pending()).toBe("false");
+    const otherEntry: FeedEntry = { ...deliveredEntry, key: "later-row", item: { ...deliveredEntry.item, deliveredMessage: { engineMessageId: "later-native-id" } } as Item };
+    gate = new Promise<void>((resolve) => { release = resolve; });
+    await act(async () => root.render(<Probe path={otherPath} items={[otherEntry]} probe={otherEntry.item} />));
+    expect(pending()).toBe("true");
+    await act(async () => { release(); });
+    expect(pending()).toBe("false");
+  } finally { release(); await act(async () => root.unmount()); }
 });
 
 test("a fresh legacy row revalidates until its receipt settles; a historical one fetches once", async () => {

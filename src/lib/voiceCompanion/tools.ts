@@ -1,11 +1,11 @@
-import { canonicalProject } from "@/lib/projects/aliases";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CompanionAdmission } from "./admission";
 import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
 import { liveEndRefusal } from "./liveGate";
+import { READ_SCHEMAS, validToolValue, type ToolProperty } from "./readSchemas";
 
 export interface CompanionToolContext {
-  project: string;
+  project: string | null;
   sessionId: string;
   callId: string;
   delegationId: string;
@@ -15,10 +15,11 @@ export interface CompanionToolContext {
   sourceTurn?: number;
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
+  read?(name: string, args: Record<string, unknown>): Promise<unknown>;
   endConversation(): void;
 }
 /** A strict schema lists every property as required; one the model may leave out is nullable. */
-type ToolProperty = { type: "string" | readonly ["string", "null"]; description?: string; minLength?: number; maxLength?: number; enum?: readonly string[] };
+
 interface ToolEntry {
   name: string;
   description: string;
@@ -27,7 +28,7 @@ interface ToolEntry {
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
 }
-const handle = { type: "string" as const, minLength: 1, maxLength: 128 };
+
 const schema = (properties: ToolEntry["parameters"]["properties"] = {}): ToolEntry["parameters"] =>
   ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
 const SENT = { delivered: "Sent to the orchestrator.", queued: "Sent. It is queued for the orchestrator.",
@@ -47,12 +48,16 @@ function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
 }
 
 const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: string; description: string }> = {
-  list_tasks: { capability: "Board tasks: the project's tasks and their states.", description: "Read the project's tasks and their states." },
+  list_tasks: { capability: "Board tasks: the project's tasks by status, newest first.", description: "Read the project's tasks by status, newest first." },
   get_task: { capability: "One task: its note, hold and steps.", description: "Read one project's task with its note, hold and steps. taskId is a handle returned by list_tasks." },
-  list_pipelines: { capability: "Pipelines: the project's pipelines and their states.", description: "Read the project's pipelines and their states." },
+  list_pipelines: { capability: "Pipelines: the project's pipelines by state, newest first.", description: "Read the project's pipelines by state, newest first." },
   get_pipeline: { capability: "One pipeline: its stages and where each stands.", description: "Read one project's pipeline and its stages. pipelineId is a handle returned by list_pipelines." },
   agent_activity: { capability: "Running agents: who is working on the project now.", description: "Read agents currently working on this project and their conversation handles." },
-  conversation_messages: { capability: "Agent messages: the latest messages of one running agent.", description: "Read the latest messages of one running agent in this project. conversationId is a handle returned by agent_activity. This reads agent messages; the voice session transcript is separate." },
+  conversation_messages: { capability: "Conversation messages: any conversation of the selected project, newest first.", description: "Read a project conversation by its handle, including inactive conversations; follow the opaque cursor for older messages." },
+  orchestrator_messages: { capability: "Orchestrator messages: what the selected project's current orchestrator said lately.", description: "Read the current orchestrator's conversation, newest first. A project name selects another project's orchestrator." },
+  search_transcripts: { capability: "Search: find project conversations by what was said in them.", description: "Search project conversation text. A project name selects another project; unknown or ambiguous names are refused." },
+  read_prototype_review: { capability: "Prototype reviews: every variant, question, recommendation and saved decision in one read.", description: "Read the task's whole prototype review, including variant names and descriptions, every question and option, the recommended option, saved answers and exact comment. Frame ids let view_prototype_frame inspect images. Makes no choice and sends nothing." },
+  view_prototype_frame: { capability: "Prototype frames: visually inspect a stored frame, read-only.", description: "Inspect a prototype frame named by read_prototype_review, including an original frame. The backend receives the image. A missing frame is refused. Makes no decision and sends nothing." },
 };
 
 /** Definitions, execution allowlist, argument validation and project admission
@@ -60,17 +65,16 @@ const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: st
 export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
   ...READ_TOOL_NAMES.map((name): ToolEntry => ({ name, class: "board-read",
     ...READ_CAPABILITIES[name],
-    parameters: schema(name === "get_task" ? { taskId: handle } : name === "get_pipeline" ? { pipelineId: handle }
-      : name === "conversation_messages" ? { conversationId: handle } : {}),
-    handler: (context, args) => context.reads.call(context.project, name, args),
+    parameters: schema(READ_SCHEMAS[name]),
+    handler: (context, args) => context.read ? context.read(name,args) : context.reads.call(context.reads.resolveProject(context.project, typeof args.project === "string" ? args.project : undefined),name,args),
   })),
   { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: sends the operator's request to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
     description: "Send the complete request text to the project's orchestrator when the operator explicitly asks to send work to it. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator asked again and you set asked_again. Input transcripts are optional context.",
-    parameters: schema({ instruction: { type: "string", minLength: 1, maxLength: 2_000 },
+    parameters: schema({ project: READ_SCHEMAS.list_tasks.project, instruction: { type: "string", minLength: 1, maxLength: 2_000 },
       confirmation_reason: { type: ["string", "null"], maxLength: 240, description: "Why the operator should confirm first, in the operator's language; null to send at once." },
       asked_again: { type: ["string", "null"], maxLength: 240, description: "Only when the operator, in their latest turn, explicitly asks to send once more a request you raised earlier in this call (sent or cancelled): one short sentence with what they asked. Otherwise null. Never set it to repeat a request on your own." } }),
     handler: async (context, args) => spoken(await context.admission.delegate(context.sessionId, context.callId, context.delegationId, args.instruction as string,
-      { sourceTurn: context.sourceTurn, ...(typeof args.asked_again === "string" && args.asked_again.trim() ? { renewed: true } : {}), ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) })) },
+      { project: context.reads.resolveProject(context.project,typeof args.project === "string" ? args.project : undefined), sourceTurn: context.sourceTurn, ...(typeof args.asked_again === "string" && args.asked_again.trim() ? { renewed: true } : {}), ...(typeof args.confirmation_reason === "string" && args.confirmation_reason.trim() ? { confirmation: args.confirmation_reason } : {}) })) },
   { name: "resolve_orchestrator_confirmation", capability: "Confirmation answer: passes on the operator's yes or no to a request you asked about.", class: "delegation",
     description: "Pass on the operator's spoken answer to the confirmation that is waiting: send when they clearly agree, cancel when they decline or change their mind. When the answer is unclear, ask again and call nothing. A cancelled confirmation sends nothing; say so.",
     parameters: schema({ decision: { type: "string", enum: ["send", "cancel"] } }),
@@ -107,16 +111,10 @@ export async function runCompanionTool(context: CompanionToolContext, name: stri
   if (!entry) throw new Error("TOOL_NOT_ALLOWED");
   const session = context.admission.session(context.sessionId);
   if (session.closed) throw new Error("SESSION_CLOSED");
-  if (canonicalProject(context.project) !== canonicalProject(session.project)) throw new Error("PROJECT_REFUSED");
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("INVALID_TOOL_ARGUMENTS");
   const values = args as Record<string, unknown>;
   const properties = entry.parameters.properties;
   if (Object.keys(values).some(key => !Object.hasOwn(properties, key))
-    || entry.parameters.required.some(key => {
-      const value = values[key]; const property = properties[key];
-      if (value === null || value === undefined) return property.type === "string";
-      return typeof value !== "string" || value.trim().length < (property.minLength ?? 0) || value.length > (property.maxLength ?? 2_000)
-        || (!!property.enum && !property.enum.includes(value));
-    })) throw new Error("INVALID_TOOL_ARGUMENTS");
-  return entry.handler({ ...context, project: canonicalProject(session.project) }, values);
+    || entry.parameters.required.some(key => !validToolValue(properties[key],values[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
+  return entry.handler(context, values);
 }

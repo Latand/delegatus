@@ -471,6 +471,7 @@ export class RuntimeJournal {
     this.migrateOperationProjectionPending();
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
+    this.retainLegacyStopAdmissions();
     this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
     this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
@@ -695,6 +696,18 @@ export class RuntimeJournal {
       }));
       const committedReceipt: RuntimeOperationReceipt = { ...receipt, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committedReceipt, event.seq);
+      // Operator intent invalidates a captured idle revision before a host
+      // call begins, including a stop that later fails without native work.
+      if (command.kind === "kill" && receipt.status !== "rejected" && receipt.origin === "operator"
+        && receipt.originAuthenticated && this.entity<RuntimeSession>("session", command.conversationId)) {
+        this.appendInTransaction(normalizeRuntimeEventInput({
+          scope: { type: "session", id: command.conversationId }, kind: "session-status", operationId,
+          producer: { kind: "runtime-host", hostEpoch: Number(this.meta("host_epoch")), eventKey: `operation:${operationId}:operator-stop-intent` },
+          payload: { conversationId: command.conversationId },
+        }));
+      }
+      if ((command.kind === "interrupt" || command.kind === "kill") && receipt.status !== "rejected")
+        this.retainStopBoundary(command, committedReceipt, event.seq, true);
       this.appendOperationConsequences(command, committedReceipt, operationId);
       this.db.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(operationId, command.conversationId, command.idempotencyKey, requestHash, requestJson, stableJson(committedReceipt), event.seq);
@@ -969,6 +982,7 @@ export class RuntimeJournal {
         const session = this.entity<RuntimeSession>("session", command.conversationId);
         if (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
           || this.retirementBlocked(command.conversationId, operationId)
+          || this.idleContinuationStopped(command.conversationId, command.onlyIfIdle.revision, operationId)
           || this.retirementInProgress(command.conversationId)) {
           status = "failed";
           // Only an unclaimed effect proves that host execution never began.
@@ -990,11 +1004,12 @@ export class RuntimeJournal {
       if ((status === "applying" || status === "applied") && command.kind !== "reconfigure" && command.kind !== "native-queue") {
         throw new Error("runtime operation transition is invalid");
       }
-      const killBoundary = completing && command.kind === "kill" && status === "delivered"
+      const stopCompleted = completing && (command.kind === "kill" && status === "delivered" || command.kind === "interrupt" && status === "interrupted");
+      const killBoundary = stopCompleted
         ? this.db.query<{ event_seq: number }, [string]>("SELECT event_seq FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`)
         : null;
-      if (completing && command.kind === "kill" && status === "delivered" && !killBoundary) {
+      if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
       // Steer-first fallback follows the next live turn. Keep the observed turn
@@ -1018,7 +1033,8 @@ export class RuntimeJournal {
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
-        ...(command.kind === "kill" ? { origin: command.onlyIfIdle ? "system" as const : "operator" as const } : {}),
+        ...(command.kind === "kill" ? { origin: previous.origin ?? (command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const) } : {}),
+        ...(command.kind === "interrupt" ? { origin: previous.origin ?? "operator" as const } : {}),
         ...(automaticKill ? { retirementClaim: status === "delivering" ? claimant ?? owner ?? null : null } : {}),
         ...(nativeEntry ? { nativeQueue: nativeQueueReceipt(nativeEntry) } : {}),
         ...(deliveredVersion ? { text: deliveredVersion.text.slice(0, 240), imageCount: deliveredVersion.images.length,
@@ -1051,24 +1067,7 @@ export class RuntimeJournal {
         .run(stableJson(committed), event.seq, completing && options.awaitProjection === true ? this.now() : null, operationId);
       if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
       if (killBoundary) {
-        this.db.query(`
-          INSERT INTO outbox(id, kind, payload_json, event_seq, state)
-          VALUES (?, 'runtime.kill-boundary', ?, ?, 'retained')
-          ON CONFLICT(id) DO UPDATE SET
-            kind = excluded.kind,
-            payload_json = excluded.payload_json,
-            event_seq = excluded.event_seq,
-            state = excluded.state
-          WHERE excluded.event_seq > outbox.event_seq
-        `).run(
-          `kill-boundary:${command.conversationId}`,
-          stableJson({
-            operationId,
-            conversationId: command.conversationId,
-            admissionEventSeq: killBoundary.event_seq,
-          }),
-          killBoundary.event_seq,
-        );
+        this.retainStopBoundary(command, committed, killBoundary.event_seq);
       }
       this.db.exec("COMMIT");
       this.compactIfNeeded();
@@ -1078,6 +1077,62 @@ export class RuntimeJournal {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
+  }
+
+  private retainStopBoundary(command: RuntimeOperationCommand, receipt: RuntimeOperationReceipt, admissionEventSeq: number, admission = false): void {
+    if (command.kind !== "kill" && command.kind !== "interrupt") return;
+    const boundary = admission && command.kind === "kill" ? "stop-boundary" : `${command.kind}-boundary`;
+    const origin = receipt.origin === "operator" && !receipt.originAuthenticated ? "unknown" : receipt.origin;
+    this.db.query(`
+          INSERT INTO outbox(id, kind, payload_json, event_seq, state)
+          VALUES (?, ?, ?, ?, 'retained')
+          ON CONFLICT(id) DO UPDATE SET
+            kind = excluded.kind,
+            payload_json = excluded.payload_json,
+            event_seq = excluded.event_seq,
+            state = excluded.state
+          WHERE excluded.event_seq > outbox.event_seq
+        `).run(
+          `${boundary}:${command.conversationId}:${origin}`,
+          `runtime.${boundary}`,
+          stableJson({
+            operationId: receipt.operationId,
+            conversationId: command.conversationId,
+            admissionEventSeq,
+            origin,
+            originAuthenticated: receipt.originAuthenticated === true,
+            admittedAt: receipt.admittedAt ?? receipt.at,
+            sessionRevision: this.entity<RuntimeSession>("session", command.conversationId)?.revision ?? null,
+          }),
+          admissionEventSeq,
+        );
+  }
+
+  /** Older releases kept stop receipts without an intent boundary. Retain each
+      unknown operation so excluding an owned key cannot erase another stop. */
+  private retainLegacyStopAdmissions(): void {
+    this.db.exec(`
+      INSERT INTO outbox(id, kind, payload_json, event_seq, state)
+      SELECT 'stop-boundary:' || conversation_id || ':' ||
+          CASE WHEN json_extract(receipt_json, '$.originAuthenticated') = 1 THEN json_extract(receipt_json, '$.origin')
+            WHEN json_extract(receipt_json, '$.origin') = 'system' OR json_type(request_json, '$.onlyIfIdle') = 'object' THEN 'system' ELSE 'unknown:' || operation_id END,
+        'runtime.stop-boundary',
+        json_object('operationId', operation_id, 'conversationId', conversation_id,
+          'admissionEventSeq', event_seq,
+          'origin', CASE WHEN json_extract(receipt_json, '$.originAuthenticated') = 1 THEN json_extract(receipt_json, '$.origin')
+            WHEN json_extract(receipt_json, '$.origin') = 'system' OR json_type(request_json, '$.onlyIfIdle') = 'object' THEN 'system' ELSE 'unknown' END,
+          'originAuthenticated', COALESCE(json_extract(receipt_json, '$.originAuthenticated'), 0),
+          'admittedAt', COALESCE(json_extract(receipt_json, '$.admittedAt'), json_extract(receipt_json, '$.at'))),
+        event_seq, 'retained'
+      FROM operations
+      WHERE json_extract(request_json, '$.kind') IN ('kill', 'interrupt')
+        AND json_extract(receipt_json, '$.status') != 'rejected'
+        AND COALESCE(json_extract(receipt_json, '$.originAuthenticated'), 0) != 1
+      ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, event_seq = excluded.event_seq
+      WHERE json_extract(excluded.payload_json, '$.admittedAt') > json_extract(outbox.payload_json, '$.admittedAt')
+        OR (json_extract(excluded.payload_json, '$.admittedAt') = json_extract(outbox.payload_json, '$.admittedAt')
+          AND excluded.event_seq > outbox.event_seq)
+    `);
   }
 
   retryOperation(
@@ -1805,8 +1860,8 @@ export class RuntimeJournal {
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
     if (kinds?.length === 0) return [];
     if (!Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) throw new Error("runtime effect cursor is invalid");
-    const stateFilter = kinds?.includes("runtime.kill-boundary")
-      ? "(state = 'pending' OR (state = 'retained' AND kind = 'runtime.kill-boundary'))"
+    const stateFilter = kinds?.some(kind => kind === "runtime.kill-boundary" || kind === "runtime.interrupt-boundary" || kind === "runtime.stop-boundary")
+      ? "(state = 'pending' OR (state = 'retained' AND kind IN ('runtime.kill-boundary', 'runtime.interrupt-boundary', 'runtime.stop-boundary')))"
       : "state = 'pending'";
     const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
     const rows = this.db.query<{ id: string; kind: string; payload_json: string; event_seq: number }, Array<string | number>>(
@@ -1882,9 +1937,23 @@ export class RuntimeJournal {
         "SELECT seq, hash FROM events WHERE seq <= ? ORDER BY seq DESC LIMIT 1",
       ).get(Math.min(target.seq, consumed ?? target.seq));
       if (!anchor) { this.db.exec("COMMIT"); return; }
+      this.retainLegacyStopAdmissions();
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
       this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
+      // Upgrade retained legacy boundaries before their receipts disappear.
+      // Kill authorship comes from the admitted fence, never from prose or ids.
+      this.db.exec(`
+        UPDATE outbox
+        SET payload_json = json_set(outbox.payload_json,
+          '$.origin', CASE WHEN json_extract(operations.receipt_json, '$.originAuthenticated') = 1 THEN json_extract(operations.receipt_json, '$.origin') WHEN json_type(operations.request_json, '$.onlyIfIdle') = 'object' THEN 'system' ELSE 'unknown' END,
+          '$.originAuthenticated', COALESCE(json_extract(operations.receipt_json, '$.originAuthenticated'), 0),
+          '$.admittedAt', COALESCE(json_extract(operations.receipt_json, '$.admittedAt'), json_extract(operations.receipt_json, '$.at')))
+        FROM operations
+        WHERE outbox.kind = 'runtime.kill-boundary' AND outbox.state = 'retained'
+          AND json_type(outbox.payload_json, '$.origin') IS NULL
+          AND operations.operation_id = json_extract(outbox.payload_json, '$.operationId')
+      `);
       /* Three reasons an operation outlives the anchor: an effect still owed
          execution, a native queue entry that is still answered through the
          operation (#1664), and a terminal receipt still owed a projection
@@ -2176,7 +2245,8 @@ export class RuntimeJournal {
       reason = "idle-retirement-in-progress";
     } else if (command.kind === "send" && command.onlyIfIdle
       && (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
-        || this.retirementBlocked(command.conversationId))) {
+        || this.retirementBlocked(command.conversationId)
+        || this.idleContinuationStopped(command.conversationId, command.onlyIfIdle.revision, operationId))) {
       status = "rejected";
       reason = "idle-continuation-cancelled";
     } else if (command.kind === "native-queue") {
@@ -2350,7 +2420,10 @@ export class RuntimeJournal {
       idempotencyKey: command.idempotencyKey,
       conversationId: command.conversationId,
       kind: command.kind,
-      ...(command.kind === "kill" ? { origin: command.onlyIfIdle ? "system" as const : "operator" as const } : {}),
+      ...(command.kind === "kill" ? { origin: command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
+      ...(command.kind === "interrupt" ? { origin: command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
+      ...((command.kind === "kill" || command.kind === "interrupt") && (command.origin || command.kind === "kill" && command.onlyIfIdle)
+        ? { originAuthenticated: true as const } : {}),
       status,
       turnId,
       queuePosition,
@@ -2388,6 +2461,29 @@ export class RuntimeJournal {
         AND json_type(request_json, '$.onlyIfIdle') = 'object'
         AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
     `).get(conversationId);
+  }
+
+  /** A stop admitted after the observed idle session fences automatic work
+      even when teardown fails without changing that session's revision. */
+  private idleContinuationStopped(conversationId: string, revision: number, operationId: string): boolean {
+    const ids = ["stop", "interrupt", "kill"].flatMap(kind => ["operator", "unknown"].map(origin =>
+      `${kind}-boundary:${conversationId}:${origin}`));
+    ids.push(`kill-boundary:${conversationId}`);
+    const admission = this.db.query<{ event_seq: number }, [string]>("SELECT event_seq FROM outbox WHERE id = ?")
+      .get(`effect:${operationId}`)?.event_seq ?? Number(this.meta("seq"));
+    return !!this.db.query<{ present: number }, (string | number)[]>(`
+      SELECT 1 AS present FROM outbox AS boundary
+      WHERE (boundary.id IN (?, ?, ?, ?, ?, ?, ?)
+          OR boundary.kind = 'runtime.stop-boundary'
+            AND json_extract(boundary.payload_json, '$.conversationId') = ?
+            AND json_extract(boundary.payload_json, '$.origin') = 'unknown')
+        AND boundary.state = 'retained'
+        AND COALESCE(json_extract(boundary.payload_json, '$.origin'), 'unknown') != 'system'
+        AND (json_extract(boundary.payload_json, '$.sessionRevision') = ?
+          OR json_extract(boundary.payload_json, '$.sessionRevision') IS NULL
+            AND COALESCE(json_extract(boundary.payload_json, '$.admissionEventSeq'), boundary.event_seq) > ?)
+      LIMIT 1
+    `).get(...ids, conversationId, revision, admission);
   }
 
   /** Keyed, durable work evidence; the eight displayed receipts cannot prove
