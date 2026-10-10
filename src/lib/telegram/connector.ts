@@ -6,6 +6,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 
 import { TELEGRAM_CONNECTOR_LOG_MAX_BYTES, telegramConnectorLogPath } from "./connectorLog";
 import type { TelegramErrorCode } from "./contracts";
@@ -372,10 +373,8 @@ function supervisorRetired(): boolean {
  * and has not been retired. A Viewer past its release handover still reads a
  * healthy runner, which is its successor's, and never touches it.
  */
-async function connectorAdmissionOpen(): Promise<boolean> {
-  if (supervisorRetired()) return false;
-  const { viewerReleaseOwnsTraffic } = await import("@/lib/viewerInstrumentation");
-  return viewerReleaseOwnsTraffic();
+function connectorAdmissionOpen(): boolean {
+  return !supervisorRetired() && viewerReleaseOwnsTraffic();
 }
 
 /** Whether this credential generation still owns the recorded live process. */
