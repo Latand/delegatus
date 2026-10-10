@@ -150,6 +150,7 @@ test("issue 1268: a staged real runtime host proves hand-over readiness from iso
   fs.cpSync(path.join(repositoryRoot, "src"), path.join(releaseRoot, "src"), { recursive: true });
   fs.cpSync(path.join(repositoryRoot, "bin"), path.join(releaseRoot, "bin"), { recursive: true });
   fs.copyFileSync(path.join(repositoryRoot, "tsconfig.json"), path.join(releaseRoot, "tsconfig.json"));
+  fs.copyFileSync(path.join(repositoryRoot, "package.json"), path.join(releaseRoot, "package.json"));
   fs.symlinkSync(path.join(repositoryRoot, "node_modules"), path.join(releaseRoot, "node_modules"), "dir");
   fs.writeFileSync(releaseFile, JSON.stringify({
     ...stagedGeneration,
@@ -170,6 +171,7 @@ test("issue 1268: a staged real runtime host proves hand-over readiness from iso
     LLV_RUNTIME_HOST_IMAGE: stagedGeneration.image,
     LLV_RUNTIME_HOST_REVISION: stagedGeneration.revision,
     LLV_RUNTIME_HOST_CONTAINER: stagedGeneration.container,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_VIEWER_DEPLOYMENTS: "0",
   };
   const child = spawn(process.execPath, ["run", "src/runtime-host/main.ts"], {
@@ -213,3 +215,53 @@ test("issue 1268: a staged real runtime host proves hand-over readiness from iso
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 10_000);
+
+// Namespace lookup lets base-red exercise each new seam independently.
+import * as startupModule from "./runtimeHostStartup";
+import { checkRuntimeHost } from "../../scripts/runtime-host-healthcheck";
+
+test("journal progress replaces bounded evidence without changing ready wire phases", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-progress-"));
+  const filename = path.join(directory, "record.json");
+  const store = new RuntimeHostStartupStore(filename, { generation, pid: 4242, startIdentity: "4242:start", now: () => "2026-01-01T00:00:00.000Z" });
+  try {
+    store.begin(); store.record("fence-acquired"); store.stableEntryListening();
+    store.progress({ subphase: "hash-chain", done: 10000, total: 10000, committedBatches: 0 });
+    const size = fs.statSync(filename).size;
+    for (let i = 0; i < 10000; i++) store.progress({ subphase: "hash-chain", done: 10000, total: 10000, committedBatches: 0 });
+    expect(fs.statSync(filename).size).toBe(size);
+    expect(JSON.parse(fs.readFileSync(filename, "utf8")).phases.length).toBe(2);
+    store.bindHostEpoch(7); for (const phase of phases.slice(2)) store.record(phase);
+    const evidence = store.readyEvidence();
+    expect(startupModule.parseRuntimeHostHandoffEvidence({ ...evidence, probe: { checkedAt: "2026-01-01T00:00:00.000Z", requestId: "probe", responseId: "probe", elapsedMs: 1 } }, generation).phases.length).toBe(7);
+    // An older writer spreads the disk record and preserves unknown fields.
+    const record = JSON.parse(fs.readFileSync(filename, "utf8"));
+    fs.writeFileSync(filename, JSON.stringify({ ...record, hostEpoch: 7 }));
+    expect(new RuntimeHostStartupStore(filename).readyEvidence().hostEpoch).toBe(7);
+    expect(JSON.parse(fs.readFileSync(filename, "utf8")).journal.done).toBe(10000);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 30_000);
+
+test("failed socket classifier distinguishes booting, stale, ready-but-refused and unknown identity", () => {
+  const record: startupModule.RuntimeHostStartupRecord = { version: 1, generation, pid: 4242, startIdentity: "4242:start", hostEpoch: null, phases: [{ phase: "fence-acquired", recordedAt: "2026-01-01T00:00:00.000Z", generation, pid: 4242, startIdentity: "4242:start", hostEpoch: null }] };
+  expect(startupModule.runtimeHostStartupState(record, "alive")).toBe("booting");
+  expect(startupModule.runtimeHostStartupState(record, "dead")).toBe("unhealthy");
+  expect(startupModule.runtimeHostStartupState(record, "unverified")).toBe("unknown");
+  expect(startupModule.runtimeHostStartupState(null, "alive")).toBe("unhealthy");
+  record.phases[0]!.phase = "ready";
+  expect(startupModule.runtimeHostStartupState(record, "alive")).toBe("unhealthy");
+  record.phases[0]!.phase = "fence-waiting";
+  expect(startupModule.runtimeHostStartupState(record, "alive")).toBe("unhealthy");
+});
+
+test("healthcheck remains failing while reporting a live booting journal", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-health-"));
+  const filename = path.join(directory, "record.json");
+  const { procBackend } = await import("@/lib/proc");
+  const store = new RuntimeHostStartupStore(filename, { generation, pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)! });
+  try {
+    store.begin(); store.record("fence-acquired");
+    store.progress({ subphase: "receipt-backfill", done: 256, total: 30000, committedBatches: 1 });
+    await expect(checkRuntimeHost({ HOME: directory, XDG_CONFIG_HOME: directory, LLV_RUNTIME_HOST_SOCKET: path.join(directory, "absent.sock"), LLV_RUNTIME_HOST_STARTUP_TARGET: filename, LLV_RUNTIME_HOST_IMAGE: generation.image, LLV_RUNTIME_HOST_REVISION: generation.revision, LLV_RUNTIME_HOST_CONTAINER: generation.container } as unknown as NodeJS.ProcessEnv)).rejects.toThrow("runtime-host booting: journal receipt-backfill 256/30000");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

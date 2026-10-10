@@ -1,3 +1,5 @@
+import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
+
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { currentConversationFile } from "@/lib/accounts/identity";
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
@@ -392,7 +394,7 @@ export function telegramActionLine(t: TFunction, action: IncumbentTelegramAction
 
 /** `ROTATION_THRESHOLD_FRACTION` (`@/lib/orchestrator/contextPolicy`) as a
     percentage — the same line the server's recommendation draws. */
-export const ROTATION_CONTEXT_PERCENT = 50;
+export const ROTATION_CONTEXT_PERCENT = ROTATION_THRESHOLD_FRACTION * 100;
 
 /** What a rotate draft starts from (#1452): the CURRENT built-in default when
     the incumbent's mandate is based on an older version, the incumbent's own
@@ -670,7 +672,37 @@ export function deriveOrchestratorPanelState(input: {
     };
   }
   if (!status) return input.statusFailed ? { kind: "unavailable" } : { kind: "loading" };
-  return { kind: "draft", vacated: Boolean(status.seat) && !status.exists };
+  return { kind: "draft", vacated: seatVacated(status) };
+}
+
+/**
+ * The seat is vacated: its record still stands, its conversation is gone from
+ * disk. Both create forms (the dock's panel and the phone's sheet) ask this of
+ * the status READ, never of the panel state a failed attempt has moved to, so
+ * they cannot disagree about it and a retry sees the same answer as the first
+ * attempt.
+ */
+export function seatVacated(status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null): boolean {
+  return status !== null && Boolean(status.seat) && !status.exists;
+}
+
+/**
+ * The create body's fragment for a vacated seat. The seat command refuses a
+ * spawn over a designated seat as an accidental rotation unless the body says
+ * `replaceIncumbent`; over a vacated seat that is exactly what the operator
+ * means. The flag is bound to the seat the read showed: the status behind it
+ * can be old (a failed re-read keeps the last answer), and without the epoch
+ * the flag would replace whatever orchestrator is designated when the POST
+ * lands. `expectedIncumbentSeatEpoch` makes the command refuse the replacement
+ * when another seat has been designated since. Empty for a live seat and for no
+ * seat: replacing a live orchestrator is the rotate flow's job, never a create
+ * form's.
+ */
+export function vacatedSeatReplacement(
+  status: Pick<OrchestratorSeatStatus, "seat" | "exists"> | null,
+): { replaceIncumbent: true; expectedIncumbentSeatEpoch: number } | Record<string, never> {
+  if (!status || !status.seat || status.exists) return {};
+  return { replaceIncumbent: true, expectedIncumbentSeatEpoch: status.seat.seatEpoch };
 }
 
 /** The warning is eligible only after the mandate has produced a visible
@@ -865,7 +897,15 @@ function rotationHintOf(file: FileEntry | null, liveness: SeatLiveness, incumben
 
   const reasons: RotationHint["reasons"] = [];
   const percent = typeof file?.ctx?.pct === "number" ? file.ctx.pct : null;
-  if (percent !== null && percent >= ROTATION_CONTEXT_PERCENT) reasons.push("context");
+  const capacity = file?.ctx?.windowTokens;
+  /* ctx already resolved runtime metadata, launch mode and registry capacity
+     together. Apply the shared Claude threshold without relabelling a registry
+     capacity as runtime evidence or losing a transcript's beta mode. */
+  const threshold = file?.engine === "claude" && typeof capacity === "number" && capacity > 0
+    ? Math.round(capacity * ROTATION_THRESHOLD_FRACTION)
+    : null;
+  const tokens = file?.ctx?.usedTokens;
+  if (threshold !== null && typeof tokens === "number" && tokens >= threshold) reasons.push("context");
   if (deadHere) reasons.push("dead");
   if (!reasons.length) return null;
   return {

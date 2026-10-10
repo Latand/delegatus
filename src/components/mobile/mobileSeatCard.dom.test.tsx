@@ -738,7 +738,7 @@ test("the seat's own state moves the row with no reload: rotation advisory, then
   expect(card(host).hasAttribute("data-mobile2-seat-rotation")).toBe(false);
 
   /* The context reading crosses the rotation line — same mount, same row. */
-  await rerender([conversation({}), { ...orchestrator, ctx: { pct: 71 } } as unknown as FileEntry]);
+  await rerender([conversation({}), { ...orchestrator, ctx: { pct: 71, usedTokens: 710_000, windowTokens: 1_000_000, source: "runtime", confidence: "exact", observedAt: "" } } as unknown as FileEntry]);
   expect(card(host).getAttribute("data-mobile2-seat-rotation")).toBe("strongly_recommend");
   expect(card(host).getAttribute("data-mobile2-seat-state")).toBe("live");
 
@@ -916,3 +916,83 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
     dom.removeEventListener(FILES_CHANGED_EVENT, refreshCatalog);
   }
 }, 15_000);
+
+/* The seat OUTLIVES its conversation: the record stays designated after the
+   conversation is closed, and the seat route refuses a plain spawn over it
+   unless the body says `replaceIncumbent`. The phone's create draft read the
+   status and never said so, so a vacated seat could not be replaced from it. */
+async function createFromDraft(files: FileEntry[]) {
+  const { host, root } = await mount(files);
+  flushSync(() => openButton(host).click());
+  await settle(root, view(files), 3);
+  expect(sheet(host)!.getAttribute("data-orchestrator-sheet-mode")).toBe("create");
+  const confirm = async () => {
+    flushSync(() => confirmButton(host).click());
+    await settle(root, view(files), 3);
+  };
+  return { host, confirm };
+}
+
+test("a create on a vacated seat carries replaceIncumbent on the first attempt", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  const { confirm } = await createFromDraft([conversation({})]);
+  await confirm();
+
+  const posts = seatPosts();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]!.body.replaceIncumbent).toBe(true);
+  expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBe(4);
+});
+
+test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  postSeat = async () => new Response(JSON.stringify({ error: "orchestrator cwd could not be resolved" }), { status: 400, headers: { "content-type": "application/json" } });
+  const { host, confirm } = await createFromDraft([conversation({})]);
+  await confirm();
+  expect(card(host).getAttribute("data-mobile2-seat-state")).toBe("intent-error");
+
+  postSeat = async () => new Response(JSON.stringify({ ok: true, state: "starting" }), { status: 200, headers: { "content-type": "application/json" } });
+  await confirm();
+  const posts = seatPosts();
+  expect(posts).toHaveLength(2);
+  expect(posts[1]!.body.clientRequestId).not.toBe(posts[0]!.body.clientRequestId);
+  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
+});
+
+test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  postSeat = async () => { throw new TypeError("network dropped"); };
+  const { host, confirm } = await createFromDraft([conversation({})]);
+  await confirm();
+  expect(card(host).getAttribute("data-mobile2-seat-state")).toBe("intent-error");
+
+  postSeat = async () => new Response(JSON.stringify({ ok: true, state: "starting" }), { status: 200, headers: { "content-type": "application/json" } });
+  await confirm();
+  const posts = seatPosts();
+  expect(posts).toHaveLength(2);
+  expect(posts[1]!.body.clientRequestId).toBe(posts[0]!.body.clientRequestId);
+  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
+});
+
+test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {
+  seatAnswer = { seat: null, pending: null, exists: true };
+  postSeat = async () => new Response(JSON.stringify({ error: "orchestrator cwd could not be resolved" }), { status: 400, headers: { "content-type": "application/json" } });
+  const { confirm } = await createFromDraft([conversation({})]);
+  await confirm();
+  await confirm();
+
+  const posts = seatPosts();
+  expect(posts).toHaveLength(2);
+  expect(posts.map((post) => "replaceIncumbent" in post.body)).toEqual([false, false]);
+  expect(posts.map((post) => "expectedIncumbentSeatEpoch" in post.body)).toEqual([false, false]);
+});
+
+test("a live seat opens no create form, so nothing can replace it from the sheet", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: true };
+  const { host } = await mount([conversation({}), orchestrator]);
+  expect(card(host).getAttribute("data-mobile2-seat-state")).not.toBe("draft");
+  expect(host.querySelector("[data-orchestrator-confirm]")).toBeNull();
+  expect(seatPosts()).toHaveLength(0);
+});

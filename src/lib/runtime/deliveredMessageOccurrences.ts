@@ -131,7 +131,7 @@ export function orchestratorMandateDeliveries(file: OrchestratorSeatFile): Map<s
  * an unreadable, compacted or simply absent seat record costs the QUALIFIER
  * and never the card.
  */
-function mandateForDelivery(
+export function mandateForDelivery(
   clientMessageId: string | null | undefined,
   mandates: ReadonlyMap<string, MandateDelivery>,
 ): MandateDelivery | null {
@@ -173,6 +173,7 @@ export function heldDeliveryOccurrences(
       textDigest: delivery.contentDigest,
       deliveredAt: delivery.deliveredAt,
       origin: origin.kind,
+      ...(origin.channel ? { channel: origin.channel } : {}),
       ...(origin.kind === "agent" && origin.role ? { senderRole: origin.role } : {}),
       ...(origin.kind === "agent" && origin.project ? { senderProject: origin.project } : {}),
       ...(origin.kind === "agent" && origin.conversationId ? { senderConversationId: origin.conversationId } : {}),
@@ -185,11 +186,12 @@ export function heldDeliveryOccurrences(
 
 /** The wire shape of one occurrence: the join identity has done its work. */
 function wireOccurrence(occurrence: DeliveredMessageOccurrence): DeliveredMessageOccurrence {
-  const { textDigest, deliveredAt, origin, senderRole, senderProject, senderConversationId, selectedContext, mandate } = occurrence;
+  const { textDigest, deliveredAt, origin, senderRole, senderProject, senderConversationId, selectedContext, mandate, channel } = occurrence;
   return {
     textDigest,
     deliveredAt,
     origin,
+    ...(channel ? { channel } : {}),
     ...(senderRole ? { senderRole } : {}),
     ...(senderProject ? { senderProject } : {}),
     ...(senderConversationId ? { senderConversationId } : {}),

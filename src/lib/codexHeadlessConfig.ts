@@ -74,6 +74,8 @@ export function headlessCodexThreadConfig(
       caller knows the thread's environment carries a capability. */
   viewerTransport: ViewerMcpTransport = "stdio",
   features: readonly CodexFeature[] = [],
+  /** A clean launch (src/lib/memory/eligibility.ts): Codex's memories off for this thread. */
+  cleanMemory = false,
 ): JsonObject {
   const config = record(record(configRead)?.config);
   const servers = record(config?.mcp_servers);
@@ -152,6 +154,7 @@ export function headlessCodexThreadConfig(
       plugins: granted.length > 0,
       multi_agent: allowSubagents,
       realtime_conversation: true,
+      ...(cleanMemory ? { memories: false } : {}),
     },
     agents: { enabled: allowSubagents },
     ...(!allowSubagents ? { approvals_reviewer: "user" } : {}),

@@ -43,6 +43,7 @@ Object.assign(globalThis, {
 const { SeatTickChip } = await import("./SeatTickChip");
 const { resetSeatTickSettingsCacheForTests } = await import("./useSeatTickSettings");
 const { resetMaintainerRoleCacheForTests } = await import("./useMaintainerRole");
+const { setLocale } = await import("@/lib/i18n");
 
 const PROJECT = "viewer";
 /* Every instant in a fixture is relative to the clock the component reads:
@@ -52,6 +53,7 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOSt
 
 function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
   return {
+    autoRotate: { enabled: false, thresholdPercent: 50, defaultPercent: 50, minPercent: 50, maxPercent: 90, windowKnown: true, lastAttempt: null, setBy: null, updatedAt: null, why: null },
     maintenance: {
       enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
       updatedAt: null, setBy: null, live: null, lastRun: null,
@@ -202,7 +204,7 @@ async function mount(): Promise<{ root: Root }> {
 }
 
 const body = () => dom.document.body as unknown as HTMLElement;
-const chip = () => body().querySelector("[data-seat-tick-chip]") as HTMLButtonElement;
+const chip = () => body().querySelector("[data-seat-tick-chip]") as HTMLElement;
 const popover = () => body().querySelector("[data-seat-tick-popover]") as HTMLElement | null;
 const field = <T extends HTMLElement>(selector: string) => body().querySelector(selector) as T;
 /** The panel's one Save: absent while nothing changed. */
@@ -224,7 +226,7 @@ function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): v
 }
 
 async function open(root: Root): Promise<void> {
-  /* A real pointer focuses the button it lands on, and the layer's focus
+  /* A real pointer focuses the control it lands on, and the layer's focus
      return is measured against that. */
   chip().focus();
   flushSync(() => chip().click());
@@ -236,10 +238,11 @@ test("the closed chip is one face and one dot: the configured schedule, and the 
   getAnswer = configured();
   const { root } = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("healthy");
-  expect(chip().textContent).toContain("every 30 min");
+  expect(chip().textContent).toContain("30 min");
+  expect(chip().getAttribute("aria-valuetext")).toBe("30 min, not a preset. every 30 min · last check 3m ago");
   expect(chip().querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("ok");
   /* One line, and it carries both halves. */
-  expect(chip().getAttribute("title")).toBe("Tick: every 30 min · last check 3m ago");
+  expect(chip().getAttribute("title")).toBe("Tick: every 30 min · last check 3m ago\nDrag to change how often the seat wakes · click for settings");
   expect(popover()).toBeNull();
 
   await open(root);
@@ -303,7 +306,8 @@ test("an enabled tick with no recent check renders as enabled AND stale, never a
   const { root } = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("stale");
   /* The face still reports the schedule the tick is configured on. */
-  expect(chip().textContent).toContain("hourly");
+  expect(chip().textContent).toContain("1 h");
+  expect(chip().getAttribute("aria-valuetext")).toBe("every hour, the default. every 60 min · stale: last check 30m ago");
   expect(chip().querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("warn");
   await open(root);
   expect(field<HTMLButtonElement>("[data-seat-tick-enabled]").getAttribute("aria-checked")).toBe("true");
@@ -338,7 +342,8 @@ test("a save displays what was sent and then adopts what the route read back", a
 
   expect(puts()).toHaveLength(1);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, wakeIntervalMinutes: 30, reason: "a release afternoon" });
-  expect(chip().textContent).toContain("every 30 min");
+  expect(chip().textContent).toContain("30 min");
+  expect(chip().getAttribute("aria-valuetext")).toBe("30 min, not a preset. every 30 min · last check 3m ago");
   expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon (recorded)");
   expect(save()).toBeNull();
   expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
@@ -398,7 +403,8 @@ test("Restore default sends the default with no reason, and only while there is 
   flushSync(() => restore()!.click());
   await settle(root);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null });
-  expect(chip().textContent).toContain("hourly");
+  expect(chip().textContent).toContain("1 h");
+  expect(chip().getAttribute("aria-valuetext")).toBe("every hour, the default. every 60 min · last check 3m ago");
   expect(restore()).toBeNull();
 });
 
@@ -424,7 +430,11 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   getFails = 500;
   const refused = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
+  /* With no record there is no stop to drag from, so the title offers no drag
+     and the cursor is the one a click gets. */
   expect(chip().getAttribute("title")).toBe("Tick: could not be read");
+  expect(chip().className).toContain("cursor-pointer");
+  expect(chip().className).not.toContain("cursor-grab");
   await open(refused.root);
   /* No record, so no form bound to one and no facts asserted. */
   expect(body().querySelector("[data-seat-tick-details]")).toBeNull();
@@ -958,7 +968,8 @@ test("a refused agent write keeps the choice, names the refusal beside the picke
   expect(rolePuts()).toHaveLength(1);
   expect(body().querySelector("[data-seat-tick-agent-error]")?.textContent).toBe("invalid codex effort");
   expect(effortSelect().value).toBe("high");
-  expect(chip().textContent).toContain("every 30 min");
+  expect(chip().textContent).toContain("30 min");
+  expect(chip().getAttribute("aria-valuetext")).toBe("30 min, not a preset. every 30 min · last check 3m ago");
   /* Only the agent change is still waiting. */
   expect(save()).not.toBeNull();
 });
@@ -1020,3 +1031,74 @@ test("maintenance: an answer from a server with no timer block renders no group 
   expect(mGroup()).toBeNull();
   expect(body().querySelector("[data-seat-tick-details]")).not.toBeNull();
 });
+
+
+test("auto-rotation shares Save and adopts the stored threshold", async () => {
+  const { root } = await mount(); await open(root);
+  press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
+  type(body().querySelector("[data-seat-tick-auto-rotate-threshold]") as HTMLInputElement, "60");
+  const stored = record({ changed: true });
+  stored.autoRotate = { ...stored.autoRotate!, enabled: true, thresholdPercent: 60, updatedAt: ago(0) };
+  putAnswers = [{ status: 200, body: stored }];
+  press(save()); await settle(root);
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, autoRotate: { enabled: true, thresholdPercent: 60 } });
+  expect((body().querySelector("[data-seat-tick-auto-rotate-threshold]") as HTMLInputElement).value).toBe("60");
+  expect(save()).toBeNull();
+});
+
+test("an auto-rotation refusal is shown beside Save and conditional captions follow the record", async () => {
+  getAnswer = record();
+  getAnswer.autoRotate = { ...getAnswer.autoRotate!, windowKnown: false, lastAttempt: {
+    id: "fixture-attempt", seatEpoch: 1, conversationId: "conversation_fixture", startedAt: ago(5), tokens: 720000, windowTokens: 1000000,
+    thresholdPercent: 60, state: "failed", error: "fixture launch refused", told: { report: true, card: true }, nextAttemptAt: ago(-55),
+  } };
+  const { root } = await mount(); await open(root);
+  expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).not.toBeNull();
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).toContain("did not replace the orchestrator");
+  press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
+  putAnswers = [{ status: 400, body: { error: "autoRotate.enabled must be a boolean" } }];
+  press(save()); await settle(root);
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toContain("autoRotate.enabled must be a boolean");
+});
+
+test("auto-rotation captions are absent without a failure or an unknown window", async () => {
+  const { root } = await mount(); await open(root);
+  expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).toBeNull();
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")).toBeNull();
+});
+
+/* The block's copy, read as rendered (#2577 UI check): a caption that says what
+   the switch does, a label that reads as a sentence, and a failure line in the
+   operator's language with no engine wording. */
+const HH_MM = String.raw`(?:\S+ \S+,? )?\d{2}:\d{2}`;
+for (const [locale, copy] of [
+  ["en", {
+    about: "When its context reaches the threshold, the orchestrator is replaced with a fresh one at its next idle moment, with a handoff.",
+    label: "Rotate when context reaches, %",
+    failed: new RegExp(`^The attempt at ${HH_MM} did not replace the orchestrator; the current one keeps working\\. Next try after ${HH_MM}\\.$`),
+  }],
+  ["uk", {
+    about: "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з передачею справ.",
+    label: "Поріг контексту, %",
+    failed: new RegExp(`^Спроба о ${HH_MM} не замінила оркестратора, поточний працює далі\\. Наступна — після ${HH_MM}\\.$`),
+  }],
+] as const) {
+  test(`auto-rotation copy in ${locale}: caption, threshold label and a failure line without the engine error`, async () => {
+    setLocale(locale);
+    try {
+      getAnswer = record();
+      getAnswer.autoRotate = { ...getAnswer.autoRotate!, enabled: true, thresholdPercent: 60, lastAttempt: {
+        id: "fixture-attempt", seatEpoch: 1, conversationId: "conversation_fixture", startedAt: ago(5), tokens: 720000, windowTokens: 1000000,
+        thresholdPercent: 60, state: "failed", error: "successor launch failed; the predecessor was restored", told: { report: true, card: true }, nextAttemptAt: ago(-55),
+      } };
+      const { root } = await mount(); await open(root);
+      expect(body().querySelector("[data-seat-tick-auto-rotate-about]")?.textContent).toBe(copy.about);
+      expect(body().querySelector("[data-seat-tick-auto-rotate-threshold]")?.closest("label")?.textContent).toBe(copy.label);
+      const failed = body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent ?? "";
+      expect(failed).toMatch(copy.failed);
+      expect(failed).not.toContain("successor");
+      expect(failed).not.toContain("predecessor");
+    } finally { setLocale("en"); }
+  });
+}

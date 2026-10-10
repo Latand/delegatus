@@ -54,6 +54,7 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOSt
 
 function record(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSettingsAnswer {
   return {
+    autoRotate: { enabled: false, thresholdPercent: 50, defaultPercent: 50, minPercent: 50, maxPercent: 90, windowKnown: true, lastAttempt: null, setBy: null, updatedAt: null, why: null },
     maintenance: {
       enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
       updatedAt: null, setBy: null, live: null, lastRun: null,
@@ -126,6 +127,8 @@ const realFetch = globalThis.fetch;
 const requests: Recorded[] = [];
 let getAnswer: SeatTickSettingsAnswer;
 let putAnswers: Array<{ status: number; body: unknown }>;
+/** How long the route takes to answer a write. */
+let putDelay = 0;
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -149,6 +152,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (!url.startsWith("/api/monitor/seat-tick/settings")) return json({});
   if (method === "PUT") {
     const next = putAnswers.length > 1 ? putAnswers.shift()! : putAnswers[0]!;
+    if (putDelay) await new Promise((resolve) => setTimeout(resolve, putDelay));
     return json(next.body, next.status);
   }
   return json(getAnswer);
@@ -187,6 +191,7 @@ beforeEach(() => {
   requests.length = 0;
   getAnswer = record();
   putAnswers = [{ status: 200, body: record() }];
+  putDelay = 0;
 });
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
@@ -217,7 +222,11 @@ async function mount(): Promise<Root> {
 }
 
 const body = () => dom.document.body as unknown as HTMLElement;
-const row = () => body().querySelector("[data-seat-tick-row]") as HTMLButtonElement | null;
+const row = () => body().querySelector("[data-seat-tick-row]") as HTMLElement | null;
+/** The label half of the row: the button that opens the tick sheet. */
+const rowOpen = () => row()!.querySelector('[data-mobile2-open="tick"]') as HTMLButtonElement;
+/** The switch half: its value text carries the closed summary the row used to print. */
+const rowSwitch = () => row()!.querySelector('[role="slider"]') as HTMLElement;
 const tickSheet = () => body().querySelector('[data-mobile2-sheet="tick"]') as HTMLElement | null;
 const seatSheet = () => body().querySelector('[data-mobile2-sheet="seat"]') as HTMLElement | null;
 const save = () => body().querySelector("[data-seat-tick-save]") as HTMLButtonElement | null;
@@ -235,7 +244,7 @@ function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): v
 }
 
 async function openTick(root: Root): Promise<void> {
-  flushSync(() => row()!.click());
+  flushSync(() => rowOpen().click());
   await settle(root);
   expect(tickSheet()).not.toBeNull();
 }
@@ -246,11 +255,14 @@ test("the live seat sheet carries the tick as a row, above Edit the mandate, wit
   const entry = row();
   expect(entry).not.toBeNull();
   expect(entry!.className).toContain("min-h-11");
-  expect(entry!.getAttribute("data-mobile2-open")).toBe("tick");
+  expect(rowOpen().textContent).toBe("Seat tick");
+  expect(rowOpen().getAttribute("aria-label")).toBe("Seat tick settings. Tick: every 60 min · last check 3m ago");
+  expect(rowSwitch().getAttribute("data-seat-tick-surface")).toBe("mobile");
   expect(entry!.getAttribute("data-seat-tick-row")).toBe("healthy");
-  /* The desktop's closed summary without its «Tick:» prefix — the sheet has
-     already said which seat this is. */
-  expect(entry!.textContent).toContain("every 60 min · last check 3m ago");
+  /* The thumb names the stop; the desktop's closed summary, without its
+     «Tick:» prefix, is the rest of the value text. */
+  expect(rowSwitch().textContent).toBe("1 h");
+  expect(rowSwitch().getAttribute("aria-valuetext")).toBe("every hour, the default. every 60 min · last check 3m ago");
   expect(entry!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("ok");
   /* Order inside the body: the identity block, then the tick, then the mandate. */
   const sheetBody = seatSheet()!.querySelector("[data-mobile2-sheet-body]")!;
@@ -265,7 +277,10 @@ test("a paused tick reads as off on the row, with a muted dot, and the row never
   getAnswer = paused();
   await mount();
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
-  expect(row()!.textContent).toContain("off since 2h ago");
+  expect(rowSwitch().textContent).toBe("off");
+  expect(rowSwitch().getAttribute("aria-valuetext")).toContain("off since 2h ago");
+  expect(rowSwitch().getAttribute("aria-valuenow")).toBe("0");
+  expect(rowOpen().getAttribute("aria-label")).toContain("off since 2h ago");
   expect(row()!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("muted");
 });
 
@@ -275,8 +290,10 @@ test("an enabled tick with no recent check reads as stale on the row while its f
   });
   const root = await mount();
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("stale");
-  expect(row()!.textContent).toContain("every 60 min");
-  expect(row()!.textContent).toContain("stale: last check 40m ago");
+  expect(rowSwitch().textContent).toBe("1 h");
+  expect(rowSwitch().getAttribute("aria-valuetext")).toContain("every 60 min · stale: last check 40m ago");
+  expect(rowSwitch().getAttribute("aria-valuenow")).toBe("2");
+  expect(row()!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("warn");
   await openTick(root);
   expect(body().querySelector("[data-seat-tick-status-detail]")?.textContent).toContain("Checks run every 5 min");
   expect(body().querySelector("[data-seat-tick-enabled]")?.getAttribute("aria-checked")).toBe("true");
@@ -451,4 +468,130 @@ test("N need you opens the last run's card through the board's own task-open eve
     dom.window.removeEventListener("llv:mcp-navigate", listener as never);
   }
   expect(navigated).toEqual([{ kind: "task", id: "hidden-done-card" }]);
+});
+
+/* The switch in the row (docs/design/seat-tick-slider.md, the phone). */
+function finger(type: string, x: number): void {
+  const Ctor = (dom.PointerEvent ?? dom.MouseEvent) as unknown as new (type: string, init: Record<string, unknown>) => Event;
+  const event = new Ctor(type, { bubbles: true, cancelable: true, pointerId: 3, pointerType: "touch", button: 0, clientX: x, clientY: 500 });
+  flushSync(() => { rowSwitch().dispatchEvent(event); });
+}
+
+test("a tap on the row's own padding opens the tick sheet, as it did when the row was one button", async () => {
+  const root = await mount();
+  flushSync(() => row()!.click());
+  await settle(root);
+  expect(tickSheet()).not.toBeNull();
+  expect(puts()).toHaveLength(0);
+});
+
+test("a tap on the switch opens the tick sheet, exactly as the label does, and writes nothing", async () => {
+  const root = await mount();
+  expect(rowSwitch().getAttribute("data-seat-tick-surface")).toBe("mobile");
+  finger("pointerdown", 300);
+  finger("pointermove", 306);
+  finger("pointerup", 306);
+  flushSync(() => rowSwitch().click());
+  await settle(root);
+  expect(tickSheet()).not.toBeNull();
+  expect(puts()).toHaveLength(0);
+});
+
+test("a horizontal drag on the switch changes the stop from the row, without opening the sheet", async () => {
+  const root = await mount();
+  const stored = record({ changed: true });
+  stored.settings = { ...stored.settings, enabled: false, reason: "off", updatedAt: new Date().toISOString() };
+  stored.effective = { ...stored.effective, enabled: false, reason: "off", isDefault: false, configured: true, updatedAt: new Date().toISOString() };
+  putAnswers = [{ status: 200, body: stored }];
+  finger("pointerdown", 300);
+  /* A step is 20 px; two of them, from the default, is off. */
+  finger("pointermove", 280);
+  finger("pointermove", 258);
+  await new Promise((resolve) => setTimeout(resolve, 110));
+  finger("pointerup", 258);
+  flushSync(() => rowSwitch().click());
+  await settle(root);
+  expect(tickSheet()).toBeNull();
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({
+    project: PROJECT, enabled: false, untilMinutes: null,
+    reason: "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.",
+  });
+  /* The row shows what the route read back. */
+  expect(rowSwitch().textContent).toBe("off");
+  expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
+});
+
+test("a drag made while the row's previous write is in flight is written after it, and the thumb stays where it was released", async () => {
+  const root = await mount();
+  const at = new Date().toISOString();
+  const tenMinutes = record({ changed: true });
+  const ten = "The operator set the activity slider to «every 10 minutes».";
+  const off = "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.";
+  tenMinutes.settings = { ...tenMinutes.settings, wakeIntervalMinutes: 10, reason: ten, updatedAt: at };
+  tenMinutes.effective = { ...tenMinutes.effective, wakeIntervalMinutes: 10, reason: ten, isDefault: false, configured: true, updatedAt: at };
+  const stopped = record({ changed: true });
+  stopped.settings = { ...stopped.settings, enabled: false, wakeIntervalMinutes: 10, reason: off, updatedAt: at };
+  stopped.effective = { ...stopped.effective, enabled: false, wakeIntervalMinutes: 10, reason: off, isDefault: false, configured: true, updatedAt: at };
+  putAnswers = [{ status: 200, body: tenMinutes }, { status: 200, body: stopped }];
+  putDelay = 300;
+  const swipe = async (to: number[]) => {
+    finger("pointerdown", 300);
+    for (const x of to) finger("pointermove", x);
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    finger("pointerup", to[to.length - 1]!);
+    flushSync(() => rowSwitch().click());
+    await settle(root);
+  };
+  /* One step right is 10 min; three back from there, before it is answered, is off. */
+  await swipe([310, 320]);
+  expect(rowSwitch().getAttribute("aria-busy")).toBe("true");
+  await swipe([280, 240]);
+  expect(rowSwitch().textContent).toBe("off");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  await settle(root);
+  expect(tickSheet()).toBeNull();
+  expect(puts().map((entry) => entry.body)).toEqual([
+    { project: PROJECT, enabled: true, wakeIntervalMinutes: 10, untilMinutes: null, reason: ten },
+    { project: PROJECT, enabled: false, untilMinutes: null, reason: off },
+  ]);
+  expect(rowSwitch().textContent).toBe("off");
+  expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
+});
+
+
+test("auto-rotation shares Save and adopts the stored threshold", async () => {
+  const root = await mount(); await openTick(root);
+  press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
+  type(body().querySelector("[data-seat-tick-auto-rotate-threshold]") as HTMLInputElement, "60");
+  const stored = record({ changed: true });
+  stored.autoRotate = { ...stored.autoRotate!, enabled: true, thresholdPercent: 60, updatedAt: ago(0) };
+  putAnswers = [{ status: 200, body: stored }];
+  press(save()); await settle(root);
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, autoRotate: { enabled: true, thresholdPercent: 60 } });
+  expect((body().querySelector("[data-seat-tick-auto-rotate-threshold]") as HTMLInputElement).value).toBe("60");
+  expect(save()).toBeNull();
+});
+
+test("an auto-rotation refusal is shown beside Save and conditional captions follow the record", async () => {
+  getAnswer = record();
+  getAnswer.autoRotate = { ...getAnswer.autoRotate!, windowKnown: false, lastAttempt: {
+    id: "fixture-attempt", seatEpoch: 1, conversationId: "conversation_fixture", startedAt: ago(5), tokens: 720000, windowTokens: 1000000,
+    thresholdPercent: 60, state: "failed", error: "fixture launch refused", told: { report: true, card: true }, nextAttemptAt: ago(-55),
+  } };
+  const root = await mount(); await openTick(root);
+  expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).not.toBeNull();
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).toContain("did not replace the orchestrator");
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")?.textContent).not.toContain("fixture launch refused");
+  press(body().querySelector("[data-seat-tick-auto-rotate-enabled]") as HTMLButtonElement);
+  putAnswers = [{ status: 400, body: { error: "autoRotate.enabled must be a boolean" } }];
+  press(save()); await settle(root);
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toContain("autoRotate.enabled must be a boolean");
+});
+
+test("auto-rotation captions are absent without a failure or an unknown window", async () => {
+  const root = await mount(); await openTick(root);
+  expect(body().querySelector("[data-seat-tick-auto-rotate-window-unknown]")).toBeNull();
+  expect(body().querySelector("[data-seat-tick-auto-rotate-failed]")).toBeNull();
 });

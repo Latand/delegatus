@@ -67,6 +67,11 @@ export interface LaunchProfile {
       interpretation for durable generations created before the axis split. */
   sandbox?: "full" | "restricted" | null;
   allowSubagents: boolean;
+  /** No automatic memory reaches this conversation: no learned rules, no
+      shared-memory hook, and its engine's own memory off. Set at spawn for a
+      clean role or review gate (src/lib/memory/eligibility.ts) and kept on
+      every resume. Absent means memory is allowed. */
+  cleanMemory?: boolean;
   mcpServers: string[];
   /** Codex plugins granted to this session (issue #687). Decided once, at
       spawn, from the session's origin; a resume replays it and can never
@@ -324,6 +329,7 @@ export interface HeldDeliveryCommand {
   kind: "send" | "steer" | "inject";
   policy: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   /** Message authorship stamped at admission (#1117), persisted on the held
       record so a migration-held delivery replays with the same attribution.
       Ordinary sends retain stamp-upgrade compatibility outside the request
@@ -343,6 +349,7 @@ export interface HeldDeliveryCommandInput {
   kind?: HeldDeliveryCommand["kind"];
   policy?: HeldDeliveryCommand["policy"];
   turnId?: string | null;
+  onlyIfIdle?: HeldDeliveryCommand["onlyIfIdle"];
   origin?: MessageOrigin;
   cohortAt?: string;
 }
@@ -395,8 +402,10 @@ export interface SuccessorProviderPort {
     conversationId: ViewerConversationId;
     source: NativeGeneration;
     targetAccountId: string;
-    /** Persists a provider-created artifact after its path and file identity are validated. */
-    recordContinuityPath(pathname: string): void;
+    /** Persists a provider-created artifact after its path and file identity
+        are validated. The write waits for the registry lock off the loop; the
+        provider awaits it where it calls it, and a refusal throws. */
+    recordContinuityPath(pathname: string): void | Promise<void>;
   }): Promise<ProviderReceipt>;
   verify(receipt: ProviderReceipt, input: { engine: MigrationEngine; targetAccountId: string; launchProfile: LaunchProfile }): Promise<void>;
   publishHost?(receipt: ProviderReceipt, input: {

@@ -1,8 +1,11 @@
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { signalFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync, type ChildProcess } from "node:child_process";
 
 import {
   buildFilesResponseInWorker,
@@ -49,11 +52,105 @@ function scratchState(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-response-worker-"));
 }
 
-afterEach(() => {
+async function stopTestWorker(): Promise<void> {
+  // The pool retains the original launch handle even after exit while inherited
+  // stdio stays open. Its diagnostic PID can already belong to another process.
+  const child = (globalThis as typeof globalThis & {
+    __llvFilesResponseWorker?: { child: ChildProcess } | null;
+  }).__llvFilesResponseWorker?.child;
   shutdownFilesResponseWorker("test");
+  if (child) {
+    await stopFixtureProcess(child);
+    expect(child.exitCode !== null || child.signalCode !== null, "test worker was reaped before teardown returned").toBe(true);
+  }
+}
+
+afterEach(async () => {
+  await stopTestWorker();
   delete process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB;
   delete process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS;
 });
+
+// Use the real pool and both call-site helpers. A descendant keeps stdout open
+// after the root exits, so diagnostics retain the root PID through actual reuse.
+for (const helperFile of ["./filesResponseWorker.test.ts", "../../app/api/files/route.test.ts"]) {
+  test.skipIf(process.platform !== "linux")(`worker cleanup preserves a genuinely reused PID: ${helperFile}`, () => {
+    const stateDir = scratchState();
+    const program = `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import ts from "typescript";
+import { captureProcessIdentity, processIdentityStatus } from ${JSON.stringify(new URL("../processIdentity.ts", import.meta.url).pathname)};
+import { stopFixtureIdentity, stopFixtureProcess } from ${JSON.stringify(new URL("../testing/fixtureProcess.ts", import.meta.url).pathname)};
+import { buildFilesResponseInWorker, filesResponseWorkerPoolDiagnostics, shutdownFilesResponseWorker } from ${JSON.stringify(new URL("./filesResponseWorker.ts", import.meta.url).pathname)};
+const scratch = ${JSON.stringify(stateDir)};
+process.env.LLV_STATE_DIR = scratch;
+const fake = path.join(scratch, "linger-worker.mjs");
+fs.writeFileSync(fake, \`import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline'; import {spawn} from 'node:child_process';
+readline.createInterface({input:process.stdin}).once('line', line => {
+  const {id} = JSON.parse(line);
+  const child = spawn('/bin/sleep', ['30'], {stdio:['ignore','inherit','inherit']});
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, 'descendant.json'), JSON.stringify({pid:child.pid}));
+  const directory = path.join(process.env.LLV_STATE_DIR, 'files-response-results'); fs.mkdirSync(directory, {recursive:true});
+  const bodyFile = path.join(directory, 'body.json'); fs.writeFileSync(bodyFile, '{}');
+  process.stdout.write(JSON.stringify({id,ok:true,result:{bodyFile,contentType:'application/json',etag:'probe',timing:'0'}}) + String.fromCharCode(10), () => process.exit(0));
+});\`);
+await buildFilesResponseInWorker({type:'project',url:'http://127.0.0.1/api/files',headers:[]}, {
+  launch:{executable:process.execPath,workerPath:fake},env:process.env,timeoutMs:2000,
+});
+const old = globalThis.__llvFilesResponseWorker.child;
+if (old.exitCode === null) await new Promise(resolve => old.once('exit', resolve));
+await Bun.sleep(30);
+const descendant = captureProcessIdentity(JSON.parse(fs.readFileSync(path.join(scratch, 'descendant.json'), 'utf8')).pid);
+let bystander;
+try {
+  if (filesResponseWorkerPoolDiagnostics().pid !== old.pid) throw new Error('pool did not retain exited root');
+  fs.writeFileSync('/proc/sys/kernel/ns_last_pid', String(old.pid - 1));
+  bystander = spawn('/bin/sleep', ['30'], {stdio:'ignore'});
+  const other = captureProcessIdentity(bystander.pid);
+  if (other.pid !== old.pid) throw new Error('real PID reuse did not occur');
+  await stopFixtureProcess(old);
+  if (processIdentityStatus(other) !== 'alive') throw new Error('original-handle control killed bystander');
+  const source = fs.readFileSync(${JSON.stringify(new URL(helperFile, import.meta.url).pathname)}, 'utf8');
+  const helper = source.slice(source.indexOf('async function stopTestWorker()'), source.indexOf('afterEach(async () =>'));
+  const code = ts.transpileModule(helper, {compilerOptions:{target:ts.ScriptTarget.ESNext,module:ts.ModuleKind.ESNext}}).outputText;
+  const expect = (actual, message) => ({toBe(expected) {if (actual !== expected) throw new Error(message + ': ' + actual + ' !== ' + expected);}});
+  const cleanup = new Function('filesResponseWorkerPoolDiagnostics', 'captureProcessIdentity', 'shutdownFilesResponseWorker', 'stopFixtureIdentity', 'stopFixtureProcess', 'processIdentityStatus', 'Bun', 'expect', code + '; return stopTestWorker;')(
+    filesResponseWorkerPoolDiagnostics, captureProcessIdentity, shutdownFilesResponseWorker, stopFixtureIdentity, stopFixtureProcess, processIdentityStatus, Bun, expect,
+  );
+  await cleanup();
+  if (processIdentityStatus(other) !== 'alive') throw new Error('worker cleanup killed recycled-PID bystander');
+  fs.writeFileSync(fake, \`import readline from 'node:readline'; import fs from 'node:fs'; import path from 'node:path';
+readline.createInterface({input:process.stdin}).on('line', line => {
+  const {id} = JSON.parse(line);
+  const bodyFile = path.join(process.env.LLV_STATE_DIR, 'files-response-results', 'live.json'); fs.writeFileSync(bodyFile, '{}');
+  process.stdout.write(JSON.stringify({id,ok:true,result:{bodyFile,contentType:'application/json',etag:'probe',timing:'0'}}) + String.fromCharCode(10));
+});\`);
+  await buildFilesResponseInWorker({type:'project',url:'http://127.0.0.1/api/files',headers:[]}, {
+    launch:{executable:process.execPath,workerPath:fake},env:process.env,timeoutMs:2000,
+  });
+  const live = globalThis.__llvFilesResponseWorker.child;
+  const liveIdentity = captureProcessIdentity(live.pid);
+  if (live.exitCode !== null || live.signalCode !== null) throw new Error('owned worker was not live');
+  await cleanup();
+  if (live.exitCode === null && live.signalCode === null) throw new Error('cleanup returned before owned worker exit');
+  if (processIdentityStatus(liveIdentity) !== 'dead') throw new Error('cleanup did not reap owned live worker');
+  if (processIdentityStatus(other) !== 'alive') throw new Error('live-worker cleanup killed bystander');
+  console.log('recycled worker PID bystander survived');
+} finally {
+  if (bystander) await stopFixtureProcess(bystander);
+  await stopFixtureIdentity(descendant);
+  shutdownFilesResponseWorker('probe end');
+}
+`;
+    try {
+      const result = spawnSync("unshare", ["-Urpf", "--mount-proc", process.execPath, "-e", program], { encoding: "utf8", timeout: 7_000 });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("recycled worker PID bystander survived");
+    } finally { fs.rmSync(stateDir, { recursive: true, force: true }); }
+  }, 10_000);
+}
 
 test("files response projection runs in an isolated worker process", async () => {
   const stateDir = scratchState();
@@ -70,7 +167,7 @@ test("files response projection runs in an isolated worker process", async () =>
       tasks: [],
     });
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -91,7 +188,7 @@ test("a burst of rapid sequential projections is served by one worker process", 
     expect(after.pid).not.toBeNull();
     for (const result of results) expectEtagMatchesBody(result);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -111,7 +208,7 @@ test("concurrent projections are served by one worker process", async () => {
        two builds can never hand back the same one. */
     expect(new Set(results.map((result) => bodyWithoutVolatileStorageFreeBytes(result.body))).size).toBe(1);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -127,7 +224,7 @@ test("a worker that ends a build above the size threshold is retired", async () 
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(2);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -142,7 +239,7 @@ test("a worker nobody asks for a projection is retired when it goes idle", async
     expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("idle");
     expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -153,15 +250,15 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     const running = filesResponseWorkerPoolDiagnostics();
     expect(running.pid).not.toBeNull();
+    const identity = captureProcessIdentity(running.pid!);
     const pending = buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    /* The pid this kills is the one the pool just reported as its own. */
-    process.kill(running.pid!, "SIGKILL");
+    signalFixtureIdentity(identity, "SIGKILL");
     await expect(pending).rejects.toThrow(/files response worker/);
     const recovered = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(recovered.etag).toMatch(/^"[a-f0-9]{40}"$/);
     expect(filesResponseWorkerPoolDiagnostics().spawns).toBeGreaterThanOrEqual(running.spawns + 1);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -185,7 +282,7 @@ test("a retired worker still answers the next revision with a delta from its per
   try {
     const first = await buildFilesResponseInWorker(scoped(1) as never, runtimeFor(stateDir));
     expect(first.delta).toBeUndefined();
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
 
     const second = await buildFilesResponseInWorker(scoped(2) as never, runtimeFor(stateDir));
     expect(second.etag).not.toBe(first.etag);
@@ -211,7 +308,7 @@ test("a retired worker still answers the next revision with a delta from its per
     }
     expect(fs.readdirSync(path.join(stateDir, "files-response-results")).filter((name) => !name.startsWith("delta-base-"))).toEqual([]);
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -237,7 +334,7 @@ test("a projection from the snapshot file reports the scan generation that file 
     const inline = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(inline.snapshotRead).toBeUndefined();
   } finally {
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });

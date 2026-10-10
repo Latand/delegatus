@@ -51,6 +51,7 @@ export const descriptorSchema = z.object({
   api_base: z.url().refine((value) => [...value].length <= 2048),
   icon_url: boundedString(2048).nullish(),
   kinds: z.array(z.string()).min(1),
+  features: z.array(z.string()).optional(),
   liveness: livenessSchema,
   limits: z.object({
     max_response_bytes: z.number().int().min(65536).max(1048576),
@@ -117,6 +118,9 @@ const toolSchema = z.object({
   name: boundedString(64).refine((value) => value.length > 0),
   summary: boundedString(240),
   mode: z.enum(["direct", "handoff"]),
+  effect: z.enum(["read", "action"]).optional(),
+  parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
+  audience: z.enum(["admin", "owner"]).optional(),
 });
 export const inputSchema = z.object({
   instructions: boundedString(32000),
@@ -131,6 +135,7 @@ export const inputSchema = z.object({
   request_text: boundedString(4000).nullable(),
   requester: requesterSchema.nullish(),
   short_term_memory: boundedString(16000).nullish(),
+  tool_guidance: boundedString(24000).nullish(),
   tools: z
     .array(toolSchema)
     .max(128)
@@ -158,6 +163,66 @@ export const requestSchema = z.object({
   }),
 });
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
+export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export const RELAY_OWNER_TOOLS = "relay_owner_tools";
+/** I9 uses the offered audience; operation names and schemas stay service-owned. */
+export const isOwnerTool = (tool: ExternalRelayTool) => tool.audience === "owner";
+/** E3 is the only owner 429 that proves no admission, debit or action stamp. */
+export const ownerRateLimitSchema = z.object({ error: z.object({
+  code: z.literal("rate_limited"), message: z.literal("rate limited"),
+  retry_after_s: z.number().int().min(1).max(60),
+}) });
+const callId = z.string().regex(/^[A-Za-z0-9_-]{22,64}$/);
+export const toolCallResultSchema = z.object({
+  call_id: callId,
+  tool: z.string().max(64),
+  status: z.enum(["ok", "error", "denied", "pending", "confirmation_pending", "outcome_unknown"]),
+  output: boundedString(16000),
+  truncated: z.boolean(),
+  effect: z.enum(["read", "action"]),
+  delivered: z.boolean(),
+  replayed: z.boolean(),
+  calls_remaining: z.number().int().min(0).max(16),
+  code: z.enum(["not_permitted", "unknown_tool", "quota_exhausted", "too_many_calls", "invalid_arguments", "unavailable"]).optional(),
+  cursor: callId.optional(),
+  audience: z.enum(["admin", "owner"]).optional(),
+  retry_after_s: z.number().int().min(1).max(60).optional(),
+  confirmation_id: id.optional(),
+  summary: boundedString(240).optional(),
+  expires_at: time.optional(),
+});
+export type ToolCallResult = z.infer<typeof toolCallResultSchema>;
+export type RoundCall = { tool: string; arguments: string; cursor: string | null };
+export function roundSchema(tools: ExternalRelayTool[], options: { handoff: boolean } = { handoff: true }) {
+  return {
+    ...handoffAnswerSchema,
+    required: ["action", "text", "reply_to", "calls"],
+    properties: {
+      ...handoffAnswerSchema.properties,
+      action: { type: "string", enum: options.handoff ? ["reply", "ignore", "handoff", "call"] : ["reply", "ignore", "call"] },
+      calls: { type: "array", items: {
+        type: "object", additionalProperties: false,
+        required: ["tool", "arguments", "cursor"],
+        properties: {
+          tool: { type: "string", enum: tools.map((tool) => tool.name).sort() },
+          arguments: { type: "string" },
+          cursor: { type: ["string", "null"] },
+        },
+      } },
+    },
+  };
+}
+export function checkedRound(value: unknown, request: ExternalRelayRequest, options: { handoff: boolean; ignore: boolean } = { handoff: true, ignore: true }):
+  ExternalRelayDecision | { kind: "calls"; calls: RoundCall[] } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const answer = value as Record<string, unknown>;
+  if (answer.action !== "call") return checkedAnswer(value, request, options);
+  if (typeof answer.text !== "string" || (answer.reply_to !== null && typeof answer.reply_to !== "string")) return null;
+  if (!Array.isArray(answer.calls) || !answer.calls.every((call) =>
+    call && typeof call === "object" && typeof call.tool === "string" &&
+    typeof call.arguments === "string" && (call.cursor === null || typeof call.cursor === "string"))) return null;
+  return { kind: "calls", calls: answer.calls };
+}
 export type ExternalRelayRequester = z.infer<typeof requesterSchema>;
 export type ExternalRelayDescriptor = z.infer<typeof descriptorSchema>;
 export type ExternalRelayTarget = z.infer<typeof targetSchema>;
@@ -181,6 +246,10 @@ export const handoffAnswerSchema = {
     action: { type: "string", enum: ["reply", "ignore", "handoff"] },
   },
 } as const;
+export const replyAnswerSchema = {
+  ...answerSchema,
+  properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply"] } },
+} as const;
 /** Hand-off is offered only for a request whose service listed its tools. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
   (request.input.tools?.length ?? 0) > 0;
@@ -195,13 +264,15 @@ export type ExternalRelayDecision =
 export function checkedAnswer(
   value: unknown,
   request: ExternalRelayRequest,
+  options: { handoff: boolean; ignore: boolean } = { handoff: true, ignore: true },
 ): ExternalRelayDecision | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const answer = value as Record<string, unknown>;
   if (answer.action === "handoff")
-    return offersHandoff(request)
+    return options.handoff && offersHandoff(request)
       ? { action: "handoff", text: "", reply_to: null }
       : null;
+  if (answer.action === "ignore" && !options.ignore) return null;
   if (
     (answer.action !== "reply" && answer.action !== "ignore") ||
     typeof answer.text !== "string" ||
@@ -232,6 +303,7 @@ export type ExternalRelayProgress = {
   at: string;
 };
 export type ExternalRelayCompletion =
+  | { lease_id: string; outcome: "compacted"; reason: CompactReason; detail: string | null; duration_ms: number }
   | {
       lease_id: string;
       outcome: "answered";
@@ -251,3 +323,17 @@ export type ExternalRelayCompletion =
       reason: string;
       detail: string | null;
     };
+
+export const compactRequestSchema = z.object({ request_id: id, lease_id: leaseId,
+  kind: z.literal("compact"), target_id: id, claimed_at: time, liveness: livenessSchema,
+  chat: z.object({ key: chatKey }), input: z.object({ requester: requesterSchema }) });
+export type CompactRequest = z.infer<typeof compactRequestSchema>;
+export type CompactReason = "compacted" | "started_fresh" | "nothing_to_compact";
+export const compactCompletionSchema = z.union([
+  z.object({ lease_id: leaseId, outcome: z.literal("compacted"),
+    reason: z.enum(["compacted", "started_fresh", "nothing_to_compact"]), detail: boundedString(200).nullable(), duration_ms: z.number().int().nonnegative() }),
+  z.object({ lease_id: leaseId, outcome: z.literal("declined"),
+    reason: z.enum(["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff", "member_limit"]),
+    detail: boundedString(200).nullable(), retry_after_s: z.number().int().nonnegative().nullable() }),
+  z.object({ lease_id: leaseId, outcome: z.literal("failed"), reason: z.enum(["agent_error", "invalid_answer", "profile_violation", "hard_cap", "install_restarted", "cancelled"]), detail: boundedString(200).nullable() }),
+]);

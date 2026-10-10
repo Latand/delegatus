@@ -1,0 +1,37 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 1440,
+      "lang": "en",
+      "reachable": true,
+      "recoveryControls": 0,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "reachable": true,
+      "recoveryControls": 0,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "reachable": true,
+      "recoveryControls": 0,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "reachable": true,
+      "recoveryControls": 0,
+      "fits": true,
+      "pageErrors": []
+    }
+  ]
+}

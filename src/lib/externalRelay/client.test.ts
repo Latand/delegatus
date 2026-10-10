@@ -122,6 +122,24 @@ test("descriptor refuses cross origin and public HTTP", async () => {
     await server.close();
   }
 });
+
+test("F4 discovery features are retained through pending pairing and confirmation", async () => {
+  const features = ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"];
+  const server = await startTestRelay((req) => {
+    if (req.url === "/.well-known/delegatus-relay.json") return { body: { ...descriptor(server.origin), features } };
+    if (req.url === "/v1/pairings") return { status: 201, body: { pairing_id: "pair_features", poll_secret: secret,
+      code: "1234-5678", verify_url: null, expires_at: "2099-09-28T12:10:00Z", poll_interval_s: 2 } };
+    if (req.url?.endsWith("/confirm")) return { body: { credential: secret, version: 1, owner, targets: [target] } };
+    return { body: { status: "awaiting_install", owner, targets: [target] } };
+  });
+  try {
+    const pending = await startRelayPairing(server.origin);
+    expect(readRelayStore().pending[0]!.features).toEqual(features);
+    await checkRelayPairing(pending.id);
+    await confirmRelayPairing(pending.id, owner.id);
+    expect(readRelayStore().relays[0]!.features).toEqual(features);
+  } finally { await server.close(); }
+});
 test("a prefixed API pairs and carries claims and heartbeats under its prefix", async () => {
   let origin = "";
   const paths: string[] = [];

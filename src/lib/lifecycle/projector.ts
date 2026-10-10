@@ -108,7 +108,7 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
         project: pipeline.project,
         pipelineId: pipeline.id,
         stageId: null,
-        summary: `pull request #${merge.prNumber} merged${merge.by === "auto-merge" ? " by Delegatus" : ""}`,
+        summary: `pull request #${merge.prNumber} merged${merge.by === "auto-merge" ? " by Delegatus" : ""}, head ${merge.mergedHead ?? "unavailable"} — ${pipeline.task}`,
       });
     }
     for (const finish of pipeline.taskFinishes ?? []) {

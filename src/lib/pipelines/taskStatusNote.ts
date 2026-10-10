@@ -1,13 +1,22 @@
-import { operatorLocale } from "@/lib/operator/settings";
+import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { patchTask } from "@/lib/tasks/commands";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
-export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" };
+export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
+  | { kind: "provider-retry"; resumeAt: string; timeZone?: string };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
 export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason): string {
   const uk = locale === "uk";
+  if (reason?.kind === "provider-retry") {
+    const zone = reason.timeZone ?? operatorTimeZone() ?? "UTC";
+    const time = new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", {
+      timeZone: zone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).format(new Date(reason.resumeAt)).replace(",", "");
+    const label = zone.split("/").at(-1)!.replaceAll("_", " ");
+    return uk ? `Автоповтор ${time} (${label}).` : `Automatic retry ${time} (${label}).`;
+  }
   if (reason?.kind === "signed-out") {
     const engine = reason.engine === "codex" ? "Codex" : "Claude";
     return uk
@@ -18,8 +27,8 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
     ? "Вичерпано ліміт використання. Очікуємо на його оновлення для повторної спроби."
     : "The usage limit was reached. Waiting for it to reset before retrying.";
   if (reason?.kind === "review-budget") return uk
-    ? "Бюджет рев’ю вичерпано. continue-review з addRounds продовжить цей пайплайн: виправлення зауважень, потім нове рев’ю."
-    : "The review budget is spent. continue-review with addRounds continues this pipeline: fix findings, then fresh review.";
+    ? "Бюджет рев’ю зафіксовано. Вирішіть залишене питання або закрийте цю лінію."
+    : "The review budget is fixed. Resolve the retained question or close this lane.";
   if (/budget|round limit|exhausted/i.test(detail)) return uk
     ? "Бюджет спроб вичерпано. Очікує рішення про продовження."
     : "The attempt budget is spent. Waiting for a decision on continuing.";

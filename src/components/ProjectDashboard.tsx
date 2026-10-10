@@ -105,6 +105,7 @@ import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
+import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -118,7 +119,7 @@ const EMPTY_MANUAL: FileEntry[] = [];
 const EMPTY_DRAFTS: string[] = [];
 const EMPTY_TASKS: BoardTask[] = [];
 const NO_READING_PATHS: readonly string[] = [];
-const EMPTY_LAUNCHED: ReadonlyMap<string, string> = new Map();
+const EMPTY_LAUNCHED: ReadonlyMap<string, FileEntry> = new Map();
 
 interface Props {
   files: FileEntry[];
@@ -565,10 +566,23 @@ function ProjectDashboardView({
     if (file) markConversationSeen(file);
   };
   const [drafts, setDrafts] = useState<string[]>([]);
-  /* Launch windows this phone handed a draft over to (`spawn:<launchId>` →
-     conversation id): what lets the conversation screen keep following the
-     agent when the scan replaces the window with its transcript. */
-  const [launchedConversations, setLaunchedConversations] = useState<ReadonlyMap<string, string>>(EMPTY_LAUNCHED);
+  /* Launch windows opened on this phone (`spawn:<launchId>` →
+     provisional file with its durable conversation id): the screen follows
+     the agent when the scan replaces the window with its transcript. */
+  const [launchedConversations, setLaunchedConversations] = useState<ReadonlyMap<string, FileEntry>>(EMPTY_LAUNCHED);
+  useEffect(() => {
+    /* Keep the last scanned launch window: the confirm's local preview may
+       predate the server's composed mandate and rotation handoff. */
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- retain the latest scanned launch across a later scan gap */
+    setLaunchedConversations((previous) => {
+      let next: Map<string, FileEntry> | null = null;
+      for (const [key, saved] of previous) {
+        const current = files.find((file) => file.path === key && file.conversationId === saved.conversationId);
+        if (current && current !== saved) (next ??= new Map(previous)).set(key, current);
+      }
+      return next ?? previous;
+    });
+  }, [files]);
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
   /* The phone's task sheet, opened from the board menu: «New task» in its
      create view, «Tasks» as the list (mobile v2 lane 1). */
@@ -577,6 +591,9 @@ function ProjectDashboardView({
      admission; a successful choice lands in the owning shelf or group. */
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
+  /* Counts the highlights asked for: the board opens on each request, and a
+     second request for the path still highlighted changes nothing else. */
+  const [highlightNonce, setHighlightNonce] = useState(0);
   /* Jump targets the scheme would otherwise skip (a stalled root builds no
      automatic group; a stalled branch hides inside a mini stack) materialize
      as ephemeral nodes: React state only, never written to prefs, gone on
@@ -1134,6 +1151,7 @@ function ProjectDashboardView({
     /* A task card is a board object, not a conversation screen. */
     if (isMobile && !path.startsWith("task::")) showMobileConversation(path);
     setHighlight(path);
+    setHighlightNonce((nonce) => nonce + 1);
     /* A focused task card stays full-size while it is the focus target. */
     setFocusedTaskId(path.startsWith("task::") ? path.slice("task::".length) : null);
     if (highlightTimer.current) window.clearTimeout(highlightTimer.current);
@@ -1490,10 +1508,6 @@ function ProjectDashboardView({
     if (isMobile && projectKey(file) === project) {
       const top = topScreen(mobileNav.getState());
       if (top.kind === "chat" && top.id === "draft::" + id) mobileNav.replace({ kind: "chat", id: file.path });
-      if (isLaunchPlaceholder(file) && file.conversationId) {
-        const conversationId = file.conversationId;
-        setLaunchedConversations((prev) => new Map(prev).set(file.path, conversationId));
-      }
     }
     removeDraft(id);
     openSwitchboardFile(file);
@@ -1611,6 +1625,9 @@ function ProjectDashboardView({
   const openSwitchboardFile = (file: FileEntry) => {
     onUserNavigate?.();
     const fileProject = projectKey(file);
+    if (isMobile && isLaunchPlaceholder(file) && file.conversationId) {
+      setLaunchedConversations((prev) => new Map(prev).set(file.path, file));
+    }
     if (fileProject !== project) {
       queueColumnOpen(fileProject, file.path, isChildConversation(file));
       /* Cross-project open navigates by CONVERSATION hash, not project hash:
@@ -1839,10 +1856,16 @@ function ProjectDashboardView({
   const mobileLaunchSuccessor = useMemo(() => {
     if (mobileConversationKey === null || !isLaunchPlaceholder({ path: mobileConversationKey })) return null;
     if (files.some((file) => file.path === mobileConversationKey)) return null;
-    const conversationId = launchedConversations.get(mobileConversationKey);
+    const conversationId = launchedConversations.get(mobileConversationKey)?.conversationId;
     const successor = conversationId ? currentConversationFile(files, conversationId) : null;
     return successor && !isLaunchPlaceholder(successor) ? successor : null;
   }, [mobileConversationKey, launchedConversations, files]);
+  /* A scan can retire the placeholder before publishing its transcript. Keep
+     the selected launch window through that gap instead of choosing another
+     conversation by attention score. The next deliberate open changes the key. */
+  const mobilePendingLaunch = mobileConversationKey && !mobileLaunchSuccessor
+    && !files.some((file) => file.path === mobileConversationKey)
+    ? launchedConversations.get(mobileConversationKey) ?? null : null;
   useEffect(() => {
     if (!mobileLaunchSuccessor) return;
     mobileNav.replace({ kind: "chat", id: mobileLaunchSuccessor.path });
@@ -2116,6 +2139,8 @@ function ProjectDashboardView({
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
+      /* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */
+      { kind: "custom", key: "learned-rules", node: <LearnedRulesRow project={project} size="sheet" /> },
       /* "Asks you" is the installation's, not the project's; it sits here
          because this is where the operator looks for what reports to them. */
       { kind: "custom", key: "asks-you", node: <AsksYouRow variant="sheet" /> },
@@ -2186,6 +2211,10 @@ function ProjectDashboardView({
             ) : null}
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
+            </BarMenuGroup>
+            {/* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */}
+            <BarMenuGroup name="learned-rules">
+              <LearnedRulesRow project={project} size="menu" onOpened={close} />
             </BarMenuGroup>
             <BarMenuGroup name="sections">
               {wide ? null : (
@@ -2487,8 +2516,8 @@ function ProjectDashboardView({
                   project={project}
                   projectName={projectName}
                   groups={layoutGroups}
-                  manual={layoutManual}
-                  files={files}
+                  manual={mobilePendingLaunch ? [...layoutManual, mobilePendingLaunch] : layoutManual}
+                  files={mobilePendingLaunch ? [...files, mobilePendingLaunch] : files}
                   flows={flows}
                   reviewGroups={directReviewGroups}
                   pipelines={pipelines}
@@ -2578,6 +2607,7 @@ function ProjectDashboardView({
                 catalogFailures={catalogFailures}
                 selection={board.selection}
                 focus={highlight}
+                focusNonce={highlightNonce}
                 onConversationOpened={markPathSeen}
                 projectCwd={projectCwd}
                 seatRefs={seatRefsForBoard}

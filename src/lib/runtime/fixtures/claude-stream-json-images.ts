@@ -1,3 +1,4 @@
+import "@/lib/testing/fixtureLifetime";
 import crypto from "node:crypto";
 import readline from "node:readline";
 

@@ -16,6 +16,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt } from "@/lib/agent/spawnPolicy";
 import { procBackend } from "@/lib/proc";
 import { STATE_OWNER_ENV } from "@/lib/stateOwnership";
+import { roleIsClean } from "@/lib/memory/eligibility";
 
 import type { RuntimeRoleConfig as RoleConfig } from "./runtimeConfig";
 
@@ -301,6 +302,13 @@ export async function prepareHeadlessPublication(built: BuiltHeadlessCommand, cw
   return { ...built, args: [...built.args, ...agentCodexPublicationArgs(policy, built.env)] };
 }
 
+/* Every headless run is a flow's reviewer or a one-shot summarizer, and a
+   reviewer is a clean launch (src/lib/memory/eligibility.ts): no shared-memory
+   hook and no engine memory. Codex's memories feature is already off here,
+   with every feature a single-agent launch has not reviewed. */
+const HEADLESS_CLEAN_MEMORY = roleIsClean("reviewer");
+const CLAUDE_CLEAN_MEMORY_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } as const;
+
 export function reviewerCommand(
   role: RoleConfig,
   reviewRequest: string,
@@ -335,12 +343,16 @@ export function reviewerCommand(
         providerAccount: Boolean(provider),
         baseSettingsPath: claudeAccount.managed ? claudeSettingsPath() : null,
         profileId: `headless-${sessionId}`,
+        cleanMemory: HEADLESS_CLEAN_MEMORY,
       }).settingsPath
       : null;
-    args.push("--settings", settings ?? JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }));
+    args.push("--settings", settings ?? JSON.stringify({
+      ...(HEADLESS_CLEAN_MEMORY ? { autoMemoryEnabled: false } : {}),
+      env: { ...agentPublicationIdentityEnv(process.env), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) },
+    }));
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
     return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
-      env: reviewerEnvironment(baseEnv, spawnCapability), stdin: null, outputPath: null, sessionId,
+      env: { ...reviewerEnvironment(baseEnv, spawnCapability), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) }, stdin: null, outputPath: null, sessionId,
       reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }
   /* --json turns stdout into a JSONL event stream whose first events carry

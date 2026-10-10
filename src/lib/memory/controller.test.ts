@@ -232,6 +232,47 @@ test("real controller joins queued operator authorship, calls grounded Jev once,
   expect(await offerForHook(request, { ...input, prompt: prompt + " again", delegatus_delivery_id: "capped" })).toBe(""); expect(calls).toBe(1);
 });
 
+// «ревьюер всегда чистый»: a reviewer, and a stage the engine classified as a
+// review gate whatever role it names (its launch profile carries the mark),
+// take no shared memory on any turn, an operator's queued follow-up included.
+for (const launch of ["review gate", "reviewer"] as const) test(`a clean ${launch} conversation takes no shared memory on an operator follow-up`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-controller-clean-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
+  process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
+  const project = projectInfoFromCwd(root)!.project;
+  const builder = registry.beginSpawn("claude", root, { cwd: root, title: "Synthetic builder" });
+  const begun = launch === "review gate"
+    ? registry.beginSpawn("claude", root, { cwd: root, title: "Synthetic gate", cleanMemory: true })
+    : registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project, role: "reviewer", reviewsConversationId: builder.conversationId,
+      origin: { kind: "operator" }, transport: "structured", launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic reviewer" }) });
+  const receipt = "kind" in begun ? (begun.kind === "conflict" ? null : begun.receipt) : begun;
+  if (!receipt) throw Error("fixture conflict");
+  /* The registry stamps a clean role itself, whoever launched it. */
+  expect(receipt.launchProfile.cleanMemory).toBe(true);
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  setSharedMemoryEnabled(project, true);
+  const source = path.join(root, "memory.md");
+  fs.writeFileSync(source, "v1\n## User preferences\n- Widget parser uses escaped delimiters for every record.\n");
+  await memoryIndex().refresh([{ path: source, engine: "codex", sourceKind: "codex_summary" }]);
+  const session = crypto.randomUUID();
+  const prompt = "Update the widget parser to handle delimiters";
+  new FileClaudeDeliveryLedger().recordQueued(session, { id: "operator", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+  let calls = 0;
+  globalThis.fetch = (async (_url, init) => {
+    calls++;
+    const request = JSON.parse(String(init?.body));
+    return Response.json({ answers: Object.fromEntries(Object.keys(request.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
+  }) as typeof fetch;
+  const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+  const before = memoryIndex().injectionActivity();
+  expect(await offerForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, source: "sdk", delegatus_delivery_id: "operator" })).toBe("");
+  expect(calls).toBe(0);
+  expect(memoryIndex().injectionActivity()).toEqual(before);
+  expect(readOperatorAsks().spend.calls).toBe(0);
+});
+
 test("Codex hook resolves durable authorship and abstains on machine and unknown deliveries", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-controller-codex-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
@@ -633,9 +674,10 @@ for (const oldKey of ["directory", "local repository", "path", "alias", "unlinke
     // Codex's default operator envelope also occurs on delegated starts. The
     // live ones are roots at depth 0 without membership, launched by another
     // conversation. They leave the seat's last turn and the budget untouched.
-    const stagePrompt = "You are a fresh-context Reviewer. Review widget parser delimiter escaping.";
+    // A builder: a reviewer is clean and takes no shared memory at all (see the clean-conversation tests).
+    const stagePrompt = "You are a fresh-context Builder. Fix widget parser delimiter escaping.";
     const stage = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
-      role: "reviewer", reviewsConversationId: receipt.conversationId, origin: { kind: "operator" }, transport: "structured",
+      role: "builder", origin: { kind: "operator" }, transport: "structured",
       launcher: { conversationId: receipt.conversationId, notify: true },
       launchDisplay: { prompt: stagePrompt, echo: stagePrompt, images: 0 },
       launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic stage conversation" }) });

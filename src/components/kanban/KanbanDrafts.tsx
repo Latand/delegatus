@@ -16,9 +16,9 @@ import { CloseGlyph } from "./kanbanGlyphs";
 /**
  * Agent drafts and the new task on the kanban board (#1695 K9a).
  *
- * A draft is the conversation an agent will be: engine, directory, account and
- * first prompt are chosen in the same `DraftAgentPane` the scheme board drew,
- * and its fields live in this tab's storage under the draft's id, so a draft
+ * A draft is the conversation an agent will be: the conversation composer and
+ * nothing else (`DraftAgentPane`), with the first prompt and the runtime the
+ * pill picks. Its fields live in this tab's storage under the draft's id, so a draft
  * survives a reload, a collapse or a trip to Conversations. The board decides
  * which card holds it (its band); this module only draws it there.
  */

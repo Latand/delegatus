@@ -61,6 +61,23 @@ test("a row survives the write and reads back whole", () => {
   expect(readSeatTickState("other", file)).toMatchObject(emptySeatTickState());
 });
 
+test("recovered authentication notice debt survives persistence and a new seat epoch", () => {
+  const file = path.join(SANDBOX, "auth-notice-debt.json");
+  const lastFailedTs = Date.parse("2026-10-08T00:05:00Z");
+  const notice = { id: "seat-auth:viewer:7:first", seatEpoch: 7, conversationId: CONVERSATION,
+    engine: "claude" as const, accountId: "fixture-account-a", firstFailedAt: new Date(lastFailedTs).toISOString(),
+    lastFailedTs, recoveredThrough: lastFailedTs, credentialStamp: null, text: "Authentication failed",
+    rotation: { state: "held" as const }, notice: null };
+  writeSeatTickState("viewer", { ...row, authNoticesOwed: [notice] }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.authNoticesOwed).toEqual([notice]);
+  const successor = seatTickStateForEpoch(reopened, 8);
+  expect(successor.authIncident).toBeUndefined();
+  expect(successor.authNoticesOwed).toEqual([notice]);
+  writeSeatTickState("viewer", successor, file);
+  expect(readSeatTickState("viewer", file).authNoticesOwed).toEqual([notice]);
+});
+
 test("one project's write leaves the others' rows alone", () => {
   const file = path.join(SANDBOX, "multi.json");
   writeSeatTickState("viewer", row, file);
@@ -437,4 +454,18 @@ test("a disk episode acknowledgment survives persistence and a seat succession",
   const read = readSeatTickState("viewer", file);
   expect(read.diskPressureShown).toBe(pressure.diskPressureShown);
   expect(seatTickStateForEpoch(read, 8).diskPressureShown).toBe(pressure.diskPressureShown);
+});
+
+test("auto-rotation attempt and failure accounting survive restart and seat succession", () => {
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "auto-rotation-"));
+  const file = path.join(directory, "tick.json");
+  const autoRotation = { overSince: { seatEpoch: 7, at: "2026-10-09T03:00:00Z" }, lastAttempt: {
+    id: "fixture-attempt", seatEpoch: 7, conversationId: CONVERSATION, startedAt: "2026-10-09T03:00:00Z", tokens: 720000, windowTokens: 1000000,
+    thresholdPercent: 60, state: "failed" as const, error: "fixture refusal", told: { card: true, report: true },
+  }, failureTold: { seatEpoch: 7, id: "fixture-attempt", resolved: false } };
+  const state = readSeatTickState("viewer", file);
+  writeSeatTickState("viewer", { ...state, seatEpoch: 7, autoRotation }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.autoRotation).toEqual(autoRotation);
+  expect(seatTickStateForEpoch(reopened, 8).autoRotation).toEqual(autoRotation);
 });

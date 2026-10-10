@@ -1,3 +1,5 @@
+import { sweepConversations } from "./conversations";
+import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -8,7 +10,8 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { isStagingMode } from "@/lib/staging";
 import { noteRelayOutcome, relayActivity } from "./activity";
 import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
-import { ExternalRelayError, fetchRelayTargets, relayCall } from "./client";
+import { discoverRelay, ExternalRelayError, fetchRelayTargets, relayCall } from "./client";
+import { RELAY_OWNER_TOOLS } from "./protocol";
 import {
   advertisedSlots,
   externalRelayTempRoot,
@@ -46,6 +49,7 @@ type PollerController = {
   sweepTimer: ReturnType<typeof setInterval> | null;
   armed: boolean;
   targetRefreshes?: Map<string, TargetRefresh>;
+  descriptorRefreshes?: Map<string, TargetRefresh>;
   prunedAt?: number;
 };
 const globalRelay = globalThis as typeof globalThis & {
@@ -61,6 +65,7 @@ const targetRefreshes = (controller.targetRefreshes ??= new Map<
   string,
   TargetRefresh
 >());
+const descriptorRefreshes = (controller.descriptorRefreshes ??= new Map<string, TargetRefresh>());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
@@ -109,6 +114,7 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
     settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery);
     dropRun(run.requestId);
   }
+  sweepConversations(readRelayStore().relays, readRunLedger().runs);
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once
@@ -211,7 +217,42 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
   }
 }
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
-export const CLAIM_FEATURES = ["requester_context"];
+export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions"];
+export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
+  const switches = readRelaySwitches();
+  const features = switches.chat_conversations ? [...CLAIM_FEATURES, "chat_conversations"] : CLAIM_FEATURES;
+  return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
+    features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
+      ? [...features, RELAY_OWNER_TOOLS] : features };
+}
+/** Dark installs make no extra descriptor request. Enabled installs refresh before
+ * their first claim, then with the existing five-minute target cadence. */
+export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0): Promise<TargetRefreshOutcome> {
+  const prior = descriptorRefreshes.get(id);
+  if (prior?.running) return prior.running;
+  if (prior && Date.now() - prior.at < minIntervalMs) return Promise.resolve("skipped");
+  const entry: TargetRefresh = { at: Date.now(), running: null };
+  descriptorRefreshes.set(id, entry);
+  entry.running = (async (): Promise<TargetRefreshOutcome> => {
+    const relay = readRelayStore().relays.find((item) => item.id === id);
+    if (!relay) { descriptorRefreshes.delete(id); return "gone"; }
+    try {
+      const { descriptor } = await discoverRelay(relay.origin);
+      const features = descriptor.features ?? [];
+      let changed = false;
+      updateRelayStore((store) => ({ ...store, relays: store.relays.map((item) => {
+        if (item.id !== id || JSON.stringify(item.features ?? []) === JSON.stringify(features)) return item;
+        changed = true;
+        return { ...item, features };
+      }) }));
+      return changed ? "changed" : "unchanged";
+    } catch {
+      noteRelayOutcome(id, "descriptor:unreachable");
+      return "failed";
+    }
+  })().finally(() => { entry.running = null; });
+  return entry.running;
+}
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 async function poll(
   relay: PairedRelay,
@@ -222,6 +263,10 @@ async function poll(
     await refreshRelayTargets(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
     // A changed list restarted this relay's loop; a 401 parked it.
     if (loop.stopped) break;
+    if (readRelaySwitches().owner_tools) {
+      await refreshRelayDescriptorFeatures(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
+      if (loop.stopped) break;
+    }
     loop.abort = new AbortController();
     try {
       const result = await relayCall<{ request?: unknown }>(
@@ -230,8 +275,7 @@ async function poll(
         "POST",
         {
           wait_s: Math.min(25, relay.limits.max_wait_s),
-          kinds: ["answer"],
-          features: CLAIM_FEATURES,
+          ...relayClaimCapabilities(readRelayStore().relays.find((item) => item.id === relay.id)),
           slots: advertisedSlots(relay),
         },
         relay.credential,
@@ -314,6 +358,7 @@ async function sweepAndRefresh(): Promise<void> {
   ) {
     controller.prunedAt = Date.now();
     pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
+    sweepConversations(readRelayStore().relays, readRunLedger().runs);
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {

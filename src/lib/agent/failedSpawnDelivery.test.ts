@@ -297,3 +297,79 @@ test("issue 653: the failed spawn launch never projects a delivering initial mes
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
+
+/* docs/design/delivery-progress-and-drain.md, C5. */
+test("an inline launch failure waits for the lock off the loop and ends its first message once; refused, the launch and message stay for the convergence", async () => {
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("./registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  const made = sqliteRegistryFixture("llv-inline-launch-failure", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const launch = (name: string) => {
+      const conversation = registry.ensureConversation("codex", path.join(made.root, `${name}.jsonl`), "account-a");
+      const begun = registry.beginSpawnRequest({
+        engine: "codex", cwd: made.root, transport: "structured", accountId: "account-a", conversationId: conversation.id,
+        launchProfile: emptyLaunchProfile({ cwd: made.root, title: `Launch ${name}` }),
+      });
+      if (begun.kind !== "created") throw new Error("expected structured launch creation");
+      const delivery = registry.holdDelivery(conversation.id, "first message", `spawn_${begun.receipt.launchId}`, "text", [], null,
+        { operationId: `spawn_message_${begun.receipt.launchId}`, kind: "send", policy: "queue" });
+      return { launchId: begun.receipt.launchId, delivery };
+    };
+    const waited = launch("waited");
+    resetBlockingWaitsForTests(() => {});
+    await holder.hold(120);
+    const { value: failed, gapMs } = await longestLoopGap(() => registry.failSpawnOffLoop(waited.launchId, "launch failed"));
+    expect(failed).toBe(true);
+    expect(gapMs).toBeLessThan(50);
+    expect(blockingWaitDiagnostics().longest.find((sample) => sample.label === "spawn.fail")).toMatchObject({
+      operationId: `spawn_message_${waited.launchId}`, synchronous: false,
+    });
+    expect(registry.snapshot().heldDeliveries[waited.delivery.id]).toMatchObject({ state: "failed", attempts: 0 });
+
+    const refused = launch("refused");
+    await holder.hold(600);
+    expect(await registry.failSpawnOffLoop(refused.launchId, "launch failed")).toBe(false);
+    expect(registry.snapshot().receipts[refused.launchId]?.state).not.toBe("failed");
+    expect(registry.snapshot().heldDeliveries[refused.delivery.id]).toMatchObject({ state: "assigned", attempts: 0 });
+    await Bun.sleep(650);
+    /* The convergence ends the launch and its first message in one transaction. */
+    expect(registry.failSpawn(refused.launchId, "stale launch past its setup bound")).toBe(true);
+    expect(registry.snapshot().heldDeliveries[refused.delivery.id]).toMatchObject({ state: "failed", attempts: 0 });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});
+
+test("a launch failure ends only its own first message; another launch's failed-spawn row stays for the convergence", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-narrow-launch-failure-"));
+  try {
+    const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const begin = (name: string) => {
+      const conversation = registry.ensureConversation("codex", path.join(dir, `${name}.jsonl`), "account-a");
+      const begun = registry.beginSpawnRequest({
+        engine: "codex", cwd: dir, transport: "structured", accountId: "account-a", conversationId: conversation.id,
+        launchProfile: emptyLaunchProfile({ cwd: dir, title: `Launch ${name}` }),
+      });
+      if (begun.kind !== "created") throw new Error("expected structured launch creation");
+      const delivery = registry.holdDelivery(conversation.id, "first message", `spawn_${begun.receipt.launchId}`, "text", [], null,
+        { operationId: `spawn_message_${begun.receipt.launchId}`, kind: "send", policy: "queue" });
+      return { launchId: begun.receipt.launchId, delivery };
+    };
+    const other = begin("other");
+    /* The other launch failed through a path that left its row (an older build). */
+    const file = registry.snapshot();
+    file.receipts[other.launchId] = { ...file.receipts[other.launchId]!, state: "failed", error: "older failure" };
+    registry.restoreSnapshot(registry.snapshot(), file);
+    const own = begin("own");
+    registry.failSpawn(own.launchId, "own failure");
+    expect(registry.snapshot().heldDeliveries[own.delivery.id]).toMatchObject({ state: "failed" });
+    expect(registry.snapshot().heldDeliveries[other.delivery.id]).toMatchObject({ state: "assigned" });
+    expect(registry.terminalizeFailedSpawnDeliveries()).toEqual([other.delivery.id]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

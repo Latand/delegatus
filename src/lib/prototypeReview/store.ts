@@ -140,16 +140,16 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
     const held = replay(); if (held) return held;
     await removeOrphanCopies();
     const expanded = await expandPrototypeInput(input);
-    const count = expanded.variants.reduce((n,v) => n + (v.frames ?? []).reduce((n,f) => n + (f.originalPath ? 2 : 1),0) + (v.videos?.length ?? 0),0);
+    const count = (expanded.variants ?? []).reduce((n,v) => n + (v.frames ?? []).reduce((n,f) => n + (f.originalPath ? 2 : 1),0) + (v.videos?.length ?? 0),0);
     if (count > PROTOTYPE_LIMITS.media) throw new PrototypeError(`review exceeds ${PROTOTYPE_LIMITS.media} media files`);
-    if (expanded.variants.some(v => !v.frames?.length && !v.videos?.length)) throw new PrototypeError("every variant needs at least one frame or video");
+    if ((expanded.variants ?? []).some(v => !v.frames?.length && !v.videos?.length)) throw new PrototypeError("every variant needs at least one frame or video");
     const staging = await fs.mkdtemp(path.join(prototypeRoot(),".publish-"));
     let committed = false;
     const removed: string[] = [];
     try {
       await fs.writeFile(path.join(staging,"manifest.json"),JSON.stringify({ id }), { mode: 0o600, flush: true });
       const round: PrototypeReviewRound = { id, taskId, project: "", title: input.title, publicationKey, inputDigest, source,
-        createdAt: new Date().toISOString(), variants: [] };
+        createdAt: new Date().toISOString(), variants: [], ...(input.questions ? { questions: input.questions } : {}) };
       let bytes = 0, imageBytes = 0;
       const copy = async (raw: string) => {
         const media = await copyMedia(raw,staging); bytes += media.bytes;
@@ -157,7 +157,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
         if (bytes > PROTOTYPE_LIMITS.setBytes || imageBytes > PROTOTYPE_LIMITS.imageSetBytes) throw new PrototypeError("review exceeds 192 MiB total or 48 MiB of images");
         return media;
       };
-      for (const variant of expanded.variants) {
+      for (const variant of expanded.variants ?? []) {
         const frames = [];
         for (const frame of variant.frames ?? []) {
           const image = await copy(frame.path);

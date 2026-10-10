@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
@@ -16,6 +17,9 @@ import { createManualProject, setProjectCrown } from "@/lib/projects/curation";
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { archivedTranscriptPaths } from "@/lib/scanner";
 import { globalCache } from "@/lib/scanner/caches";
+import { ctxFor } from "@/lib/scanner/context";
+import { entryModels } from "@/lib/scanner/model";
+import { deriveOrchestratorPanelState } from "@/components/orchestrator/seatState";
 import { describe as describeTranscript, projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
 import { initializeStateCollections, injectStateWriteFaultForTests, SqliteStateCollection, readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import { writeSessionTitle } from "@/lib/session/titleStore";
@@ -35,6 +39,7 @@ import {
 } from "@/lib/scanner/scanCache";
 import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -115,7 +120,21 @@ beforeEach(() => {
   resetPresenceForTest();
 });
 
-afterEach(() => {
+async function stopTestWorker(): Promise<void> {
+  // The pool retains the original launch handle even after exit while inherited
+  // stdio stays open. Its diagnostic PID can already belong to another process.
+  const child = (globalThis as typeof globalThis & {
+    __llvFilesResponseWorker?: { child: ChildProcess } | null;
+  }).__llvFilesResponseWorker?.child;
+  shutdownFilesResponseWorker("test");
+  if (child) {
+    await stopFixtureProcess(child);
+    expect(child.exitCode !== null || child.signalCode !== null, "test worker was reaped before fixture cleanup").toBe(true);
+  }
+}
+
+afterEach(async () => {
+  await stopTestWorker();
   injectStateWriteFaultForTests(null);
   setStateFreeBytesProbeForTests(null);
   noteStateCommit();
@@ -173,7 +192,64 @@ const { resetPresenceForTest, upsertPresence } = await import("@/lib/view/presen
 const { controllerFileScan } = await import("@/lib/pipelines/controller");
 const { allowedKillTarget, buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
 const { GET } = await import("./route");
-const { consolidateProjectCatalogByRepository } = await import("./response");
+const { buildFilesResponse, consolidateProjectCatalogByRepository } = await import("./response");
+
+test.each([
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, tokens: 120_000, window: 1_000_000, percent: 12, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, tokens: 120_000, window: 200_000, percent: 60, source: "runtime", advice: "strongly_recommend" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", tokens: 120_000, window: 1_000_000, percent: 12, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: null, beta: null, tokens: 240_000, window: 1_000_000, percent: 24, source: "registry", advice: "none" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: null, tokens: 240_000, window: null, percent: null, source: "unknown", advice: "none" },
+  { launchModel: "sonnet-4-5[1m]", runtimeWindow: 200_000, beta: null, tokens: 240_000, window: 200_000, percent: 100, source: "runtime", advice: "strongly_recommend" },
+  { launchModel: "sonnet-4-5", runtimeWindow: null, beta: "context-1m-2025-08-07", tokens: 240_000, window: 1_000_000, percent: 24, source: "registry", advice: "none" },
+])("files projection and panel fallback preserve launch mode and capacity provenance: %j", async ({ launchModel, runtimeWindow, beta, tokens, window, percent, source, advice }) => {
+  const artifactPath = path.join(registryRoot, "rotation-context.jsonl");
+  fs.writeFileSync(artifactPath, JSON.stringify({ type: "assistant", message: {
+    model: "claude-sonnet-4-5", usage: { input_tokens: tokens },
+    ...(runtimeWindow ? { context_window: runtimeWindow } : {}),
+    ...(beta ? { beta: [beta] } : {}),
+  } }) + "\n");
+  const stat = fs.statSync(artifactPath);
+  const scanned = { ...file(artifactPath), root: "claude-projects" as const, engine: "claude" as const,
+    fmt: "claude" as const, size: stat.size, mtime: stat.mtimeMs / 1000 };
+  const models = entryModels(scanned);
+  const entry = { ...scanned, model: models.display, launchModel: models.launch };
+  entry.ctx = ctxFor(entry);
+  expect(entry.launchModel).toBe("claude-sonnet-4-5");
+  expect(entry.ctx?.windowTokens).toBe(runtimeWindow ?? (beta ? 1_000_000 : tokens > 200_000 ? null : 200_000));
+
+  const registry = agentRegistry();
+  const cwd = process.cwd();
+  const launchProfile = emptyLaunchProfile({ cwd, model: launchModel });
+  const begun = registry.beginSpawnRequest({ engine: "claude", cwd, transport: "structured", launchProfile });
+  if (begun.kind !== "created") throw new Error("expected a rotation-context reservation");
+  registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "claude", sessionId: "rotation-context" }, artifactPath, cwd, accountId: null, launchProfile,
+    status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+
+  const response = await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+    listFilesWithProjectCatalog: async () => ({ files: [{ ...entry }], projectCatalog: [], complete: true }),
+  });
+  const body = await response.json() as { files: FileEntry[] };
+  const projected = body.files.find((candidate) => candidate.path === artifactPath)!;
+  expect(projected.launchModel).toBe(launchModel);
+  expect(projected.ctx).toMatchObject({ usedTokens: tokens, windowTokens: window, pct: percent, source });
+  const state = deriveOrchestratorPanelState({
+    status: { seat: {
+      project: projected.project, seatEpoch: 1, conversationId: begun.receipt.conversationId, path: artifactPath,
+      mandate: "run the board", promptVersion: 3, predecessorConversationId: null, state: "active",
+      intent: { clientRequestId: "rotation-context-request", mode: "spawn", launchId: begun.receipt.launchId, error: null },
+      designatedAt: "2026-10-09T10:00:00.000Z", activatedAt: "2026-10-09T10:00:00.000Z",
+    }, pending: null, exists: true, viewerMcpRegistered: false },
+    statusFailed: false, submitting: false, submitFailure: null, file: projected, surface: "live-root", incumbent: null,
+  });
+  expect(state.kind).toBe("live");
+  if (state.kind !== "live") throw new Error("expected a live panel fallback");
+  expect(state.rotation?.level ?? "none").toBe(advice);
+  if (window === null) expect(state.rotation).toBeNull();
+  if (advice === "strongly_recommend") expect(state.rotation?.contextPercent).toBe(percent);
+});
 
 test("repository-backed catalog rows collapse to the current repository identity", () => {
   const repositoryRoot = process.cwd();
@@ -699,7 +775,7 @@ test("a worker-built projection is dated by the scan snapshot the worker actuall
   } finally {
     release?.();
     setFilesResponseWorkerRuntimeForTests(null);
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
   }
 }, 60_000);
 
@@ -3934,7 +4010,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
     expect(response.status).toBe(200);
     expect((await response.json()).systemHealth.storage.writes.state).toBe("disk-full");
     expect(response.headers.get("etag")).not.toBe(warm.headers.get("etag"));
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 const classifiedWorkerFull = new StateDiskFullError("state transaction", Object.assign(new Error("full"), { code: "SQLITE_FULL" })).message;
@@ -3971,7 +4047,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
     expect(response.headers.get("etag")).not.toBe(warm.headers.get("etag"));
     const unchanged = await GET(new Request("http://127.0.0.1/api/files", { headers: { "if-none-match": response.headers.get("etag")! } }));
     expect(unchanged.status).toBe(304);
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 test("a cached board resumes after worker ENOSPC and a cross-process data commit", async () => {
   scannedFiles = [];
@@ -3988,7 +4064,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
   try {
     const full = await GET(new Request("http://127.0.0.1/api/files"));
     expect((await full.json()).systemHealth.storage.writes.state).toBe("disk-full");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
   const storePath = path.resolve(import.meta.dir, "../../../lib/pipelines/store.ts");
   const child = Bun.spawn([process.execPath, "-e", `import { buildPipeline, savePipelines } from ${JSON.stringify(storePath)}; savePipelines([buildPipeline({id:'recovered',task:'Recovered fixture',project:'fixture',repoDir:process.env.LLV_STATE_DIR,stages:[],srcPath:null,srcConversationId:null,now:'2026-10-01T00:00:00.000Z',state:'draft'})]);`], {
     env: { ...process.env, LLV_STATE_DIR: stateDir }, stdout: "pipe", stderr: "pipe",
@@ -4034,7 +4110,7 @@ process.stdout.write(JSON.stringify(reply)+'\\n');});`);
       payload = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
     }
     expect(payload.systemHealth.storage.writes.state).toBe("ok");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 async function warmFilesProjectionForWorkerTest(): Promise<string> {
   let warm = await GET(new Request("http://127.0.0.1/api/files"));
@@ -4094,7 +4170,7 @@ test("worker transport recovery preserves a concurrent SQLite commit failure unt
     savePipelines([pipeline]);
     expect(readStateCollectionRevision(database, "pipelines")).toBeGreaterThan(revision!);
     expect((await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json()).state).toBe("ok");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 test("successful worker transport preserves disk-full state health reported in its body", async () => {
@@ -4113,7 +4189,7 @@ test("successful worker transport preserves disk-full state health reported in i
     expect(health.state).toBe("disk-full");
     expect(health.since).toBe(body.systemHealth.storage.writes.since);
     expect(stateWriteHealth(stateDir).state).toBe("disk-full");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 test("worker ENOSPC fallback retains input A until input B rebuilds after an unrelated commit", async () => {
@@ -4136,7 +4212,7 @@ test("worker ENOSPC fallback retains input A until input B rebuilds after an unr
     expect(rebuilt.systemHealth.storage.writes.state).toBe("ok");
     expect(response.headers.get("x-llv-files-projection-cache")).toBe("miss");
     expect(fs.readFileSync(path.join(stateDir, "worker-attempts"), "utf8")).toBe("2");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 test("disk-full alert overlays a persisted representation from before write health existed", async () => {
@@ -4188,4 +4264,23 @@ test("storage health exposes fresh preserved registry ids without an auto-update
     await expect(GET(new Request(url))).rejects.toThrow("corrupt pipelines SQLite row");
     expect(scans).toBe(0);
   } finally { db.close(); }
+});
+
+
+test("the internal needs-you read shares the operator summary and its warm cache, with prototype dismissals", async () => {
+  const { operatorBoardRepresentation } = await import("./operatorProjection");
+  const { dismissAttention } = await import("@/lib/attention/dismissals");
+  const task = { id: "prototype-task", project: "project-a", status: "inbox", placement: "unplaced", text: "Layout", assignments: [], sources: [], createdAt: "2026-10-06T09:00:00Z", updatedAt: "2026-10-06T09:00:00Z", prototypeReview: { latestReviewId: "round-a", waitingReviewId: "round-a", title: "Layout", rounds: 1, createdAt: "2026-10-06T10:00:00Z" } };
+  boardTasksStore = () => [task];
+  scannedFiles = [];
+  const first = await operatorBoardRepresentation();
+  const operator = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).json();
+  expect(first.files).toEqual(operator.files);
+  expect(first.tasks).toEqual(operator.tasks);
+  expect(first.tasks[0]!.prototypeReview?.waitingReviewId).toBe("round-a");
+  const scansBefore = scans;
+  expect((await operatorBoardRepresentation()).tasks).toEqual(operator.tasks);
+  expect(scans).toBe(scansBefore);
+  await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "round-a" }, { kind: "operator" }, { ports: { now: () => new Date(), task: () => task as never, resolveConversation: () => null, pipelines: () => [], pipeline: () => null, setPipelineDismissal: async () => ({}), resolveReports: () => ({ resolved: [], alreadyClear: [], unknown: [] }) } });
+  expect((await operatorBoardRepresentation()).tasks[0]!.prototypeReview?.waitingDismissal?.by).toEqual({ kind: "operator" });
 });

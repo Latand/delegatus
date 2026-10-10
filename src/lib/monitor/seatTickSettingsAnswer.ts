@@ -1,6 +1,11 @@
+import { agentRegistry } from "@/lib/agent/registry";
+import { orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
+import { AUTO_ROTATE_DEFAULT_PERCENT } from "./seatTickSettings";
+import { autoRotationRetryAt, type AutoRotationAttempt } from "./seatAutoRotation";
 import { boardMaintenanceAnswer, type BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { seatTickSettingsCardText } from "./cards";
+import { SEAT_TICK_INTERVAL_ELIGIBILITY, seatTickSettingsCardText } from "./cards";
 import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy, seatTickSettingsCardDetail } from "./seatTick";
 import {
@@ -80,6 +85,9 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
+  autoRotate?: { enabled: boolean; thresholdPercent: number; defaultPercent: number; minPercent: number; maxPercent: number;
+    windowKnown: boolean | null; lastAttempt: (AutoRotationAttempt & { nextAttemptAt: string }) | null;
+    setBy: SeatTickSettingsActor | null; updatedAt: string | null; why: string | null };
   maintenance: BoardMaintenanceAnswer;
   project: string;
   /** Whether this request wrote the record. A read, and a change with no
@@ -122,6 +130,8 @@ export interface SeatTickSettingsAnswer {
     staleAfterMinutes: number | null;
     /** Fruitless wakes of one reason before the guard holds it back. */
     retryGuardWakes: number;
+    /** Absent in older Viewer responses; current answers always explain eligibility. */
+    intervalEligibility?: string;
   };
   /** The tick's own record for this project, or null when it has never
       recorded one — which is an unknown, not a quiet tick. */
@@ -168,7 +178,7 @@ function recorded(row: SeatTickProjectState): boolean {
 
 function actualState(row: SeatTickProjectState, retryGuardWakes: number): SeatTickActualState {
   const guarded = Object.entries(row.wakesWithoutChange ?? {})
-    .flatMap(([kind, wakes]) => (typeof wakes === "number" && wakes >= retryGuardWakes
+    .flatMap(([kind, wakes]) => (kind !== "interval" && typeof wakes === "number" && wakes >= retryGuardWakes
       ? [{ kind: kind as SeatTickWakeReasonKind, wakes }]
       : []));
   /* One gap, the one an operator would look at first: the pull-request source
@@ -214,10 +224,12 @@ export function seatTickSettingsAnswer(
   const checkIntervalMinutes = policy ? Math.max(1, Math.round(policy.checkIntervalMs / 60_000)) : null;
   const retryGuardWakes = policy?.retryGuard ?? 2;
 
+  let autoAttempt: AutoRotationAttempt | undefined;
   let state: SeatTickActualState | null = null;
   let stateError: string | null = null;
   try {
     const row = (ports.readState ?? peekSeatTickState)(project);
+    autoAttempt = row.autoRotation?.lastAttempt;
     state = recorded(row) ? actualState(row, retryGuardWakes) : null;
   } catch (error) {
     stateError = error instanceof Error ? error.message : "the tick's record could not be read";
@@ -244,7 +256,14 @@ export function seatTickSettingsAnswer(
     journalError = error instanceof Error ? error.message : "the tick's journal could not be read";
   }
 
+  const active = orchestratorSeatForCurrentProject(project).active;
+  const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {
+    autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,
+      defaultPercent: AUTO_ROTATE_DEFAULT_PERCENT, minPercent: 50, maxPercent: 90,
+      windowKnown: active ? contextWindowPolicyFor(conversation?.engine ?? active.engine ?? null, conversation?.generations.at(-1)?.launchProfile?.model ?? active.model ?? null) !== null : null,
+      lastAttempt: autoAttempt?.state === "failed" ? { ...autoAttempt, nextAttemptAt: autoRotationRetryAt(autoAttempt) } : null,
+      setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null },
     maintenance: boardMaintenanceAnswer(project, effective, { now, lastCheckAt: state?.lastCheckAt ?? null, checkIntervalMs: policy?.checkIntervalMs ?? null }),
     project,
     changed,
@@ -285,6 +304,7 @@ export function seatTickSettingsAnswer(
       checkIntervalMinutes,
       staleAfterMinutes: checkIntervalMinutes === null ? null : checkIntervalMinutes * STALE_CHECKS,
       retryGuardWakes,
+      intervalEligibility: SEAT_TICK_INTERVAL_ELIGIBILITY,
     },
     state,
     stateError,
@@ -292,4 +312,11 @@ export function seatTickSettingsAnswer(
     lastDelivery,
     journalError,
   };
+}
+
+/** Compact tool reads include a failure only; successful attempts stay in the journal. */
+export function autoRotationFailureAnswer(project: string): { lastAttempt?: { startedAt: string; error: string | null; nextAttemptAt: string } } {
+  const attempt = peekSeatTickState(project).autoRotation?.lastAttempt;
+  return attempt?.state === "failed" ? { lastAttempt: { startedAt: attempt.startedAt, error: attempt.error ?? null,
+    nextAttemptAt: autoRotationRetryAt(attempt) } } : {};
 }

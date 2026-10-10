@@ -30,6 +30,7 @@ export class EphemeralProfileError extends Error {
   }
 }
 export type EphemeralAgentRequest = {
+  session?: { mode: "start" | "resume"; id: string | null; cwd: string; codexHome?: string };
   key: string;
   engine: "claude" | "codex";
   model: string;
@@ -46,6 +47,9 @@ export type EphemeralAgentRequest = {
   runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
 };
 export type EphemeralAgentResult = {
+  sessionId?: string | null;
+  promptTokens?: number | null;
+  compacted?: boolean;
   status: "done" | "failed" | "timeout" | "violation" | "cancelled";
   answer: unknown;
   durationMs: number;
@@ -69,13 +73,13 @@ export type EphemeralCommand = {
 };
 const answerEnvironment = (base: NodeJS.ProcessEnv) =>
   reviewerEnvironment(base, undefined, ["LLV_SPAWN_CAPABILITY", "LLV_RELAY_CREDENTIAL"]);
-function answerHome(account: AccountContext): string {
+function answerHome(account: AccountContext, sessionHome?: string): string {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(account.accountId))
     throw new EphemeralProfileError("invalid account id");
   const source = path.join(account.home, "auth.json");
   if (!fs.existsSync(source) || !fs.statSync(source).isFile())
     throw new EphemeralProfileError("auth file unavailable");
-  const home = statePath(`external-relay/codex-homes/${account.accountId}`);
+  const home = sessionHome ?? statePath(`external-relay/codex-homes/${account.accountId}`);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const link = path.join(home, "auth.json");
   try {
@@ -177,7 +181,7 @@ export function buildEphemeralCommand(
       JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv) }),
       "--json-schema",
       JSON.stringify(request.schema),
-      "--no-session-persistence",
+      ...(request.session ? [request.session.mode === "resume" ? "--resume" : "--session-id", request.session.id!, "--autocompact", "auto"] : ["--no-session-persistence"]),
       "--model",
       request.model,
       ...(request.effort ? ["--effort", request.effort] : []),
@@ -192,7 +196,7 @@ export function buildEphemeralCommand(
       reviewerPath: null,
     };
   }
-  const home = answerHome(request.account);
+  const home = answerHome(request.account, request.session?.codexHome);
   const catalog = writeCatalog(
     request.account,
     home,
@@ -203,6 +207,7 @@ export function buildEphemeralCommand(
   const binary = resolveBinary("codex");
   const args = [
     "exec",
+    ...(request.session?.mode === "resume" ? ["resume", request.session.id!] : []),
     ...codexSubagentArgs(binary, false, request.account.env),
     "--disable",
     "shell_tool",
@@ -227,7 +232,7 @@ export function buildEphemeralCommand(
     "--disable",
     "view_image",
     "-",
-    "--ephemeral",
+    ...(request.session ? [] : ["--ephemeral"]),
     "--ignore-user-config",
     "--ignore-rules",
     "--skip-git-repo-check",
@@ -236,8 +241,7 @@ export function buildEphemeralCommand(
     schemaPath,
     "--output-last-message",
     output,
-    "-s",
-    "read-only",
+    ...(request.session?.mode === "resume" ? ["-c", 'sandbox_mode="read-only"'] : ["-s", "read-only"]),
     "-c",
     "cli_auth_credentials_store=file",
     "-c",
@@ -264,6 +268,11 @@ export function buildEphemeralCommand(
       ? ["-c", `model_reasoning_effort=${request.effort}`]
       : []),
   ];
+  if (request.session) {
+    const entry = JSON.parse(fs.readFileSync(catalog, "utf8")).models[0];
+    if (!entry.auto_compact_token_limit && Number.isFinite(entry.context_window))
+      args.push("-c", `model_auto_compact_token_limit=${Math.floor(entry.context_window * 0.9)}`);
+  }
   args.push(...agentCodexPublicationArgs({}, request.account.env));
   return {
     command: binary,
@@ -295,6 +304,9 @@ export function runEphemeralAgent(
   let cancelled = false;
   let violation = false;
   let sawClaudeInit = false;
+  let sessionId: string | null = null;
+  let compacted = false;
+  let promptTokens: number | null = null;
   let pid: number | null = null;
   let identity: string | null = null;
   const cancel = () => {
@@ -330,12 +342,19 @@ export function runEphemeralAgent(
       try {
         const item = JSON.parse(line);
         if (item?.type === "result") resultEvent = item;
+        if (request.session) {
+          if (item?.type === "thread.started" && typeof item.thread_id === "string") sessionId = item.thread_id;
+          if (item?.type === "system" && item.subtype === "init" && typeof item.session_id === "string") sessionId = item.session_id;
+          if (item?.type === "system" && item.subtype === "compact_boundary" || item?.item?.type === "context_compaction") compacted = true;
+          const tokens = item?.usage?.input_tokens;
+          if (typeof tokens === "number" && Number.isFinite(tokens)) promptTokens = tokens;
+        }
         if (item?.type === "system" && item?.subtype === "init")
           sawClaudeInit = true;
       } catch {
         /* mapper ignores malformed lines */
       }
-      for (const event of mapAgentLine(request.engine, line, { webSearch: request.webSearch === true })) {
+      for (const event of mapAgentLine(request.engine, line, { webSearch: request.webSearch === true, session: !!request.session })) {
         request.onEvent?.(event);
         if (event.type === "violation") {
           violation = true;
@@ -353,7 +372,7 @@ export function runEphemeralAgent(
   const launched = launchDetached({
     key: request.key,
     built,
-    cwd: path.join(request.runDir, "cwd"),
+    cwd: request.session?.cwd ?? path.join(request.runDir, "cwd"),
     stdoutPath: stdout,
     stderrPath: stderr,
     timeoutMs: request.runtime?.timeoutMs ?? request.hardCapMs,
@@ -395,6 +414,7 @@ export function runEphemeralAgent(
                 ? "done"
                 : "failed";
       finish({
+        ...(request.session ? { sessionId, promptTokens, compacted } : {}),
         status,
         answer,
         durationMs: Date.now() - run.startedAt,

@@ -15,7 +15,7 @@ import type { RemoteAgentView } from "./RemoteAgents";
  */
 
 export type RemoteLaneView = LaneRow & { peer: string; install: string; stale: boolean; asOf: number };
-export type RemoteHost = { label: string; linked: boolean; state?: "active" | "failing"; lastCall?: number | null };
+export type RemoteHost = { label: string; linked: boolean; seatMessages?: boolean; state?: "active" | "failing"; lastCall?: number | null };
 export type RemoteHosts = Readonly<Record<string, RemoteHost>>;
 export interface RemoteFeed {
   agents: RemoteAgentView[];

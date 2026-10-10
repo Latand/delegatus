@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
-import { runtimeHostClient } from "@/lib/runtime/client";
+import { statePath } from "@/lib/configDir";
+import { readRuntimeHostStartupState } from "../../../../runtime-host/runtimeHostStartup";
+import { isRuntimeHostTransportFailure, runtimeHostClient } from "@/lib/runtime/client";
 import { runtimeEventsEnabled, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { withJsonMembers } from "@/lib/runtime/snapshotBody";
 import { structuredStartupAxis } from "@/lib/runtime/startupStatus";
@@ -46,6 +48,12 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
     return new NextResponse(body as BodyInit, { headers });
   } catch (error) {
+    if (isRuntimeHostTransportFailure(error)) {
+      const startup = readRuntimeHostStartupState(statePath("runtime-host-startup"));
+      if (startup.state === "booting") {
+        return NextResponse.json({ error: "runtime host is booting", code: "runtime-host-booting", journal: startup.journal }, { status: 503 });
+      }
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : "runtime host is unavailable" }, { status: 503 });
   }
 }

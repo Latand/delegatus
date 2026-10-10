@@ -30,7 +30,7 @@ import { readSession } from "@/lib/session/reader";
  * WORDS ONLY, structurally: every export here is a READ. Nothing on this path
  * spawns, designates, revokes or rotates anything — crossing the rotation
  * threshold changes what this payload SAYS and nothing else. Rotation happens
- * only when the operator explicitly posts `/api/orchestrator/rotate`.
+ * through the normal command, explicitly or from the opted-in seat tick.
  */
 
 export interface OrchestratorIncumbentLiveness {
@@ -72,7 +72,7 @@ export interface OrchestratorIncumbentBody {
 
 /** Same sentence `get_orchestrator` carries, for the same reason: a reader of
     this payload must never be able to mistake it for an instruction. */
-export const ROTATION_NOTE = "recommendation only — rotation never happens automatically; call rotate_orchestrator explicitly";
+export const ROTATION_NOTE = "recommendation only — call rotate_orchestrator explicitly; the seat tick rotates automatically after an authentication failure onto another allowed account, and at the project's auto-rotation threshold when that is on";
 
 export interface IncumbentReadDependencies {
   conversation: (id: ViewerConversationId) => RegistryConversation | null;
@@ -156,7 +156,7 @@ export async function readOrchestratorIncumbent(
   const model = generation?.launchProfile?.model ?? null;
   const counts = transcriptPath && engine ? dependencies.sessionCounts(transcriptPath, engine) : null;
   const facts = readOrchestratorTranscriptFacts(transcriptPath, counts);
-  const policy = contextWindowPolicyFor(engine, model);
+  const policy = contextWindowPolicyFor(engine, model, facts);
   const context = contextReading({ policy, facts });
 
   let liveness: OrchestratorIncumbentLiveness | null = null;

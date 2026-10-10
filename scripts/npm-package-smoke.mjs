@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { cliRuntimeHostConfig } from "../bin/server-runtime.mjs";
+import { runtimeHostStartIdentity } from "../bin/self-update-supervisor.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(scriptPath), "..");
@@ -105,7 +106,7 @@ process.stdin.resume();
 
 function command(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { timeout: startupTimeoutMs, killSignal: "SIGKILL", ...options, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     const collect = (chunk) => {
       output = `${output}${chunk}`;
@@ -212,7 +213,7 @@ function jsonRequest(port, pathname, method = "GET", body = undefined) {
   });
 }
 
-async function waitForRuntimeHostPid(socketPath, child, output, previousPid = null) {
+async function waitForRuntimeHostIdentity(socketPath, child, output, previousPid = null) {
   const deadline = Date.now() + startupTimeoutMs;
   const fencePath = `${socketPath}.lock`;
   while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
@@ -222,8 +223,10 @@ async function waitForRuntimeHostPid(socketPath, child, output, previousPid = nu
         Number.isSafeInteger(metadata.pid)
         && metadata.pid > 1
         && metadata.pid !== previousPid
+        && typeof metadata.startIdentity === "string"
+        && runtimeHostStartIdentity(metadata.pid) === metadata.startIdentity
         && await socketReady(socketPath)
-      ) return metadata.pid;
+      ) return { pid: metadata.pid, startIdentity: metadata.startIdentity };
     } catch {
       // The fence and socket move independently during a supervised restart.
     }
@@ -251,17 +254,14 @@ async function waitForStructuredStartup(port, afterMs, child, output) {
   throw new Error(`Viewer did not recover structured startup after the supervised host restart${output() ? `: ${output()}` : ""}`);
 }
 
-function processAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
-    throw error;
-  }
+export function signalRuntimeHost(identity, signal, readIdentity = runtimeHostStartIdentity, send = process.kill) {
+  if (!Number.isSafeInteger(identity.pid) || identity.pid <= 1 || typeof identity.startIdentity !== "string"
+    || !identity.startIdentity || readIdentity(identity.pid) !== identity.startIdentity) return false;
+  try { send(identity.pid, signal); return true; }
+  catch (error) { if (error?.code !== "ESRCH") throw error; return false; }
 }
 
-async function stopCliAndVerifyHost(child, runtimeHostPid, output) {
+async function stopCliAndVerifyHost(child, runtimeHost, output) {
   child.kill("SIGINT");
   await Promise.race([
     child.exitCode !== null || child.signalCode !== null
@@ -273,8 +273,9 @@ async function stopCliAndVerifyHost(child, runtimeHostPid, output) {
     throw new Error(`CLI did not exit after SIGINT${output() ? `: ${output()}` : ""}`);
   }
   const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline && processAlive(runtimeHostPid)) await delay(100);
-  if (processAlive(runtimeHostPid)) {
+  const alive = () => runtimeHostStartIdentity(runtimeHost.pid) === runtimeHost.startIdentity;
+  while (Date.now() < deadline && alive()) await delay(100);
+  if (alive()) {
     throw new Error(`CLI left its supervised runtime host alive after SIGINT${output() ? `: ${output()}` : ""}`);
   }
 }
@@ -382,22 +383,19 @@ function scrubOutput(output, tempDirectory) {
     .trim();
 }
 
-async function stop(child) {
-  const signalGroup = (signal) => {
-    try {
-      process.kill(-child.pid, signal);
-    } catch (error) {
-      if (error?.code !== "ESRCH") throw error;
-    }
-  };
-  signalGroup("SIGTERM");
-  await Promise.race([
-    child.exitCode !== null || child.signalCode !== null
-      ? Promise.resolve()
-      : new Promise((resolve) => child.once("exit", resolve)),
-    delay(2_000),
-  ]);
-  signalGroup("SIGKILL");
+export async function stop(child, termMs = 500, timeoutMs = 2_000) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  const forced = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, termMs);
+  let deadline;
+  try {
+    await Promise.race([exited, new Promise((_, reject) => {
+      deadline = setTimeout(() => reject(new Error("package smoke child survived bounded cleanup")), timeoutMs);
+    })]);
+  } finally { clearTimeout(forced); clearTimeout(deadline); }
 }
 
 async function main() {
@@ -543,18 +541,18 @@ async function main() {
       env: runtimeEnvironment,
       home: homeDirectory,
     }).socketPath;
-    const firstRuntimeHostPid = await waitForRuntimeHostPid(socketPath, server, safeOutput);
-    if (firstRuntimeHostPid === process.pid || firstRuntimeHostPid === server.pid) {
+    const firstRuntimeHost = await waitForRuntimeHostIdentity(socketPath, server, safeOutput);
+    if (firstRuntimeHost.pid === process.pid || firstRuntimeHost.pid === server.pid) {
       throw new Error("runtime host fence points at the smoke runner or Viewer process");
     }
     const restartRequestedAt = Date.now();
-    process.kill(firstRuntimeHostPid, "SIGTERM");
-    const restartedRuntimeHostPid = await waitForRuntimeHostPid(socketPath, server, safeOutput, firstRuntimeHostPid);
-    if (restartedRuntimeHostPid === firstRuntimeHostPid) throw new Error("runtime host supervisor reused a dead process id");
+    if (!signalRuntimeHost(firstRuntimeHost, "SIGTERM")) throw new Error("runtime host restart lost its recorded identity");
+    const restartedRuntimeHost = await waitForRuntimeHostIdentity(socketPath, server, safeOutput, firstRuntimeHost.pid);
+    if (restartedRuntimeHost.pid === firstRuntimeHost.pid) throw new Error("runtime host supervisor reused a dead process id");
     await waitForStructuredStartup(cliPort, restartRequestedAt, server, safeOutput);
     console.log("npm package smoke: CLI runtime host restarted with a new supervised generation.");
     await runPipelineSmoke(cliPort, repoDirectory, baseRef, server, safeOutput);
-    await stopCliAndVerifyHost(server, restartedRuntimeHostPid, safeOutput);
+    await stopCliAndVerifyHost(server, restartedRuntimeHost, safeOutput);
     console.log("npm package smoke passed: direct and CLI launches stayed healthy; the packed structured pipeline completed; Ctrl-C stopped its host.");
   } finally {
     if (server) await stop(server);

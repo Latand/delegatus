@@ -1,0 +1,44 @@
+{
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=stages",
+  "readings": {
+    "folded-1440-en-light": {
+      "panel": 70,
+      "gap": "2px",
+      "paddingBottom": "6px",
+      "line": {
+        "height": 24,
+        "whiteSpace": "nowrap",
+        "textOverflow": "ellipsis",
+        "overflow": "hidden",
+        "color": "rgb(85, 85, 95)",
+        "secondary": "rgb(85, 85, 95)",
+        "cut": false
+      },
+      "shown": [
+        "conv-head",
+        "rlatest"
+      ],
+      "pageErrors": []
+    },
+    "folded-1000-uk-dark": {
+      "panel": 70,
+      "gap": "2px",
+      "paddingBottom": "6px",
+      "line": {
+        "height": 24,
+        "whiteSpace": "nowrap",
+        "textOverflow": "ellipsis",
+        "overflow": "hidden",
+        "color": "rgb(162, 162, 174)",
+        "secondary": "rgb(162, 162, 174)",
+        "cut": false
+      },
+      "shown": [
+        "conv-head",
+        "rlatest"
+      ],
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

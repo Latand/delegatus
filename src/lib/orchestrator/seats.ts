@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { captureSeatAuthCredentialBaseline, normalizeSeatAuthCredentialBaseline, seatAuthCredentialStamp, type SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -48,6 +49,8 @@ export interface OrchestratorSeatIntent {
   launchId: string | null;
   /** Terminal error of the last completion attempt; null while none failed. */
   error: string | null;
+  /** Trusted automatic-rotation fence, retained when the launching request dies. */
+  automaticReplacement?: { conversationId: string; seatEpoch: number };
 }
 
 /**
@@ -83,6 +86,8 @@ export interface OrchestratorSeat {
   model?: string | null;
   /** False only for persisted rows written before runtime identity freezing. */
   runtimeIdentityFrozen?: boolean;
+  /** Content proof for recognizing login before the first authentication check. */
+  authCredentialBaseline?: SeatAuthCredentialBaseline;
   /** Connector selection frozen with this spawn intent for idempotent replay. */
   telegramGrant?: boolean;
   /** The mandate text delivered (active) or to be delivered (pending). */
@@ -256,6 +261,7 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
     engine,
     model,
     runtimeIdentityFrozen,
+    authCredentialBaseline: normalizeSeatAuthCredentialBaseline(seat.authCredentialBaseline),
     ...(typeof seat.telegramGrant === "boolean" ? { telegramGrant: seat.telegramGrant } : {}),
     mandate: seat.mandate,
     ...(typeof seat.roleTable === "string" ? { roleTable: seat.roleTable } : {}),
@@ -268,6 +274,9 @@ function normalizeSeat(value: unknown): OrchestratorSeat | null {
       mode: intent.mode,
       launchId: typeof intent.launchId === "string" ? intent.launchId : null,
       error: typeof intent.error === "string" ? intent.error : null,
+      ...(intent.automaticReplacement && typeof intent.automaticReplacement.conversationId === "string"
+        && Number.isSafeInteger(intent.automaticReplacement.seatEpoch) && intent.automaticReplacement.seatEpoch > 0
+        ? { automaticReplacement: { conversationId: intent.automaticReplacement.conversationId, seatEpoch: intent.automaticReplacement.seatEpoch } } : {}),
     },
     designatedAt: seat.designatedAt,
     activatedAt: seat.activatedAt ?? null,
@@ -772,6 +781,7 @@ export function beginOrchestratorSeatIntent(input: {
   engine?: string | null;
   model?: string | null;
   telegramGrant?: boolean;
+  automaticReplacement?: OrchestratorSeatIntent["automaticReplacement"];
   promptVersion?: number | null;
   /** Who triggered this designation, resolved from the request by the caller —
       never read off a caller-supplied body, so attribution cannot be dictated. */
@@ -825,7 +835,8 @@ export function beginOrchestratorSeatIntent(input: {
       predecessorConversationId: null,
       triggeredBy: input.triggeredBy ?? null,
       state: "pending",
-      intent: { clientRequestId: input.clientRequestId, mode: input.mode, launchId: null, error: null },
+      intent: { clientRequestId: input.clientRequestId, mode: input.mode, launchId: null, error: null,
+        ...(input.automaticReplacement ? { automaticReplacement: { ...input.automaticReplacement } } : {}) },
       designatedAt: input.now ?? new Date().toISOString(),
       activatedAt: null,
     };
@@ -833,6 +844,22 @@ export function beginOrchestratorSeatIntent(input: {
     file.pending[project] = seat;
     writeSeatFile(file);
     return { kind: "begun", seat, ...(terminalized ? { terminalized } : {}) };
+  });
+}
+
+/** Freeze the actual account's contents before a new seat launch is admitted. */
+export function recordOrchestratorSeatAuthCredentialBaseline(projectInput: string, clientRequestId: string, seatEpoch: number, engine: string, accountId: string): void {
+  if (engine !== "claude" && engine !== "codex") return;
+  withAccountMutationLock(() => {
+    const file = readOrchestratorSeatFile();
+    const project = canonicalOrchestratorProject(projectInput);
+    const pending = file.pending[project];
+    if (!pending || pending.intent.clientRequestId !== clientRequestId || pending.seatEpoch !== seatEpoch) throw new Error("seat intent changed before credential admission");
+    const scope = `seat-auth-baseline:${project}:${seatEpoch}`;
+    const stamp = seatAuthCredentialStamp(engine, accountId, scope);
+    if (!stamp) return;
+    pending.authCredentialBaseline = { engine, accountId, stamp, scope };
+    writeSeatFile(file);
   });
 }
 
@@ -912,6 +939,7 @@ export function completeOrchestratorSeatIntent(input: {
       state: "active",
       intent: { ...pending.intent, launchId: input.launchId ?? pending.intent.launchId, error: null },
       activatedAt: now,
+      authCredentialBaseline: pending.authCredentialBaseline ?? captureSeatAuthCredentialBaseline(pending.engine ?? input.engine, input.path, `seat-auth-baseline:${project}:${pending.seatEpoch}`),
     };
     delete file.pending[project];
     file.seats[project] = seat;
@@ -1122,7 +1150,8 @@ export function confirmOrchestratorSeatMaterialization(input: {
     if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
     if (active.conversationId !== input.conversationId) return null;
     if (active.path === input.path && !file.rollbacks[project]) return active;
-    const confirmed: OrchestratorSeat = { ...active, path: input.path };
+    const confirmed: OrchestratorSeat = { ...active, path: input.path,
+      authCredentialBaseline: active.authCredentialBaseline ?? captureSeatAuthCredentialBaseline(active.engine, input.path, `seat-auth-baseline:${project}:${active.seatEpoch}`) };
     file.seats[project] = confirmed;
     delete file.rollbacks[project];
     writeSeatFile(file);

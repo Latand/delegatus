@@ -18,6 +18,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
 import { conversationFrameRole } from "@/lib/roleFrames";
 import type { BoardTask } from "@/lib/tasks/types";
+import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "@/components/BranchPane";
@@ -81,6 +82,8 @@ const SWIPE_MIN_X = 56;
 export const SWIPE_ZONE = "[data-mobile2-bar], [data-mobile2-dock]";
 /** How long the title cell's end-of-list bump runs (§5). */
 export const BUMP_MS = 200;
+/** How long the bar names the other task a swipe landed in. */
+export const TASK_CHANGE_MS = 3000;
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 const EMPTY_TASKS: readonly FileEntry[] = [];
 
@@ -225,11 +228,15 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
      same reason: on the phone this view is mounted by an open (mobile v2 lane
      2 pushes it as the conversation screen), so the remembered pin is the
      conversation the operator just left, and starting there painted and
-     mounted that other conversation's feed for a frame. */
-  const [focusState, setFocusState] = useState<{ project: string; key: string | null }>(() => ({ project, key: focus ?? rememberedFocus(project) }));
-  if (focusState.project !== project) setFocusState({ project, key: focus ?? rememberedFocus(project) });
+     mounted that other conversation's feed for a frame. The parent's next
+     focus also takes effect during render, before transcript adoption can
+     retire the pinned launch path and expose the attention fallback. */
+  const [focusState, setFocusState] = useState<{ project: string; key: string | null; requested: typeof focus }>(() => ({ project, key: focus ?? rememberedFocus(project), requested: focus }));
+  if (focusState.project !== project || focusState.requested !== focus) {
+    setFocusState({ project, key: focus ?? (focusState.project === project ? focusState.key : rememberedFocus(project)), requested: focus });
+  }
   const focusPath = focusState.key;
-  const setFocusPath = useCallback((key: string | null) => setFocusState((prev) => (prev.key === key ? prev : { project: prev.project, key })), []);
+  const setFocusPath = useCallback((key: string | null) => setFocusState((prev) => (prev.key === key ? prev : { ...prev, key })), []);
   /* Bumped by the menu's Rename row: the editor opens over the bar, where the
      title cell is (§4.2, #1348). The editor reports the effective title back,
      so the cell under it shows an optimistic rename at once instead of waiting
@@ -284,13 +291,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     },
     restoreCamera: () => false,
   }), [project, focusIndex, byKey, setFocusPath]);
-
-  /* Any open (overview card, toast, switch of a quiet branch) arrives as the
-     transient highlight: pin it. */
-  useEffect(() => {
-    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the opener's highlight is the pin */
-    if (focus) setFocusPath(focus);
-  }, [focus, setFocusPath]);
 
   /* The pinned key while it exists; otherwise the most attention-worthy node,
      so a closed pane falls through to the next thing that matters. */
@@ -365,6 +365,33 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     [onOpenTask, activeFile, relatedTasksByPath],
   );
   const backgroundTasks = activeNode?.tasks ?? EMPTY_TASKS;
+  /* The task the conversation works for: its pipeline's task, else the task it
+     is assigned to. A swipe walks every agent of the project, so one that lands
+     on another task's agent says so in the bar for a moment, in the meta line's
+     place (docs/design/agent-window.md, Phone). */
+  const activeTask = useMemo(() => {
+    const board = sheetTasks ?? tasks;
+    const id = stage?.pipeline.taskIds?.[0];
+    const task = (id ? board.find((entry) => entry.id === id) : undefined) ?? (activeFile ? relatedTasksByPath.get(activeFile.path)?.[0]?.task : undefined);
+    if (task) return { id: task.id, title: firstLineTitle(task.text) };
+    return stage?.pipeline.task ? { id: `pipeline:${stage.pipeline.id}`, title: firstLineTitle(stage.pipeline.task) } : null;
+  }, [stage, sheetTasks, tasks, activeFile, relatedTasksByPath]);
+  const swiped = useRef(false);
+  const lastTask = useRef<string | null>(null);
+  const [taskChange, setTaskChange] = useState<{ key: string; title: string } | null>(null);
+  useEffect(() => {
+    const was = lastTask.current;
+    lastTask.current = activeTask?.id ?? null;
+    if (!swiped.current) return;
+    swiped.current = false;
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the swipe landed on another task's agent */
+    if (activeTask && resolvedKey && was !== activeTask.id) setTaskChange({ key: resolvedKey, title: activeTask.title });
+  }, [activeTask, resolvedKey]);
+  useEffect(() => {
+    if (!taskChange) return;
+    const timer = window.setTimeout(() => setTaskChange(null), TASK_CHANGE_MS);
+    return () => window.clearTimeout(timer);
+  }, [taskChange]);
   /* A sheet whose contents are gone — the last task finished, the pinned task
      was closed, the swipe moved to a conversation with neither — leaves with them. */
   const orphanSheet = (navState.sheet === "pinned" && pinnedRelations.length === 0) || (navState.sheet === "background" && backgroundTasks.length === 0);
@@ -475,8 +502,11 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     if (!seatHandoff || !seatKey || seatKey === resolvedKey || !byKey.has(seatKey)) return;
     setSeatSheetOpen(false);
     setSeatHandoff(false);
+    const file = byKey.get(seatKey)?.file;
+    if (topScreen(navState).kind === "chat") nav.replace({ kind: "chat", id: seatKey });
+    if (file) onSelect(file);
     setFocusPath(seatKey);
-  }, [seatHandoff, seatKey, resolvedKey, byKey, setFocusPath]);
+  }, [seatHandoff, seatKey, resolvedKey, byKey, setFocusPath, nav, navState, onSelect]);
   /* And it is armed for THAT rotation only. A rotation that failed, or a draft
      the operator abandoned, closes the sheet without a successor; leaving the
      wait armed would hand the phone's focus to whatever seat change happened
@@ -511,6 +541,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     /* A step that lands ends whatever bump the last one at the edge started. */
     nav.clearBump();
     setBumpPulse(null);
+    swiped.current = true;
     switchTo(target, false);
   }, [switchEntries, resolvedKey, nav, switchTo]);
 
@@ -559,6 +590,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
+        taskChange={taskChange && taskChange.key === resolvedKey ? taskChange.title : null}
       />
     </>
   ) : activeEntry ? (
@@ -845,11 +877,13 @@ function ChatIdentity({ file }: { file: FileEntry }) {
  *
  * Read off the live transcript path, as every other account surface reads it.
  * The legacy home is named too — «default» is the answer to that question, and
- * the runtime sheet answers it with the same word.
+ * the runtime sheet answers it with the same word. A conversation still
+ * starting has no transcript yet; its launch record names the account it was
+ * launched on, as the board's account chip reads it.
  */
 function ChatAccountTag({ file }: { file: FileEntry }) {
   const { t } = useLocale();
-  const account = accountIdFromPath(file.path);
+  const account = file.spawn?.accountId ?? accountIdFromPath(file.path);
   /* #1846: a pick waiting for the next message is named here too, in the frame the sheet names it, so
      the conversation says where the next message goes with the sheet closed. */
   const runtime = useRuntimeSessionForConversation(file.conversationId, file.path);
@@ -893,7 +927,7 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null }) {
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null }) {
   const { t } = useLocale();
   const bits = chatStateBits(t, file, { offline });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
@@ -913,7 +947,11 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
         </span>
         <ChatAccountTag file={file} />
       </span>
-      {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : (
+      {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : taskChange ? (
+        <span data-mobile2-chat-task-change="" className="min-w-0 truncate text-label font-medium leading-tight text-secondary">
+          {t("mobile2.chat.otherTask", { title: taskChange })}
+        </span>
+      ) : (
       <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
         <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>

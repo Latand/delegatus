@@ -151,6 +151,19 @@ including `git show --remerge-diff <sha>`, before listing its newly reviewed
 head in the next batch. A failed resolution gate can be retried after its
 cause is addressed, with the recorded resolution kept for inspection.
 
+Resolution tests use the batch gate's shared native-main comparison and bounded
+confirmation. Each selected file runs alone in a fresh isolated home, temp and
+state root on the resolution and on the exact main merged into it. The baseline
+is sampled anew for every resolution attempt; the earlier batch baseline supplies
+no evidence here. Pre-existing assertions and file faults permit publication;
+confirmed new failures withhold the original branch push. Between-test and file
+errors are judged from the file's standalone run, so a bundled-only error is
+rerun alone before any verdict. Incomplete main files use the same named-case
+probes as the batch gate. Dependencies, types, lint and privacy keep their gates.
+The report records each resolution's main and tip, selected files, pre-existing,
+intermittent and uncompared results, and confirmed new failures, including a
+failed attempt kept for inspection.
+
 The report separates pre-existing, intermittent and attributed test failures,
 including confirmation and omission evidence. It has one row per input: `merged <main sha>`, `needs-review <sha>`,
 `culprit <check: attribution>` or `head-moved`, plus the batch URL. A deferred

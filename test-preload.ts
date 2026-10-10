@@ -5,6 +5,24 @@ import { afterAll } from "bun:test";
 
 import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "./src/lib/tempDirs";
 import { beginCodexFeatureFixture } from "./src/lib/agent/codexSpawnPolicyTestFixtures";
+import { beginTestChildOwnership } from "./src/lib/testing/testChildren";
+import { captureProcessIdentity } from "./src/lib/processIdentity";
+
+// Each Linux test runner needs its own kernel-owned tree. A nested runner must
+// not share its parent's lifetime: a short-lived intermediate can detach a
+// descendant before any polling observer sees it. Re-enter the existing gate
+// supervisor before test modules load, preserving Bun's exact command line.
+const admitted = process.platform !== "linux" || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
+  && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
+if (!admitted) {
+  const argv = fs.readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean);
+  const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...argv], {
+    env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+  });
+  process.on("SIGTERM", () => runner.kill("SIGTERM"));
+  process.on("SIGINT", () => runner.kill("SIGTERM"));
+  process.exit(await runner.exited);
+}
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
@@ -28,6 +46,7 @@ beginCodexFeatureFixture();
  * with an owned prefix, and the Viewer's sweeper removes it once it is stale.
  */
 const run = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
+beginTestChildOwnership(run.root);
 afterAll(() => run.release());
 
 /*

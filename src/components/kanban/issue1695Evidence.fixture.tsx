@@ -7,6 +7,7 @@ import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
 import { translate } from "@/lib/i18n";
+import { insertLearnedRules, lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
@@ -15,6 +16,14 @@ import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
+import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
+import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
+import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
+import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
+import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
+import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -33,7 +42,8 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
-import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
+import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -119,6 +129,33 @@ const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
+/* The floating voice companion (#2519, docs/design/voice-companion-research.md §9, §10): the default board with the
+   character over it in its one final look, driven by the simulator on the shared event contract.
+   `&script=<scenario>` picks the scripted scenario (delegation by default), `&collapsed=1` starts it as its small
+   tile, `&delivered=1` opens with the delegated message and the orchestrator's answer already in the seat's
+   conversation, `&full=1` puts earlier exchanges above them, enough to fill the conversation to its whole height, `&engine=codex` seats a Codex orchestrator, `&surface=underlay` replaces the board with a field of
+   plain click-counting cells (no controls), where the character can be taken to any edge, and `&surface=buttons`
+   with small real buttons every 100 px, where no lane fits. `&failure=<code>` makes Talk refuse with that failure,
+   as the product does for a missing key or a reached cap, and `&seat=none` says the project has no orchestrator.
+   `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
+   `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
+   memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
+   driver turns the companion on through the settings dialog. `&transcript=1` (item 6 of
+   docs/design/voice-delegatus-live-feedback.md) lets the companion read a whole session's transcript record, as the
+   live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
+const VOICE = SCENARIO === "voice-companion";
+const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
+const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
+  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
+const voiceSettings = {
+  enabled: false, monthlyCapUsd: 20,
+  keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
+  month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
+};
+const VOICE_RELAY_UUID = "engine_message_voice_delegation";
+const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
+const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
 const FEED_FAILURES = SCENARIO === "feed-failures";
 /* `&reload=1`: a window opened fresh on a long conversation. The host still
    keeps the replies of the turns it ran, and this window watched none arrive. */
@@ -297,6 +334,7 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+const SEAT_UNCONFIRMED = SEAT_HEAD && new URLSearchParams(location.search).get("usage") === "unconfirmed";
 /* The same seat with its agent not running and its context past the rotation
    line: the status read reports both causes, as data, beside the sentences it
    writes for an agent. */
@@ -304,6 +342,10 @@ const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") 
 /* The seat holds the Telegram tool and Telegram waits on the operator: the
    status read names the action: `sign_in`, `check` or `restart`. */
 const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("telegram") : null;
+/* The seat tick switch in that header and in the phone's seat sheet
+   (`&tick=driver`): the driver holds the tick's record and answers the
+   settings route, so a drag reads back the way the real route answers. */
+const SEAT_TICK_DRIVER = SEAT_HEAD && new URLSearchParams(location.search).get("tick") === "driver";
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -336,6 +378,21 @@ const TICK_CARDS = SCENARIO === "seat-tick-cards";
    arriving while the turn runs, the turn's end. The driver reads every layout shift from the first click to
    the end of the turn. */
 const LAUNCH_CLS = SCENARIO === "launch-cls";
+/* Creating a new agent (docs/design/new-agent-redesign.md): the board of `atlas`, with what a draft reads
+   answered in full — the accounts of each engine, a structured launch that takes images — and a launch
+   that runs on the clock of `launch-cls`, held a little longer before its receipt so the frame between the
+   press and the receipt can be read. */
+const NEW_AGENT = SCENARIO === "new-agent";
+/* Five states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
+   a tab's drafts, continuing the conversation «Worker waiting for a seat»; the same draft when the source's
+   folder is on no record; the engine's active account signed out; a launch the server refuses by name; and
+   two Copilot accounts to choose between. */
+const NEW_AGENT_SEEDS = ["handoff", "handoff-lost", "signed-out", "refused", "copilot"] as const;
+const NEW_AGENT_SEED = NEW_AGENT ? NEW_AGENT_SEEDS.find((seed) => seed === new URLSearchParams(location.search).get("naseed")) ?? null : null;
+if (NEW_AGENT_SEED === "handoff" || NEW_AGENT_SEED === "handoff-lost") {
+  sessionStorage.setItem("llvDrafts:atlas", JSON.stringify(["na-handoff"]));
+  sessionStorage.setItem("llvDraftPane:na-handoff:src", "/repo/pending-worker.jsonl");
+}
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -567,6 +624,7 @@ function fmApply() {
   else adopted(undefined);
 }
 if (FIRST_MESSAGE && !FM_SEAT) fmApply();
+if (VOICE && new URLSearchParams(location.search).get("engine") === "codex") seatOn("codex", "gpt-5.6-sol", "high", "voice");
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -1527,6 +1585,21 @@ const accountsBody = {
     mutationLocked: false, migration: null, autoBalance: null,
   },
 };
+/* `?railaccounts=N` (the compact footer, one line per account): each engine knows N accounts, the active one
+   first. From the third on the readings are the states a line has to draw: an aged reading, and no reading at all. */
+const RAIL_ACCOUNTS = Number(new URLSearchParams(location.search).get("railaccounts")) || 0;
+if (RAIL_ACCOUNTS) {
+  const plans = ["Max", "Pro", "Pro", "Max", "Plus", "Pro", "Max", "Pro"];
+  const used = [72, 18, 41, 100, 55, 8, 64, 30];
+  const roster = (letters: string): (typeof accountsBody)["claude"]["accounts"] => Array.from({ length: RAIL_ACCOUNTS }, (_, index) => {
+    const row = accountRow(index === 0 ? "default" : `account-${index}`, `Account ${letters[index]}`, plans[index]!, used[index]!, 90 + 25 * index);
+    if (index === 1 && RAIL_ACCOUNTS > 2) return { ...row, limits: { ...row.limits, state: "stale", checkedAt: iso(40 * MIN) } };
+    if (index === 2 && RAIL_ACCOUNTS > 2) return { ...row, limits: null as never };
+    return row;
+  });
+  accountsBody.claude.accounts = roster("ACEGIJKM");
+  accountsBody.codex.accounts = roster("BDFHLNPQ");
+}
 /* Claude work in this project may use accounts A, C and E; Codex is unbound. */
 const CLAUDE_ALLOWED = ["default", "account-c", "account-e"];
 const bindingsBody = {
@@ -1582,6 +1655,12 @@ function task(id: string, status: TaskStatus, title: string, description: string
 }
 
 const tasks: BoardTask[] = [
+  ...(SCENARIO === "finding-recurrence" ? [task("t-finding", "inbox", L("Investigate the recurring timeout", "Перевірити повторний тайм-аут"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 2 * MIN, [], {
+    findingKey: "socket-timeout", finding: { count: 3, lastSeenAt: iso(20 * MIN) },
+  }), task("t-finding-held", "blocked", L("Review the recurring timeout", "Перевірити повторний тайм-аут у черзі"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 45 * MIN, [], {
+    findingKey: "held-socket-timeout", finding: { count: 12, lastSeenAt: iso(20 * MIN) },
+    hold: { kind: "worker", note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(45 * MIN), by: "agent" },
+  })] : []),
   ...(SCENARIO === "status-note" ? [task("t-note", "inbox", L("Review the route changes", "Перевірити зміни маршрутів"), L("Preserve the route contracts.", "Зберегти контракти маршрутів."), 2 * MIN, [], { note: {
     text: L("Waiting for the independent review of the changed routes and their persistence checks. The agent is verifying how updates survive concurrent writes, reloads and a restarted server before moving this task to the next stage.", "Очікує незалежного рев’ю змінених маршрутів і перевірок збереження даних. Агент перевіряє, як оновлення переживають одночасні записи, перезавантаження сторінки та перезапуск сервера, перш ніж перевести задачу до наступного етапу."),
     author: { kind: "orchestrator" }, updatedAt: iso(2 * MIN),
@@ -1877,15 +1956,20 @@ if (BOARD_ORDER) {
   );
 }
 if (TICK_CARDS) {
-  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice: string; failed: string; live: string };
+  /* Each card is present when the driver sends its text. An automatic
+     rotation's card (#2577) carries its text and its folded details. */
+  type Card = { text: string; details: string };
+  const texts = JSON.parse(decodeURIComponent(escape(atob(new URLSearchParams(location.search).get("texts") ?? "e30=")))) as { notice?: string; failed?: string; live?: string; rotFailed?: Card; rotDone?: Card };
   files.splice(0, files.length, orchestrator);
   pipelines.splice(0, pipelines.length);
   tasks.splice(0, tasks.length,
-    task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" }),
+    ...(texts.notice === undefined ? [] : [task("t-tick-notice", "inbox", texts.notice, "", 14 * MIN, [], { color: "amber", icon: "timer" })]),
+    ...(texts.rotFailed ? [task("t-rot-failed", "inbox", "", "", 9 * MIN, [], texts.rotFailed)] : []),
     task("t-tick-cleanup", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 3 * 60 * MIN, [], { color: "slate", icon: "wrench" }),
-    task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    ...(texts.live === undefined ? [] : [task("t-tick-live", "assigned", texts.live, "", 6 * MIN, [], { color: "slate", icon: "brush-cleaning" })]),
     task("t-tick-search", "assigned", L("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), "", 25 * MIN),
-    task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" }),
+    ...(texts.failed === undefined ? [] : [task("t-tick-failed", "blocked", texts.failed, "", 40 * MIN, [], { color: "slate", icon: "brush-cleaning" })]),
+    ...(texts.rotDone ? [task("t-rot-done", "done", "", "", 70 * MIN, [], texts.rotDone)] : []),
   );
 }
 if (PRIORITY) {
@@ -1982,11 +2066,42 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
   line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } }),
   line(secondsAgo - 2, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
 ];
+/* Role memory's variant 5, the stage as its agent sees it (`&rolememory=1`): the
+   builder's launch message with its learned rules below the brief, its
+   stage_report and the lesson request in the answer, then its leave_lesson. The
+   text is the product's own renderer's. */
+function roleMemoryStageTranscript(): string {
+  const rule = (id: string, text: string, why: string) => ({ kind: "rule", id, scope: "", rule: text, why, state: "active", hints: [], source: {}, createdAt: "", changedAt: "" }) as never;
+  const block = renderLearnedRules([
+    { scope: "role:atlas:builder", rules: [rule("r_5d0e21aa", "Keep a fix round to the handed findings and what they reveal; a wider rewrite restarts the review from zero.", "A fix round that also refactored drew five new findings.")] },
+    { scope: "project:atlas", rules: [rule("r_9b47c3f0", "Run the test files you touched by path; a whole-directory sweep reaches live runtime state.", "A sweep once stopped the host of a running conversation.")] },
+    { scope: "machine", rules: [rule("r_1f8a6d52", "Give a browser started from a pipeline stage a short temporary directory for its sockets.", "The driver died on the socket path limit until TMPDIR was shortened.")] },
+  ]);
+  const brief = ["Move the delta chain off the request thread; the worker must own it.", "", "Role prompt scaffold:", "You are a Builder in plain mode. Implement the brief with focused checks.", "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings, summary }."].join("\n");
+  const finding = "The delta chain is rebuilt on the request thread; the worker must own it.";
+  const tool = (secondsAgo: number, id: string, name: string, input: Record<string, unknown>) => line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: `mcp__viewer__${name}`, input }] } });
+  const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
+  const lessons = [
+    { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
+    { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
+  ];
+  return `${[
+    asked(46 * 60, insertLearnedRules(brief, block)),
+    said(43 * 60, L("The worker owns the chain now; one check still fails on the request thread.", "Ланцюгом тепер володіє воркер; одна перевірка ще падає в потоці запиту.")),
+    tool(41 * 60 + 5, "toolu_role_memory_report", "stage_report", { clientRequestId: "md-impl-report", verdict: "fail", findings: [{ severity: "P1", text: finding }], summary: finding }),
+    result(41 * 60, "toolu_role_memory_report", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, replaced: false, report: { seq: 1, verdict: { status: "fail", findingCount: 1 } }, lessonRequest: lessonRequestLines(null) }),
+    tool(40 * 60 + 30, "toolu_role_memory_lesson", "leave_lesson", { clientRequestId: "md-impl-lesson", lessons }),
+    result(40 * 60 + 25, "toolu_role_memory_lesson", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, left: [{ id: "r_8c1e04b7", scope: "role:atlas:builder", state: "active", scopeChars: 606 }, { id: "r_2a7f9c13", scope: "role:atlas:visual-critic", state: "active", scopeChars: 214 }], none: null }),
+    said(40 * 60, L("Two lessons left; the stage itself is complete.", "Лишив два уроки; сам етап завершено.")),
+  ].join("\n")}\n`;
+}
+
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
+  if (ROLE_MEMORY && (file as { conversationId?: string }).conversationId === "conversation_md-impl") return roleMemoryStageTranscript();
   /* A launch the transcript has not appeared for reads nothing. */
-  if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
+  if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (FEED_RELOAD && file === searchVer2) return `${[
@@ -2038,6 +2153,28 @@ function transcriptOf(pathname: string): string {
       ...tool(4 * MIN, "toolu_seat_update_task", "mcp__viewer__update_task", { taskId: SEAT_TASK_ID, status: "assigned" }),
       ...tool(3 * MIN, "toolu_seat_shell", "Bash", { command: SEAT_SHELL, description: "Check the worktree" }),
       said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
+    ].join("\n")}\n`;
+  }
+  if (VOICE && file === orchestrator) {
+    const codex = file.engine === "codex";
+    /* A message Delegatus delivered: the SDK's record on Claude, a user-role response item on Codex. */
+    const relayed = (secondsAgo: number, uuid: string, text: string) => codex
+      ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: uuid, role: "user", content: [{ type: "input_text", text }] } })
+      : line(secondsAgo, { type: "user", uuid, message: { role: "user", content: text }, promptSource: "sdk" });
+    const answered = (secondsAgo: number, text: string) => codex
+      ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: "voice_answer", role: "assistant", content: [{ type: "output_text", text }] } })
+      : said(secondsAgo, text);
+    /* Earlier exchanges: the operator's question and the orchestrator's answer, eight times over. */
+    const earlier = new URLSearchParams(location.search).get("full") === "1" ? Array.from({ length: 8 }, (_, index) => [
+      (codex ? (secondsAgo: number, text: string) => line(secondsAgo, { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) : asked)((60 - index * 6) * MIN, L(`Where does lane ${index + 1} stand, and is anything waiting on me?`, `Як справи зі смугою ${index + 1} і чи щось чекає на мене?`)),
+      answered((59 - index * 6) * MIN, L(`Lane ${index + 1} passed review on its second attempt and is merging; nothing is waiting on you there.`, `Смуга ${index + 1} пройшла рев’ю з другої спроби й зливається; там на вас нічого не чекає.`)),
+    ]).flat() : [];
+    return `${[
+      ...earlier,
+      relayed(5 * MIN, VOICE_INTERNAL_UUID, voiceInternalText()),
+      answered(4 * MIN, L("Noted. The retry banner lane can merge.", "Прийнято. Смугу банера повтору можна зливати.")),
+      ...(voice.delivered ? [relayed(40, VOICE_RELAY_UUID, demoInstruction(UK ? "uk" : "en"))] : []),
+      ...(voice.answered ? [answered(10, demoAnswer(UK ? "uk" : "en"))] : []),
     ].join("\n")}\n`;
   }
   if (REPORT_PREVIEW && file === orchestrator) {
@@ -2585,14 +2722,13 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto");
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
+const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
+/* The Viewer's own selectors: which round waits and which a later decision retired. */
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
-  const latest = rounds.at(-1)!;
-  const waiting = rounds.findLast((round) => !round.decision);
-  return {
-    latestReviewId: latest.id, waitingReviewId: waiting?.id ?? null, title: latest.title, rounds: rounds.length, createdAt: (waiting ?? latest).createdAt,
-    ...(latest.decision ? { decision: { chosen: latest.variants.filter((variant) => latest.decision!.chosen.includes(variant.number)).map(({ number, name }) => ({ number, name })), comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}),
-  };
+  const summary = prototypeReviewSummary(rounds)!;
+  const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
+  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2641,6 +2777,13 @@ if (PROTO) {
     { number: 2, name: L("Segmented control", "Сегментований перемикач"), description: L("The presets as one segmented control.", "Пресети одним сегментованим перемикачем."), videos: [], frames: [{ image: image(960, 600, 80, "segments", false, false), caption: L("presets", "пресети"), width: 1440 }] },
     { number: 3, name: L("Advanced drawer", "Шухляда розширених"), description: L("Eleven toggles behind one disclosure.", "Одинадцять перемикачів за одним розкриттям."), videos: [], frames: [{ image: image(960, 600, 120, "drawer", false, false), caption: L("advanced", "розширені"), width: 1440 }] },
   ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN), decision: decided([2, 3], L("Take the segmented control and keep the drawer closed by default.", "Беремо сегментований перемикач, шухляда типово закрита."), 38 * 24 * 60 * MIN, "sent") })];
+  /* `&retired=1`: export's design round was never answered and its decided
+     round came after it, as on the task a revise stage answered. The decision
+     retires that earlier round, so export waits for nothing. */
+  if (params.get("retired") === "1") protoRounds["t-export"]!.unshift(round("r-export-0", "t-export", L("Export presets, first take", "Пресети експорту, перша спроба"), 41 * 24 * 60 * MIN, [
+    { number: 1, name: L("One long list", "Один довгий список"), description: L("Every preset in one list.", "Усі пресети одним списком."), videos: [], frames: [{ image: image(960, 600, 60, "list", false, false), caption: L("presets", "пресети"), width: 1440, lang: "en" }] },
+    { number: 2, name: L("Two tabs", "Дві вкладки"), description: L("Simple and advanced presets on two tabs.", "Прості й розширені пресети на двох вкладках."), videos: [], frames: [{ image: image(960, 600, 90, "tabs", false, false), caption: L("presets", "пресети"), width: 1440, lang: "en" }] },
+  ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN) }));
   protoRounds["t-links"] = [
     round("r-links-1", "t-links", L("Release notes links", "Посилання в нотатках релізу"), 3 * 24 * 60 * MIN, [
       { number: 1, name: L("Inline arrows", "Стрілки в рядку"), description: L("An arrow after every repaired link.", "Стрілка після кожного виправленого посилання."), videos: [], frames: [{ image: image(960, 600, 20, "arrows"), caption: L("notes", "нотатки"), width: 1440 }] },
@@ -2655,6 +2798,25 @@ if (PROTO) {
     { number: 1, name: L("Treemap", "Деревоподібна карта"), description: L("Area by size.", "Площа за розміром."), videos: [], frames: [{ image: image(960, 600, 280, "treemap"), caption: L("report", "звіт"), width: 1440 }] },
     { number: 2, name: L("Sorted bars", "Впорядковані смуги"), description: L("One bar per directory.", "Смуга на кожен каталог."), videos: [], frames: [{ image: image(960, 600, 310, "bars"), caption: L("report", "звіт"), width: 1440 }] },
   ], { decision: decided([2], L("Bars. Add the reclaimable column.", "Смуги. Додайте колонку «можна звільнити»."), 4 * 60 * MIN, "failed") })];
+  if (PROTO === "questions") {
+    const questionnaire: PrototypeQuestion[] = [
+      { id: "place", text: L("Where should the questionnaire live?", "Де має бути опитувальник?"), options: [{ label: L("In the existing review window", "У наявному вікні рев’ю"), recommended: true }, { label: L("In a separate window", "В окремому вікні") }] },
+      { id: "surfaces", text: L("Which surfaces do you use?", "Якими інтерфейсами ви користуєтеся?"), multiple: true, options: [{ label: L("Desktop", "Комп’ютер"), recommended: true }, { label: L("Phone", "Телефон") }] },
+      { id: "timing", text: L("When should we ask?", "Коли ставити питання?"), other: true, options: [{ label: L("Before ambiguous work", "Перед неоднозначною задачею"), recommended: true }, { label: L("On every task", "Для кожної задачі") }] },
+      { id: "comment", text: L("Where do extra details go?", "Де писати додаткові деталі?"), options: [{ label: L("In one shared field", "В одному спільному полі"), recommended: true }, { label: L("Beside each question", "Біля кожного питання") }] },
+      { id: "start", text: L("What follows the answers?", "Що робити після відповідей?"), options: [{ label: L("Restate the understanding and start", "Записати розуміння та почати"), recommended: true }, { label: L("Wait for another approval", "Чекати ще одного підтвердження") }] },
+    ];
+    const images = protoRounds["t-search"]![0]!.variants.slice(0,2);
+    const questionRound = (taskId: string, questions: PrototypeQuestion[], variants: PrototypeRoundView["variants"] = []) => round(`r-questions-${taskId}`, taskId, L("A few questions before work", "Кілька питань перед роботою"), 4 * MIN, variants, { questions });
+    protoRounds["t-search"] = [questionRound("t-search", questionnaire)];
+    protoRounds["t-upload"] = [questionRound("t-upload", questionnaire.slice(0,3), images)];
+    protoRounds["t-links"] = [questionRound("t-links", questionnaire.map(q => ({ ...q, multiple: true })))];
+    const longText = L("Which information should remain visible while you answer the questions and compare the proposed layout? Please include the navigation, task context and the controls you use most often. ", "Яка інформація має залишатися видимою, поки ви відповідаєте на питання та порівнюєте запропоноване оформлення? Врахуйте навігацію, контекст задачі та елементи керування, якими користуєтеся найчастіше. ");
+    protoRounds["t-disk"] = [questionRound("t-disk", questionnaire.slice(0,3).map(q => ({ ...q, text: (longText.repeat(3)).slice(0,300), options: q.options.map((o,j) => ({ ...o, label: (`${j + 1}. ${longText}`).slice(0,120) })) })))];
+    const answered = questionRound("t-export", questionnaire);
+    answered.decision = { chosen: [], answers: questionnaire.map(q => ({ questionId: q.id, options: [0] })), skipped: true, comment: L("Keep the recommended defaults.", "Залиште рекомендовані відповіді."), at: iso(MIN), delivery: { state: "sent", retryable: false } };
+    protoRounds["t-export"] = [answered];
+  }
   protoPublish();
   Object.assign(window, { protoPosts });
 }
@@ -2807,10 +2969,19 @@ const SEAT_TITLE = "Orchestrator for atlas";
 const launchRun = {
   launchId: "launch-cls", conversationId: "conversation_launch-cls", path: "/repo/launch-cls.jsonl",
   startedAt: 0, prompt: "", title: "Claude", engine: "claude", model: "haiku", effort: "low", clientAttemptId: null as string | null,
+  /* The card whose own «+ Agent» opened the draft, when one did. */
+  taskId: null as string | null,
+  /* The account the launch asked for, which the spawn record carries as the product's does. */
+  accountId: null as string | null,
+  /* How many pictures the first message carried, which the server projects beside its words. */
+  images: 0,
+  requests: [] as Record<string, unknown>[],
 };
-const LAUNCH_RECEIPT_MS = 700;
-const LAUNCH_ADOPT_MS = 2_400;
-const LAUNCH_END_MS = 10_800;
+/* The new-agent frames read the pane between the press and the receipt, so that scenario holds the receipt longer. */
+const LAUNCH_HOLD_MS = NEW_AGENT ? 1_500 : 0;
+const LAUNCH_RECEIPT_MS = 700 + LAUNCH_HOLD_MS;
+const LAUNCH_ADOPT_MS = 2_400 + LAUNCH_HOLD_MS;
+const LAUNCH_END_MS = 10_800 + LAUNCH_HOLD_MS;
 const launchTimeline: Array<{ at: number; lines: (stamp: (ms: number) => number) => string[] }> = [
   { at: 3_000, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(0, 1) },
   { at: 3_400, lines: (at) => tool(at(3_000), "toolu_launch_ls", "Bash", { command: "ls", description: "List the project" }).slice(1) },
@@ -2827,12 +2998,14 @@ function launchTranscript(): string {
   /* A row's stamp is its own time on the clock, so the feed's times read as a turn that ran. */
   const stamp = (ms: number) => (Date.now() - (launchRun.startedAt + ms)) / 1_000;
   const rows = [asked(stamp(LAUNCH_RECEIPT_MS), launchRun.prompt)];
-  for (const entry of launchTimeline) if (elapsed >= entry.at) rows.push(...entry.lines(stamp));
+  for (const entry of launchTimeline) if (elapsed >= entry.at + LAUNCH_HOLD_MS) rows.push(...entry.lines(stamp));
   return `${rows.join("\n")}\n`;
 }
+/* The launch's name: its first line, or for a picture with no words the title it was launched with. */
+const launchName = () => launchRun.prompt.split("\n")[0] || launchRun.title.replace(/^[^·]*·\s*/, "");
 /* The files and tasks the board holds at this moment of the launch. */
 function launchAdvance() {
-  if (!(LAUNCH_CLS || SEAT_CLS) || !launchRun.startedAt) return;
+  if (!(LAUNCH_CLS || SEAT_CLS || NEW_AGENT) || !launchRun.startedAt) return;
   const elapsed = Date.now() - launchRun.startedAt;
   const nowSeconds = Date.now() / 1_000;
   for (let index = files.length - 1; index >= 0; index -= 1) if (files[index]!.conversationId === launchRun.conversationId) files.splice(index, 1);
@@ -2840,7 +3013,7 @@ function launchAdvance() {
   const ended = elapsed >= LAUNCH_END_MS;
   const common = { model: launchRun.model, launchModel: launchRun.model, effort: launchRun.effort, fast: null, mtime: nowSeconds };
   files.push(adopted
-    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.prompt.split("\n")[0] ?? "", {
+    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchName(), {
       ...common, path: launchRun.path, size: new TextEncoder().encode(launchTranscript()).length,
       ...(ended
         ? { activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, lastTurn: { startedAt: launchRun.startedAt, endedAt: Date.now() } }
@@ -2849,16 +3022,29 @@ function launchAdvance() {
     : conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.title, {
       ...common, path: `spawn:${launchRun.launchId}`, size: 0, activity: "live", activityReason: "structured_spawn_starting", generation: 1,
       spawn: {
-        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: null, conversationId: launchRun.conversationId, generation: 1,
-        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt,
+        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: launchRun.accountId, conversationId: launchRun.conversationId, generation: 1,
+        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt, promptImages: launchRun.images,
         ...(SEAT_CLS ? { mandate: { kind: "version", version: ORCHESTRATOR_PROMPT_VERSION } } : {}),
       },
     }));
   /* The seat's conversation belongs to no task. */
   if (SEAT_CLS) return;
+  const assignment = {
+    launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
+    panePid: null, state: "delivered", error: null, at: new Date(launchRun.startedAt).toISOString(),
+  };
+  /* A draft opened from a card launches onto that card's task. */
+  const owner = launchRun.taskId ? tasks.find((entry) => entry.id === launchRun.taskId) : null;
+  if (owner) {
+    Object.assign(owner, {
+      assignments: [...(owner.assignments ?? []).filter((entry) => entry.launchId !== launchRun.launchId), assignment],
+      updatedAt: new Date().toISOString(), revision: REV(900 + Math.floor(elapsed / 1_000)),
+    });
+    return;
+  }
   const index = tasks.findIndex((entry) => entry.id === "t-launch");
   const placeholder = {
-    id: "t-launch", project: PROJECT, text: launchRun.prompt.split("\n")[0] ?? "", status: "assigned", placement: "unplaced",
+    id: "t-launch", project: PROJECT, text: launchName(), status: "assigned", placement: "unplaced",
     origin: { kind: "launch", key: launchRun.clientAttemptId ?? launchRun.launchId, refinement: "pending" },
     assignments: [{
       launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
@@ -2879,6 +3065,7 @@ Object.assign(window, { launchRun });
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2891,9 +3078,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
+  if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
-  if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
+  if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
+  if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
@@ -2902,11 +3092,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (held) await new Promise((resolve) => setTimeout(resolve, held));
     return json({ text: L("Take the header from the two columns and keep the dense rows of the table.", "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.") });
   }
+  if (PROTO && url.pathname === "/api/attention/dismissals" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { target: DismissalTarget; undo?: boolean; surface: "desktop" | "phone" };
+    const target = body.target;
+    if (target.kind === "prototype") {
+      const at = new Date().toISOString();
+      const by = { kind: "operator" as const, surface: body.surface };
+      if (body.undo) protoHidden.delete(target.reviewId);
+      else protoHidden.set(target.reviewId, { at, by });
+      protoPublish();
+      return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
+    }
+  }
   if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
@@ -2917,12 +3119,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       else if (!held.decision) {
         const state = protoSaveState[taskId] ?? "sent";
-        held.decision = { chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
+        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
       }
       protoPublish();
     }
     return json({
-      taskId, rounds, waitingReviewId: rounds.findLast((entry) => !entry.decision)?.id ?? null,
+      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return { ...entry, ...(by ? { supersededBy: by } : {}), ...(protoHidden.has(entry.id) ? { hidden: protoHidden.get(entry.id) } : {}) }; }),
+      waitingReviewId: rounds.length && !protoSummary(rounds).waitingDismissal ? protoSummary(rounds).waitingReviewId : null,
       ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
@@ -2942,9 +3145,41 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(albumPage(taskId));
   }
-  if (LAUNCH_CLS && url.pathname === "/api/spawn" && method === "POST") {
+  if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
+    return json(NEW_AGENT_SEED === "signed-out" ? {
+      ...accountsBody,
+      claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
+        ? { ...row, authPresent: false, loginState: "signed_out", auth: { ...row.auth, state: "signed_out" } } : row) },
+    } : NEW_AGENT_SEED === "copilot" ? {
+      ...accountsBody,
+      copilot: { active: "default", accounts: [accountRow("default", "Account H", "Pro", 22, 160), accountRow("account-k", "Account K", "Pro", 9, 190)], mutationLocked: false, migration: null, autoBalance: null },
+    } : accountsBody);
+  }
+  if (NEW_AGENT && url.pathname === "/api/spawn" && method === "GET") {
+    const images = { supported: true, reason: null, formats: ["image/png", "image/jpeg"], maxImages: 8, maxRawBytesPerImage: 5_000_000, maxEncodedBytesPerRequest: 20_000_000 };
+    /* A handoff's source names its own checkout, as the route reads it from the source transcript. */
+    const sourceCwd = url.searchParams.get("src") && NEW_AGENT_SEED !== "handoff-lost" ? "/repo/worktrees/export-csv" : null;
+    return json({ dirs: ["/repo", "/repo/worktrees/export-csv", "/srv/atlas-docs"], cwd: sourceCwd, spawnTransport: "structured", imageInput: { claude: images, codex: images, copilot: images } });
+  }
+  /* Dictation in the draft's composer: no live token, so the recording is transcribed on stop, and the
+     answer is the first prompt the operator spoke. */
+  if (NEW_AGENT && url.pathname === "/api/transcribe/token") return json({}, 404);
+  if (NEW_AGENT && url.pathname === "/api/transcribe" && method === "POST") {
+    return json({ text: L("Read the README and tell me what this project is made of", "Прочитай README і скажи, з чого складається цей проєкт") });
+  }
+  /* What each launch asked for, kept for the driver: this page answers its own requests, so none reaches the network. */
+  if (NEW_AGENT && url.pathname === "/api/spawn" && method === "POST") launchRun.requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+  if (NEW_AGENT_SEED === "refused" && url.pathname === "/api/spawn" && method === "POST") {
+    return json({ error: L("Launch refused: /repo/worktrees/export-csv is not a checkout this account may write to.", "Запуск відхилено: /repo/worktrees/export-csv не є копією, у яку цей акаунт може писати.") }, 422);
+  }
+  if ((LAUNCH_CLS || NEW_AGENT) && url.pathname === "/api/spawn" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     Object.assign(launchRun, {
+      taskId: typeof body.taskId === "string" ? body.taskId : null,
+      accountId: NEW_AGENT && typeof body.accountId === "string" ? body.accountId : null,
+      images: Array.isArray(body.images) ? body.images.length : 0,
+      /* A managed account's transcripts live under its own home, which is how the conversation names its account. */
+      ...(NEW_AGENT && typeof body.accountId === "string" && body.accountId !== "default" ? { path: `/repo/accounts/claude/${body.accountId}/launch-cls.jsonl` } : {}),
       startedAt: Date.now(), prompt: String(body.prompt ?? ""), title: String(body.title ?? "Claude"), engine: String(body.engine ?? "claude"),
       model: String(body.model ?? "") || "haiku", effort: String(body.effort ?? "") || "low", clientAttemptId: typeof body.clientAttemptId === "string" ? body.clientAttemptId : null,
     });
@@ -3410,7 +3645,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const { reqs } = JSON.parse(String(init?.body)) as { reqs: Array<{ id: string; path: string; offset: number }> };
     return json({ chunks: Object.fromEntries(reqs.map((req) => {
       if (req.path === evidence.failLogsFor) return [req.id, { error: "transcript read failed in the evidence fixture" }];
-      if ((LAUNCH_CLS || SEAT_CLS) && req.path === launchRun.path) {
+      if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && req.path === launchRun.path) {
         /* The transcript grows by whole lines: a read answers what lies past the offset it was given. */
         const bytes = new TextEncoder().encode(launchTranscript());
         return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: bytes.length, size: bytes.length }];
@@ -3419,7 +3654,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }
@@ -3428,6 +3663,37 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
     if (FM_HANDOVER) await fmEvidenceGate;
     return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+  }
+  /* The delegated message is the operator's own instruction on the voice channel; the reviewer's relay beside it is
+     ordinary internal traffic. Both joins are answered: the engine id (Claude) and the occurrence (Codex).
+     The relay's owner is answered from the first read, before its record exists, as the registry writes a
+     delivery's owner when it admits the send. The feed reads provenance only once a row it cannot name is
+     shown, and until that read answers it draws such a record as a system fold across the whole row: answered
+     late, the delegated row flashed as a fold before it took its tint. */
+  if (VOICE && url.pathname === "/api/voice-companion/settings") {
+    if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
+    return json(voiceSettings);
+  }
+  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
+    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
+    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
+    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
+    voice.keyWrites.push(key.length);
+    voiceSettings.keySource = "file";
+    return json(voiceSettings);
+  }
+  if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
+  if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
+  if (url.pathname === "/api/log/provenance" && VOICE) {
+    const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
+    const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };
+    return json({
+      messages: { [VOICE_INTERNAL_UUID]: internal, [VOICE_RELAY_UUID]: relay },
+      occurrences: [
+        { ...internal, textDigest: messageTextDigest(voiceInternalText()), deliveredAt: iso(5 * MIN) },
+        { ...relay, textDigest: messageTextDigest(demoInstruction(UK ? "uk" : "en")), deliveredAt: iso(40) },
+      ],
+    });
   }
   if (REPORT_PREVIEW && url.pathname === "/api/log/suggestions") {
     /* The set the seat offers after reading the preview back: the tool's own approving draft beside a no and an edit. */
@@ -3481,9 +3747,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
       engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
-      context: { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
-      transcriptFacts: null,
-      rotation: FM_SEAT
+      context: SEAT_UNCONFIRMED
+        ? { tokens: 1_249, limit: 1_000_000, percent: 0, estimated: true, basis: "CLI post-compaction estimate; awaiting provider usage" }
+        : { tokens: 520_825, limit: 1_000_000, percent: 52, estimated: false, basis: "" },
+      transcriptFacts: SEAT_UNCONFIRMED ? { bytes: 9 * 1024 * 1024, messageCount: 100, toolCount: 20, compactionCount: 2 } : null,
+      rotation: FM_SEAT || SEAT_UNCONFIRMED
         ? { recommended: false, level: "none", reasons: [], thresholdUnknown: false }
         : SEAT_GONE
         ? {
@@ -3591,9 +3859,62 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
+   message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
+   The page gives up the strip the companion docks into, as a host surface is asked to. */
+function voiceCompanionScene() {
+  const params = new URLSearchParams(location.search);
+  const script = params.get("script");
+  const failure = params.get("failure");
+  const readsTranscript = params.get("transcript") === "1";
+  const adapter = createSimulatedCompanion({
+    script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
+    recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
+    dispatch: () => { voice.dispatches += 1; voice.delivered = true; },
+  });
+  adapter.subscribe((event) => {
+    if (event.type !== "playback.level") voice.events.push(event);
+    if (event.type === "orchestrator.answer") voice.answered = true;
+  });
+  void adapter.finished.then(() => { voice.finished = true; });
+  Object.assign(window, { voiceCompanion: voice });
+  let sendLost = params.get("sendlost") === "1";
+  const shown: VoiceCompanionAdapter = !sendLost && !readsTranscript ? adapter : {
+    mode: adapter.mode, start: (options) => adapter.start(options), subscribe: (emit) => adapter.subscribe(emit), close: () => adapter.close(),
+    command: async (command) => {
+      if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
+      return adapter.command(command);
+    },
+    ...(readsTranscript ? { transcript: async () => sampleTranscript(UK ? "uk" : "en", PROJECT) } : {}),
+  };
+  /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
+     the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
+  const underlay = params.get("surface") === "underlay";
+  const buttons = params.get("surface") === "buttons";
+  const clicks: Record<string, number> = {};
+  Object.assign(window, { voiceUnderlayClicks: clicks });
+  return (
+    <>
+      {underlay ? (
+        <div data-voice-underlay style={{ position: "fixed", inset: 0, display: "grid", gridTemplateColumns: "repeat(auto-fill, 40px)", gridAutoRows: 40, background: "var(--color-canvas)" }}>
+          {Array.from({ length: Math.ceil(innerWidth / 40) * Math.ceil(innerHeight / 40) }, (_, index) => (
+            <div key={index} data-underlay-cell={index} style={{ border: "1px solid var(--color-border)", opacity: 0.6 }} onClick={() => { clicks[index] = (clicks[index] ?? 0) + 1; }} />
+          ))}
+        </div>
+      ) : buttons ? (
+        <div data-voice-buttons style={{ position: "fixed", inset: 0, background: "var(--color-canvas)" }}>
+          {Array.from({ length: Math.ceil(innerWidth / 100) * Math.ceil(innerHeight / 100) }, (_, index) => (
+            <button key={index} type="button" aria-label={`cell ${index}`} style={{ position: "absolute", left: (index % Math.ceil(innerWidth / 100)) * 100 + 40, top: Math.floor(index / Math.ceil(innerWidth / 100)) * 100 + 40, width: 20, height: 20, borderRadius: 4, border: "1px solid var(--color-border)", background: "var(--color-raised)" }} />
+          ))}
+        </div>
+      ) : <Viewer />}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
+    </>
+  );
+}
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
-createRoot(document.getElementById("root")!).render(diskDensity ? (
+createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

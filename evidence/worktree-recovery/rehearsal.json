@@ -1,0 +1,18 @@
+{
+  "live": {
+    "dryRun": true,
+    "folded": 0,
+    "leftAlone": 10,
+    "reasons": {
+      "checkout-present-or-unreadable": 2,
+      "directory-identity-mismatch": 7,
+      "recorded-repository-not-known": 1
+    },
+    "unchanged": true
+  },
+  "isolated": {
+    "folded": 0,
+    "rescanned": true,
+    "scanned": 6470
+  }
+}

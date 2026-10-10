@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./finding";
 import path from "node:path";
 
 import { isTaskNote } from "./note";
@@ -56,7 +57,8 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
   /* A lazy legacy backfill is a real row change and gets a new fence. */
   for (const [id, prior] of before) {
     const stored = persistedRows.get(prior.ref) as BoardTask | undefined;
-    if (stored && (stored.doneAt !== prior.ref.doneAt || JSON.stringify(stored.doneAdmissions) !== JSON.stringify(prior.ref.doneAdmissions))) {
+    if (stored && (stored.doneAt !== prior.ref.doneAt || JSON.stringify(stored.doneAdmissions) !== JSON.stringify(prior.ref.doneAdmissions)
+      || stored.findingKey !== prior.ref.findingKey || JSON.stringify(stored.finding) !== JSON.stringify(prior.ref.finding))) {
       before.set(id, { ...prior, fingerprint: taskFingerprint(stored) });
     }
   }
@@ -67,6 +69,7 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
     const stored = prior ? persistedRows.get(prior.ref) as BoardTask | undefined : undefined;
     return prior && taskRevision(task) === prior.revision && stored
       && stored.doneAt === task.doneAt && JSON.stringify(stored.doneAdmissions) === JSON.stringify(task.doneAdmissions)
+      && stored.findingKey === task.findingKey && JSON.stringify(stored.finding) === JSON.stringify(task.finding)
       ? persistedRows.get(prior.ref) : task;
   });
 }
@@ -224,6 +227,11 @@ function coerceTask(value: unknown): BoardTask | null {
     createdAt: raw.createdAt!,
     updatedAt: raw.updatedAt!,
   };
+  if (task.findingKey !== undefined) {
+    const key = readFindingKey(task.findingKey);
+    if (!key.ok || key.key === undefined) delete task.findingKey;
+  }
+  if (task.findingKey === undefined || !validStoredFinding(task.finding)) delete task.finding;
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
@@ -296,12 +304,19 @@ function stateRows(tasksRows: unknown[], recentCreates: RecentCreate[], migratio
 function stateFromBody(raw: TasksFile | undefined): TasksFileState {
   if (raw === undefined) return { tasks: [], recentCreates: [], migrations: {} };
   if (!raw || !Array.isArray(raw.tasks)) throw new Error("invalid persisted task state");
-  const tasks = raw.tasks.map(value => {
+  const decoded = raw.tasks.map(value => {
     const task = coerceTask(value);
     if (!task) throw new Error("invalid persisted task row");
     persistedRows.set(task, value);
     return task;
   });
+  const tasks = reconcileOpenFindings(decoded);
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i]!;
+    if (task === decoded[i]) continue;
+    persistedRows.set(task, raw.tasks[i]);
+    Object.assign(task, { revision: `task-legacy:${taskFingerprint(task)}` });
+  }
   if (new Set(tasks.map(task => task.id)).size !== tasks.length) throw new Error("duplicate persisted task id");
   if (raw.recentCreates !== undefined && (!Array.isArray(raw.recentCreates) || !raw.recentCreates.every(isRecentCreate))) {
     throw new Error("invalid persisted task receipts");
@@ -519,7 +534,12 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
     filename: legacyDatabasePath(filePath),
     read: (id: string) => {
       const row = collection.get(`t:${id}`);
-      return row ? coerceTask(row) : null;
+      const task = row ? coerceTask(row) : null;
+      // A keyed task in a converged project needs the same ownership projection
+      // as the board list; ordinary bounded selections keep the direct read.
+      if (!task || task.status === "done" || task.findingKey === undefined
+        || !Object.values(projectAliasSnapshot().aliases).some(project => canonicalProject(project) === task.project)) return task;
+      return structuredClone(loadTasksForList(filePath).find(task => task.id === id) ?? null);
     },
   };
 }
@@ -556,9 +576,13 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
     }
     tasks.push(task);
   }
-  Object.freeze(tasks);
-  listSnapshots.set(rows, { aliases, tasks });
-  return tasks;
+  const resolved = reconcileOpenFindings(tasks).map(task => {
+    if (!Object.isFrozen(task)) Object.assign(task, { revision: `task-legacy:${taskFingerprint(task)}` });
+    return deepFreeze(task);
+  });
+  Object.freeze(resolved);
+  listSnapshots.set(rows, { aliases, tasks: resolved });
+  return resolved;
 }
 
 /** The persisted body: optional sections stay omitted while empty so an
