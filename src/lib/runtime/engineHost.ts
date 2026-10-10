@@ -156,9 +156,9 @@ export interface EngineHost {
       host's own steer handling, or the `unsupported-steering` refusal. */
   readonly steerFallback?: "interrupt";
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
-  send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<DeliveryReceipt>;
+  send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
-  steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence): Promise<RuntimeSteerOutcome>;
+  steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
   health(): Promise<HostState>;

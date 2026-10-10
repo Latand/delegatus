@@ -1,3 +1,4 @@
+import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -157,6 +158,10 @@ export interface SpawnCommandDependencies {
   /** In-process autonomous callers recheck their admission hold under the
       account lock. Direct operator requests omit this callback. */
   autonomousAdmissionHeld?(): boolean;
+  /** Trusted caller authorization, including replays and first-prompt delivery. */
+  authorizeAutonomousLaunch?(): void;
+  /** Trusted autonomous custody requires the interruptible structured host. */
+  autonomousStructured?: boolean;
   /** Trusted automatic target restriction, checked under the account lock
       immediately before a fresh launch receipt is reserved. */
   assertAccountAdmission?(accountId: string): void;
@@ -303,6 +308,8 @@ export function spawnLauncherFor(
   return { value: null };
 }
 
+type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+
 export async function executeSpawnRequest(
   req: NextRequest,
   dependencies: SpawnCommandDependencies = productionSpawnCommandDependencies,
@@ -310,13 +317,22 @@ export async function executeSpawnRequest(
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  let body: { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+  let body: SpawnCommandBody;
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
+  return withSpawnDiagnostics(body?.clientAttemptId, () => executeParsedSpawnRequest(req, body, {
+    ...dependencies,
+    // Preserve the request's egress boundary even when a deferred driver invokes
+    // its stored callback from a different asynchronous context.
+    defer: work => dependencies.defer(bindSpawnDiagnostics(work)),
+  }));
+}
+
+async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBody, dependencies: SpawnCommandDependencies): Promise<NextResponse<SpawnResponse | ApiError>> {
   /* Requested MCP grant (issue #739). A name outside the grantable bound is
      rejected here with 400, exactly like a rejected plugin, instead of being
      trimmed. Absence leaves the decision to policy; an explicit list — `[]`
@@ -445,7 +461,7 @@ export async function executeSpawnRequest(
     : null;
   let transport;
   try {
-    transport = spawnTransport();
+    transport = dependencies.autonomousStructured ? "structured" : spawnTransport();
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
@@ -998,6 +1014,7 @@ export async function executeSpawnRequest(
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
     const begun = await withAccountMutationLockAsync(() => {
+      dependencies.authorizeAutonomousLaunch?.();
       const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
       if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
         && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) return null;
@@ -1187,7 +1204,7 @@ export async function executeSpawnRequest(
           },
         });
       } catch (error) {
-        console.error("[spawn] pipeline attempt adoption failed", {
+        spawnDiagnosticError("[spawn] pipeline attempt adoption failed", {
           launchId: materialized.launchId,
           conversationId: materialized.conversationId,
           sourceConversationId: pipelineSourceConversationId,
@@ -1202,6 +1219,11 @@ export async function executeSpawnRequest(
     ): void => {
       dependencies.defer(async () => {
         let response: SpawnResponse;
+        try { dependencies.authorizeAutonomousLaunch?.(); }
+        catch {
+          await registry.failStructuredSpawnOffLoop(receipt.launchId, "autonomous launch authorization revoked");
+          return;
+        }
         try {
           response = await dependencies.spawnStructuredConversation({
             engine,
@@ -1212,10 +1234,11 @@ export async function executeSpawnRequest(
             imageRefs,
             registry,
             client: runtimeClient,
+            authorize: dependencies.authorizeAutonomousLaunch,
           });
           recordActualLaunchAccount(receipt, account.accountId, response.path);
         } catch (error) {
-          console.error("[spawn] structured launch failed", {
+          spawnDiagnosticError("[spawn] structured launch failed", {
             launchId: receipt.launchId,
             conversationId: receipt.conversationId,
             error,
@@ -1241,7 +1264,7 @@ export async function executeSpawnRequest(
             rememberHandoffChild(response.path, parentArtifactPath);
             persistHandoffLineage();
           } catch (error) {
-            console.error("[spawn] handoff lineage persistence failed", {
+            spawnDiagnosticError("[spawn] handoff lineage persistence failed", {
               launchId: receipt.launchId,
               conversationId: receipt.conversationId,
               childArtifactPath: response.path,
@@ -1255,7 +1278,7 @@ export async function executeSpawnRequest(
           try {
             await dependencies.publishFilesRevision?.(runtimeClient);
           } catch (error) {
-            console.error("[spawn] transcript materialization refresh failed", {
+            spawnDiagnosticError("[spawn] transcript materialization refresh failed", {
               launchId: receipt.launchId,
               conversationId: receipt.conversationId,
               artifactPath: response.path,
@@ -1355,6 +1378,7 @@ export async function executeSpawnRequest(
       }
     }
     const startedAtMs = Date.now();
+    dependencies.authorizeAutonomousLaunch?.();
     const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt);
     const childPath = await resolveSpawnedTranscriptPath({
       engine,
