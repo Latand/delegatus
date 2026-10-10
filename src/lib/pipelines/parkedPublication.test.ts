@@ -108,19 +108,20 @@ function terminalReview(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
-// Budget exhaustion controls stage recovery even when an earlier fix still
-// needs publication. Publishing that fix never supplies a review verdict.
+// An explicit budget stop controls recovery even when an earlier fix still
+// needs publication. Publishing that fix never supplies a review verdict,
+// and the fixed budget cannot be extended to leave the stop.
 function terminalBudgetPark(h: ReturnType<typeof fixture>) {
   terminalReview(h);
   const stage = h.lane.stages[1]!;
-  stage.kind = "run"; stage.onFail = { to: "build", maxRounds: 1 };
+  stage.kind = "run"; stage.onFail = { to: "build", maxRounds: 1, onExhausted: "park" };
   const attempt = h.lane.runs[1]!.attempts[0]!;
   attempt.flowId = null; attempt.state = "failed";
   attempt.verdict = { status: "fail", findings: ["P1 retained defect"] };
   attempt.completedAt = new Date().toISOString();
   attempt.activatedBy = { stageId: "build", attempt: 1, edge: "pass", budgetRecheck: true };
   h.lane.lastPassedCommit = h.head;
-  h.lane.stateDetail = "budget spent: retained terminal findings; continue-review required";
+  h.lane.stateDetail = "budget spent: retained terminal findings; explicit operator stop";
   h.lane.reviewPending = { terminalRecheck: true, stageId: "review", attempt: 1,
     fixStageId: "build", fixAttempt: 1, reviewedHead: h.head, currentHead: h.head,
     verdict: "fail", findings: 1, at: attempt.completedAt };
@@ -209,14 +210,18 @@ for (const timing of ["before execution", "during Git verification", "after fina
         expect(h.pushes()).toBe(0);
         if (timing === "before execution") expect(gitCalls).toBe(0);
         for (const action of ["skip-stage", "retry-stage"] as const) {
-          expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+          expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
         }
         expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "stale-race-grant",
           addRounds: 1, expectedRevision: admittedRevision }, ports, { kind: "operator" })).status).toBe(409);
-        expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "fresh-race-grant",
-          addRounds: 1, expectedRevision: pipelineRevision(h.current()) }, ports, { kind: "operator" })).error).toBeUndefined();
-        expect(h.current()).toMatchObject({ state: "running", cursor: { stageId: "build", state: "pending",
-          input: expect.stringContaining("late review defect") }, reviewGrants: [{ rounds: 1, terminalAttempt: 1 }] });
+        const fixedRevision = pipelineRevision(h.current());
+        expect(await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "fresh-race-grant",
+          addRounds: 1, expectedRevision: fixedRevision }, ports, { kind: "operator" }))
+          .toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
+        expect(pipelineRevision(h.current())).toBe(fixedRevision);
+        expect(h.current()).toMatchObject({ state: "needs_decision", reviewPending: retainedPending });
+        expect(h.current().reviewGrants).toBeUndefined();
+        expect(h.current().stages[1]!.onFail!.maxRounds).toBe(1);
         expect(h.pushes()).toBe(0);
       } finally { release(); await work; h.cleanup(); }
     });
@@ -265,16 +270,18 @@ for (const hookFails of [false, true]) test(`publishing an unpublished fix prese
     if (!result.ok) expect(result.error).toContain("retained-hook-phase");
     else expect(h.current().publishedCommit).toBe(h.head);
     for (const action of ["retry-stage", "skip-stage"] as const) {
-      expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+      expect(await patchPipeline(h.lane.id, { action }, ports)).toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
     }
     const current = h.current();
-    expect((await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "budget-before-recovery",
-      addRounds: 1, expectedRevision: pipelineRevision(current) }, ports, { kind: "operator" })).error).toBeUndefined();
-    expect(h.current()).toMatchObject({ state: "running", cursor: { stageId: "build", state: "pending", input: expect.stringContaining("retained defect") },
-      reviewGrants: [{ rounds: 1, terminalAttempt: 1 }] });
-    expect(h.current().runs[1]!.attempts).toHaveLength(1);
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ state: "failed", verdict: review!.verdict,
-      activatedBy: review!.activatedBy, reviewHeadSha: review!.reviewHeadSha, budgetSpent: true });
+    const fixedRevision = pipelineRevision(current);
+    expect(await patchPipeline(h.lane.id, { action: "continue-review", clientRequestId: "budget-before-recovery",
+      addRounds: 1, expectedRevision: fixedRevision }, ports, { kind: "operator" }))
+      .toMatchObject({ status: 409, error: expect.stringContaining("Review budget is fixed") });
+    expect(pipelineRevision(h.current())).toBe(fixedRevision);
+    expect(h.current()).toMatchObject({ state: "needs_decision", reviewPending: pending });
+    expect(h.current().reviewGrants).toBeUndefined();
+    expect(h.current().stages[1]!.onFail!.maxRounds).toBe(1);
+    expect(h.current().runs[1]!.attempts).toEqual([review!]);
     expect(h.pushes()).toBe(1);
   } finally { h.cleanup(); }
 });

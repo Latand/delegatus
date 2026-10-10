@@ -16,6 +16,7 @@ import { decideMemories, injectMemory } from "./injection";
 import { memoryIndex } from "./service";
 import type { MemoryTurnReason } from "./viewTypes";
 import { sharedMemoryEnabled } from "./settings";
+import { conversationMemoryExcluded } from "./eligibility";
 // Selected names are provisional durable evidence until stdout confirmation;
 // selection expiry and bounded confirmation retention are separate deadlines.
 export async function offerForHook(request: Request, input: Record<string, unknown>): Promise<string> {
@@ -47,6 +48,10 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     const receipt = Object.values(snapshot.receipts).findLast(r => r.conversationId === conversationId);
     const engine = conversation?.engine ?? receipt?.engine;
     if (engine !== "claude" && engine !== "codex") return "";
+    // A clean stage (a reviewer, a review gate) takes no automatic memory on any turn.
+    if (conversationMemoryExcluded({ agentRole: conversation?.agentRole ?? receipt?.agentRole, launchProfile: generation?.launchProfile ?? receipt?.launchProfile })) {
+      possibleOperator = false; return "";
+    }
     if (receipt?.key && receipt.key.sessionId !== input.session_id && !generation?.path.includes(input.session_id)) return "";
     const cwd = generation?.launchProfile.cwd || receipt?.cwd;
     if (!cwd || input.cwd !== cwd) return "";

@@ -51,6 +51,7 @@ export const descriptorSchema = z.object({
   api_base: z.url().refine((value) => [...value].length <= 2048),
   icon_url: boundedString(2048).nullish(),
   kinds: z.array(z.string()).min(1),
+  features: z.array(z.string()).optional(),
   liveness: livenessSchema,
   limits: z.object({
     max_response_bytes: z.number().int().min(65536).max(1048576),
@@ -163,6 +164,14 @@ export const requestSchema = z.object({
 });
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export const RELAY_OWNER_TOOLS = "relay_owner_tools";
+/** I9 uses the offered audience; operation names and schemas stay service-owned. */
+export const isOwnerTool = (tool: ExternalRelayTool) => tool.audience === "owner";
+/** E3 is the only owner 429 that proves no admission, debit or action stamp. */
+export const ownerRateLimitSchema = z.object({ error: z.object({
+  code: z.literal("rate_limited"), message: z.literal("rate limited"),
+  retry_after_s: z.number().int().min(1).max(60),
+}) });
 const callId = z.string().regex(/^[A-Za-z0-9_-]{22,64}$/);
 export const toolCallResultSchema = z.object({
   call_id: callId,

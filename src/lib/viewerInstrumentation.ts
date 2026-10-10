@@ -110,6 +110,7 @@ interface CurrentReleaseControllerLoaders {
 interface ViewerRuntimeActivationSteps {
   initializeOperatorCapability: () => Promise<void>;
   runIdentityMigration?: () => Promise<void> | void;
+  runWorktreeRecovery?: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
@@ -805,6 +806,7 @@ export async function completeViewerRuntimeActivation(
   await steps.initializeOperatorCapability();
   await steps.runIdentityMigration?.();
   steps.publishHotStateActivation();
+  await steps.runWorktreeRecovery?.();
   steps.startStructuredHosts?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
@@ -905,6 +907,10 @@ export async function registerViewerRuntime(): Promise<void> {
     let activatedAuthority: HotStateAuthority | null = null;
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
+      runWorktreeRecovery: async () => {
+        const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
+        await runWorktreeRecoveryAtStartup();
+      },
       runIdentityMigration: async () => {
         const { runIdentityWaveMigrationAtStartup } = await import("@/lib/agent/identityWaveStartup");
         runIdentityWaveMigrationWithoutBlockingStartup(runIdentityWaveMigrationAtStartup);

@@ -31,7 +31,7 @@ import { AttentionHost } from "./attention/AttentionHost";
 import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
-import { useDismissalOverlay } from "./attention/dismissalOverlay";
+import { useDismissalOverlay, usePrototypeDismissalOverlay } from "./attention/dismissalOverlay";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
 import { AttentionIsland } from "./attention/AttentionIsland";
@@ -50,6 +50,7 @@ import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
+import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
 import { ExternalRelaySettingsHost } from "./externalRelay/ExternalRelaySettingsDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
@@ -253,12 +254,13 @@ function ViewerApp() {
      new object and starts without a pin. */
   const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
   const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
-  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
      (docs/design/needs-attention.md §5). */
   const { files: allFiles, pipelines } = useDismissalOverlay(polledFiles, polledPipelines);
+  const tasks = usePrototypeDismissalOverlay(polledTasks);
   /* Whether the server answers (#2071 D7): one reading for every surface, from
      the files streak above and the runtime stream; no request of its own. */
   const reach = useDerivedServerReach({ catalogFailures, failingSince, lastSuccessAt });
@@ -1867,6 +1869,8 @@ function ViewerApp() {
       <SelfUpdateHost />
       <LinkedSettingsHost />
       <TelemetrySettingsHost />
+      {/* Role memory's rules window, opened from the board's ⋯ and from a stage report's rule line. */}
+      <LearnedRulesWindowHost />
       {/* #2519: the voice companion's settings, from the desktop menu's Settings page and the companion's own notice. */}
       <VoiceCompanionSettingsHost />
       <ExternalRelaySettingsHost />

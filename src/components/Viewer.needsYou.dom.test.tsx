@@ -285,15 +285,10 @@ async function press(key: string): Promise<void> {
 /** Whether the board's convergence has seeded `path` as a root. */
 const seeded = (path: string) => boardWrites.some((mutation) => mutation.kind === "reconcile-roots" && mutation.roots.includes(path));
 const filterControl = (host: HTMLElement) => host.querySelector("[data-attention-filter]");
-/** The rail's ⏸ for a project, 0 when its row shows none. */
-const railPause = (host: HTMLElement, name: string) => {
-  for (const button of host.querySelectorAll("button")) {
-    if (!(button.textContent ?? "").includes(name)) continue;
-    const badge = [...button.querySelectorAll("span")].find((span) => (span.textContent ?? "").trim().startsWith("⏸"));
-    if (badge) return Number((badge.textContent ?? "").replace("⏸", "").trim());
-  }
-  return 0;
-};
+/** The rail's needs-you count for a project, 0 when its row shows none. */
+const railNeeds = (host: HTMLElement, project: string) => Number(
+  host.querySelector(`[data-rail-project="${project}"] [data-rail-needs]`)?.textContent ?? "0",
+);
 /** Open the panel from the header control. */
 async function openPanel(host: HTMLElement): Promise<void> {
   if (host.querySelector("[data-needs-you-panel]")) return;
@@ -317,7 +312,7 @@ test("desktop: a lane parked on a decision counts 1 on the island, in the tab ti
   expect(host.querySelector('.column[data-status="assigned"] .needs.num')?.getAttribute("data-count")).toBe("1");
 
   /* The rail reads the same grouping. */
-  expect(railPause(host, LEDGER)).toBe(1);
+  expect(railNeeds(host, LEDGER)).toBe(1);
 
   /* The panel lists it under its project, in the card's own words, with the
      role of the stage it stopped on, and the row opens its card. */
@@ -473,7 +468,7 @@ test("desktop: a lane dismissed on its card leaves the island's count with the c
   await until(() => islandCount(host) === 0);
   expect(posted).toHaveLength(1);
   expect(dom.document.title).toBe(PRODUCT_NAME);
-  expect(railPause(host, LEDGER)).toBe(0);
+  expect(railNeeds(host, LEDGER)).toBe(0);
 });
 
 test("desktop: «Dismiss» on the panel's row clears the lane from the header, the tab title, the rail and the panel at once, and Undo brings it back", async () => {
@@ -484,14 +479,14 @@ test("desktop: «Dismiss» on the panel's row clears the lane from the header, t
   expect(posted).toHaveLength(1);
   expect((posted[0]!.target as { subjects: Array<{ kind: string; pipelineId: string }> }).subjects[0]).toMatchObject({ kind: "pipeline", pipelineId: LANE });
   expect(dom.document.title).toBe(PRODUCT_NAME);
-  expect(railPause(host, LEDGER)).toBe(0);
+  expect(railNeeds(host, LEDGER)).toBe(0);
   expect(host.querySelector(`[data-needs-you-row="${LANE}"]`)).toBeNull();
 
   await click(host.querySelector("[data-needs-you-undo]"));
   await until(() => islandCount(host) === 1);
   expect((posted[1] as { undo?: boolean }).undo).toBe(true);
   expect(dom.document.title).toBe(`(1) ${PRODUCT_NAME}`);
-  expect(railPause(host, LEDGER)).toBe(1);
+  expect(railNeeds(host, LEDGER)).toBe(1);
 });
 
 test("desktop: a lane already dismissed for this decision counts 0", async () => {

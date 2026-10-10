@@ -103,4 +103,7 @@ export async function ensureLegacyCollectionsImported(
 /** Write each moved store's legacy file for a rollback release that predates it. */
 export async function checkpointLegacyCollectionMirrorsForDemotion(): Promise<void> {
   for (const entry of LEGACY_COLLECTIONS) await entry.checkpointMirrorForDemotion();
+  // Recovery augments the map, aliases and journal; the board above already
+  // mirrors its migrated rows. The preceding release needs all four together.
+  await (await import("@/lib/projects/worktreeRecoveryStore")).checkpointWorktreeRecoveryForDemotion();
 }

@@ -138,6 +138,8 @@ import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAut
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
+import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -2416,7 +2418,39 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     attempt: result.attempt,
     replaced: result.replaced ?? false,
     report: stageReportAcknowledgement(result.report),
+    ...stageLessonRequest(result, dependencies),
   };
+}
+
+/** Role memory's stage-end prompt (docs/design/role-memory.md §2.4): the first
+    accepted report of an eligible attempt carries the request for a lesson. A
+    failure to read or record it never costs the report. */
+function stageLessonRequest(result: { pipelineId?: string; stageId?: string; attempt?: number; replaced?: boolean }, dependencies: ViewerMcpDomainDependencies): { lessonRequest?: string[] } {
+  const conversationId = attributionOf(dependencies).conversationId;
+  if (result.replaced || !result.pipelineId || !result.stageId || !result.attempt || !conversationId) return {};
+  try {
+    const pipeline = dependencies.readPipelineRecord
+      ? dependencies.readPipelineRecord(result.pipelineId)
+      : dependencies.getPipelines?.().pipelines.find((item) => item.id === result.pipelineId) ?? null;
+    const lines = pipeline ? lessonRequestForReport(pipeline, result.stageId, result.attempt, conversationId) : null;
+    return lines ? { lessonRequest: lines } : {};
+  } catch (error) {
+    console.warn(`[role-memory] lesson request unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
+}
+
+async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
+  try {
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lessons: args.lessons, none: args.none });
+    return { ...result };
+  } catch (error) {
+    if (error instanceof RoleMemoryRefusal) {
+      throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409 });
+    }
+    throw error;
+  }
 }
 
 async function linkTaskToPipeline(args: McpToolArgs, dependencies: LinkTaskToPipelineDependencies): Promise<McpToolPayload> {
@@ -3718,7 +3752,10 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
-  return { accounts, people, local, projects };
+  /* Role memory is never optional here: a store that cannot be read throws
+     LESSON_PRIVACY_UNAVAILABLE, and nothing is sent unchecked. */
+  const lessons = storedLessonTexts();
+  return { accounts, people, local, projects, lessons };
 }
 
 async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {
@@ -7329,6 +7366,7 @@ export function viewerMcpBindings(
       } },
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
+    leave_lesson: (args) => leaveLesson(args, domainDependencies),
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
     search_transcripts: reads.search_transcripts,
