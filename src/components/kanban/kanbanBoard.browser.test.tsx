@@ -27910,15 +27910,15 @@ describe("account chips with the weekly limit left: the launch chooser and the r
     { surface: "pill", phone: false, lang: "uk", scheme: "light", state: "rest" },
   );
 
-  /* What one chip row looks like on screen: each chip's box and text, whether its parts stand inside it, and how the row scrolls. */
+  /* What one chip row looks like on screen: each chip's box (left and right measured from the row's visible left edge) and text, whether its parts stand inside it, and how the row scrolls. */
   const readRow = (page: Page) => page.evaluate(() => {
     const rows = [...document.querySelectorAll<HTMLElement>('[data-launch-account-row]')].filter((element) => element.getClientRects().length);
     const row = rows.at(-1)!;
     const box = row.getBoundingClientRect();
     const chips = [...row.querySelectorAll<HTMLElement>("[data-launch-account]")].map((chip) => {
       const rect = chip.getBoundingClientRect();
-      /* The tag and the percent never lose a letter inside their chip; only a long label ends in an ellipsis. */
-      const parts = [...chip.querySelectorAll<HTMLElement>("[data-launch-account-signed-out], [data-weekly-percent]")];
+      /* No part loses a letter inside its chip: a label wider than the row breaks between words instead. */
+      const parts = [...chip.querySelectorAll<HTMLElement>("[data-launch-account-label], [data-launch-account-signed-out], [data-weekly-percent]")];
       const cut = parts.filter((part) => {
         const own = part.getBoundingClientRect();
         return part.scrollWidth > part.clientWidth + 0.5 || own.left < rect.left - 0.5 || own.right > rect.right + 0.5;
@@ -28001,13 +28001,13 @@ describe("account chips with the weekly limit left: the launch chooser and the r
             const claude = opened.chips.map((chip) => [chip.id, chip.percent, chip.bar]);
             expect(claude, `${name} chips`).toEqual([["default", "92%", "92"], ["work", "41%", "41"], ["backup", "7%", "7"], ["old", null, null], ["team", "64%", "64"]]);
             expect(opened.chips.find((chip) => chip.id === "old")!.text, `${name} signed out`).toBe(`Old login ${tr("kanban.account.tagSignedOut")}`);
-            expect(opened.chips.flatMap((chip) => chip.cut), `${name} no tag or percent cut`).toEqual([]);
+            expect(opened.chips.flatMap((chip) => chip.cut), `${name} no label, tag or percent cut`).toEqual([]);
             const check = (row: typeof opened, label: string) => {
               const chosen = row.chips.find((chip) => chip.checked)!;
               if (shot.phone) {
                 expect(row.mode, `${label} the phone scrolls`).toBe("scroll");
                 expect(row.scrollWidth, `${label} more chips than room`).toBeGreaterThan(row.clientWidth);
-                expect(chosen.left - row.scrollLeft >= 0 && chosen.right - row.scrollLeft <= row.width, `${label} the chosen chip in view: ${JSON.stringify({ chosen, scrollLeft: row.scrollLeft, width: row.width })}`).toBe(true);
+                expect(chosen.left >= -1 && chosen.right <= row.width + 1, `${label} the chosen chip in view: ${JSON.stringify({ chosen, scrollLeft: row.scrollLeft, width: row.width })}`).toBe(true);
                 expect(row.mask, `${label} the edge fades`).toContain("linear-gradient");
                 expect(new Set(row.chips.map((chip) => chip.top)).size, `${label} one line`).toBe(1);
               } else {
@@ -28041,7 +28041,7 @@ describe("account chips with the weekly limit left: the launch chooser and the r
               expect(codex.chips.find((chip) => chip.checked)!.id, `${name} the engine's active account`).toBe("default");
               if (shot.phone) {
                 const chosen = codex.chips.find((chip) => chip.checked)!;
-                expect(chosen.left - codex.scrollLeft >= 0 && chosen.right - codex.scrollLeft <= codex.width, `${name} the chosen chip in view`).toBe(true);
+                expect(chosen.left >= -1 && chosen.right <= codex.width + 1, `${name} the chosen chip in view`).toBe(true);
               } else check(codex, `${name} codex`);
             }
             if (shot.state === "hint") {
@@ -28086,4 +28086,48 @@ describe("account chips with the weekly limit left: the launch chooser and the r
       server.stop();
     }
   }, 900_000);
+
+  browserTest("on the phone the chosen chip stays in view when the readings land after the sheet opens, and the long label is never cut", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "account-picker-late-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&accountpicker=1&pickeractive=team&pickerdelay=6000`, { width: 390, height: 844 }, "dark", "uk", "reduce", true);
+      try {
+        await page.locator("[data-mobile2-open=seat]").first().waitFor({ state: "attached", timeout: 40_000 });
+        await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+        await page.locator("[data-mobile2-open=seat]").first().click();
+        await page.locator('[data-mobile2-open="rotate"]').first().click();
+        await page.waitForSelector('[data-mobile2-sheet="rotate"] [data-orchestrator-draft="rotate"]', { timeout: 20_000 });
+        await page.locator("[data-launch-account-row]").last().waitFor({ timeout: 10_000 });
+        const inView = (row: Awaited<ReturnType<typeof readRow>>, label: string) => {
+          const chosen = row.chips.find((chip) => chip.checked)!;
+          expect(chosen.id, `${label} the long-labelled account is chosen`).toBe("team");
+          expect(chosen.left >= -1 && chosen.right <= row.width + 1, `${label} the chosen chip in view: ${JSON.stringify({ chosen, scrollLeft: row.scrollLeft, width: row.width })}`).toBe(true);
+        };
+        const early = await readRow(page);
+        expect(early.chips.every((chip) => chip.percent === null), "no reading has landed yet").toBe(true);
+        inView(early, "before the readings");
+        await page.locator("[data-launch-account-row] [data-weekly-percent]").first().waitFor({ timeout: 15_000 });
+        await page.waitForTimeout(500);
+        const late = await readRow(page);
+        expect(late.scrollWidth, "the readings widened the row").toBeGreaterThan(early.scrollWidth);
+        inView(late, "after the readings");
+        expect(late.chips.find((chip) => chip.checked)!.percent, "the chosen chip shows its percent").toBe("64%");
+        const fadesAtEnd = late.scrollLeft + late.clientWidth < late.scrollWidth - 1;
+        expect(late.mask.includes("linear-gradient"), "the end fade flag matches the scroll width").toBe(fadesAtEnd || late.scrollLeft > 1);
+        expect(late.chips.flatMap((chip) => chip.cut), "every label, tag and percent whole at 390").toEqual([]);
+        const labels = await page.locator("[data-launch-account-row] [data-launch-account-label]").evaluateAll((elements) => elements.map((element) => ({ text: element.textContent, whole: element.scrollWidth <= element.clientWidth })));
+        expect(labels.filter((label) => !label.whole), "no label wider than its box").toEqual([]);
+        await page.mouse.move(0, 0);
+        await page.screenshot({ path: path.join(out, "build-rotate-390-uk-dark-late-readings.png") });
+        expect(pageErrors, "page errors").toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 300_000);
 });

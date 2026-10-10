@@ -412,6 +412,11 @@ export function LaunchAccountSelect({
   const tint = engineTintOf(draft.engine).color;
   const selected = draft.launchAccountId;
   const count = draft.accounts.length;
+  /* Which chips carry a meter, and how wide its number is: the row's width changes with it, a refreshed reading of the same width does not. */
+  const meterSignature = draft.accounts.map((account) => {
+    const weekly = draft.engine === "copilot" ? null : accountWeeklyLeft(readings.find((entry) => entry.id === account.id)?.limits, now, tint);
+    return weekly ? String(Math.round(weekly.left)).length : 0;
+  }).join("");
 
   const measureEdges = useCallback(() => {
     const row = rowRef.current;
@@ -421,7 +426,7 @@ export function LaunchAccountSelect({
     setEdges((value) => (value.start === start && value.end === end ? value : { start, end }));
   }, [phone]);
 
-  /* The chosen chip is in sight when the row first shows and whenever the engine changes. */
+  /* The chosen chip is in sight when the row first shows, whenever the engine changes and whenever the readings widen the chips. */
   useLayoutEffect(() => {
     const row = rowRef.current;
     const chip = chipRefs.current.get(selected);
@@ -431,8 +436,8 @@ export function LaunchAccountSelect({
       row.scrollLeft = revealScrollLeft({ left: box.left, width: box.width, scrollLeft: row.scrollLeft }, { left: rect.left, width: rect.width });
     }
     measureEdges();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- revealed on the engine and on the catalog's arrival, not on every pick
-  }, [draft.engine, count, phone]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- revealed on the engine, on the catalog's arrival and on the readings', not on every pick
+  }, [draft.engine, count, phone, meterSignature]);
 
   useEffect(() => {
     if (!phone) return;
@@ -476,7 +481,7 @@ export function LaunchAccountSelect({
       default: break;
     }
   };
-  const size = phone ? "min-h-11 px-2.5 text-body" : roomy ? "h-8 px-2 text-ui" : "h-7 px-1.5 text-ui";
+  const size = phone ? "min-h-11 px-2.5 text-body" : roomy ? "min-h-8 px-2 text-ui" : "min-h-7 px-1.5 text-ui";
 
   return (
     <div className={`flex min-w-0 flex-col gap-1 ${className ?? ""}`} data-launch-account-chips>
@@ -528,8 +533,8 @@ export function LaunchAccountSelect({
               }`}
             >
               {active ? <span aria-hidden data-launch-account-active className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" /> : null}
-              {/* The whole name: a chip is only cut short when it would be wider than its row. */}
-              <span className={`min-w-0 truncate ${chosen ? "font-semibold text-primary" : pickable ? "font-medium text-secondary" : "text-muted"}`}>{account.label}</span>
+              {/* The whole name: one that is wider than the row breaks between words onto a second line inside the chip. */}
+              <span data-launch-account-label="" className={`min-w-0 whitespace-normal break-words py-0.5 leading-tight ${chosen ? "font-semibold text-primary" : pickable ? "font-medium text-secondary" : "text-muted"}`}>{account.label}</span>
               {account.signedOut ? (
                 <span className="shrink-0 text-caption font-semibold text-warning" data-launch-account-signed-out>{t("kanban.account.tagSignedOut")}</span>
               ) : null}

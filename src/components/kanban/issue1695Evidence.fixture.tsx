@@ -3075,8 +3075,11 @@ const pickerRow = (id: string, label: string, plan: string, limits: ReturnType<t
   id, label, kind: "managed", authPresent: !signedOut, loginPending: false, loginState: signedOut ? "idle" : "authenticated", deviceAuth: null,
   auth: { state: signedOut ? "signed_out" : "authenticated", plan }, limits,
 });
+/* `&pickeractive=team` makes the long-labelled account the Claude active one, and `&pickerdelay=<ms>` holds the
+   accounts reply back, so the readings land after the chooser is open. */
+const PICKER_PARAMS = new URLSearchParams(location.search);
 const pickerAccounts = {
-  claude: { active: "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
+  claude: { active: PICKER_PARAMS.get("pickeractive") ?? "default", mutationLocked: false, migration: null, autoBalance: null, accounts: [
     pickerRow("default", "Main", "Max", pickerReading(8, 5)), pickerRow("work", "Work", "Max", pickerReading(59, 44)),
     pickerRow("backup", "Backup", "Pro", pickerReading(93, 70)), pickerRow("old", "Old login", "Pro", null, true),
     pickerRow("team", "Review lanes · shared team workspace (night shift)", "Max", pickerReading(36, 12)),
@@ -3097,7 +3100,11 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
-  if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") return json(pickerAccounts);
+  if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
+    const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
+    if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
+    return json(pickerAccounts);
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/limits") {
     const engine = (row: (typeof pickerAccounts.claude.accounts)[number]) => ({ session: row.limits!.session, weekly: row.limits!.weekly, plan: row.auth.plan, capturedAt: Math.floor(Date.now() / 1000) - 300 });
     return json({
