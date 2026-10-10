@@ -1,5 +1,7 @@
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
+import { withWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
+import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -60,7 +62,7 @@ import {
   type IdentityWaveSeat,
 } from "./identityWaveMigration";
 import { mcpServersForStoredSession, reboundAssembledMcpGrants, reboundEntryMcpGrant, reboundStoredMcpGrants, storedTelegramSeatGrantFor, type McpGrantPolicy } from "./mcpAllowlist";
-import { accountHasLiveSessions, liveAccountConversationIds, type AccountLivenessOptions } from "./accountLiveness";
+import { accountHasLiveSessions, liveAccountConversationIds, staleUndeliverableHeldDeliveryIds, type AccountLivenessOptions } from "./accountLiveness";
 import { loadSpawnNestingPolicy } from "./nestingPolicy";
 import {
   SpawnAdmissionError,
@@ -726,6 +728,30 @@ export interface DeliveryOperationOwner {
   delivery?: RuntimeDeliveryMode;
   /** The turn that delivery interrupted. */
   interruptedTurnId?: string;
+  /** A message admitted straight into the runtime journal with no reservation
+      behind it, which owns its own settlement (docs/design/
+      delivery-progress-and-drain.md, A2): the composer's Queue-for-Codex
+      hand-off. Its `deliveryId` is its own operation id. */
+  directAdmission?: "native-queue-add";
+}
+
+/** What a direct-admission row is about, when no reservation or earlier row
+    names it: the identity a reservation for the same payload would store. */
+export interface DirectAdmissionIdentity {
+  conversationId: ViewerConversationId;
+  clientMessageId: string | null;
+  /** The command the journal is handed; its operation id is the row's. */
+  command: HeldDeliveryCommandInput & { kind: HeldDeliveryCommand["kind"] };
+  /** The text the request digest covers. */
+  text: string;
+  contentDigest: string | null;
+  evidenceText: string | null;
+  evidenceImageCount: number;
+}
+
+/** Whether an owner row settles itself: a retry attempt or a direct admission. */
+export function ownsItsSettlement(owner: Pick<DeliveryOperationOwner, "retryOfOperationId" | "directAdmission"> | null | undefined): boolean {
+  return Boolean(owner?.retryOfOperationId || owner?.directAdmission);
 }
 
 /** The delivery route a settled send is recorded with (see `delivery` above). */
@@ -1855,6 +1881,9 @@ export class MigrationRevisionError extends Error {
   }
 }
 
+/** The refusal of a retry whose minted attempt id another request's row owns. */
+export const RETRY_ATTEMPT_ID_OWNED_ELSEWHERE = "the retry attempt's operation id is already owned by another request";
+
 export class DeliveryReservationConflictError extends Error {
   constructor(message = "client message id is already reserved for another request") {
     super(message);
@@ -2365,6 +2394,7 @@ function canonicalHeldDeliveryCommand(
       : "interrupt-active",
   };
   if (value?.turnId === null || typeof value?.turnId === "string") command.turnId = value.turnId;
+  if (value?.onlyIfIdle !== undefined) command.onlyIfIdle = value.onlyIfIdle;
   /* #1117: authorship rides the held record so a migration replay keeps it.
      Re-validated on every normalization — a corrupt persisted origin drops
      rather than replaying as a forged attribution. */
@@ -2377,7 +2407,7 @@ function canonicalHeldDeliveryCommand(
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2389,7 +2419,19 @@ function heldDeliveryRequestDigest(
     command.kind,
     command.policy,
     turnFence,
+    ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
   ])).digest("hex");
+}
+
+/** The request digest a reservation for this payload would carry, for a row
+    written without one (A2): an adopted or handed-off admission and a later
+    reservation under the same key agree. */
+export function deliveryRequestDigest(
+  conversationId: ViewerConversationId,
+  text: string,
+  commandInput: HeldDeliveryCommandInput,
+): string {
+  return heldDeliveryRequestDigest(conversationId, text, canonicalHeldDeliveryCommand(commandInput, "direct-admission"));
 }
 
 /** Reverse alias traversal uses the value index, including aliases of aliases. */
@@ -2412,7 +2454,7 @@ function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
 ): Set<string> {
   const identities = conversationIdentities(file, conversationId);
   return new Set([...identities].map((identity) => heldDeliveryRequestDigest(identity, text, command)));
@@ -2425,6 +2467,14 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
   let state = value.state ?? "held";
   const text = typeof value.text === "string" ? value.text : "";
   const command = canonicalHeldDeliveryCommand(value.command, value.id);
+  let idleFenceCorrupt = false;
+  if (command.onlyIfIdle !== undefined) {
+    try {
+      command.onlyIfIdle = parseRuntimeIdleKillFence(command.onlyIfIdle);
+      idleFenceCorrupt = command.kind !== "send" || command.policy !== "queue" || command.turnId !== null;
+    } catch { idleFenceCorrupt = true; }
+    if (idleFenceCorrupt && state !== "delivered") state = "failed";
+  }
   const legacyDigest = text
     ? heldDeliveryRequestDigest(value.conversationId, text, command)
     : null;
@@ -2467,7 +2517,8 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
     assignedAt: imagesCorrupt ? null : value.assignedAt ?? null,
     deliveredAt: value.deliveredAt ?? null,
-    error: imagesCorrupt ? CORRUPT_HELD_DELIVERY_IMAGES_ERROR : value.error ?? null,
+    error: imagesCorrupt ? CORRUPT_HELD_DELIVERY_IMAGES_ERROR
+      : idleFenceCorrupt ? "held continuation idle fence is invalid" : value.error ?? null,
   };
 }
 
@@ -2604,11 +2655,14 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
     Only attempts-zero held/assigned rows are failed from receipt evidence. An
     attempted/uncertain delivery keeps its ambiguity and settles from its own
     journal outcome. Returns changed delivery ids and is idempotent. */
-function terminalizeFailedSpawnDeliveriesInFile(file: RegistryFile): string[] {
+function terminalizeFailedSpawnDeliveriesInFile(file: RegistryFile, onlyLaunchId?: string): string[] {
   const changed: string[] = [];
   for (const delivery of Object.values(file.heldDeliveries)) {
     const receipt = initialSpawnReceiptOf(file, delivery);
     if (!receipt) continue;
+    /* A launch's own failure ends its own first message; other launches'
+       rows are the convergence's (docs/design/delivery-progress-and-drain.md, C5). */
+    if (onlyLaunchId !== undefined && receipt.launchId !== onlyLaunchId) continue;
     if (delivery.state === "failed" && !["completed", "failed", "conflicted"].includes(receipt.state)) {
       const previousState = receipt.state;
       failInitialSpawnReceiptForDelivery(file, delivery);
@@ -2844,6 +2898,7 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(owner.directAdmission === "native-queue-add" ? { directAdmission: owner.directAdmission } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
           ? { interruptedTurnId: owner.interruptedTurnId }
@@ -4302,10 +4357,24 @@ function journalStructuredTermination(registryFilename: string, record: Record<s
   }
 }
 
+/** A delivery write found the registry's write lock held by another writer
+    past its asynchronous deadline, and wrote nothing. */
+export const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by another writer";
+
+/** A registry write a delivery path waited for off the loop and was refused:
+    nothing was written, so the durable state is what it was before the step,
+    and the next pass resumes from it. */
+export class RegistryWriterBusyError extends Error {
+  constructor(readonly label: string) {
+    super(`${REGISTRY_WRITER_BUSY} (${label})`);
+    this.name = "RegistryWriterBusyError";
+  }
+}
+
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
-  private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly writerDeadlineMs: number | undefined;
+  private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
@@ -5201,17 +5270,60 @@ export class AgentRegistry {
   private async whenWriterHeld<T>(
     correlation: { label: string; operationId?: string | null },
     operation: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
-    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") return { acquired: true, value: operation() };
-    const written = await this.sqliteStore!.withWriter(operation, {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
+      return { acquired: true, value: withWaitCorrelation(correlation, operation) };
+    }
+    const waitStartedAt = performance.now();
+    const written = await withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, {
+      ...(correlate ? { correlate } : {}),
       ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
-    });
+    }));
     if (!written.acquired) {
       console.warn(`[registry] ${correlation.label}${correlation.operationId ? ` for ${correlation.operationId}` : ""} `
-        + `found the write lock held for ${Math.round(written.waitedMs)}ms and wrote nothing`);
-      return { acquired: false };
+        + `found the write lock held for ${Math.round(performance.now() - waitStartedAt)}ms and wrote nothing`);
     }
-    return { acquired: true, value: written.value };
+    return written;
+  }
+
+  /**
+   * One registry write on a delivery path, with the write lock waited for off
+   * the event loop and correlated with the operation it is made for
+   * (docs/design/delivery-progress-and-drain.md, rule c). `write` makes exactly
+   * one registry mutation and reads no snapshot before it. `{ acquired: false }`
+   * means nothing was written; each caller states what a refusal leaves.
+   */
+  async deliveryWrite<T>(
+    correlation: { label: string; operationId?: string | null },
+    write: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    return this.whenWriterHeld(correlation, write, correlate);
+  }
+
+  /** {@link deliveryWrite} for a coordinator step: the value, or
+      {@link RegistryWriterBusyError} when the lock stayed held. */
+  async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+    const written = await this.whenWriterHeld(correlation, write);
+    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label);
+    return written.value;
+  }
+
+  /**
+   * {@link deliveryWrite} for a caller that may not wait at all, because it
+   * runs inside another synchronous lock (account retirement holds the
+   * accounts registry file lock, whose waiters spin): one non-blocking request
+   * for the lock, and a refusal recorded with its label.
+   */
+  deliveryWriteNow<T>(
+    correlation: { label: string; operationId?: string | null },
+    write: () => T,
+  ): { acquired: true; value: T } | { acquired: false } {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
+      return { acquired: true, value: withWaitCorrelation(correlation, write) };
+    }
+    return withWaitCorrelation(correlation, () => this.sqliteStore!.tryWriter(write));
   }
 
   /** Shared process-local snapshot for projections that never mutate registry
@@ -6524,6 +6636,39 @@ export class AgentRegistry {
   }
 
   failSpawn(launchId: string, error: string): boolean {
+    const failed = this.failSpawnInFile(launchId, error);
+    if (failed.receipt) settleFailedLaunch(failed.receipt);
+    return failed.result;
+  }
+
+  /**
+   * {@link failSpawn} with the registry lock waited for off the event loop
+   * (docs/design/delivery-progress-and-drain.md, C5): the launch's failure and
+   * its never-attempted first message's ending stay one transaction, only the
+   * wait for its lock leaves the loop. Refused, nothing changed: the launch
+   * keeps its state and its first message stays held, as a crash just before
+   * the write leaves them, for the stale-launch convergence. Answers false then.
+   */
+  async failSpawnOffLoop(launchId: string, error: string): Promise<boolean> {
+    const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failSpawnInFile(launchId, error));
+    if (!written.acquired) return false;
+    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    return written.value.result;
+  }
+
+  /** {@link failSpawn} as a non-waiting write, for a caller that runs inside
+      a synchronous transaction of its own (the pipeline engine's tick): one
+      request for the lock, and false with nothing changed when it is held. */
+  failSpawnNow(launchId: string, error: string): boolean {
+    const written = this.deliveryWriteNow({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failSpawnInFile(launchId, error));
+    if (!written.acquired) return false;
+    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    return written.value.result;
+  }
+
+  private failSpawnInFile(launchId: string, error: string): { result: boolean; receipt: SpawnReceipt | null } {
     /* A fresh launch that failed here leaves its task where it was (#2170). */
     const failed: { receipt: SpawnReceipt | null } = { receipt: null };
     const result = this.mutate((file) => {
@@ -6548,12 +6693,11 @@ export class AgentRegistry {
       /* A promote/admission race can fail through this pre-identity path with a
          held or assigned attempts-zero initial delivery. Converge it in the
          same transaction instead of waiting for the reaper. */
-      terminalizeFailedSpawnDeliveriesInFile(file);
+      terminalizeFailedSpawnDeliveriesInFile(file, launchId);
       if (receipt.state === "failed") failed.receipt = clone(receipt);
       return receipt.state === "failed";
     });
-    if (failed.receipt) settleFailedLaunch(failed.receipt);
-    return result;
+    return { result, receipt: failed.receipt };
   }
 
   /** Durably reconcile terminal launches and attempts-zero initial deliveries
@@ -6561,6 +6705,18 @@ export class AgentRegistry {
       receipt/delivery failure. Peeks first so a quiet registry stays byte-stable
       across polls. Returns the reservation ids whose durable state changed. */
   terminalizeFailedSpawnDeliveries(): string[] {
+    if (!this.failedSpawnDeliveryCandidates()) return [];
+    return this.mutate((file) => terminalizeFailedSpawnDeliveriesInFile(file));
+  }
+
+  /** The convergence's mutation alone, for a caller that waits for the lock
+      off the loop (C0); it re-checks every row inside its transaction. */
+  terminalizeFailedSpawnDeliveriesNow(): string[] {
+    return this.mutate((file) => terminalizeFailedSpawnDeliveriesInFile(file));
+  }
+
+  /** The read half of {@link terminalizeFailedSpawnDeliveries}. */
+  failedSpawnDeliveryCandidates(): boolean {
     const snapshot = this.readOnlySnapshot();
     const hasCandidate = Object.values(snapshot.heldDeliveries).some(
       (delivery) => {
@@ -6574,8 +6730,7 @@ export class AgentRegistry {
           && (delivery.state === "held" || delivery.state === "assigned");
       },
     );
-    if (!hasCandidate) return [];
-    return this.mutate((file) => terminalizeFailedSpawnDeliveriesInFile(file));
+    return hasCandidate;
   }
 
   /** Atomically claims terminal failure and returns only the host identity this
@@ -6588,6 +6743,23 @@ export class AgentRegistry {
     options: { retainRegisteredHost?: boolean } = {},
   ): StructuredSpawnFailureClaim {
     const claim = this.failStructuredSpawnInFile(launchId, error, options);
+    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    return claim;
+  }
+
+  /** {@link failStructuredSpawn} with the lock waited for off the loop (C5).
+      Refused, nothing was claimed and the receipt is as it was. */
+  async failStructuredSpawnOffLoop(
+    launchId: string,
+    error: string,
+    options: { retainRegisteredHost?: boolean } = {},
+  ): Promise<StructuredSpawnFailureClaim> {
+    const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failStructuredSpawnInFile(launchId, error, options));
+    if (!written.acquired) {
+      return { claimed: false, receipt: this.readOnlySnapshot().receipts[launchId] ?? null, cleanup: null };
+    }
+    const claim = written.value;
     if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
     return claim;
   }
@@ -6616,7 +6788,7 @@ export class AgentRegistry {
          its still-`held` `spawn_<launchId>` reservation is terminalized in the
          same transaction (issue #653) rather than left as an eternal owed
          delivery. */
-      terminalizeFailedSpawnDeliveriesInFile(file);
+      terminalizeFailedSpawnDeliveriesInFile(file, launchId);
       if (!receipt.key || !receipt.artifactPath) {
         return { claimed: true, receipt: clone(receipt), cleanup: null };
       }
@@ -8063,7 +8235,40 @@ export class AgentRegistry {
     liveness: AccountLivenessOptions = {},
     options: { rewrite?: readonly AccountPathRewrite[] } = {},
   ): AccountRetirementReport {
-    return withAccountMutationLock(() => this.mutate((file) => {
+    return withAccountMutationLock(() => this.retireAccountInFile(engine, accountId, fallbackAccountId, liveness, options));
+  }
+
+  /**
+   * {@link retireAccount} as a non-waiting write (docs/design/
+   * delivery-progress-and-drain.md, C5). The removal runs it inside the
+   * accounts registry's file lock, whose waiters spin synchronously, so it may
+   * neither spin for the registry lock nor hold that lock across an `await`:
+   * the lock is asked for once, and {@link RegistryWriterBusyError} answers a
+   * lock held elsewhere with nothing retired.
+   */
+  retireAccountNow(
+    engine: MigrationEngine,
+    accountId: string,
+    fallbackAccountId: string,
+    liveness: AccountLivenessOptions = {},
+    options: { rewrite?: readonly AccountPathRewrite[] } = {},
+  ): AccountRetirementReport {
+    return withAccountMutationLock(() => {
+      const written = this.deliveryWriteNow({ label: "account.retire" },
+        () => this.retireAccountInFile(engine, accountId, fallbackAccountId, liveness, options));
+      if (!written.acquired) throw new RegistryWriterBusyError("account.retire");
+      return written.value;
+    });
+  }
+
+  private retireAccountInFile(
+    engine: MigrationEngine,
+    accountId: string,
+    fallbackAccountId: string,
+    liveness: AccountLivenessOptions,
+    options: { rewrite?: readonly AccountPathRewrite[] },
+  ): AccountRetirementReport {
+    return this.mutate((file) => {
       if (accountHasLiveSessions(file, engine, accountId, liveness)) throw new Error("account has live sessions");
       if (liveAccountConversationIds(file, engine, accountId, liveness).length > 0) throw new Error("account has current conversations");
       const changedAt = now();
@@ -8125,7 +8330,7 @@ export class AgentRegistry {
         file.conversationRevision[conversation.engine] += 1;
       }
       return report;
-    }));
+    });
   }
 
   /** Moves registry paths back after an interrupted account removal returned
@@ -9033,6 +9238,18 @@ export class AgentRegistry {
     }, { deliveryOnly: true });
   }
 
+  /** {@link holdDelivery} with the write lock waited for off the event loop
+      and kept for the write, correlated with the operation it admits. Null
+      when the lock stayed held past its deadline: nothing was reserved. */
+  async holdDeliveryOffLoop(...admission: Parameters<AgentRegistry["holdDelivery"]>): Promise<HeldDelivery | null> {
+    const write = await this.whenWriterHeld(
+      { label: "delivery.admit", operationId: admission[6]?.operationId ?? null },
+      () => this.holdDelivery(...admission),
+      (held) => ({ label: "delivery.admit", operationId: held.command.operationId }),
+    );
+    return write.acquired ? write.value : null;
+  }
+
   /** Resolves conflicts and terminal replays without mutating the registry.
       Callers can complete admission before publishing blobs or changing
       account-migration ownership. */
@@ -9168,16 +9385,59 @@ export class AgentRegistry {
     }, { deliveryOnly: true });
   }
 
+  /** Hygiene's stale candidate is rechecked against the current attempt and
+      liveness inside the mutation that acquired the writer (C4, P22 × P13).
+      A retry or a live owner that arrived during the wait keeps its send. */
+  terminalizeStaleUndeliverableHeldDelivery(expected: HeldDelivery, options: AccountLivenessOptions): HeldDelivery | null {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[expected.id];
+      if (!delivery || delivery.command.operationId !== expected.command.operationId
+        || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+        || delivery.generationId !== expected.generationId
+        || !staleUndeliverableHeldDeliveryIds(file, options).includes(expected.id)) return null;
+      return this.recordDeliveryOutcomeInFile(file, delivery.id, "failed",
+        "delivery-uncertain abandoned: owning migration settled with no live host or receipt (#652)");
+    }, { deliveryOnly: true });
+  }
+
+  /** Ends a reservation only while it is still `held` under the operation the
+      caller saw, decided inside the write transaction: a withdrawal that waited
+      for the writer can find the row already claimed by an attempt, and then
+      it leaves the row as it is (docs/design/delivery-progress-and-drain.md,
+      C2). `too-late` when it was delivered, `unknown` for any other state. */
+  withdrawHeldDelivery(id: string, operationId: string | null, reason: string): "withdrawn" | "too-late" | "unknown" {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[id];
+      if (!delivery) return "unknown";
+      if (delivery.state === "delivered") return "too-late";
+      if (delivery.state !== "held" || (operationId !== null && delivery.command.operationId !== operationId)) return "unknown";
+      terminalizeHeldDelivery(file, delivery, reason);
+      return "withdrawn";
+    }, { deliveryOnly: true });
+  }
+
   /** Expires pending work whose target has two terminal proofs: a durable
       supersedence edge and a registry process identity that is gone. Settlement
       keeps the delivery operation queryable and removes it from startup's
       pending-work set. */
   drainDeadSupersededHeldDeliveries(): string[] {
+    const candidates = this.deadSupersededHeldDeliveryCandidates();
+    if (candidates.length === 0) return [];
+    return this.drainDeadSupersededHeldDeliveryCandidates(candidates);
+  }
+
+  /** The read half of {@link drainDeadSupersededHeldDeliveries}: the
+      reservations its mutation would end, so the mutation alone can wait for
+      the lock off the loop (docs/design/delivery-progress-and-drain.md, C0). */
+  deadSupersededHeldDeliveryCandidates(): string[] {
     const snapshot = this.readOnlySnapshot();
-    const candidates = Object.values(snapshot.heldDeliveries)
+    return Object.values(snapshot.heldDeliveries)
       .filter((delivery) => heldDeliveryTargetsDeadSupersededSession(snapshot, delivery, this.ownerAlive))
       .map((delivery) => delivery.id);
-    if (candidates.length === 0) return [];
+  }
+
+  /** The mutation half: each candidate is checked again inside the transaction. */
+  drainDeadSupersededHeldDeliveryCandidates(candidates: readonly string[]): string[] {
     return this.mutate((file) => candidates.flatMap((id) => {
       const delivery = file.heldDeliveries[id];
       if (!delivery || !heldDeliveryTargetsDeadSupersededSession(file, delivery, this.ownerAlive)) return [];
@@ -9248,6 +9508,18 @@ export class AgentRegistry {
     }, { deliveryOnly: true });
   }
 
+  /** {@link beginDeliveryAttempt} with the write lock waited for off the event
+      loop and kept for the claim, correlated with the operation it claims.
+      `acquired: false` when the lock stayed held past its deadline: nothing
+      was claimed and the reservation is as it was. */
+  async beginDeliveryAttemptOffLoop(
+    operationId: string,
+    id: string,
+    generationId: string,
+  ): Promise<{ acquired: true; value: HeldDelivery | null } | { acquired: false }> {
+    return this.whenWriterHeld({ label: "delivery.claim", operationId }, () => this.beginDeliveryAttempt(id, generationId));
+  }
+
   recordDeliveryArtifacts(id: string, artifactPaths: string[]): HeldDelivery {
     return this.mutate((file) => {
       const delivery = file.heldDeliveries[id];
@@ -9287,13 +9559,151 @@ export class AgentRegistry {
    * inventing a reservation for it would be worse than admitting it.
    */
   recordDeliveryRetryAttempt(previousOperationId: string, retryOperationId: string): boolean {
-    if (!retryOperationId || retryOperationId === previousOperationId) return false;
+    return this.recordDirectAdmission({ operationId: retryOperationId, retryOf: previousOperationId }) !== null;
+  }
+
+  /**
+   * Writes the owner row of a message admitted straight into the runtime
+   * journal, before the command that admits it leaves the process
+   * (docs/design/delivery-progress-and-drain.md, A2): a retry attempt, and the
+   * composer's Queue-for-Codex hand-off. The row is the send's owner, its
+   * settlement subject and its deadline, so a lost reply leaves something the
+   * settlement can end and the progress record can be restored from.
+   *
+   * - `retryOf`: the row copies its identity from the retried operation's row
+   *   or reservation. When nothing durable names it (a continuation older code
+   *   admitted into the journal only), the caller's `identity` is adopted.
+   *   With neither, nothing is written and the answer is null: the caller does
+   *   not send.
+   * - `handOff`: a fresh direct admission, keyed by its conversation and
+   *   client message id. Its operation id is minted on the first admission and
+   *   the same for every replay of the key; a different payload under the key
+   *   is a conflict.
+   *
+   * Idempotent: an existing row for the operation is returned as it is.
+   */
+  recordDirectAdmission(
+    admission:
+      | { operationId: string; retryOf: string; identity?: DirectAdmissionIdentity; reopenLost?: boolean }
+      | { handOff: DirectAdmissionIdentity; adoptOperationId?: string },
+  ): DeliveryOperationOwner | null {
+    if ("retryOf" in admission && (!admission.operationId || admission.operationId === admission.retryOf)) return null;
     return this.mutate((file) => {
-      if (file.deliveryOperationOwners[retryOperationId]) return true;
+      const ownerFor = (identity: DirectAdmissionIdentity, operationId: string) => {
+        const conversationId = resolveConversationAlias(file, identity.conversationId);
+        const conversation = file.conversations[conversationId];
+        const command = canonicalHeldDeliveryCommand({ ...identity.command, operationId }, operationId);
+        return {
+          conversationId: identity.conversationId,
+          runtimeConversationId: identity.conversationId,
+          clientMessageId: identity.clientMessageId,
+          deliveryId: operationId,
+          command,
+          requestDigest: heldDeliveryRequestDigest(conversationId, identity.text, command),
+          contentDigest: identity.contentDigest,
+          targetGenerationId: conversation?.generations.at(-1)?.id ?? null,
+          evidenceText: identity.evidenceText,
+          evidenceImageCount: identity.evidenceImageCount,
+          createdAt: now(),
+          retryOfOperationId: null,
+          terminalState: null,
+          terminalDisposition: null,
+          terminalReason: null,
+          settledAt: null,
+        } satisfies DeliveryOperationOwner;
+      };
+      if ("handOff" in admission) {
+        const identity = admission.handOff;
+        const canonicalId = resolveConversationAlias(file, identity.conversationId);
+        /* The key's rows, the open one first, then the newest. */
+        /* An operation id the request supplied may already name another
+           admission: another key, conversation or payload. That owner belongs
+           to another request, so this one is refused and the owner is left
+           untouched. */
+        const sameHandOff = (owner: DeliveryOperationOwner) =>
+          resolveConversationAlias(file, owner.conversationId) === canonicalId
+          && owner.clientMessageId === identity.clientMessageId
+          && owner.requestDigest === heldDeliveryRequestDigest(canonicalId, identity.text, canonicalHeldDeliveryCommand(identity.command, owner.deliveryId));
+        const keyed = identity.clientMessageId
+          ? conversationRows(file, "deliveryOperationOwners", canonicalId)
+            .filter((owner) => owner.directAdmission === "native-queue-add" && owner.clientMessageId === identity.clientMessageId)
+            .sort((left, right) => Number(left.terminalState !== null) - Number(right.terminalState !== null)
+              || right.createdAt.localeCompare(left.createdAt))
+          : [];
+        if (admission.adoptOperationId) {
+          /* The journal holds this key under an operation older code admitted.
+             This request's own row names nothing the journal admitted, so it
+             ends lost, and the journal's operation gets the row, in one
+             transaction. */
+          const adopted = admission.adoptOperationId;
+          const settledAt = now();
+          for (const owner of keyed) {
+            if (owner.command.operationId === adopted || owner.terminalState !== null) continue;
+            owner.terminalState = "failed";
+            owner.terminalDisposition = "lost";
+            owner.terminalReason = "the runtime journal holds this key under an earlier operation";
+            owner.settledAt = settledAt;
+          }
+          const existingAdopted = file.deliveryOperationOwners[adopted];
+          if (existingAdopted) {
+            if (!sameHandOff(existingAdopted)) throw new DeliveryReservationConflictError();
+            return clone(existingAdopted);
+          }
+          const owner: DeliveryOperationOwner = { ...ownerFor(identity, adopted), directAdmission: "native-queue-add" };
+          file.deliveryOperationOwners[adopted] = owner;
+          return clone(owner);
+        }
+        /* A row that ended `lost` names an admission the journal refused or
+           never held: the key is free again, as a failed reservation's is. */
+        const existing = keyed.find((owner) => owner.terminalState === null || owner.terminalDisposition !== "lost");
+        if (existing) {
+          const digest = heldDeliveryRequestDigest(canonicalId, identity.text, canonicalHeldDeliveryCommand(identity.command, existing.deliveryId));
+          if (existing.requestDigest !== digest) throw new DeliveryReservationConflictError();
+          return clone(existing);
+        }
+        const operationId = identity.command.operationId || crypto.randomUUID();
+        const taken = file.deliveryOperationOwners[operationId];
+        if (taken) {
+          if (!sameHandOff(taken)) throw new DeliveryReservationConflictError();
+          return clone(taken);
+        }
+        if (Object.values(file.heldDeliveries).some((delivery) => delivery.command.operationId === operationId)) {
+          throw new DeliveryReservationConflictError();
+        }
+        const owner: DeliveryOperationOwner = { ...ownerFor(identity, operationId), directAdmission: "native-queue-add" };
+        file.deliveryOperationOwners[operationId] = owner;
+        return clone(owner);
+      }
+      const { operationId: retryOperationId, retryOf: previousOperationId, identity } = admission;
+      const recorded = file.deliveryOperationOwners[retryOperationId];
       const previous = file.deliveryOperationOwners[previousOperationId];
       const delivery = previous
         ? file.heldDeliveries[previous.deliveryId]
         : Object.values(file.heldDeliveries).find((candidate) => candidate.command.operationId === previousOperationId);
+      if (recorded) {
+        /* The id a retry mints can already name another request's row: a
+           Queue-for-Codex hand-off that supplied it, or another send's attempt.
+           Only an attempt of the same send is this retry's to return or
+           reopen; any other row is refused here, before the caller records a
+           wait or sends a command under it, and is left as it was. */
+        const sourceDeliveryId = previous?.deliveryId ?? delivery?.id ?? null;
+        const sameSend = recorded.retryOfOperationId !== null
+          && !recorded.directAdmission
+          && (recorded.retryOfOperationId === previousOperationId
+            || (sourceDeliveryId !== null && recorded.deliveryId === sourceDeliveryId));
+        if (!sameSend) throw new DeliveryReservationConflictError(RETRY_ATTEMPT_ID_OWNED_ELSEWHERE);
+        /* An attempt the journal refused outright ended `lost`: nothing ran
+           under its id. A new explicit retry, which mints the same id, reopens
+           it rather than sending under a row that fences it. */
+        if (admission.reopenLost && recorded.terminalState === "failed" && recorded.terminalDisposition === "lost") {
+          recorded.terminalState = null;
+          recorded.terminalDisposition = null;
+          recorded.terminalReason = null;
+          recorded.settledAt = null;
+          recorded.createdAt = now();
+        }
+        return clone(recorded);
+      }
       const source = previous ?? (delivery
         ? {
           conversationId: delivery.conversationId,
@@ -9308,9 +9718,17 @@ export class AgentRegistry {
           evidenceImageCount: delivery.runtimeImages.length,
         }
         : null);
-      if (!source?.requestDigest) return false;
+      if (!source?.requestDigest) {
+        /* Nothing durable names the retried operation. A caller that holds
+           its whole identity (startup's continuation) has it adopted, so the
+           retry has an owner, a deadline and a record before its command. */
+        if (!identity) return null;
+        const adopted: DeliveryOperationOwner = { ...ownerFor(identity, retryOperationId), retryOfOperationId: previousOperationId };
+        file.deliveryOperationOwners[retryOperationId] = adopted;
+        return clone(adopted);
+      }
       const conversation = file.conversations[resolveConversationAlias(file, source.conversationId)];
-      file.deliveryOperationOwners[retryOperationId] = {
+      const owner: DeliveryOperationOwner = {
         conversationId: source.conversationId,
         runtimeConversationId: source.runtimeConversationId,
         clientMessageId: source.clientMessageId,
@@ -9331,7 +9749,8 @@ export class AgentRegistry {
         terminalReason: null,
         settledAt: null,
       };
-      return true;
+      file.deliveryOperationOwners[retryOperationId] = owner;
+      return clone(owner);
     });
   }
 
@@ -9340,6 +9759,20 @@ export class AgentRegistry {
   bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     if (!operationId || !generationId) return false;
     if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    return this.writeDeliveryOperationGeneration(operationId, generationId);
+  }
+
+  /** {@link bindDeliveryOperationGeneration} with the write lock waited for off
+      the event loop. Null when the lock stayed held and nothing was written. */
+  async bindDeliveryOperationGenerationOffLoop(operationId: string, generationId: string): Promise<boolean | null> {
+    if (!operationId || !generationId) return false;
+    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const write = await this.whenWriterHeld({ label: "delivery.bind-generation", operationId },
+      () => this.writeDeliveryOperationGeneration(operationId, generationId));
+    return write.acquired ? write.value : null;
+  }
+
+  private writeDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
       if (!owner?.retryOfOperationId) return false;
@@ -9366,11 +9799,12 @@ export class AgentRegistry {
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId || (owner.terminalState !== null
+      if (!owner || !ownsItsSettlement(owner)) return owner ? clone(owner) : null;
+      if (owner.terminalState !== null
         && !(state === "delivered" && disposition === "delivered"
           && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
           && owner.terminalReason !== OPERATOR_DISCARDED_DELIVERY_REASON
-          && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)))) return owner ? clone(owner) : null;
+          && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX))) return clone(owner);
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
@@ -9378,6 +9812,34 @@ export class AgentRegistry {
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
+  }
+
+  /** {@link settleDeliveryRetryAttempt} for every row that settles itself,
+      a direct admission included (A2). */
+  settleDirectAdmission(...attempt: Parameters<AgentRegistry["settleDeliveryRetryAttempt"]>): DeliveryOperationOwner | null {
+    return this.settleDeliveryRetryAttempt(...attempt);
+  }
+
+  /** {@link settleDeliveryRetryAttempt} with the write lock waited for off the
+      event loop. False when the lock stayed held and nothing was written. */
+  async settleDeliveryRetryAttemptOffLoop(
+    ...attempt: Parameters<AgentRegistry["settleDeliveryRetryAttempt"]>
+  ): Promise<boolean> {
+    const write = await this.whenWriterHeld({ label: "delivery.settle-retry", operationId: attempt[0] },
+      () => this.settleDeliveryRetryAttempt(...attempt));
+    return write.acquired;
+  }
+
+  /** {@link recordDeliveryOutcome} with the write lock waited for off the event
+      loop, correlated with the operation the reservation belongs to. False
+      when the lock stayed held and nothing was written. */
+  async recordDeliveryOutcomeOffLoop(
+    operationId: string,
+    ...outcome: Parameters<AgentRegistry["recordDeliveryOutcome"]>
+  ): Promise<boolean> {
+    const write = await this.whenWriterHeld({ label: "delivery.settle", operationId },
+      () => this.recordDeliveryOutcome(...outcome));
+    return write.acquired;
   }
 
   recordDeliveryOutcome(
@@ -9390,27 +9852,38 @@ export class AgentRegistry {
     /** How a delivered send reached the engine, when the journal recorded it. */
     route?: DeliveryRoute | null,
   ): HeldDelivery {
-    return this.mutate((file) => {
-      const delivery = file.heldDeliveries[id];
-      if (!delivery) throw new Error("held delivery is unknown");
-      if (delivery.state === "delivered" || terminalDeliveryFailureIsAbsorbing(delivery)) {
-        return clone(delivery);
-      }
-      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
-      const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
-      const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
-      delivery.state = state;
-      delivery.deliveredAt = state === "delivered" ? now() : null;
-      delivery.error = error?.slice(0, 240) ?? null;
-      if (state === "delivered") delivery.text = "";
-      if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
-      if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-      syncDeliveryOperationOwnerState(file, delivery, disposition);
-      if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
-      const settled = clone(delivery);
-      if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
-      return settled;
-    }, { deliveryOnly: true });
+    return this.mutate((file) => this.recordDeliveryOutcomeInFile(file, id, state, error, disposition, route), { deliveryOnly: true });
+  }
+
+  /** Shared settlement body so guarded hygiene retains every existing
+      uncertainty, payload, owner and compaction rule. */
+  private recordDeliveryOutcomeInFile(
+    file: RegistryFile,
+    id: string,
+    state: Extract<HeldDelivery["state"], "delivered" | "failed" | "delivery-uncertain">,
+    error: string | null,
+    disposition?: DeliveryTerminalDisposition,
+    route?: DeliveryRoute | null,
+  ): HeldDelivery {
+    const delivery = file.heldDeliveries[id];
+    if (!delivery) throw new Error("held delivery is unknown");
+    if (delivery.state === "delivered" || terminalDeliveryFailureIsAbsorbing(delivery)) {
+      return clone(delivery);
+    }
+    const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+    const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
+    const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
+    delivery.state = state;
+    delivery.deliveredAt = state === "delivered" ? now() : null;
+    delivery.error = error?.slice(0, 240) ?? null;
+    if (state === "delivered") delivery.text = "";
+    if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
+    if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
+    syncDeliveryOperationOwnerState(file, delivery, disposition);
+    if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
+    const settled = clone(delivery);
+    if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
+    return settled;
   }
 
   recordDeliveryOutcomeForOperation(
@@ -9429,6 +9902,17 @@ export class AgentRegistry {
       ...(disposition ? { disposition } : {}),
       ...(route ? { route } : {}),
     }])[0] ?? null;
+  }
+
+  /** {@link recordDeliveryOutcomeForOperation} with the write lock waited for
+      off the event loop. False when the lock stayed held and nothing was
+      written: the outcome is still owed to the record. */
+  async recordDeliveryOutcomeForOperationOffLoop(
+    ...outcome: Parameters<AgentRegistry["recordDeliveryOutcomeForOperation"]>
+  ): Promise<boolean> {
+    const write = await this.whenWriterHeld({ label: "delivery.outcome", operationId: outcome[1] },
+      () => this.recordDeliveryOutcomeForOperation(...outcome));
+    return write.acquired;
   }
 
   /** Settles a startup reconciliation page in one storage transaction. A
@@ -9526,6 +10010,12 @@ export class AgentRegistry {
       unchanged, so engine dedup and the operator-attention projection keep one
       identity across a lost HTTP response or repeated click. */
   retryUncertainDeliveryForOperation(operationId: string): HeldDelivery | null {
+    return this.rearmUncertainDeliveryForOperation(operationId)?.reservation ?? null;
+  }
+
+  /** The transaction's rearm decision lets an HTTP replay keep the active
+      attempt's progress and clocks (A2, P13). */
+  rearmUncertainDeliveryForOperation(operationId: string): { reservation: HeldDelivery; rearmed: boolean } | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
       const delivery = owner
@@ -9539,9 +10029,9 @@ export class AgentRegistry {
          outcomes remain terminal. */
       const unverifiedFailure = delivery.state === "failed"
         && owner?.terminalDisposition === "unverified";
-      if (delivery.state !== "delivery-uncertain" && !unverifiedFailure) return clone(delivery);
+      if (delivery.state !== "delivery-uncertain" && !unverifiedFailure) return { reservation: clone(delivery), rearmed: false };
       if (unverifiedFailure) delivery.state = "delivery-uncertain";
-      return clone(placeDeliveryForRetryInFile(file, delivery, true));
+      return { reservation: clone(placeDeliveryForRetryInFile(file, delivery, true)), rearmed: true };
     });
   }
 

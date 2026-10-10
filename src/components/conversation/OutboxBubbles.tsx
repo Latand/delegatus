@@ -9,6 +9,7 @@ import { useMessageProvenance } from "@/components/feed/messageProvenance";
 import { useMeAsSender } from "@/components/team/teamClient";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { refreshRuntime } from "@/hooks/useRuntime";
+import { useDeliveryProgress } from "@/hooks/useDeliveryProgress";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 
 import { DELIVERY_WAIT_TICK_MS } from "@/components/runtime/deliveryWait";
@@ -144,8 +145,18 @@ export function ConversationMessageRow({
      delivery is unresolved and the row reads exactly like every other message
      in the conversation. The local entry is still consulted for what only it
      knows — what the submission carried — and for nothing else. */
+  /* The queue's record of what this message waits on, read while it is
+     unsettled; one poller serves every row. */
+  const pendingOperation = entry && !canonical && entry.state !== "delivered" && entry.state !== "failed"
+    ? messageRowOperationId(entry) : null;
+  const progress = useDeliveryProgress(pendingOperation ? [pendingOperation] : [], pendingOperation !== null);
   const row = entry && !canonical
-    ? messageRowModel(t, entry, { switchHold, nowMs, session })
+    ? messageRowModel(t, entry, {
+      switchHold,
+      nowMs: progress.readAt ? Math.max(nowMs, progress.readAt) : nowMs,
+      session,
+      progress: pendingOperation ? progress.records.get(pendingOperation) ?? null : null,
+    })
     : null;
   const text = entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
   const selectedContext = canonical?.selectedContext ?? entry?.selectedContext ?? null;
@@ -173,8 +184,8 @@ export function ConversationMessageRow({
       </span>
     </button>
   ) : undefined;
-  /* The failure line and the transport disclosure are the only things that
-     ever sit under the bubble, and only one of them at a time. */
+  /* The failure line, the stall line and the transport disclosure are the only
+     things that ever sit under the bubble, and only one of them at a time. */
   const below = row?.failure ? (
     <div
       data-outbox-failure={entry!.id}
@@ -245,6 +256,18 @@ export function ConversationMessageRow({
           {t(entry!.needsReattach ? "outbox.action.attachAgain" : "outbox.action.takeBack")}
         </button>
       )}
+    </div>
+  ) : row?.stalled && !open ? (
+    /* A hand-over the queue recorded as stalled says so on the message itself,
+       at rest (incident 2026-10-06): the spinner alone reads as "moving". The
+       open disclosure carries the same record in full, so this line steps
+       aside for it and the status is never written twice. */
+    <div
+      data-outbox-stalled={entry!.id}
+      className="mt-1 flex max-w-[86%] items-start justify-end gap-1.5 text-caption font-semibold text-warning"
+    >
+      <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+      <span data-outbox-stalled-status className="min-w-0 whitespace-normal break-words text-right">{row.stalled}</span>
     </div>
   ) : null;
   /* Everything the old receipt stack beside the composer used to say about
