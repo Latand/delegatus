@@ -1,4 +1,6 @@
-import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement } from "./runtimeSwitch";
+import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
+import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
+import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
@@ -364,7 +366,7 @@ export interface PipelinePorts {
     clientMessageId: string;
     text: string;
     /** Restart recovery must not interrupt work that began after its snapshot. */
-    policy?: "queue";
+    policy?: "queue" | "steer-or-queue";
     /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
     continuationAllowed?: () => Promise<boolean>;
     /** The delivery layer's refusal, retained by provider recovery when it parks. */
@@ -382,7 +384,7 @@ export interface PipelinePorts {
   runtimeSwitchControl?(conversationId: string, path: string, action: "interrupt" | "reconfigure", operationId: string, target: PipelineRuntimeSwitch["to"]): Promise<"already-current" | void>;
   runtimeSwitchOutcome?(conversationId: string, operationId: string): Promise<{ state: "pending" | "applied" | "failed" | "superseded"; error?: string }>;
   cancelRuntimeSwitch?(conversationId: string, operationId: string): Promise<void>;
-  runtimeSwitchDelivery?(conversationId: string, clientMessageId: string): { state: "pending" | "delivered" | "failed"; at?: string; error?: string } | Promise<{ state: "pending" | "delivered" | "failed"; at?: string; error?: string }>;
+  runtimeSwitchDelivery?(conversationId: string, clientMessageId: string): RuntimeSwitchDelivery | Promise<RuntimeSwitchDelivery>;
   runtimeSwitchKilled?(conversationId: string, since: string, ignoredOperationIds?: readonly string[]): Promise<boolean>;
   /** Retained operator kill authority; unavailable evidence rejects automatic recovery. */
   conversationOperatorStopped?(conversationId: string, since: string, ignoredOperationIds?: readonly string[]): Promise<boolean>;
@@ -1698,13 +1700,19 @@ export function defaultPipelinePorts(
     },
     invalidateProviderContinuation,
     runtimeSwitchControl: async (conversationId, path, action, operationId, target) => {
-      if (registry.conversation(conversationId as ViewerConversationId)?.reconfigure?.operationId === operationId) return;
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      if (conversation?.reconfigure?.operationId === operationId) return;
       if (await runtimeHostClient()?.operationStatus(operationId)) return;
+      const generation = conversation?.generations.at(-1);
+      // The same-account shortcut compares model/effort/fast only. A changed
+      // tier needs the executor, whose pipeline fence carries the exact tier.
+      const sameAccountTierChange = target.engine === "codex" && generation?.accountId === target.accountId
+        && generation && !runtimeTargetsEqual({ ...target, serviceTier: launchServiceTier(generation.launchProfile) ?? null }, target);
       const result = await dispatchStructuredControl({ conversationId, path, action, operationId,
         actor: { kind: "agent", conversationId },
         ...(action === "reconfigure" ? { reconfiguration: { model: target.model ?? undefined, effort: target.effort ?? undefined,
           fast: target.engine === "codex" ? !!target.serviceTier && !["default", "standard"].includes(target.serviceTier) : null,
-          ...(target.accountId ? { accountId: target.accountId } : {}) } } : {}) });
+          ...(target.accountId && !sameAccountTierChange ? { accountId: target.accountId } : {}) } } : {}) });
       return runtimeSwitchControlAcknowledgement(result);
     },
     runtimeSwitchOutcome: async (conversationId, operationId) => {
@@ -1728,9 +1736,11 @@ export function defaultPipelinePorts(
       return hasRuntimeSwitchKill(client, conversationId, since, ignored, true);
     },
     runtimeSwitchDelivery: async (conversationId, key) => {
-      const receipt = registry.deliveryAdmissionForKey(conversationId, key);
-      const operation = receipt.outcome === "admitted" ? await runtimeHostClient()?.operationStatus(receipt.operationId) : null;
-      return receipt.outcome === "admitted" ? { state: receipt.state === "delivered" ? "delivered" : receipt.state === "failed" ? "failed" : "pending", at: operation?.receipt.admittedAt } : { state: "pending" };
+      const admission = registry.deliveryAdmissionForKey(conversationId, key);
+      if (admission.outcome !== "admitted") return { state: "pending", admitted: false };
+      const receipt = await resolveSendReceipt(admission.operationId, { registry, client: runtimeHostClient() });
+      return { state: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "failed" : "pending",
+        at: receipt?.acceptedAt ?? undefined, error: receipt?.reason ?? undefined, admitted: true, duplicateRisk: receipt?.duplicateRisk ?? true };
     },
     conversationGeneration: (conversationId) => {
       const conversation = registry.conversation(conversationId as ViewerConversationId);
@@ -5869,7 +5879,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       let switchFailed = false;
       if (parked && record.phase !== "cutting") {
         if (record.mode === "fork") {
-          const outcome = await ports.runtimeSwitchOutcome?.(record.from.conversationId, switchOperationKey(record, "reconfigure"));
+          const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
           const delivery = record.continuationDispatch
             ? await ports.runtimeSwitchDelivery?.(record.from.conversationId, record.continuationDispatch.key)
             : null;
@@ -5879,7 +5889,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           switchFailed = outcome.state === "failed";
           const generation = attempt.conversationId ? ports.conversationGeneration?.(attempt.conversationId) : null;
           const expected = switchFailed ? record.from : record.to;
-          if (!generation || !runtimeTargetsEqual(generation, expected)) continue;
+          if (delivery?.state === "delivered" && (!generation || !runtimeTargetsEqual(generation, expected))) continue;
           if (switchFailed && record.phase === "continuing") {
             record.phase = "switching";
             await checkpoint();
@@ -12275,7 +12285,7 @@ async function verifiedForkContinuation(target: StageCompletionTarget, ports: Pi
   const dispatch = record?.continuationDispatch;
   if (!record || record.mode !== "fork" || !["switching", "continuing"].includes(record.phase)
     || !dispatch || !conversationId || (record.continuationKey ?? switchOperationKey(record, "continue")) !== dispatch.key) return false;
-  const outcome = await ports.runtimeSwitchOutcome?.(record.from.conversationId, switchOperationKey(record, "reconfigure"));
+  const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
   if (outcome?.state !== "applied" && outcome?.state !== "failed") return false;
   const successorRuntime = outcome.state === "failed" ? record.from : record.to;
   let allowed: string[] | null | undefined;

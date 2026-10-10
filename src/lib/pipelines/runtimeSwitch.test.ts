@@ -193,6 +193,34 @@ test("the production runtime-switch control preserves the fast flag for Ultrafas
   } finally { dispatch.mockRestore(); }
 });
 
+test("a same-account tier-only switch reaches the exact-tier reconfigure executor", async () => {
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const controls = await import("@/lib/runtime/structuredControls");
+  const { defaultPipelinePorts } = await import("./engine");
+  const prior = agentRegistry();
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "tier-only-registry.json"));
+  const transcript = path.join(process.env.LLV_STATE_DIR!, "tier-only-stage.jsonl");
+  registry.reconcileConversations([{ engine: "codex", path: transcript, accountId: "default",
+    launchProfile: emptyLaunchProfile({ model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "priority" }),
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date().toISOString() }]);
+  const conversationId = registry.conversationForPath(transcript)!.id;
+  const requests: import("@/lib/runtime/structuredControls").StructuredControlRequest[] = [];
+  const dispatch = spyOn(controls, "dispatchStructuredControl").mockImplementation(async request => {
+    requests.push(request);
+    return { status: 202, body: { ok: true, structured: true, target: request.conversationId,
+      operationId: request.operationId!, receipt: { operationId: request.operationId!, status: "queued" } } };
+  });
+  setAgentRegistryForTests(registry);
+  try {
+    await defaultPipelinePorts().runtimeSwitchControl!(conversationId, transcript, "reconfigure", "tier-only-control",
+      { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", accountId: "default", accountPinned: false });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.reconfiguration).toMatchObject({ model: "gpt-6-astra", effort: "high", fast: true });
+    expect(requests[0]!.reconfiguration?.accountId).toBeUndefined();
+  } finally { dispatch.mockRestore(); setAgentRegistryForTests(prior); }
+});
+
 for (const edit of ["model", "effort", "account", "standard", "priority"] as const) {
   test(`a displayed Ultrafast stage choice reaches its native generation and pipeline projection: ${edit}`, async () => {
     const { AgentRegistry } = await import("@/lib/agent/registry");
@@ -291,6 +319,74 @@ test("concurrent requests replay one target and refuse a different target", asyn
   const conflict = await patchPipeline(id, { action: "override-stage", stageId: "plan", model: "sonnet", applyNow: true }, h.ports);
   expect(conflict).toMatchObject({ status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches).toHaveLength(1);
+});
+test("a no-op switch stops re-admitting its pending continuation", async () => {
+  const h = switchHarness();
+  h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+  let admissions = 0;
+  h.ports.resumeSeveredTurn = async input => {
+    admissions++;
+    h.deliveries.set(input.clientMessageId, { state: "pending", at: h.ports.now() });
+    return true;
+  };
+  await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.advance(1000);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(admissions).toBe(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
+});
+
+test("an unverified no-op continuation retains its fence and never sends a replacement", async () => {
+  const h = switchHarness();
+  h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+  h.ports.runtimeSwitchDelivery = (_id, key) => {
+    const delivery = h.deliveries.get(key);
+    return delivery ? { ...delivery, duplicateRisk: true, error: "arrival is unverified" } : { state: "pending" };
+  };
+  h.ports.resumeSeveredTurn = async input => {
+    h.continuations.push(input);
+    h.deliveries.set(input.clientMessageId, { state: "failed", at: h.ports.now() });
+    return true;
+  };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  expect(await patchPipeline(requested.pipeline!.id, {
+    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+  }, h.ports)).toMatchObject({ status: 409 });
+});
+
+for (const parked of [false, true]) test(`a refused no-op continuation settles promptly and allows retry (parked=${parked})`, async () => {
+  const h = switchHarness();
+  h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
+  h.setOutcome("pending"); // A no-op never wrote a reconfigure receipt.
+  h.ports.resumeSeveredTurn = async input => {
+    h.continuations.push(input);
+    h.deliveries.set(input.clientMessageId, { state: "failed", at: h.ports.now() });
+    return true;
+  };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  if (parked) {
+    const rows = loadPipelines();
+    rows[0]!.state = "needs_decision";
+    rows[0]!.runs[0]!.attempts[0]!.state = "needs_decision";
+    savePipelines(rows);
+  }
+  const restarted = await import(`./engine?terminal-noop=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("continuation failed") });
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "failed", settledAt: h.ports.now() });
+  expect(h.continuations).toHaveLength(2);
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  const retry = await restarted.patchPipeline(requested.pipeline!.id, {
+    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+  }, h.ports);
+  expect(retry.error).toBeUndefined();
 });
 test("persisted switching replays deterministic operations and owes only one continuation", async () => {
   const h = switchHarness(); h.setOutcome("pending"); await requestSwitch(h);
