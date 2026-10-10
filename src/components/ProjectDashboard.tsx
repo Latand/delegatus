@@ -105,6 +105,7 @@ import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
+import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -2138,6 +2139,8 @@ function ProjectDashboardView({
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
+      /* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */
+      { kind: "custom", key: "learned-rules", node: <LearnedRulesRow project={project} size="sheet" /> },
       /* "Asks you" is the installation's, not the project's; it sits here
          because this is where the operator looks for what reports to them. */
       { kind: "custom", key: "asks-you", node: <AsksYouRow variant="sheet" /> },
@@ -2208,6 +2211,10 @@ function ProjectDashboardView({
             ) : null}
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
+            </BarMenuGroup>
+            {/* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */}
+            <BarMenuGroup name="learned-rules">
+              <LearnedRulesRow project={project} size="menu" onOpened={close} />
             </BarMenuGroup>
             <BarMenuGroup name="sections">
               {wide ? null : (

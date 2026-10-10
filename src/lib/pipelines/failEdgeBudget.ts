@@ -99,8 +99,8 @@ export function failEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage): b
 
 /** A spent advance handoff is scoped to the current gate entry. A fix from
     another gate may return through this gate and needs its own handoff (#2247).
-    The round count remains cumulative, so the terminal gate still reaches its
-    final re-check. Old records without this boundary keep their existing rule. */
+    The round count remains cumulative; a terminal advance gate completes
+    after its final fix. Old records without this boundary keep their existing rule. */
 export function advanceFailEdgeBudgetSpent(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
   let firstAttempt = attempt.n;
   let activation = attempt.activatedBy;

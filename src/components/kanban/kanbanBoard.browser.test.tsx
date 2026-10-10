@@ -26941,6 +26941,122 @@ describe("idle seat interval eligibility", () => {
   }, 120_000);
 });
 
+
+describe("operator-selected needs-you rules", () => {
+  browserTest("completed reports and reversible prototype hiding at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/needs-you-rules");
+    fs.mkdirSync(out, { recursive: true });
+    const reportsServer = await serveEvidenceFixture(path.join(out, "reports"), "src/components/attention/needsYouPanel.fixture.tsx");
+    const prototypeServer = await serveEvidenceFixture(path.join(out, "prototype"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const list = phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+        const counter = phone ? "[data-mobile2-attention-count]" : "[data-attention-count]";
+        const report = await openFixture(browser, `${reportsServer.base}?rules=1&seat=beside`, viewport, "light", "uk", "reduce", phone);
+        try {
+          await report.page.locator(counter).waitFor({ timeout: 30_000 });
+          await report.page.locator(counter).click();
+          await report.page.locator(`${list} [data-needs-you-row]`).first().waitFor();
+          await report.page.waitForTimeout(300);
+          const waits = await report.page.locator(list).innerText();
+          expect(waits).not.toContain("бюджет");
+          expect(waits).not.toContain("Слати нічний дайджест");
+          expect(waits).not.toContain("Повідомлення не доставлене");
+          await report.page.screenshot({ path: path.join(out, `needs-you-${width}.png`) });
+          await report.page.keyboard.press("Escape");
+          if (phone) {
+            await report.page.evaluate(() => { location.hash = "reports"; });
+          } else {
+            await report.page.locator("[data-report-log-toggle]").click();
+          }
+          await report.page.locator("[data-report-entry]").first().waitFor();
+          await report.page.waitForTimeout(300);
+          const completed = report.page.locator('[data-report-entry][data-report-class="completed"]');
+          const completedCount = await completed.count();
+          // The existing renderer carries the outcome's card and PR links.
+          const reports = await report.page.locator("[data-report-log]").innerText();
+          expect(reports).toContain("останні зауваження виправлено");
+          expect(reports).toContain("Нічний дайджест завершено");
+          const links: unknown[] = [];
+          await report.page.screenshot({ path: path.join(out, `reports-${width}.png`) });
+          for (const [text, cardId] of [["Повідомлення агента не доставлено", "t-voice"], ["Оркестратор зняв вирішене питання", "t-seat"]]) {
+            // Opening a card leaves the log; restore it before the next link.
+            if (links.length) {
+              await report.page.reload();
+              await report.page.locator(counter).waitFor({ timeout: 30_000 });
+              if (phone) await report.page.evaluate(() => { location.hash = "reports"; });
+              else await report.page.locator("[data-report-log-toggle]").click();
+              await report.page.locator("[data-report-entry]").first().waitFor();
+            }
+            const outcome = completed.filter({ hasText: text });
+            expect(await outcome.count()).toBe(1);
+            const link = outcome.locator(`[data-report-card="${cardId}"]`);
+            await link.scrollIntoViewIfNeeded();
+            const geometry = await link.boundingBox();
+            expect(geometry).not.toBeNull();
+            expect(geometry!.x).toBeGreaterThanOrEqual(0);
+            expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+            expect(await link.isEnabled()).toBe(true);
+            await report.page.screenshot({ path: path.join(out, `report-card-${cardId}-${width}.png`) });
+            await report.page.evaluate(() => {
+              (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = null;
+              window.addEventListener("llv:mcp-navigate", event => {
+                (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = (event as CustomEvent).detail;
+              }, { once: true });
+            });
+            await link.click();
+            const navigation = await report.page.evaluate(() => (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation);
+            expect(navigation).toEqual({ kind: "task", id: cardId });
+            links.push({ cardId, geometry, navigation });
+          }
+          readings.push({ width, waits, reports, links, completed: completedCount, errors: report.pageErrors });
+          expect(report.pageErrors).toEqual([]);
+        } finally { await report.context.close(); }
+
+        const proto = await openFixture(browser, `${prototypeServer.base}?proto=1`, viewport, "light", "uk", "reduce", phone);
+        try {
+          await proto.page.locator(counter).waitFor({ timeout: 30_000 });
+          const count = () => proto.page.locator(counter).innerText().then(text => Number(text.replace(/\D/g, "")));
+          await proto.page.waitForFunction(selector => Number((document.querySelector(selector)?.textContent ?? "").replace(/\D/g, "")) >= 3, counter);
+          const before = await count();
+          if (phone) await proto.page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await proto.page.locator(phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]').click();
+          const hide = proto.page.locator("[data-prototype-hide]");
+          await hide.waitFor();
+          expect(await hide.innerText()).toBe("Сховати");
+          const geometry = await hide.boundingBox();
+          expect(geometry).not.toBeNull();
+          expect(geometry!.x).toBeGreaterThanOrEqual(0);
+          expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+          if (phone) expect(geometry!.height).toBeGreaterThanOrEqual(44);
+          await proto.page.screenshot({ path: path.join(out, `hide-${width}.png`) });
+          await hide.click();
+          await proto.page.locator('[data-prototype-hidden="r-search"]').waitFor();
+          expect(await count()).toBe(before - 1);
+          expect(await proto.page.locator("[data-prototype-save]").count()).toBe(0);
+          await proto.page.screenshot({ path: path.join(out, `history-${width}.png`) });
+          await proto.page.locator("[data-prototype-undo-hide]").click();
+          await hide.waitFor();
+          expect(await count()).toBe(before);
+          expect(await proto.page.locator("[data-prototype-save]").count()).toBe(1);
+          readings.push({ width, before, hidden: before - 1, restored: await count(), hide: geometry, errors: proto.pageErrors });
+          expect(proto.pageErrors).toEqual([]);
+        } finally { await proto.context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-rules", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-rules/rendered.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      reportsServer.stop();
+      prototypeServer.stop();
+    }
+  });
+});
+
 /** Registry-enriched rows use the existing read-only remote-agent surface. */
 describe("linked seats and shared-project agent activity", () => {
   browserTest("a remote deployer stays under its task and the peer seat appears in its machine group", async () => {

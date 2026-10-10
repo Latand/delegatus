@@ -218,7 +218,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const elsewhere = data?.unavailable === "another-installation";
   /* The later decided round that retired this one: the operator already answered there. */
   const successor = round && !round.decision && round.supersededBy ? rounds.find((entry) => entry.id === round.supersededBy) ?? null : null;
-  const open = Boolean(round && !round.decision && !elsewhere && (!successor || reopened.has(round.id)));
+  const open = Boolean(round && !round.decision && !round.hidden && !elsewhere && (!successor || reopened.has(round.id)));
   const draft = (roundId && drafts[roundId]) || initialDraft(round);
   /* Two pictures side by side are each half a phone wide, too small to read: the phone compares on one frame. */
   const mode: PairMode = phone ? "slider" : pairMode ?? "side";
@@ -764,6 +764,11 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       )}
       {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}
     </div>
+  ) : round.hidden ? (
+    <div data-prototype-hidden={round.id} className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">
+      <span className="text-label text-secondary">{t("proto.hidden")}</span>
+      <button type="button" className={SECONDARY} data-prototype-undo-hide="" disabled={review.saving} onClick={() => void review.hide(round.id, true, phone ? "phone" : "desktop")}>{t("proto.undoHide")}</button>
+    </div>
   ) : elsewhere ? supersededLine : successor && !open ? (
     <div className="flex min-w-0 flex-1 flex-col">{supersededLine}</div>
   ) : (
@@ -796,7 +801,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             <MicButtonView {...dictation} start={startDictation} busy={review.saving} onText={insertSpoken} anchored />
           </span>
         </div>
-        <div data-prototype-actions="" className={hasQuestions ? phone ? "grid shrink-0 grid-cols-2 gap-2" : "flex shrink-0 justify-end gap-2" : "contents"}>
+        <div data-prototype-actions="" className={hasQuestions ? phone ? "grid shrink-0 grid-cols-2 gap-2" : "flex shrink-0 justify-end gap-2" : "flex shrink-0 flex-wrap justify-end gap-2"}>
+          <button type="button" className={SECONDARY} data-prototype-hide="" disabled={review.saving || speaking} onClick={() => void review.hide(round.id, false, phone ? "phone" : "desktop")}>{t("proto.hide")}</button>
           {hasQuestions ? <button type="button" className={SECONDARY} data-prototype-skip="" aria-label={t("proto.skipAria")} disabled={!canSend} onClick={() => void save(true)}>{t("proto.skip")}</button> : null}
           <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}

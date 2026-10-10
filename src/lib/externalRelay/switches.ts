@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { withFileLock, writeRelayFile } from "./store";
-export type RelaySwitch = "chat_conversations" | "compact";
+export type RelaySwitch = "chat_conversations" | "compact" | "relay:owner_tools:enabled";
 const file = () => statePath("external-relay/switches.json");
 function stored(): Record<string, unknown> {
   try { const value = JSON.parse(fs.readFileSync(file(), "utf8")); return value?.v === 1 ? value : {}; }
@@ -10,7 +10,8 @@ function stored(): Record<string, unknown> {
 export function readRelaySwitches() {
   const value = stored();
   const chat_conversations = value.chat_conversations === true;
-  return { chat_conversations, compact: chat_conversations && value.compact === true };
+  return { chat_conversations, compact: chat_conversations && value.compact === true,
+    owner_tools: value["relay:owner_tools:enabled"] === true };
 }
 export function setRelaySwitch(name: RelaySwitch, on: boolean) {
   withFileLock(file(), () => writeRelayFile(file(), { ...stored(), v: 1, [name]: on }));

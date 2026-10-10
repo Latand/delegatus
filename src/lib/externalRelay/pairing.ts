@@ -33,6 +33,7 @@ export async function startRelayPairing(url: string, label?: string) {
     api_base: descriptor.api_base,
     name: descriptor.name,
     description: descriptor.description,
+    ...(descriptor.features !== undefined ? { features: descriptor.features } : {}),
     limits: descriptor.limits,
     ...started,
   };
@@ -105,6 +106,7 @@ export async function confirmRelayPairing(
     api_base: pending.api_base,
     name: pending.name,
     description: pending.description,
+    ...(pending.features !== undefined ? { features: pending.features } : {}),
     credential: confirmed.credential,
     owner: confirmed.owner,
     pairedAt: new Date().toISOString(),

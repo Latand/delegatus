@@ -1743,6 +1743,7 @@ export function claudeStartupHostOptions(
     providerAccount: Boolean(owner?.claudeProvider),
     spawnPolicyBaseSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath ?? null,
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
+    cleanMemory: entry.launchProfile?.cleanMemory === true,
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
     readOnly: launchProfileEngineReadOnly(entry.launchProfile),
@@ -2099,6 +2100,7 @@ async function adoptStructuredHostsPass(
           effort: entry.launchProfile?.effort ?? undefined,
           approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
+          cleanMemory: entry.launchProfile?.cleanMemory === true,
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never
