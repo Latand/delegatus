@@ -1052,7 +1052,7 @@ for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine
     expect(again.evidence.tokenMatches).toBe(true);
   }));
 
-for (const engine of ["claude", "codex"] as const) test(`after a self-update a ${engine} relaunch takes over the previous release's connector and starts with the tool`,
+for (const engine of ["claude", "codex"] as const) test(`after a self-update a ${engine} relaunch replaces the previous release's connector and starts with the tool`,
   async () => withRegistryMode("sqlite", async () => {
     const target = await grantedConversationWithoutHost(engine);
     /* The observed state: the connector started by the previous release runs
@@ -1060,9 +1060,11 @@ for (const engine of ["claude", "codex"] as const) test(`after a self-update a $
        error. */
     const token = signedInWith({ status: "error", errorCode: "bridge_failed" });
     const earlier = startConnectorFromRelease(path.join(sandbox, `release-a-${engine}`));
+    let started: number[] = [];
     try {
       await asRelease(path.join(sandbox, `release-b-${engine}`), async () => {
         const { service, calls } = releaseTakeover(token);
+        started = calls.pids;
         /* The production health check, over the production supervisor. */
         setTelegramLaunchRepairForTests({ healthCheck: async () => { await service.checkHealth(); }, waitMs: 5_000 });
         const probe = deferredLaunch(engine, token, undefined, undefined, true);
@@ -1072,14 +1074,15 @@ for (const engine of ["claude", "codex"] as const) test(`after a self-update a $
         expect(probe.evidence.tokenMatches).toBe(true);
         expect(probe.evidence.telegramDefinition).toBeTruthy();
         expect(probe.evidence.runNotice).toBeNull();
-        /* One connector: the one that was already running. */
-        expect(calls.spawns).toBe(0);
-        expect(() => process.kill(earlier.pid, 0)).not.toThrow();
+        /* One connector: the new release's own, which replaced the earlier one. */
+        expect(calls.spawns).toBe(1);
+        expect(() => process.kill(earlier.pid, 0)).toThrow();
         expect(telegramOperatorAction()).toBeNull();
         await stopTelegramConnector();
       });
     } finally {
       endConnectorProcess(earlier.pid);
+      for (const pid of started) endConnectorProcess(pid);
       connected();
     }
   }), 30_000);

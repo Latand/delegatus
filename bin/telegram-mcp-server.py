@@ -18,6 +18,38 @@ EXCLUDED_TOOLS = [
 if len(TOKEN) < 32 or not VENDOR_DIR:
     raise SystemExit("authenticated Telegram MCP configuration is missing")
 
+
+def _end_with_lease():
+    """End this connector with the Viewer process that started it.
+
+    The Viewer holds the write end of this process's stdin and never writes to
+    it. The kernel closes that end when the Viewer exits, however it exits, and
+    the read here returns at end of file. The connector then stops: a runner
+    that outlived its Viewer kept the service's old cgroup populated through
+    every restart (2026-10-10). Installed before the vendored imports, so a
+    Viewer that dies while the connector is still loading ends it too.
+    """
+    if os.environ.get("LLV_TELEGRAM_CONNECTOR_LEASE") != "stdin":
+        return
+    import signal
+    import threading
+    import time
+
+    def watch():
+        try:
+            while os.read(0, 4096):
+                pass
+        except OSError:
+            pass
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(2)
+        os._exit(0)
+
+    threading.Thread(target=watch, name="llv-connector-lease", daemon=True).start()
+
+
+_end_with_lease()
+
 sys.path.insert(0, VENDOR_DIR)
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402

@@ -34,6 +34,7 @@ let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNo
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
 let lockLauncherStartup;
+let retireTelegramConnector;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -887,24 +888,28 @@ async function stopChild(processHandle) {
   });
 }
 
-async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor) {
+async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor, stateDirectory) {
   await Promise.all([
     serverProcess ? stopChild(serverProcess) : Promise.resolve(),
     tailscaleProcess ? stopChild(tailscaleProcess) : Promise.resolve(),
     runtimeHostSupervisor ? runtimeHostSupervisor.stop() : Promise.resolve(),
   ]);
+  /* After the Viewer: its Telegram connector ends with it, and must be gone
+     before this process exits and the service manager starts the next one. */
+  const connector = await retireTelegramConnector(stateDirectory);
+  if (connector === "survived") console.error("[delegatus] the Telegram connector did not stop with the Viewer");
 }
 
 /* `serverRef.current` is whichever web process runs at shutdown: a
    self-update restart (#2007) replaces the one startup launched. */
-function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, onShutdown = () => {}) {
+function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, stateDirectory, onShutdown = () => {}) {
   let stopping = false;
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
     relaunch?.requestStop();
     onShutdown();
-    await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
+    await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor, stateDirectory);
     process.exit(0);
   };
 
@@ -1054,7 +1059,7 @@ async function main() {
     stop: () => {
       recoverWeb = null;
       pauseWebRecovery();
-      return stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
+      return stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
     } });
   await relaunch.recoverPending();
   /* Everything started below inherits the choice (#2168). */
@@ -1177,7 +1182,7 @@ async function main() {
   };
   const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
   let restartRequests = null;
-  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, () => {
+  installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSupervisor, runtimeHostConfig.stateDirectory, () => {
     recoverWeb = null;
     pauseWebRecovery();
     restartRequests?.stop();
@@ -1198,7 +1203,7 @@ async function main() {
       if (page) throw new Error(page);
     }
   } catch (error) {
-    await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
+    await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
     fail(error instanceof Error ? error.message : m.serverNotReady());
   }
 
@@ -1217,11 +1222,11 @@ async function main() {
       }
       exposedAddress = newlyBoundNonLoopbackAddress(bindStateBeforeLaunch, bindStateAfterLaunch);
     } catch (error) {
-      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
+      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
       fail(m.bindCheckFail(error instanceof Error ? error.message : String(error)));
     }
     if (exposedAddress !== null) {
-      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
+      await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor, runtimeHostConfig.stateDirectory);
       fail(m.unexpectedNonLocalBind(exposedAddress));
     }
   }
@@ -1536,6 +1541,7 @@ async function checkoutLauncher() {
   ({ createRelaunch } = await import("./launcher-relaunch.mjs"));
   ({ assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost } = await import("./launcher-adoption.mjs"));
   ({ lockLauncherStartup } = await import("./launcher-lock.mjs"));
+  ({ retireTelegramConnector } = await import("./telegram-connector-retire.mjs"));
   delete process.env.LLV_LAUNCHER_REEXEC;
   delete process.env.LLV_LAUNCHER_CHECKOUT;
   await main();

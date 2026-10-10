@@ -29,6 +29,10 @@ const CONNECTOR_SESSION = {
   savedAt: "2026-08-20T12:00:00.000Z",
 };
 
+function READ_ONLY_FOR(connectorToken: string): ConnectorProbe {
+  return { ok: true, serverName: connectorServerName(connectorToken), tools: [{ name: "get_me", readOnly: true }] };
+}
+
 const READ_ONLY: ConnectorProbe = {
   ok: true,
   serverName: connectorServerName(CONNECTOR_SESSION.connectorToken),
@@ -38,8 +42,11 @@ const READ_ONLY: ConnectorProbe = {
   ],
 };
 
-function fakePorts(script: Array<ConnectorProbe | null>, options: { spawnFails?: boolean; owned?: boolean; recordFails?: boolean } = {}) {
+/* `foreign` marks a recorded runner this Viewer process did not start: an
+   earlier Viewer's, a previous service invocation's or an older release's. */
+function fakePorts(script: Array<ConnectorProbe | null>, options: { spawnFails?: boolean; owned?: boolean; recordFails?: boolean; foreign?: boolean; admitted?: () => boolean } = {}) {
   const calls = { spawns: 0, probes: 0, stops: 0, records: 0, kills: [] as Array<NodeJS.Signals | undefined>, probeTokens: [] as string[] };
+  const runner = { foreign: options.foreign ?? false };
   let clock = 0;
   let owned = options.owned ?? false;
   const ports: TelegramConnectorPorts = {
@@ -61,10 +68,13 @@ function fakePorts(script: Array<ConnectorProbe | null>, options: { spawnFails?:
       calls.records += 1;
       if (options.recordFails) return false;
       owned = true;
+      runner.foreign = false;
       return true;
     },
+    ownGeneration: () => owned && !runner.foreign,
+    admitted: options.admitted ?? (() => true),
   };
-  return { ports, calls };
+  return { ports, calls, runner };
 }
 
 beforeEach(async () => {
@@ -437,14 +447,14 @@ test("fresh health preserves a healthy connector recorded before process-owned l
     undefined,
     false,
   );
-  const previousViewer = fakePorts([READ_ONLY], { owned: true });
+  const viewer = fakePorts([READ_ONLY], { owned: true });
 
-  const result = await ensureTelegramConnector(CONNECTOR_SESSION, previousViewer.ports);
+  const result = await ensureTelegramConnector(CONNECTOR_SESSION, viewer.ports);
 
   expect(result).toEqual({ ok: true, url: telegramMcpUrl() });
-  expect(previousViewer.calls.stops).toBe(0);
-  expect(previousViewer.calls.spawns).toBe(0);
-  expect(previousViewer.calls.probes).toBe(1);
+  expect(viewer.calls.stops).toBe(0);
+  expect(viewer.calls.spawns).toBe(0);
+  expect(viewer.calls.probes).toBe(1);
 });
 
 test("a credential-generation mismatch stops the old record before spawning", async () => {
@@ -461,6 +471,7 @@ test("concurrent Viewer generations serialize adoption and spawn one recorded co
   let records = 0;
   const ports: TelegramConnectorPorts = {
     ownsProcess: () => owned,
+    ownGeneration: () => owned,
     stop: async () => { await Promise.resolve(); owned = false; },
     spawn: () => {
       spawns += 1;
@@ -554,6 +565,7 @@ test("stop invalidates an in-flight connector operation", async () => {
     sleep: async () => {},
     now: () => 0,
     ownsProcess: () => true,
+    ownGeneration: () => true,
     beginOperation: () => {
       const current = ++generation;
       return () => current === generation;
@@ -653,37 +665,216 @@ test("stop waits through SIGKILL escalation until a TERM-resistant connector exi
   }
 }, 5_000);
 
-/* ── A connector that outlived the release that started it ─────────────────── */
+/* ── A connector that outlived the Viewer that started it ───────────────────── */
 
-test("the release that takes over after a self-update adopts the connector the previous release started", async () => {
+/* 2026-10-10: a healthy runner a Viewer of an earlier release had started was
+   adopted by every Viewer after it, survived each service restart, and kept
+   the service's old cgroup populated, so the service never reached its
+   configured slice. The Viewer that owns traffic replaces such a runner. */
+for (const [name, releases] of [
+  ["an older release", ["release-a", "release-b"]],
+  ["this release under an earlier service invocation", ["release-c", "release-c"]],
+] as const) test(`the Viewer that takes over replaces a healthy connector started from ${name}`, async () => {
   const { asRelease, endConnectorProcess, releaseTakeover, startConnectorFromRelease } = await import("./fixtures/releaseConnector");
   const { readTelegramLaunchState } = await import("./launchReadiness");
   const { readTelegramConnection, saveTelegramSession, writeTelegramConnection } = await import("./sessionStore");
   const session = saveTelegramSession(PLACEHOLDER_SESSION);
-  /* What the new release kept publishing while it refused the old connector. */
   writeTelegramConnection({ version: 1, status: "error", credentialRef: session.credentialRef, identity: null,
     lastHealthCheckAt: null, errorCode: "bridge_failed", identityIdUpgradedAt: null });
-  const earlier = startConnectorFromRelease(path.join(SANDBOX, "release-a"));
+  const earlier = startConnectorFromRelease(path.join(SANDBOX, releases[0]));
+  let started: number[] = [];
   try {
-    await asRelease(path.join(SANDBOX, "release-b"), async () => {
+    await asRelease(path.join(SANDBOX, releases[1]), async () => {
       expect(readTelegramLaunchState()).toEqual({ kind: "recoverable" });
       const { service, calls } = releaseTakeover(session.connectorToken);
+      started = calls.pids;
       await service.checkHealth();
       expect(readTelegramConnection().status).toBe("connected");
       expect(readTelegramLaunchState()).toEqual({ kind: "ready", token: session.connectorToken });
-      /* One connector: the one already running, and nothing started beside it. */
-      expect(calls.spawns).toBe(0);
-      expect(() => process.kill(earlier.pid, 0)).not.toThrow();
-      const recorded = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "telegram", "connector.json"), "utf8")) as { pid: number; entrypoint: string };
-      expect(recorded.pid).toBe(earlier.pid);
-      expect(recorded.entrypoint).toBe(earlier.entrypoint);
-      /* The release that took over can also stop it, which a sign-out and a
-         replacement after a failed probe both need. */
-      await stopTelegramConnector();
+      /* One connector: the one this Viewer started, and the earlier one gone. */
+      expect(calls.spawns).toBe(1);
       expect(() => process.kill(earlier.pid, 0)).toThrow();
+      const recorded = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "telegram", "connector.json"), "utf8")) as { pid: number; entrypoint: string; ownerPid: number; lease: string };
+      expect(recorded.pid).toBe(calls.pids[0]!);
+      expect(recorded.entrypoint).toBe(path.join(SANDBOX, releases[1], "bin", "telegram-mcp-server.py"));
+      expect(recorded.ownerPid).toBe(process.pid);
+      expect(recorded.lease).toBe("stdin");
+      /* Its own runner is adopted on the next check, not replaced again. */
+      await service.checkHealth();
+      expect(calls.spawns).toBe(1);
+      await stopTelegramConnector();
+      expect(() => process.kill(calls.pids[0]!, 0)).toThrow();
     });
   } finally {
     endConnectorProcess(earlier.pid);
+    for (const pid of started) endConnectorProcess(pid);
+  }
+}, 20_000);
+
+test("a Viewer that no longer owns traffic neither replaces nor signals the recorded connector", async () => {
+  const healthy = fakePorts([READ_ONLY], { owned: true, foreign: true, admitted: () => false });
+  expect(await ensureTelegramConnector(CONNECTOR_SESSION, healthy.ports)).toEqual({ ok: true, url: telegramMcpUrl() });
+  expect(healthy.calls.spawns).toBe(0);
+  expect(healthy.calls.stops).toBe(0);
+
+  const silent = fakePorts([null], { owned: true, foreign: true, admitted: () => false });
+  expect(await ensureTelegramConnector(CONNECTOR_SESSION, silent.ports)).toEqual({ ok: false, code: "connector_failed" });
+  expect(silent.calls.spawns).toBe(0);
+  expect(silent.calls.stops).toBe(0);
+
+  const nothing = fakePorts([], { admitted: () => false });
+  expect(await ensureTelegramConnector(CONNECTOR_SESSION, nothing.ports)).toEqual({ ok: false, code: "connector_failed" });
+  expect(nothing.calls.spawns).toBe(0);
+  expect(nothing.calls.stops).toBe(0);
+});
+
+test("a Viewer retired while it stops the old connector starts no new one", async () => {
+  let retired = false;
+  const { ports, calls } = fakePorts([READ_ONLY], { owned: true, foreign: true, admitted: () => !retired });
+  const stop = ports.stop!;
+  ports.stop = () => { retired = true; return stop(); };
+  expect(await ensureTelegramConnector(CONNECTOR_SESSION, ports)).toEqual({ ok: false, code: "connector_failed" });
+  expect(calls.stops).toBe(1);
+  expect(calls.spawns).toBe(0);
+});
+
+test("a predecessor whose connector never became ready leaves its successor's connector running", async () => {
+  const { ports, calls, runner } = fakePorts([]);
+  const record = ports.recordProcess!;
+  /* The successor records its own runner for the same credential while this
+     Viewer still waits for readiness. */
+  ports.recordProcess = (...args) => {
+    const recorded = record(...args);
+    runner.foreign = true;
+    return recorded;
+  };
+  expect(await ensureTelegramConnector(CONNECTOR_SESSION, ports)).toEqual({ ok: false, code: "connector_failed" });
+  expect(calls.spawns).toBe(1);
+  /* The one stop before the spawn, and none at the readiness deadline. */
+  expect(calls.stops).toBe(1);
+});
+
+test("retirement ends the runner this Viewer started and leaves one it did not start", async () => {
+  const { asRelease, endConnectorProcess, startConnectorFromRelease } = await import("./fixtures/releaseConnector");
+  const { retireTelegramConnectorSupervisor, spawnTelegramConnectorProcess } = await import("./connector");
+  const { saveTelegramSession } = await import("./sessionStore");
+  const session = saveTelegramSession(PLACEHOLDER_SESSION);
+  const retired = Symbol.for("delegatus.telegramConnector.retired");
+  const pids: number[] = [];
+  const probe = async () => READ_ONLY_FOR(session.connectorToken);
+  try {
+    await asRelease(path.join(SANDBOX, "release-d"), async () => {
+      const ports: TelegramConnectorPorts = {
+        spawn: (spec) => { const child = spawnTelegramConnectorProcess(spec); if (child?.pid) pids.push(child.pid); return child; },
+        probe, sleep: async () => {}, now: () => Date.now(),
+      };
+      expect((await ensureTelegramConnector(session, ports)).ok).toBe(true);
+      await retireTelegramConnectorSupervisor();
+      expect(() => process.kill(pids[0]!, 0)).toThrow();
+      /* Admission stays closed: no later check starts another. */
+      expect(await ensureTelegramConnector(session, ports)).toEqual({ ok: false, code: "connector_failed" });
+      expect(pids).toHaveLength(1);
+    });
+    delete (globalThis as Record<symbol, unknown>)[retired];
+    const earlier = startConnectorFromRelease(path.join(SANDBOX, "release-e"));
+    pids.push(earlier.pid);
+    await retireTelegramConnectorSupervisor();
+    expect(() => process.kill(earlier.pid, 0)).not.toThrow();
+    await asRelease(path.join(SANDBOX, "release-e"), () => stopTelegramConnector());
+  } finally {
+    delete (globalThis as Record<symbol, unknown>)[retired];
+    for (const pid of pids) endConnectorProcess(pid);
+  }
+}, 20_000);
+
+test("a connector ends when the Viewer that started it dies, and an agent that Viewer started lives on", async () => {
+  const python = Bun.which("python3");
+  expect(python).not.toBeNull();
+  const { saveTelegramSession } = await import("./sessionStore");
+  const { stagedConnectorSourceDir } = await import("./packaging");
+  saveTelegramSession(PLACEHOLDER_SESSION);
+  /* The real entrypoint over a stand-in vendor tree whose server only waits. */
+  const vendor = stagedConnectorSourceDir();
+  for (const [file, body] of Object.entries({
+    "mcp/__init__.py": "", "mcp/server/__init__.py": "",
+    "mcp/server/fastmcp.py": "class FastMCP:\n    def streamable_http_app(self):\n        return None\n",
+    "telegram_mcp/__init__.py": "",
+    "telegram_mcp/runtime.py": [
+      "class _Tool:", "    def __init__(self, name):", "        self.name = name", "",
+      "class _Tools:", "    tools = [_Tool('get_me'), _Tool('wait_for_settled_message')]",
+      "    def list_tools(self):", "        return list(self.tools)",
+      "    def remove_tool(self, name):", "        self.tools = [tool for tool in self.tools if tool.name != name]", "",
+      "class _Server:", "    name = ''", "",
+      "class _Mcp:", "    _mcp_server = _Server()", "    _tool_manager = _Tools()", "",
+      "mcp = _Mcp()", "",
+    ].join("\n"),
+    "telegram_mcp/runner.py": [
+      "import os", "import time", "",
+      "def main():",
+      "    open(os.path.join(os.path.dirname(__file__), '..', 'runner-ready'), 'w').close()",
+      "    while True:", "        time.sleep(1)", "",
+    ].join("\n"),
+  })) {
+    fs.mkdirSync(path.dirname(path.join(vendor, file)), { recursive: true });
+    fs.writeFileSync(path.join(vendor, file), body);
+  }
+  const viewer = path.join(SANDBOX, "lease-viewer.mjs");
+  fs.writeFileSync(viewer, [
+    "import { spawn } from 'node:child_process';",
+    `const { connectorServerName, ensureTelegramConnector, spawnTelegramConnectorProcess } = await import(${JSON.stringify(path.join(import.meta.dir, "connector.ts"))});`,
+    `const { readTelegramSession } = await import(${JSON.stringify(path.join(import.meta.dir, "sessionStore.ts"))});`,
+    "const session = readTelegramSession();",
+    "let runner = 0;",
+    "const result = await ensureTelegramConnector(session, {",
+    "  spawn: (spec) => { const child = spawnTelegramConnectorProcess(spec); runner = child?.pid ?? 0; return child; },",
+    "  probe: async () => ({ ok: true, serverName: connectorServerName(session.connectorToken), tools: [{ name: 'get_me', readOnly: true }] }),",
+    "  sleep: async () => {}, now: () => Date.now(), admitted: () => true,",
+    "});",
+    /* An agent this Viewer starts after the runner: it must not inherit the lease. */
+    "const agent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });",
+    "agent.unref();",
+    "process.stdout.write(JSON.stringify({ ok: result.ok, runner, agent: agent.pid }) + '\\n');",
+    "setInterval(() => {}, 1000);",
+    "",
+  ].join("\n"));
+  const { procBackend } = await import("@/lib/proc");
+  const started = spawn(process.execPath, [viewer], {
+    stdio: ["ignore", "pipe", "inherit"],
+    env: { ...process.env, LLV_TELEGRAM_PYTHON: python!, LLV_TELEGRAM_SERVER_BRIDGE: path.resolve(import.meta.dir, "../../../bin/telegram-mcp-server.py") },
+  });
+  let launched: { ok: boolean; runner: number; agent: number } | null = null;
+  try {
+    launched = await Promise.race([
+      new Promise<{ ok: boolean; runner: number; agent: number }>((resolve) => {
+        let buffered = "";
+        started.stdout!.on("data", (chunk: Buffer) => {
+          buffered += chunk.toString();
+          if (buffered.includes("\n")) resolve(JSON.parse(buffered.split("\n")[0]!));
+        });
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ]);
+    expect(launched?.ok).toBe(true);
+    /* The runner got past its imports and is serving before the Viewer dies. */
+    const ready = path.join(vendor, "runner-ready");
+    const readyBy = Date.now() + 5_000;
+    while (!fs.existsSync(ready) && Date.now() < readyBy) await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(fs.existsSync(ready)).toBe(true);
+    const runnerIdentity = procBackend.processIdentity(launched!.runner);
+    expect(runnerIdentity).not.toBeNull();
+    /* The Viewer crashes: no shutdown code of its own runs. */
+    started.kill("SIGKILL");
+    const deadline = Date.now() + 5_000;
+    while (procBackend.processIdentity(launched!.runner) === runnerIdentity && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(procBackend.processIdentity(launched!.runner)).not.toBe(runnerIdentity);
+    expect(() => process.kill(launched!.agent, 0)).not.toThrow();
+  } finally {
+    try { started.kill("SIGKILL"); } catch { /* already gone */ }
+    for (const pid of [launched?.runner, launched?.agent]) {
+      if (pid && pid > 1) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+    }
   }
 }, 20_000);
 

@@ -476,6 +476,16 @@ class CheckoutIntegration(unittest.TestCase):
         self.inventory_overrides = {}
         self.inventory_reads = 0
         self.recovery_overrides = {}
+        # The service's kernel cgroup, under the slice its unit configures.
+        self.cgroup = self.root / "cgroup"
+        self.slice_group = "/user.slice/synthetic.slice"
+        self.service_group = self.slice_group + "/synthetic-viewer.service"
+        self.parents = {}
+        self.cmdlines = {}
+        self.groups = {}
+        self.moving = set()
+        self.stat_reads = 0
+        self.members = [101, 102, 103]
         self.set_record(OLD)
         fixture = self
         class Transport:
@@ -515,8 +525,19 @@ class CheckoutIntegration(unittest.TestCase):
         self.addCleanup(env.stop)
         self.adapter = deploy.Checkout(self.plan, clock=FakeClock(), process_read=self.process,
                                        http=self.http, runtime=lambda record: {"ready": True},
-                                       execute=self.execute, mcp_factory=Transport)
+                                       execute=self.execute, mcp_factory=Transport, cgroup_root=self.cgroup)
         self.addCleanup(self.adapter.close)
+
+    @property
+    def members(self):
+        return self._members
+
+    @members.setter
+    def members(self, pids):
+        self._members = pids
+        directory = self.cgroup / self.service_group.lstrip("/")
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "cgroup.procs").write_text("".join(str(pid) + "\n" for pid in pids))
 
     def set_record(self, sha):
         offset = 0 if sha == OLD else 100
@@ -531,8 +552,16 @@ class CheckoutIntegration(unittest.TestCase):
         if self.old_gone and pid < 200:
             raise FileNotFoundError("old release and old stage exited")
         root = self.releases / self.current[:12]
-        return {"stat": str(pid) + " (synthetic process) " + " ".join(["S"] + ["0"] * 18 + [str(pid)]),
-                "cmdline": ("bun\0" + str(root / "bin/cli.mjs") + "\0").encode(), "cwd": str(root)}[field]
+        identity = str(pid)
+        if field == "stat" and pid in self.moving:
+            # A recycled PID: every read finds a different process.
+            self.stat_reads += 1
+            identity += "-" + str(self.stat_reads)
+        self.reads = getattr(self, "reads", 0) + 1
+        # CPU time changes on every read of a live process; the start identity does not.
+        return {"stat": str(pid) + " (synthetic process) " + " ".join(["S", str(self.parents.get(pid, 1))] + ["0"] * 10 + [str(self.reads)] + ["0"] * 6 + [identity]),
+                "cmdline": self.cmdlines.get(pid, "bun\0" + str(root / "bin/cli.mjs") + "\0").encode(), "cwd": str(root),
+                "cgroup": "0::" + self.groups.get(pid, self.service_group) + "\n"}[field]
 
     def execute(self, args, cwd=None):
         self.commands.append(args)
@@ -543,10 +572,15 @@ class CheckoutIntegration(unittest.TestCase):
         if args[:2] == ["git", "status"] or "list-jobs" in args:
             return ""
         if "show" in args:
+            if "ControlGroup" in args:
+                if args[3].endswith(".slice"):
+                    return "ControlGroup=" + self.slice_group
+                return "Slice=synthetic.slice\nControlGroup=" + self.service_group
             return "KillMode=process\nActiveState=active" if "KillMode" in args else "ActiveState=active"
         if "restart" in args:
             self.current = TARGET
             self.set_record(TARGET)
+            self.members = [201, 202, 203]
             self.old_gone = True
             self.mcp_failures = 1
             self.http_failures = 1
@@ -613,6 +647,108 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertTrue(all(result["serving"][role]["sha"] == TARGET and result["serving"][role]["since"]
                             for role in ["launcher", "viewer", "runtimeHost"]))
         self.assertNotIn("KeyError", result["diagnostics"])
+
+    # A restart leaves every process KillMode=process spares in the service
+    # cgroup, and systemd then starts the replacement in that old cgroup path
+    # instead of the configured slice (2026-10-10: a Telegram connector runner
+    # of an earlier generation, re-parented to the user manager).
+    def leftover_members(self):
+        self.members = [101, 102, 103, 150, 151, 152, 153, 160, 161]
+        connector = str(self.releases / "2d611c2bc3b2" / "bin" / "telegram-mcp-server.py")
+        self.cmdlines.update({
+            150: "/state/telegram/venv/bin/python\0" + connector + "\0",
+            151: "tail\0-F\0/private/log\0",
+            152: "ugrep\0-r\0secret-pattern\0",
+            153: "synthetic-unknown\0",
+            # A child of the serving Viewer and a descendant of a live agent host.
+            160: "bun\0worker.js\0",
+            161: "sleep\0" + "60\0",
+        })
+        self.parents.update({150: 1, 151: 1, 152: 1, 153: 9999, 160: 102, 161: 170, 170: 104})
+
+    def test_leftover_helpers_in_the_service_cgroup_are_named_and_refuse_before_publication(self):
+        self.leftover_members()
+        with self.assertRaises(deploy.LeftoverProcesses) as refused:
+            deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        named = refused.exception.members
+        self.assertEqual([member["pid"] for member in named], [150, 151, 152, 153])
+        self.assertEqual([member["name"] for member in named],
+                         ["python telegram-mcp-server.py", "tail", "ugrep", "synthetic-unknown"])
+        self.assertEqual(named[0]["startIdentity"], "150")
+        self.assertEqual(named[0]["parentPid"], 1)
+        self.assertTrue(all(member["since"] for member in named))
+        # Base names only: arguments can carry paths and secrets.
+        self.assertNotIn("secret-pattern", json.dumps(named))
+        self.assertNotIn("/private/log", json.dumps(named))
+        self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+        self.assertFalse(any("restart" in c or "stop" in c or "kill" in c for c in self.commands))
+
+    def test_agents_and_the_serving_generation_are_not_leftovers(self):
+        self.members = [101, 102, 103, 160, 161]
+        self.parents.update({160: 102, 161: 170, 170: 104})
+        self.adapter.preflight()
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+
+    def test_preflight_refuses_with_the_list_on_the_command_line(self):
+        self.leftover_members()
+        with self.assertRaises(deploy.LeftoverProcesses):
+            self.adapter.preflight()
+        lines = deploy.leftover_lines(self.adapter.leftovers_found)
+        self.assertEqual(len(lines), 4)
+        self.assertIn("pid=150", lines[0])
+        self.assertIn("python telegram-mcp-server.py", lines[0])
+
+    def test_an_unreadable_or_moving_service_cgroup_refuses(self):
+        (self.cgroup / self.service_group.lstrip("/") / "cgroup.procs").unlink()
+        with self.assertRaises(RuntimeError):
+            self.adapter.preflight()
+        self.members = [101, 102, 103, 150]
+        self.moving.add(150)
+        with self.assertRaises(RuntimeError):
+            self.adapter.preflight()
+        self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+        self.assertFalse(any("restart" in c for c in self.commands))
+
+    def test_a_healthy_service_in_the_wrong_cgroup_fails_loudly(self):
+        self.service_group = "/user.slice/app.slice/synthetic-viewer.service"
+        self.members = self.members
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertTrue(result["serving"]["checks"]["http"])
+        self.assertFalse(result["serving"]["checks"]["placement"])
+        self.assertEqual(result["verdict"], "fail")
+        self.assertEqual(result["serving"]["placement"]["expected"], "/user.slice/synthetic.slice/synthetic-viewer.service")
+        self.assertEqual(result["serving"]["placement"]["actual"], "/user.slice/app.slice/synthetic-viewer.service")
+
+    def test_a_serving_process_outside_the_service_cgroup_fails_placement(self):
+        self.groups[202] = "/user.slice/app.slice/other.service"
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "fail")
+        self.assertFalse(result["serving"]["checks"]["placement"])
+
+    def test_missing_placement_reads_fail_closed(self):
+        execute = self.adapter.command
+        for unit, missing in [("service", "Slice"), ("service", "ControlGroup"), ("slice", "ControlGroup")]:
+            with self.subTest(unit=unit, missing=missing):
+                def without(args, cwd=None):
+                    output = execute(args, cwd)
+                    if "ControlGroup" in args and (unit == "slice") == args[3].endswith(".slice"):
+                        return "\n".join(line for line in output.splitlines() if not line.startswith(missing + "="))
+                    return output
+                self.adapter.command = without
+                self.assertFalse(self.adapter.serving()["checks"]["placement"])
+        self.adapter.command = execute
+
+    def test_correct_placement_passes(self):
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertTrue(result["serving"]["checks"]["placement"])
+        self.assertEqual(result["serving"]["placement"]["actual"], result["serving"]["placement"]["expected"])
+
+    def test_the_baseline_may_serve_from_the_old_cgroup_before_its_restart(self):
+        self.service_group = "/user.slice/app.slice/synthetic-viewer.service"
+        self.members = self.members
+        self.adapter.preflight()
 
     def test_pipeline_runs_reconcile_recovered_attempt(self):
         self.assert_stage_verdict(self.attempts, "pass", "recovered", 1)

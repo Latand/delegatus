@@ -1,5 +1,6 @@
 """Detached, observable checkout switch. Importing this module performs no I/O."""
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -46,10 +47,13 @@ def process_or_gone(adapter, entry):
         return None
 
 
-def ready(serving, target):
+def ready(serving, target, placement=True):
+    """The baseline is read with placement=False: putting the service into its
+    configured slice is what a restart does, so only the replacement owes it."""
     return all(serving.get(role, {}).get("sha") == target
                and serving.get(role, {}).get("healthy") is True
-               for role in ["launcher", "viewer", "runtimeHost"]) and all(serving.get("checks", {}).values())
+               for role in ["launcher", "viewer", "runtimeHost"]) and all(
+                   passed for name, passed in serving.get("checks", {}).items() if placement or name != "placement")
 
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=180):
@@ -357,6 +361,56 @@ def read_process(entry, read=proc_field):
         return None
 
 
+class LeftoverProcesses(RuntimeError):
+    """The service cgroup holds processes that are neither agents nor the
+    serving generation. KillMode=process spares them at the restart, and while
+    any of them remains systemd starts the replacement in that old cgroup path
+    instead of the configured slice (2026-10-08: tail and ugrep; 2026-10-10: a
+    Telegram connector runner of an earlier generation)."""
+    def __init__(self, members):
+        super().__init__("leftover processes in the service cgroup")
+        self.members = members
+
+
+def leftover_lines(members):
+    return ["Leftover in service cgroup: pid=" + str(member["pid"]) + " name=" + member["name"]
+            + " since=" + str(member["since"]) + " parent=" + str(member["parentPid"]) for member in members]
+
+
+def systemd_properties(output):
+    values = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key] = value
+    return values
+
+
+def parent_pid(stat):
+    return int(stat[stat.rfind(")") + 2:].split()[1])
+
+
+def kernel_cgroup(text):
+    """The cgroup v2 path of a process; anything else is unreadable."""
+    for line in text.splitlines():
+        if line.startswith("0::"):
+            return line[3:]
+    raise RuntimeError("process cgroup unreadable")
+
+
+def within(group, parent):
+    return group == parent or group.startswith(parent.rstrip("/") + "/")
+
+
+def process_name(args):
+    """The executable's base name, and a script's beside it: the arguments
+    themselves can carry paths and credentials."""
+    names = [os.path.basename(args[0])] if args and args[0] else []
+    if len(args) > 1 and re.search(r"\.(py|mjs|cjs|js|ts)$", args[1]):
+        names.append(os.path.basename(args[1]))
+    return " ".join(names) or "unknown"
+
+
 def stage_outcome(host, attempts, activity):
     current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default=None)
     result = {"stageId": host["stageId"], "attempt": current["n"] if current else None, "outcome": "unknown"}
@@ -530,8 +584,12 @@ class Checkout:
     clock = Clock()
 
     def __init__(self, config, run_id=None, *, process_read=proc_field, http=http_read,
-                 runtime=socket_health, execute=command, clock=None, mcp_factory=Mcp):
+                 runtime=socket_health, execute=command, clock=None, mcp_factory=Mcp,
+                 cgroup_root="/sys/fs/cgroup"):
         self.clock = clock or Clock()
+        self.cgroup_root = pathlib.Path(cgroup_root)
+        self.agents = {}
+        self.leftovers_found = []
         self.process_read, self.http, self.runtime, self.command = process_read, http, runtime, execute
         self.config_file = pathlib.Path(config).resolve()
         self.plan = json.loads(self.config_file.read_text())
@@ -608,7 +666,7 @@ class Checkout:
         if "KillMode=process" not in properties.splitlines() or "ActiveState=active" not in properties.splitlines() or self.jobs():
             raise RuntimeError("agent preservation or idle service fence unavailable")
         def baseline_ready():
-            if not ready(self.serving(), self.baseline["sha"]):
+            if not ready(self.serving(), self.baseline["sha"], placement=False):
                 raise RuntimeError("baseline serving health unavailable")
         retry(baseline_ready, self.clock, 30)
         def capture():
@@ -616,15 +674,97 @@ class Checkout:
             return complete_activity(answer)
         rows = retry(capture, self.clock, 30)
         hosts = []
+        self.agents = {}
         for row in rows:
             host, pipeline = row.get("host") or {}, row.get("pipeline")
+            if host.get("state") == "alive" and isinstance(host.get("pid"), int):
+                proc = self.process({"pid": host["pid"]})
+                if proc:
+                    self.agents[host["pid"]] = proc["startIdentity"]
             if pipeline and host.get("state") == "alive" and row.get("turnState") == "busy":
                 entry = {"pid": host["pid"]}
                 proc = self.process(entry)
                 hosts.append({**entry, "startIdentity": proc["startIdentity"] if proc else None,
                               "conversationId": row["conversationId"], "pipelineId": pipeline["pipelineId"],
                               "stageId": pipeline["stageId"], "attempt": pipeline["attempt"]})
+        # Last, so the inventory is read immediately before publication.
+        self.fence()
         return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
+
+    def placement(self):
+        """The slice the unit configures and the cgroup it actually runs in.
+        A missing value is unreadable, never a match."""
+        unit = systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "Slice", "-p", "ControlGroup"]))
+        configured, actual = unit.get("Slice"), unit.get("ControlGroup")
+        if not configured or not actual:
+            raise RuntimeError("service placement unreadable")
+        parent = systemd_properties(self.command(["systemctl", "--user", "show", configured, "-p", "ControlGroup"])).get("ControlGroup")
+        if not parent:
+            raise RuntimeError("slice placement unreadable")
+        return {"slice": configured, "expected": parent.rstrip("/") + "/" + self.unit, "actual": actual}
+
+    def members(self, group):
+        """Every PID in the cgroup subtree. A subtree that cannot be read whole
+        is refused rather than read as empty."""
+        root = self.cgroup_root / group.lstrip("/")
+        if not root.is_dir():
+            raise RuntimeError("service cgroup unreadable")
+        def refuse(error):
+            raise error
+        pids = set()
+        try:
+            for directory, _, _ in os.walk(root, onerror=refuse):
+                pids.update(int(pid) for pid in (pathlib.Path(directory) / "cgroup.procs").read_text().split())
+        except (OSError, ValueError):
+            raise RuntimeError("service cgroup unreadable") from None
+        return sorted(pids)
+
+    def owner(self, pid, owners):
+        """Walks the parents of a process to the serving generation or an agent
+        host, each matched by its start identity. A process re-parented to the
+        user manager reaches neither."""
+        seen = set()
+        while pid > 1 and pid not in seen and len(seen) < 64:
+            seen.add(pid)
+            stat = self.process_read(pid, "stat")
+            if owners.get(pid, (None, None))[1] == start_identity(stat):
+                return owners[pid][0]
+            pid = parent_pid(stat)
+        return None
+
+    def leftovers(self, group):
+        record = json.loads(self.record_file.read_text())
+        owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
+        for key in ["launcher", "web", "runtimeHost"]:
+            owners[record[key]["pid"]] = ("current", record[key].get("startIdentity"))
+        found = []
+        for pid in self.members(group):
+            try:
+                stat = self.process_read(pid, "stat")
+                if self.owner(pid, owners) is not None:
+                    continue
+                args = self.process_read(pid, "cmdline").decode().split("\0")
+                if start_identity(self.process_read(pid, "stat")) != start_identity(stat):
+                    raise RuntimeError("service cgroup member changed while it was read")
+            except FileNotFoundError:
+                # Exited since the cgroup was listed, or a parent left mid-walk:
+                # a recheck must classify it again.
+                if self.process({"pid": pid}) is None:
+                    continue
+                raise RuntimeError("service cgroup member moved while it was read")
+            identity = start_identity(stat)
+            found.append({"pid": pid, "startIdentity": identity, "name": process_name(args),
+                          "parentPid": parent_pid(stat), "since": self.clock.process_since(identity)})
+        return found
+
+    def fence(self):
+        """Refuses, naming them, while the service cgroup holds a process that
+        is neither an agent nor the serving generation. Nothing is signalled."""
+        group = self.placement()["actual"]
+        self.leftovers_found = retry(lambda: self.leftovers(group), self.clock, 10)
+        if self.leftovers_found:
+            self.emit({"leftovers": self.leftovers_found})
+            raise LeftoverProcesses(self.leftovers_found)
 
     def publish(self):
         # Repeat the immutability fences immediately before the atomic write.
@@ -724,6 +864,17 @@ class Checkout:
             if set(re.findall(r"pid=(\d+)", listeners)) != {str(record["web"]["pid"])}:
                 raise RuntimeError("Viewer listener identity mismatch")
         check("service", service)
+        def placement():
+            observed = self.placement()
+            result["placement"] = observed
+            if observed["actual"] != observed["expected"]:
+                with contextlib.suppress(Exception):
+                    observed["leftovers"] = self.leftovers(observed["actual"])
+                raise RuntimeError("service runs outside its configured slice")
+            for key in ["launcher", "web", "runtimeHost"]:
+                if not within(kernel_cgroup(self.process_read(record[key]["pid"], "cgroup")), observed["actual"]):
+                    raise RuntimeError("serving process outside the service cgroup")
+        check("placement", placement)
         return result
 
     def emit(self, event):
@@ -739,6 +890,9 @@ class Checkout:
             serving = " ".join(role + "=" + str(event["serving"].get(role, {}).get("sha"))
                                + " since=" + str(event["serving"].get(role, {}).get("since"))
                                for role in ["launcher", "viewer", "runtimeHost"])
+            placement = event["serving"].get("placement")
+            if placement and event["serving"].get("checks", {}).get("placement") is False:
+                serving += " placement=FAILED expected=" + placement["expected"] + " actual=" + placement["actual"]
             with open(self.run_dir / "switch.log", "a") as stream:
                 stream.write("Verdict: " + event["verdict"] + " " + serving + "\n")
             write_json(self.run_dir.parent / ("latest-" + self.install + ".json"),
@@ -790,10 +944,14 @@ def main():
             return {"pass": 0, "fail": 1, "needs_decision": 2}[result["verdict"]]
     except Exception as error:
         # Public console output never carries arbitrary exception text.
+        leftovers = error.members if isinstance(error, LeftoverProcesses) else None
         if adapter and adapter.run_dir:
             observed = result or getattr(adapter, "last_result", None)
             if observed is None:
-                adapter.emit({"verdict": "needs_decision", "serving": {}, "diagnostics": [type(error).__name__], "phase": "before-switch"})
+                adapter.emit({"verdict": "needs_decision", "serving": {}, "diagnostics": [type(error).__name__],
+                              "phase": "before-switch", **({"leftovers": leftovers} if leftovers else {})})
+        for line in leftover_lines(leftovers or []):
+            print(line, file=sys.stderr)
         print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
         return 2
     finally:

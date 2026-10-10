@@ -49,6 +49,19 @@ catalog is pending or stale, or transcript evidence is unreadable or projected.
 A consistently capped inventory needs a complete enumeration before this
 procedure can run.
 
+With `KillMode=process` a restart spares every process left in the service's
+cgroup, and while one remains systemd starts the replacement in that old cgroup
+path instead of the slice the unit configures. Preflight therefore reads the
+service's kernel cgroup subtree last, immediately before publication, and
+classifies each member by walking its parents to the serving launcher, Viewer
+or runtime host, or to a live agent host from the protected-host capture, each
+matched by its start identity. Any other member refuses the switch before
+publication or restart and is named on standard error and in `switch.log`:
+pid, start identity, start time, parent pid and the base names of its
+executable and script, never its arguments. Nothing is signalled. A subtree
+that cannot be read whole, or a member whose identity changes while it is
+read, refuses as well.
+
 Validate without publishing or restarting:
 
 ```sh
@@ -118,9 +131,17 @@ bounded recovery reads. A terminal host-loss error without a live replacement
 records lost work. A stage's ordinary completed verdict also counts as completed
 work when its host exits.
 
+Every serving sample also checks placement: the unit's `ControlGroup` must be
+its configured `Slice`'s own `ControlGroup` followed by the unit name, and the
+launcher, Viewer and runtime host must run inside it. A missing value fails the
+check. The sample records the expected and actual cgroup, and when they differ,
+the members that neither the serving generation nor an agent accounts for; the
+`Verdict:` line repeats the mismatch. The baseline is exempt in preflight,
+because reaching the configured slice is what the restart does.
+
 The final verdict describes the final sample: `pass` requires all three
-processes serving the target, successful HTTP/socket/MCP/service checks and
-protected work preserved or recovered. `fail` names unhealthy or different
+processes serving the target, successful HTTP/socket/MCP/service/placement
+checks and protected work preserved or recovered. `fail` names unhealthy or different
 serving processes or confirmed lost work. `needs_decision` names unresolved
 protected work or a preflight refusal. Earlier submission or read errors cannot
 override a healthy recovered final state. The procedure issues one restart and

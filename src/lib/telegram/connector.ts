@@ -45,11 +45,21 @@ export { TELEGRAM_CONNECTOR_LOG_MAX_BYTES, telegramConnectorLogPath };
  *
  * The spawned pid and its portable process identity persist in
  * `<state>/telegram/connector.json`, so a LATER Viewer generation — the one
- * actually handling the logout or local deletion — can stop the connector it
- * adopted rather than only one it spawned itself. Identity comes from the
- * platform `procBackend` (kernel start token on Linux, the darwin identity on
- * macOS), exact argv, credentialRef, and token digest, so a recycled pid or a
- * connector for another credential generation is never adopted or signaled.
+ * actually handling the logout or local deletion — can stop a connector it
+ * did not spawn itself. Identity comes from the platform `procBackend`
+ * (kernel start token on Linux, the darwin identity on macOS), exact argv,
+ * credentialRef, and token digest, so a recycled pid or a connector for
+ * another credential generation is never adopted or signaled.
+ *
+ * A runner lives no longer than the Viewer process that started it. That
+ * Viewer holds the runner's stdin as a lease and the runner ends when the
+ * lease closes; the launcher waits for it before the service stops
+ * (`bin/telegram-connector-retire.mjs`). Only that Viewer adopts it: a later
+ * Viewer, of this release or the next, replaces it with its own. A runner
+ * that a Viewer adopted across restarts kept the service's old cgroup
+ * populated, so every restart started the service there instead of in its
+ * configured slice (2026-10-10). Only the Viewer that owns traffic replaces
+ * or signals a runner, so a predecessor never stops its successor's.
  */
 
 /** The audited read surface: every `readOnlyHint=True` tool in the vendored
@@ -100,6 +110,10 @@ export interface TelegramConnectorPorts {
   recordProcess?(child: ConnectorChild, spec: ProcessSpec, binding: ConnectorBinding): boolean;
   stop?(): Promise<void> | void;
   beginOperation?(): () => boolean;
+  /** Whether the recorded runner was started by this Viewer process. */
+  ownGeneration?(): boolean;
+  /** Whether this Viewer may start, replace or signal a runner. */
+  admitted?(): boolean | Promise<boolean>;
   probeTimeoutMs?: number;
 }
 
@@ -176,16 +190,23 @@ export async function probeTelegramConnector(url: string, connectorToken: string
   }
 }
 
+/** Starts the runner with its stdin as this process's lease on it. Nothing is
+    written to the pipe; its write end closes when this process exits, and the
+    runner ends then (bin/telegram-mcp-server.py). The descriptor is
+    close-on-exec, so no agent this Viewer starts later can hold it open. */
+export function spawnTelegramConnectorProcess(spec: ProcessSpec): ConnectorChild | null {
+  try {
+    const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ["pipe", "ignore", "ignore"], detached: true });
+    child.stdin?.on("error", () => undefined);
+    child.unref();
+    return child;
+  } catch {
+    return null;
+  }
+}
+
 const realPorts: TelegramConnectorPorts = {
-  spawn(spec) {
-    try {
-      const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdio: "ignore", detached: true });
-      child.unref();
-      return child;
-    } catch {
-      return null;
-    }
-  },
+  spawn: spawnTelegramConnectorProcess,
   probe: probeTelegramConnector,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),
@@ -217,6 +238,11 @@ type ConnectorRecord = {
   feedSince?: string;
   /** Present only when stdout/stderr are bounded inside the connector process. */
   logSinkVersion?: 1;
+  /** The Viewer process that started the runner and holds its stdin lease.
+      Absent on a record written before leases, whose runner no Viewer adopts. */
+  ownerPid?: number;
+  ownerIdentity?: string;
+  lease?: "stdin";
 };
 
 let liveConnectorChild: {
@@ -248,6 +274,9 @@ function readConnectorRecord(): ConnectorRecord | null {
     if (row.feedFile !== undefined && typeof row.feedFile !== "string") return null;
     if (row.feedSince !== undefined && typeof row.feedSince !== "string") return null;
     if (row.logSinkVersion !== undefined && row.logSinkVersion !== 1) return null;
+    if (row.ownerPid !== undefined && (!Number.isInteger(row.ownerPid) || row.ownerPid <= 1)) return null;
+    if (row.ownerIdentity !== undefined && typeof row.ownerIdentity !== "string") return null;
+    if (row.lease !== undefined && row.lease !== "stdin") return null;
     return row as ConnectorRecord;
   } catch {
     return null;
@@ -261,11 +290,11 @@ function readConnectorRecord(): ConnectorRecord | null {
  * process, together with the kernel identity of that process. A process that
  * still carries that identity and still runs the recorded interpreter on the
  * recorded entry is that connector, whichever release started it. The entry
- * lives inside a release directory, a self-update moves the release, and the
- * detached connector outlives both. The release that owns traffic has to
- * adopt or stop that process, so the entry is compared by its file name, the
+ * lives inside a release directory, and a runner started before leases
+ * outlives the release that started it. The release that owns traffic has to
+ * be able to stop that process, so the entry is compared by its file name, the
  * same in every release; the interpreter lives in the state directory and is
- * compared whole.
+ * compared whole. Adoption asks more ({@link recordedConnectorIsThisGeneration}).
  */
 function connectorArgvMatches(record: ConnectorRecord): boolean {
   const argv = procBackend.readArgv(record.pid);
@@ -310,6 +339,45 @@ function ownsRecordedConnector(binding: ConnectorBinding): boolean {
     && connectorArgvMatches(record));
 }
 
+/** This Viewer process as a runner's owner; the pid alone where the platform
+    reports no start identity. */
+function viewerProcessOwner(): { pid: number; identity: string } {
+  return { pid: process.pid, identity: procBackend.processIdentity(process.pid) ?? `pid:${process.pid}` };
+}
+
+/**
+ * Whether the recorded runner was started by this Viewer process, under its
+ * lease, from this release's exact entry. Only such a runner is adopted. One
+ * started by an earlier Viewer, by a previous service invocation or from an
+ * older release directory is replaced, even while it answers healthy.
+ */
+function recordedConnectorIsThisGeneration(): boolean {
+  const record = readConnectorRecord();
+  const owner = viewerProcessOwner();
+  return Boolean(record && record.lease === "stdin"
+    && record.ownerPid === owner.pid && record.ownerIdentity === owner.identity
+    && record.command === telegramVenvPython() && record.entrypoint === telegramMcpServerPath());
+}
+
+const RETIRED = Symbol.for("delegatus.telegramConnector.retired");
+type RetirementFlag = { [RETIRED]?: boolean };
+
+/** Process-wide, because Next can load this module more than once. */
+function supervisorRetired(): boolean {
+  return (globalThis as RetirementFlag)[RETIRED] === true;
+}
+
+/**
+ * Whether this Viewer may start, replace or signal a runner: it owns traffic
+ * and has not been retired. A Viewer past its release handover still reads a
+ * healthy runner, which is its successor's, and never touches it.
+ */
+async function connectorAdmissionOpen(): Promise<boolean> {
+  if (supervisorRetired()) return false;
+  const { viewerReleaseOwnsTraffic } = await import("@/lib/viewerInstrumentation");
+  return viewerReleaseOwnsTraffic();
+}
+
 /** Whether this credential generation still owns the recorded live process. */
 export function telegramConnectorOwnsSession(session: ConnectorBinding): boolean {
   return ownsRecordedConnector(session);
@@ -351,6 +419,7 @@ function recordConnectorProcess(child: ConnectorChild, spec: ProcessSpec, bindin
     return false;
   }
   liveConnectorChild = { child, pid, identity };
+  const owner = viewerProcessOwner();
   const record: ConnectorRecord = {
     version: 1,
     pid,
@@ -368,6 +437,9 @@ function recordConnectorProcess(child: ConnectorChild, spec: ProcessSpec, bindin
       && spec.env.LLV_TELEGRAM_CONNECTOR_LOG_MAX_BYTES === String(TELEGRAM_CONNECTOR_LOG_MAX_BYTES)
       ? { logSinkVersion: 1 as const }
       : {}),
+    ownerPid: owner.pid,
+    ownerIdentity: owner.identity,
+    ...(spec.env?.LLV_TELEGRAM_CONNECTOR_LEASE === "stdin" ? { lease: "stdin" as const } : {}),
   };
   const tmp = `${pidFilePath()}.${process.pid}.tmp`;
   try {
@@ -496,13 +568,12 @@ async function verifiedProbe(
 
 /**
  * Brings the shared connector up for the stored session and resolves only
- * once its read-only surface is verified. A process already listening on the
- * shared port (a previous Viewer generation's connector, still recorded in
- * the pid file) is adopted, not duplicated — that keeps the process count at
- * one across Viewer restarts and across a self-update, where the listener was
- * started from the previous release's directory. Launch metadata controls which feed coverage the
- * report may trust; it never turns a healthy current-credential process into
- * a restart candidate during a fresh health check.
+ * once its read-only surface is verified. A runner this Viewer process started
+ * is adopted, not duplicated. Any other recorded runner, from an earlier
+ * Viewer, service invocation or release, is stopped and replaced, so one
+ * process serves the account and it belongs to the Viewer that owns traffic.
+ * A Viewer that no longer owns traffic uses a healthy runner as it finds it
+ * and never replaces or signals one.
  */
 export async function ensureTelegramConnector(
   session: StoredTelegramSession,
@@ -512,20 +583,26 @@ export async function ensureTelegramConnector(
   const binding = { credentialRef: session.credentialRef, connectorToken: session.connectorToken };
   const stop = ports.stop ?? stopRealConnectorUnlocked;
   const ownsProcess = ports.ownsProcess ?? ownsRecordedConnector;
+  const ownGeneration = ports.ownGeneration ?? recordedConnectorIsThisGeneration;
+  const admitted = async () => await (ports.admitted ?? connectorAdmissionOpen)();
   let isCurrent = ports.beginOperation?.() ?? (() => true);
   const prepared = await withConnectorSupervisorLock(async (): Promise<ConnectorEnsureResult | "spawned"> => {
     if (ownsProcess(binding)) {
-      const adopted = await verifiedProbe(url, session.connectorToken, ports);
-      if (!isCurrent()) return { ok: false, code: "connector_failed" };
-      if (adopted && adopted !== "timeout") {
-        if (!adopted.ok) await stop();
-        return adopted;
+      const replaceable = await admitted();
+      if (ownGeneration() || !replaceable) {
+        const adopted = await verifiedProbe(url, session.connectorToken, ports);
+        if (!isCurrent()) return { ok: false, code: "connector_failed" };
+        if (adopted && adopted !== "timeout") {
+          if (!adopted.ok && await admitted()) await stop();
+          return adopted;
+        }
       }
     }
-    /* Missing ownership, a credential-generation mismatch, or a failed probe
-       makes the current listener ineligible. Stop and record the replacement
-       while holding the cross-process supervisor lock, so another Viewer
-       generation can only adopt the one durable winner. */
+    if (!await admitted()) return { ok: false, code: "connector_failed" };
+    /* Missing ownership, a credential-generation mismatch, a failed probe or a
+       runner of another Viewer makes the current listener ineligible. Stop and
+       record the replacement while holding the cross-process supervisor lock,
+       so another Viewer generation can only see the one durable winner. */
     await stop();
     isCurrent = ports.beginOperation?.() ?? (() => true);
     const credentials = telegramApiCredentials();
@@ -536,7 +613,8 @@ export async function ensureTelegramConnector(
     } catch {
       return { ok: false, code: "connector_failed" };
     }
-    if (!isCurrent()) return { ok: false, code: "connector_failed" };
+    /* Retirement can land while the stop above waits. */
+    if (!isCurrent() || !await admitted()) return { ok: false, code: "connector_failed" };
     const child = ports.spawn(spec);
     if (!child) return { ok: false, code: "connector_failed" };
     const recordProcess = ports.recordProcess ?? recordConnectorProcess;
@@ -547,9 +625,12 @@ export async function ensureTelegramConnector(
     return "spawned";
   });
   if (prepared !== "spawned") return prepared;
+  /* Only the runner this Viewer started: by the time readiness gives up, a
+     successor may have replaced it with one of its own for the same
+     credential. */
   const stopThisGeneration = async (): Promise<void> => {
     await withConnectorSupervisorLock(async () => {
-      if (ownsProcess(binding)) await stop();
+      if (ownsProcess(binding) && ownGeneration()) await stop();
     });
   };
   const deadline = ports.now() + READY_DEADLINE_MS;
@@ -568,6 +649,21 @@ export async function ensureTelegramConnector(
   }
   await stopThisGeneration();
   return { ok: false, code: "connector_failed" };
+}
+
+/**
+ * Closes this Viewer's connector admission for good, then ends the runner it
+ * started, if that is still the recorded one. Called when the Viewer hands
+ * traffic to its successor: an operation already past its admission check
+ * stops at its next one, and a runner the successor already recorded is left
+ * alone.
+ */
+export async function retireTelegramConnectorSupervisor(): Promise<void> {
+  (globalThis as RetirementFlag)[RETIRED] = true;
+  supervisorGeneration += 1;
+  await withConnectorSupervisorLock(async () => {
+    if (recordedConnectorIsThisGeneration()) await stopRealConnectorUnlocked();
+  });
 }
 
 /** Stops the shared connector — the recorded process, whichever Viewer

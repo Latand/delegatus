@@ -278,6 +278,9 @@ export function connectorLaunchSpec(input: { credentialRef: string; sessionStrin
       LLV_TELEGRAM_EXCLUDED_TOOLS: TELEGRAM_BURST_CONSUMING_TOOLS.join(","),
       LLV_TELEGRAM_MCP_TOKEN: input.connectorToken,
       LLV_TELEGRAM_VENDOR_DIR: vendor,
+      /* The runner ends when the Viewer that started it closes its stdin
+         (bin/telegram-mcp-server.py), so it never outlives that Viewer. */
+      LLV_TELEGRAM_CONNECTOR_LEASE: "stdin",
       MCP_TRANSPORT: "http",
       MCP_HOST: TELEGRAM_MCP_HOST,
       MCP_PORT: String(telegramMcpPort()),

@@ -226,7 +226,10 @@ node bin/install-cpu-placement.mjs            # --unit NAME.service if the servi
 systemctl --user daemon-reload
 # Moving the service into delegatus.slice takes a restart; run it after hosted agents finish:
 systemctl --user restart delegatus.service
-systemctl --user show delegatus.service -p Slice -p CPUWeight
+# ControlGroup must end in delegatus.slice/delegatus.service. Slice alone reads the
+# configuration: while any process the restart spared stays in the old cgroup,
+# systemd reuses that path and the service never moves (2026-10-10).
+systemctl --user show delegatus.service -p Slice -p ControlGroup -p CPUWeight
 systemctl --user show delegatus-agents-work.slice -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec
 systemd-cgls --user-unit delegatus.slice
 cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/delegatus.slice/cgroup.subtree_control

@@ -974,6 +974,14 @@ export async function registerViewerRuntime(): Promise<void> {
       } catch (error) {
         console.error("[external relay] poller stop failed", error instanceof Error ? error.name : "unknown");
       }
+      /* The successor owns the Telegram connector from here: this Viewer
+         stops starting or replacing one and ends the runner it started. */
+      try {
+        const connector = await import("@/lib/telegram/connector");
+        await connector.retireTelegramConnectorSupervisor();
+      } catch (error) {
+        console.error("[telegram connector] retirement failed", error instanceof Error ? error.name : "unknown");
+      }
       await quiesceStartup();
       await completeViewerReleaseDemotion(async () => {
         if (fenced) return;
