@@ -3,9 +3,14 @@
 Every pull request runs `privacy-publication` from the default branch through
 `pull_request_target`. The job checks out trusted scanner, test, workflow, and
 fingerprint files separately, then handles the pull-request checkout as opaque
-inspection input for the trusted scan. After the trusted verdict and cache
-writes, the candidate's privacy tests run without credentials under a 90-second
-timeout. The scan covers committed, staged, unstaged, and untracked changes
+inspection input for the trusted scan. Default-branch privacy self-tests run
+under a 130-second timeout and report failures or timeouts as warnings, so a
+repair candidate can reach inspection when main's suite is broken. Trusted
+inspection must pass. After the trusted verdict and cache writes, the
+candidate's privacy tests must pass without credentials under their own
+130-second timeout; a failure or timeout refuses publication. Candidate code
+never supplies the scanner or fingerprint catalog for the trusted verdict.
+The scan covers committed, staged, unstaged, and untracked changes
 relative to the exact base SHA.
 Diagnostics expose finding classes and counts. Matched values, OCR text,
 metadata values, and file paths remain suppressed.
