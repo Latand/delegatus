@@ -275,7 +275,8 @@ test.skipIf(process.platform !== "linux")("cleanup archives a Codex account reti
   expect(codexSessionRoots()).toContain(path.join(fixture.archive, "sessions"));
   expect(pathAllowed(moved)).toBe(true);
   expect(agentRegistry().readOnlySnapshot().conversations[fixture.conversation.id]!.generations[0]!.path).toBe(moved);
-  expect(persistedAccountRegistry("codex").retired).toEqual([{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, archived: true }]);
+  const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, archived: true }];
+  expect(persistedAccountRegistry("codex").retired).toEqual(expectedRetired);
   expect(cleanupOrphanedCodexHomes()).toEqual({ removed: [], unresolved: [] });
 });
 
@@ -347,7 +348,8 @@ for (const checkpoint of ["journaled", "renamed", "registry-retired", "accounts-
 
     expect(recoverInterruptedCodexAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
     const committed = checkpoint === "registry-retired" || checkpoint === "accounts-committed";
-    expect(persistedAccountRegistry("codex").retired).toEqual([{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, ...(committed ? { archived: true } : {}) }]);
+    const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, ...(committed ? { archived: true } : {}) }];
+    expect(persistedAccountRegistry("codex").retired).toEqual(expectedRetired);
     expect(fs.existsSync(fixture.account.home)).toBe(!committed);
     if (!committed) expect(cleanupOrphanedCodexHomes()).toMatchObject({ unresolved: [], archived: [{ id: fixture.account.id }] });
     const moved = path.join(fixture.archive, path.relative(fixture.account.home, fixture.rollout));

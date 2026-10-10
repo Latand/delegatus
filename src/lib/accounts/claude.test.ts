@@ -452,7 +452,8 @@ test.skipIf(process.platform !== "linux")("cleanup archives a Claude account ret
   expect(fs.existsSync(path.join(fixture.archive, ".credentials.json"))).toBe(false);
   expect(fs.readFileSync(fixture.sharedTranscript, "utf8")).toBe("{\"cwd\":\"/repo\"}\n");
   expect(mod.claudeProjectRoots()).toContain(fixture.shared);
-  expect(persistedAccountRegistry("claude").retired).toEqual([{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, archived: true }]);
+  const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, archived: true }];
+  expect(persistedAccountRegistry("claude").retired).toEqual(expectedRetired);
   expect(mod.cleanupOrphanedClaudeHomes()).toEqual({ removed: [], unresolved: [] });
 });
 
@@ -662,7 +663,8 @@ for (const checkpoint of ["journaled", "renamed", "registry-retired", "accounts-
 
     expect(mod.recoverInterruptedClaudeAccountRemovals()).toEqual({ recovered: [fixture.account.id], unresolved: [] });
     const committed = checkpoint === "registry-retired" || checkpoint === "accounts-committed";
-    expect(persistedAccountRegistry("claude").retired).toEqual([{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, ...(committed ? { archived: true } : {}) }]);
+    const expectedRetired = [{ id: fixture.account.id, label: fixture.account.label, retiredAt: 1234, ...(committed ? { archived: true } : {}) }];
+    expect(persistedAccountRegistry("claude").retired).toEqual(expectedRetired);
     expect(fs.existsSync(fixture.account.home)).toBe(!committed);
     if (!committed) expect(mod.cleanupOrphanedClaudeHomes()).toMatchObject({ unresolved: [], archived: [{ id: fixture.account.id }] });
     expect(fs.readFileSync(path.join(fixture.archive, "history.jsonl"), "utf8")).toBe(LEFTOVERS["history.jsonl"]!);
