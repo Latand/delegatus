@@ -160,7 +160,33 @@ test("an account id nobody offers falls back to the engine's active one", () => 
   expect(resolveLaunchAccountId(parsed, "claude", "removed")).toBe("primary");
   expect(resolveLaunchAccountId(parsed, "claude", "spare")).toBe("spare");
   expect(resolveLaunchAccountId(parsed, "codex", "primary")).toBe("codex-a");
-  expect(resolveLaunchAccountId(null, "claude", "primary")).toBe("");
+});
+
+test("before the accounts answer, the operator's pick is the account the launch carries", async () => {
+  expect(resolveLaunchAccountId(null, "claude", "spare")).toBe("spare");
+  /* No pick and no catalog: the launch names no account, and the engine's own choice takes it. */
+  expect(resolveLaunchAccountId(null, "claude", "")).toBe("");
+
+  /* A draft remounted with its pick in storage, while the catalog read is still waiting for an answer. */
+  store.clear();
+  store.set("accountId", "spare");
+  let answer: (response: Response) => void = () => {};
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input) === "/api/accounts") return new Promise<Response>((resolve) => { answer = resolve; });
+    return { ok: true, status: 200, json: async () => ({}) } as Response;
+  }) as typeof fetch;
+  const { draft } = mount();
+  await settle();
+  expect(draft().catalog).toBeNull();
+  expect(draft().accountId).toBe("spare");
+  expect(draft().launchAccountId).toBe("spare");
+
+  /* The answer arrives: the pick is checked against it, and here it is one the engine offers. */
+  answer({ ok: true, status: 200, json: async () => catalog } as Response);
+  await settle();
+  flushSync(() => undefined);
+  expect(draft().catalog).not.toBeNull();
+  expect(draft().launchAccountId).toBe("spare");
 });
 
 test("a malformed accounts body hides the selector rather than breaking the draft", () => {
