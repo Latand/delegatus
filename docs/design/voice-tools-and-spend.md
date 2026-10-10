@@ -777,9 +777,14 @@ Project reconciliation runs independently of event heartbeats. The microphone
 stays paused while a context acknowledgement is pending, and a healthy events
 connection keeps the same provider call alive beyond the watchdog window.
 Receipt publication is retained on the stored proposal, with matching request
-and operation references; older sessions recover it from their transcript.
+and operation references; older sessions recover it from their retained events
+or transcript. Their first poll recovers unconsumed correlated replies before
+establishing a watermark that excludes old unrelated reports.
 Standalone reports remain in the transcript in record order, with the project,
 status, time, retained text and a copy control, including reports after hangup.
+Opening a closed transcript reconciles fresh reports once without speaking.
+Compact pipeline detail reads retain each stage's kind and role without prompts
+or attempt history; list rows retain the cursor stage's latest verdict.
 
 ## Notes
 

@@ -417,6 +417,21 @@ export class CompanionAdmission {
       });
     }
   }
+  private hasPublishedReceipt(session: StoredSession, row: StoredProposal): boolean {
+    if (!row.delivery?.operationId) return false;
+    const matches = (delivery: Delivery | undefined) => delivery?.clientMessageId === row.delivery!.clientMessageId
+      && delivery.operationId === row.delivery!.operationId;
+    if (!row.publishedReceipt) {
+      // Base-version sessions retain publication in the event ring or request
+      // journal. Recover only the same operation, never an uncertain send.
+      const retained = session.events.some(event => event.type === "delegation.tool.result" ? "delivery" in event.result && matches(event.result.delivery)
+        : event.type === "delegation.delivery.settled" && matches(event.delivery));
+      const request = retained ? undefined : this.records.read(session.id).entries.find(entry => entry.id === `request-${row.proposal.callId}`);
+      if (retained || matches(request?.data.delivery as Delivery | undefined))
+        row.publishedReceipt = { clientMessageId: row.delivery.clientMessageId, operationId: row.delivery.operationId };
+    }
+    return row.publishedReceipt?.clientMessageId === row.delivery.clientMessageId && row.publishedReceipt.operationId === row.delivery.operationId;
+  }
   pollReports(id: string): CompanionEvent[] {
     const clean = this.cleaner();
     return this.storage.change(document => {
@@ -427,11 +442,28 @@ export class CompanionAdmission {
       if (current) projects.add(canonicalProject(current));
       for (const row of Object.values(session.proposals)) if (row.state === "admitted" && row.status !== "failed") projects.add(canonicalProject(row.proposal.recipient.project));
       const reports: BridgeReportV1[] = [];
+      const legacy = session.reportWatermarks === undefined;
+      const baselines = new Map<string, number>();
+      const rowFor = (report: BridgeReportV1) => Object.values(session.proposals).find(held => held.state === "admitted" && held.delivery && held.status !== "failed"
+        && canonicalProject(held.proposal.recipient.project) === canonicalProject(report.project!)
+        && held.delivery.clientMessageId === report.correlatesDirective);
       const marks = session.reportWatermarks ??= {};
       for (const project of projects) {
         // Alias succession retains the highest watermark already recorded.
         const keys = Object.keys(marks).filter(key => canonicalProject(key) === project);
-        if (!keys.length) { this.baseline(session, project); continue; }
+        if (!keys.length) {
+          const existing = this.paths.reports(project).filter(report => report.project && canonicalProject(report.project) === project);
+          const baseline = existing.reduce((seq, report) => Math.max(seq, report.seq), 0);
+          marks[project] = legacy ? 0 : baseline;
+          if (legacy) {
+            baselines.set(project, baseline);
+            reports.push(...existing.filter(report => {
+              const row = rowFor(report);
+              return row && !row.reports.includes(report.id) && this.hasPublishedReceipt(session, row);
+            }));
+          }
+          continue;
+        }
         const after = Math.max(...keys.map(key => marks[key]));
         marks[project] = after;
         reports.push(...this.paths.reports(project).filter(report => report.project
@@ -449,22 +481,12 @@ export class CompanionAdmission {
         if (report.synthetic || report.origin?.kind !== "manager" || !status || spoken.includes(report.id)) continue;
         spoken.push(report.id);
         const text = withoutLocalPaths(clean(report.body)).slice(0, 1_200).replace(/[\uD800-\uDBFF]$/u, "");
-        const row = Object.values(session.proposals).find(held => held.state === "admitted" && held.delivery && held.status !== "failed"
-          && canonicalProject(held.proposal.recipient.project) === project
-          && held.delivery.clientMessageId === report.correlatesDirective);
+        const row = rowFor(report);
         if (row) row.reports.push(report.id);
         // A card can join only a receipt already published to the client. A
         // report arriving during a send or after a lost transport reply still
         // gets its own visible card, without inventing an operation identity.
-        // Older sessions kept this evidence in their transcript request row.
-        if (row?.delivery?.operationId && !row.publishedReceipt) {
-          const request = this.records.read(id).entries.find(entry => entry.id === `request-${row.proposal.callId}`);
-          const delivery = request?.data.delivery as Delivery | undefined;
-          if (delivery?.clientMessageId === row.delivery.clientMessageId && delivery.operationId === row.delivery.operationId)
-            row.publishedReceipt = { clientMessageId: delivery.clientMessageId, operationId: delivery.operationId };
-        }
-        const published = row?.delivery?.operationId && row.publishedReceipt?.clientMessageId === row.delivery.clientMessageId
-          && row.publishedReceipt.operationId === row.delivery.operationId;
+        const published = row && this.hasPublishedReceipt(session, row);
         if (row && published) {
           events.push(this.append(session, { type: "orchestrator.answer", delivery: row.delivery!, reportId: report.id, status, text }, this.now(), clean));
         } else {
@@ -473,6 +495,9 @@ export class CompanionAdmission {
             at: Number.isFinite(at) ? at : this.now(), project }, this.now(), clean));
         }
       }
+      // Migration recovers pending correlated replies before fencing off old
+      // unrelated reports. First visits in current calls only set a baseline.
+      for (const [project, seq] of baselines) marks[project] = Math.max(marks[project], seq);
       session.spokenReports = spoken.slice(-256);
       return events;
     });

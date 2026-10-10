@@ -5150,9 +5150,14 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), task: pipeline.task, revision: recordRevision(pipeline) });
   }
   if (!fullAnswer(args)) {
+    const compact = pipelineCompactRow(pipeline);
+    const definitions = new Map(pipeline.stages.map(stage => [stage.id, stage]));
     return redactPayload({
       pipelineId,
-      ...pipelineCompactRow(pipeline),
+      ...compact,
+      // A detail read retains role metadata without retained prompts/history.
+      stages: compact.stages.map(stage => ({ ...stage, kind: definitions.get(stage.id)?.kind ?? null,
+        roleId: definitions.get(stage.id)?.effectiveRole?.roleId ?? null })),
       ...pipelineCheckFields(pipeline),
       revision: recordRevision(pipeline),
       taskIds: pipeline.taskIds,

@@ -15,6 +15,25 @@ const { createCompanionBoardReadPaths } = await import("./readPaths");
 const { CompanionBoardReads } = await import("./boardReads");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+test("ordinary pipeline reads retain the cursor verdict and stage kinds and roles without history", async () => {
+  const { pipelineCorpus, CORPUS_BODY_MARKERS } = await import("@/lib/pipelines/fixtures/corpus");
+  const pipeline = pipelineCorpus(1)[0];
+  pipeline.state = "running"; pipeline.closedAt = null;
+  pipeline.cursor = { stageId: "review", state: "reviewing", input: null, activatedBy: null };
+  pipeline.runs[1].attempts.at(-1)!.verdict = { status: "fail", findings: ["P1 — Missing ownership fence"] };
+  savePipelines([pipeline]);
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const list = await reads.call(pipeline.project, "list_pipelines", { state: ["open"] });
+  expect(list).toMatchObject({ total: 1, rows: [{ stage: "review", verdict: "fail" }] });
+  const detail = await reads.call(pipeline.project, "get_pipeline", { pipelineId: pipeline.id });
+  expect(detail).toMatchObject({ item: { stages: [
+    { title: "build", kind: "run", role: "builder", verdict: "pass" },
+    { title: "review", kind: "review-loop", role: "reviewer", verdict: "fail" },
+  ] } });
+  expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(4000);
+  for (const marker of Object.values(CORPUS_BODY_MARKERS)) expect(JSON.stringify(detail)).not.toContain(marker);
+});
+
 test("a historical lineage attempt does not replace the operational stage state", async () => {
   const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
   const pipeline = pipelineCorpus(1)[0];

@@ -17,10 +17,10 @@ const { setCompanionSessionsForTests } = await import("@/lib/voiceCompanion/serv
 const { GET, POST } = await import("./route");
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 afterAll(() => { setCompanionSessionsForTests(undefined); fs.rmSync(root, { recursive: true, force: true }); });
-function fixture() {
+function fixture(reports: import("@/lib/bridge/types").BridgeReportV1[] = []) {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
-  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => [] });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => reports });
   const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
     provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(service);
@@ -67,6 +67,28 @@ test("a new server instance closes an orphaned minted session and preserves inco
 });
 
 const get = (sessionId: string) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${sessionId}&after=0`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+
+test("reopening a closed transcript ingests fresh standalone reports once without speaking", async () => {
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const f = fixture(reports);
+  const minted = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "closed-transcript" }))).json();
+  await POST(request({ action: "close", sessionId: minted.sessionId }));
+  expect(f.admission.session(minted.sessionId)).toMatchObject({ closed: true, proposals: {} });
+  const commands = f.provider.commands.length;
+  reports.push({ id: "after-hangup", seq: 1, project: "fixture", at: "2026-10-10T12:00:00Z", class: "completed", body: "The independent review is complete.",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  for (let visit = 0; visit < 2; visit++) {
+    const response = await GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&view=transcript`,
+      { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+    expect(response.status).toBe(200);
+    const record = await response.json();
+    expect(record.entries.filter((entry: { kind: string }) => entry.kind === "report")).toMatchObject([
+      { id: "report-after-hangup", data: { project: "fixture", text: reports[0].body } },
+    ]);
+  }
+  expect(f.provider.commands).toHaveLength(commands);
+  expect(f.provider.attached).toBe(0);
+});
 
 test("a transcript that repeats the provider key is answered and stored without it", async () => {
   const f = fixture();

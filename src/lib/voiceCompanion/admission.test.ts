@@ -393,6 +393,40 @@ function reportFixture(project: string, seq: number, changes: Partial<import("@/
     origin: { kind: "manager", conversationId: "conversation_successor", role: "orchestrator" }, ...changes };
 }
 
+for (const closed of [false, true]) for (const evicted of [false, true]) test(`the first upgraded poll recovers only unconsumed published legacy replies${closed ? " after hangup" : ""}${evicted ? " from the journal alone" : ""}`, async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const paths = { recipient: () => ({ project: "legacy", conversationId: "conversation_legacy", seatEpoch: 1, engine: "codex" as const }),
+    reports: () => reports, send: async () => ({ status: "queued" as const, operationId: "operation-legacy" }) };
+  const storage = new CompanionStorage();
+  const admission = new CompanionAdmission(storage, paths);
+  const session = admission.create({ project: "legacy", locale: "en", authority: "live-model" });
+  await admission.delegate(session.id, "request", "turn", "Review the plan");
+  const held = Object.values(admission.session(session.id).proposals)[0];
+  const consumed = reportFixture("legacy", 2, { correlatesDirective: held.delivery!.clientMessageId });
+  admission.emit(session.id, { type: "orchestrator.answer", delivery: held.delivery!, reportId: consumed.id, status: "progress", text: consumed.body });
+  if (evicted) for (let index = 0; index < 520; index++) admission.emit(session.id, { type: "tool.called", callId: `read-${index}`, name: "list_tasks", summary: "Read open tasks" });
+  if (closed) admission.retire(session.id);
+  // These are exactly the session/proposal fields absent from base version 1.
+  storage.change(document => {
+    const row = document.sessions[session.id];
+    delete row.currentProject; delete row.reportWatermarks; delete row.spokenReports; delete row.startedBy; delete row.endedAt;
+    for (const proposal of Object.values(row.proposals)) { delete proposal.publishedReceipt; delete proposal.retargetCount; }
+    row.proposals[held.proposal.proposalId].reports.push(consumed.id);
+  });
+  reports.push(reportFixture("legacy", 1), consumed,
+    reportFixture("legacy", 3, { class: "completed", correlatesDirective: held.delivery!.clientMessageId }), reportFixture("legacy", 4));
+  const upgraded = new CompanionAdmission(new CompanionStorage(), paths);
+  expect(upgraded.pollReports(session.id)).toMatchObject([{ type: "orchestrator.answer", reportId: "report-legacy-3", delivery: held.delivery }]);
+  expect(upgraded.pollReports(session.id)).toEqual([]);
+  expect(upgraded.session(session.id).reportWatermarks).toEqual({ legacy: 4 });
+  expect(upgraded.transcriptRecord(session.id).entries.filter(entry => entry.kind === "report").map(entry => entry.id)).toEqual([
+    `report-${consumed.id}`, "report-report-legacy-3",
+  ]);
+  reports.push(reportFixture("legacy", 5));
+  expect(upgraded.pollReports(session.id)).toMatchObject([{ type: "orchestrator.report", reportId: "report-legacy-5" }]);
+});
+
 test("a published receipt keeps its reply correlation after event retention and a restart", async () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];

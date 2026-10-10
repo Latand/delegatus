@@ -64,8 +64,12 @@ export async function GET(req: NextRequest) {
     const session = service.storage.read().sessions[sessionId];
     if (!session) throw new Error("SESSION_UNAVAILABLE");
     companionSessionOwner(req, session);
-    if (req.nextUrl.searchParams.get("view") === "transcript")
+    if (req.nextUrl.searchParams.get("view") === "transcript") {
+      // Opening an ended call is also its bounded report reconciliation path.
+      // The shared event path speaks only while the provider call is active.
+      await service.events(sessionId, after);
       return NextResponse.json({ ...service.transcriptRecord(sessionId), usage: service.storage.usageFor(sessionId) }, { headers });
+    }
     return NextResponse.json({ events: await service.events(sessionId, after), usage: service.storage.usageFor(sessionId) }, { headers });
   } catch (error) { return companionFailure(error); }
 }

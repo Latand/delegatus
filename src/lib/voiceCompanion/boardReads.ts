@@ -34,7 +34,8 @@ const object = (value: unknown): Record<string, unknown> => value && typeof valu
 const rows = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.map(object) : [];
 const taskRow = (row: Record<string, unknown>) => ({ handle: row.id, title: short(String(row.text ?? "").split("\n")[0]), state: short(row.status,32), ...(row.priority ? { priority: row.priority } : {}) });
 const pipelineRow = (row: Record<string, unknown>) => ({ handle: row.id ?? row.pipelineId, title: short(row.task ?? row.title), state: short(row.state,32),
-  ...(row.stateDetail ? { detail: short(row.stateDetail,80) } : {}), ...(row.cursor ? { stage: short(object(row.cursor).stageId,32) } : {}) });
+  ...(row.stateDetail ? { detail: short(row.stateDetail,80) } : {}), ...(row.cursor ? { stage: short(object(row.cursor).stageId,32),
+    verdict: object(rows(row.stages).find(stage => stage.id === object(row.cursor).stageId)?.latestAttempt).verdict ?? null } : {}) });
 function page(source: Record<string, unknown>, items: Record<string, unknown>[], label: string): SpeechReadResult {
   const total = typeof source.total === "number" ? source.total : typeof source.count === "number" ? source.count : items.length;
   const more = typeof source.remainingCount === "number" ? source.remainingCount : Math.max(source.hasMore === true ? 1 : 0,total-items.length);
@@ -98,7 +99,7 @@ export class CompanionBoardReads {
       return {item,speech:short(`${item.title}: ${item.state}. ${item.note} ${item.hold} ${item.steps.map(step=>`${step.text}: ${step.state}`).join(". ")}`,600),truncated:rows(row.steps).length>8};
     }
     if (name === "get_pipeline") {
-      const item = {...pipelineRow(source), stages:rows(source.stages).slice(0,12).map(stage=>({title:short(stage.id,32),kind:short(stage.kind,32),state:short(object(stage.latestAttempt).state ?? stage.state ?? "pending",32),verdict:object(stage.latestAttempt).verdict ?? stage.verdict ?? null})),
+      const item = {...pipelineRow(source), stages:rows(source.stages).slice(0,12).map(stage=>({title:short(stage.id,32),kind:short(stage.kind,32),role:short(stage.roleId,64),state:short(object(stage.latestAttempt).state ?? stage.state ?? "pending",32),verdict:object(stage.latestAttempt).verdict ?? stage.verdict ?? null})),
         ...(args.stageId ? {stageId:args.stageId,stageDetail:{kind:short(object(source.stage).kind,32),role:short(object(source.stage).roleId,32),state:short(object(source.attempt).state,32)},verdict:object(source.attempt).verdict ?? null,summary:short(object(source.attempt).summary,600),findings:(Array.isArray(object(source.attempt).findings) ? object(source.attempt).findings as unknown[] : []).slice(0,5).map(finding=>short(finding,200))} : {})};
       return {item,speech:short(`${item.title}: ${item.state}. ${args.stageId ? `${item.stageId}: ${item.stageDetail?.state}. ${item.verdict ?? ""}. ${item.summary}` : item.stages.map(stage=>`${stage.title}: ${stage.state}`).join(". ")}`,600),truncated:rows(source.stages).length>12 || (Array.isArray(object(source.attempt).findings) && (object(source.attempt).findings as unknown[]).length>5)};
     }
