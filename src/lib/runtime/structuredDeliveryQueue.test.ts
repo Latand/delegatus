@@ -3068,3 +3068,35 @@ test.each([false, true])("provider recovery authority reaches termination with a
   expect(terminations).toEqual([["conversation-one", { engine: "codex", sessionId: "generation-one" }, onlyIfIdle,
     expect.objectContaining({ operationId: "provider-retire" }), providerRecovery]]);
 });
+
+test("dispatch authorization is rechecked after the delivering journal wait", async () => {
+  let allowed = true, sends = 0;
+  const statuses: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:owner-cutoff", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "owner-cutoff", conversationId: "conversation-one", text: "Owner instruction", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }),
+    hostClaim: async () => "owner:1",
+    settled: () => !allowed,
+    authorizeDispatch: () => { if (!allowed) throw new StructuredSendRefusedError("owner first prompt revoked"); },
+    transition: async (_id, status) => { statuses.push(status); if (status === "delivering") { await Promise.resolve(); allowed = false; } },
+  }, () => host(async () => { sends++; return { outcome: "turn-started", turnId: "turn-one" }; }));
+  await queue.drain();
+  expect(sends).toBe(0);
+  expect(statuses).toContain("failed");
+});
+
+test("dispatch authorization is rechecked before a thread-read resend", async () => {
+  let allowed = true, sends = 0;
+  const statuses: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:owner-read-retry", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "owner-read-retry", conversationId: "conversation-one", text: "Owner instruction", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }), hostClaim: async () => "owner:1",
+    authorizeDispatch: () => { if (!allowed) throw new StructuredSendRefusedError("owner first prompt revoked"); },
+    transition: async (_id, status) => { statuses.push(status); },
+  }, () => host(async () => { sends++; allowed = false; throw Error("thread/read timed out"); }));
+  await queue.drain();
+  expect(sends).toBe(1);
+  expect(statuses).toContain("failed");
+});

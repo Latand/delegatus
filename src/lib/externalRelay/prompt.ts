@@ -3,7 +3,7 @@ import type { RelayConversation } from "./conversations";
 import { callableTools, mayQuote } from "./toolLoop";
 import { readRelaySwitches } from "./switches";
 import { isOwnerTool, offersHandoff, type ExternalRelayRequest } from "./protocol";
-const json = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
+export const json = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
 export function answerPrompt(request: ExternalRelayRequest): string {
   const input = request.input;
   const handoff = offersHandoff(request);
