@@ -8,7 +8,6 @@ import { withPipelineMutation } from "../pipelines/store";
 import { notifyQuestion } from "../push";
 import { overlaySessionTitles, sessionProjectProjection } from "../session/titleProjection";
 import { deputyConversationRefs } from "../orchestrator/deputies";
-import { tickTaskInbox } from "../tasks/inboxScanner";
 import { admitScannedConversations } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
 import { panePidMap, resolveTarget } from "../tmux";
@@ -414,7 +413,6 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
   await yieldToRuntime();
   await tickWorkflows(entries);
   await yieldToRuntime();
-  tickTaskInbox(entries);
   /* Canonical task membership (#1586): every root conversation the board draws
      belongs to a task. Placeholders are minted here, on the durable controller
      pass, in bounded batches — never from a read-only files GET. */
