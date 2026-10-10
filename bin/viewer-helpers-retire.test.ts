@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { procBackend } from "@/lib/proc";
 
-import { retireViewerHelpers, viewerProcessTree } from "./viewer-helpers-retire.mjs";
+import { retireViewerDescendants, retireViewerHelpers, viewerProcessTree } from "./viewer-helpers-retire.mjs";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-helpers-retire-"));
 const LEASE_ENTRY = path.resolve(import.meta.dir, "helper-lease.mjs");
@@ -106,7 +106,59 @@ test.if(process.platform === "linux")("a helper whose guardian ends it with the 
   for (const process of [mine.guardian, mine.helper, mine.child]) expect(alive(process.pid, process.identity)).toBe(false);
 }, 30_000);
 
+/* A Viewer's other children (a `git fetch` stuck on the network, a worker
+   nobody leased) are spared by KillMode=process and kept the old cgroup path
+   populated after the Viewer stopped: their deadlines lived in the Viewer. They
+   stay in the Viewer's process group; agents are started detached. */
+test.if(process.platform === "linux")("the launcher ends what the stopped Viewer left in its process group and spares its agents", async () => {
+  const stuck = path.join(SANDBOX, "descendants-stuck.mjs");
+  fs.writeFileSync(stuck, "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n");
+  const hung = path.join(SANDBOX, "descendants-hung.mjs");
+  fs.writeFileSync(hung, [
+    "import { spawn } from 'node:child_process';",
+    `const child = spawn(process.execPath, [${JSON.stringify(stuck)}], { stdio: 'ignore' });`,
+    "process.stdout.write(child.pid + '\\n');",
+    "process.on('SIGTERM', () => {});",
+    "setInterval(() => {}, 1000);",
+    "",
+  ].join("\n"));
+  const viewerScript = path.join(SANDBOX, "descendants-viewer.mjs");
+  fs.writeFileSync(viewerScript, [
+    "import { spawn } from 'node:child_process';",
+    `const hung = spawn(process.execPath, [${JSON.stringify(hung)}], { stdio: ['ignore', 'pipe', 'ignore'] });`,
+    "const quick = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 400)'], { stdio: 'ignore' });",
+    "const agent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });",
+    "const agentChild = spawn('/bin/sh', ['-c', 'sleep 300 & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'], detached: true });",
+    "let grandchild = null; let agentGrandchild = null;",
+    "const done = () => { if (grandchild && agentGrandchild) process.stdout.write(JSON.stringify({ hung: hung.pid, grandchild, quick: quick.pid, agent: agent.pid, agentGrandchild }) + '\\n'); };",
+    "hung.stdout.once('data', (chunk) => { grandchild = Number(String(chunk).trim()); done(); });",
+    "agentChild.stdout.once('data', (chunk) => { agentGrandchild = Number(String(chunk).trim()); done(); });",
+    "setInterval(() => {}, 1000);",
+    "",
+  ].join("\n"));
+  const viewer: ChildProcess = spawn(process.execPath, [viewerScript], { stdio: ["ignore", "pipe", "inherit"] });
+  own(viewer.pid!);
+  const pids = await new Promise<Record<string, number>>((resolve, reject) => {
+    let buffered = "";
+    const timer = setTimeout(() => reject(new Error("the Viewer stand-in never reported")), 8_000);
+    viewer.stdout!.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString();
+      if (buffered.includes("\n")) { clearTimeout(timer); resolve(JSON.parse(buffered.split("\n")[0]!)); }
+    });
+  });
+  const processes = Object.fromEntries(Object.entries(pids).map(([name, pid]) => [name, own(pid)]));
+  /* Read before the stop, as the launcher does. */
+  const owners = viewerProcessTree(viewer.pid);
+  expect(owners.map((owner) => owner.pid)).toEqual(expect.arrayContaining(Object.values(pids)));
+  await stopped(viewer);
+  const outcome = await retireViewerDescendants(viewer.pid, owners, { waitMs: 1_000, termMs: 300, killMs: 2_000 });
+  expect(outcome).toEqual({ exited: 1, terminated: 0, killed: 2, survived: [] });
+  for (const name of ["hung", "grandchild", "quick"]) expect(alive(processes[name]!.pid, processes[name]!.identity)).toBe(false);
+  for (const name of ["agent", "agentGrandchild"]) expect(alive(processes[name]!.pid, processes[name]!.identity)).toBe(true);
+}, 30_000);
+
 test("nothing is waited for or signalled without owners", async () => {
+  expect(await retireViewerDescendants(undefined, [], { waitMs: 10 })).toEqual({ exited: 0, terminated: 0, killed: 0, survived: [] });
   expect(await retireViewerHelpers(path.join(SANDBOX, "nothing"), [], { leaseMs: 10 })).toEqual({ exited: 0, terminated: 0, killed: 0, survived: [] });
   expect(viewerProcessTree(undefined)).toEqual([]);
 });

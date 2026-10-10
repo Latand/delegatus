@@ -881,23 +881,28 @@ export async function runBackupPassInWorker(
   options: { launch?: { executable: string; workerPath: string } } = {},
 ): Promise<Map<string, BackupOutcome>> {
   const launch = options.launch ?? stateBackupWorkerLaunch();
-  const { spawn } = await import("node:child_process");
+  const { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } = await import("@/lib/helperLease");
   const useNice = fs.existsSync("/usr/bin/nice");
-  const child = spawn(useNice ? "/usr/bin/nice" : launch.executable, [
-    ...(useNice ? ["-n", "10", launch.executable] : []),
-    launch.workerPath,
-  ], { cwd: process.cwd(), stdio: ["pipe", "pipe", "inherit"], env: process.env });
+  /* Under a lease: a pass that outlives its Viewer would keep the service's
+     cgroup populated after it (src/lib/helperLease.ts). */
+  const child = spawnLeasedHelper("state-backup", {
+    command: useNice ? "/usr/bin/nice" : launch.executable,
+    args: [...(useNice ? ["-n", "10", launch.executable] : []), launch.workerPath],
+    cwd: process.cwd(),
+    env: process.env,
+  }, stateDirectory, { input: true, stdout: "pipe", stderr: "inherit", followRelease: false });
+  const input = leasedHelperInput(child);
   const request: BackupWorkerRequest = { stateDirectory, lastRevisions: [...lastRevisions] };
   const response = await new Promise<BackupWorkerResponse>((resolve, reject) => {
     let output = "";
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
+      endLeasedHelper(child);
       reject(new Error(`the backup worker ran past ${BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`));
     }, BACKUP_WORKER_TIMEOUT_MS);
     timeout.unref?.();
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { output += chunk; });
-    child.stdin.on("error", () => { /* the exit below reports it */ });
+    child.stdout!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => { output += chunk; });
+    input.on("error", () => { /* the exit below reports it */ });
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -911,7 +916,7 @@ export async function runBackupPassInWorker(
         reject(error);
       }
     });
-    child.stdin.end(JSON.stringify(request));
+    input.end(JSON.stringify(request));
   });
   const outcomes = new Map(response.outcomes);
   for (const [name, outcome] of outcomes) {

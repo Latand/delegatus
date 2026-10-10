@@ -1,9 +1,9 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
+import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "@/lib/search/transcriptFeed";
 
 import type { FileCatalogScan, FileScanOptions } from "./index";
@@ -115,17 +115,18 @@ export function collectFileScanInWorker(
      Next process ahead of their CPU demand on a busy operator host. Explicit
      test/runtime launch seams retain their exact command. */
   const useNice = runtime.launch === undefined && fs.existsSync("/usr/bin/nice");
-  const child = spawn(useNice ? "/usr/bin/nice" : launch.executable, [
-    ...(useNice ? ["-n", "10", launch.executable] : []),
-    launch.workerPath,
-  ], {
+  /* Under a lease: the scan ends with this Viewer however it exits, and the
+     deadline below ends the worker's whole group (src/lib/helperLease.ts). */
+  const child = spawnLeasedHelper("file-scanner", {
+    command: useNice ? "/usr/bin/nice" : launch.executable,
+    args: [...(useNice ? ["-n", "10", launch.executable] : []), launch.workerPath],
     cwd: runtime.cwd ?? process.cwd(),
-    stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...withoutUnsupportedApiCredentials(runtime.env ?? process.env),
       LLV_FILE_SCANNER_WORKER: "1",
     },
-  });
+  }, undefined, { input: true, stdout: "pipe", stderr: "pipe", followRelease: false });
+  const input = leasedHelperInput(child);
   return new Promise<FileCatalogScan>((resolve, reject) => {
     const scheduler = runtime.scheduler ?? systemScheduler;
     let settled = false;
@@ -154,7 +155,7 @@ export function collectFileScanInWorker(
     const terminate = (error: Error) => {
       if (settled || terminationError) return;
       terminationError = error;
-      try { child.kill("SIGKILL"); } catch { /* child already exited */ }
+      endLeasedHelper(child);
       if (child.exitCode !== null || child.signalCode !== null) finish(error);
     };
     const fail = (message: string) => {
@@ -198,8 +199,8 @@ export function collectFileScanInWorker(
       fail("file scanner worker timed out");
     }, runtime.timeoutMs ?? FILE_SCAN_WORKER_TIMEOUT_MS);
     child.once("error", (error) => finish(error));
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    child.stdout!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => {
       outputBytes += Buffer.byteLength(chunk);
       if (outputBytes > FILE_SCAN_WORKER_OUTPUT_MAX_BYTES) {
         fail("file scanner worker exceeded output limit");
@@ -208,8 +209,8 @@ export function collectFileScanInWorker(
       stdout += chunk;
       consume();
     });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
+    child.stderr!.setEncoding("utf8");
+    child.stderr!.on("data", (chunk: string) => {
       stderr = `${stderr}${chunk}`;
       if (Buffer.byteLength(stderr) > FILE_SCAN_WORKER_STDERR_MAX_BYTES) {
         stderr = Buffer.from(stderr).subarray(-FILE_SCAN_WORKER_STDERR_MAX_BYTES).toString("utf8");
@@ -238,7 +239,7 @@ export function collectFileScanInWorker(
       }
       finish(undefined, completed);
     });
-    child.stdin.once("error", (error) => {
+    input.once("error", (error) => {
       if (!terminationError) finish(error);
     });
     if (runtime.signal) {
@@ -246,6 +247,6 @@ export function collectFileScanInWorker(
       listening = true;
       if (runtime.signal.aborted) onAbort();
     }
-    child.stdin.end(JSON.stringify({ type: "scan", options }));
+    input.end(JSON.stringify({ type: "scan", options }));
   });
 }

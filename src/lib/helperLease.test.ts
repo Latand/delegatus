@@ -191,3 +191,184 @@ test.if(process.platform === "linux")("a signal to the guardian ends the helper'
   await exited;
   expect(await gone([helper.helper, helper.child])).toBe(true);
 }, 20_000);
+
+/* A helper that starts its work at end of file on its standard input, as the
+   file scanner and the backup pass do: closing that input never ends it. */
+function requestWorker(file: string, report: string): string {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [
+    "import { spawn } from 'node:child_process';",
+    "import fs from 'node:fs';",
+    "let request = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { request += chunk; });",
+    "process.stdin.on('end', () => {",
+    "  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    `  fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({ helper: process.pid, child: child.pid, request }));`,
+    "  setInterval(() => {}, 1000);",
+    "});",
+    "",
+  ].join("\n"));
+  return file;
+}
+
+test.if(process.platform === "linux")("a file scan worker that is mid-scan ends when the Viewer that started it dies", async () => {
+  const report = path.join(SANDBOX, "scanner.json");
+  const worker = requestWorker(path.join(SANDBOX, "scanner", "worker.mjs"), report);
+  const { viewer, line } = await startViewer("scanning-viewer", [
+    "import { spawn } from 'node:child_process';",
+    `const { collectFileScanInWorker } = await import(${JSON.stringify(path.join(REPO, "src/lib/scanner/fileScanWorker.ts"))});`,
+    `void collectFileScanInWorker({}, undefined, { launch: { executable: process.execPath, workerPath: ${JSON.stringify(worker)} } }).catch(() => {});`,
+    ...AGENT,
+    "process.stdout.write(JSON.stringify({ agent: agent.pid }) + '\\n');",
+  ], { env: { LLV_STATE_DIR: path.join(SANDBOX, "scanner-state"), LLV_HELPER_LEASE_ENTRY: LEASE_ENTRY } });
+  const helper = await readReport(report);
+  /* The request still reached the worker through the guardian. */
+  expect(JSON.parse(fs.readFileSync(report, "utf8")).request).toContain("\"type\":\"scan\"");
+  viewer.kill("SIGKILL");
+  expect(await gone([helper.helper, helper.child])).toBe(true);
+  expect(() => process.kill(line.agent!, 0)).not.toThrow();
+}, 30_000);
+
+test.if(process.platform === "linux")("a state backup pass ends when the Viewer that started it dies", async () => {
+  const state = path.join(SANDBOX, "backup-state");
+  fs.mkdirSync(state, { recursive: true, mode: 0o700 });
+  const report = path.join(SANDBOX, "backup.json");
+  const worker = requestWorker(path.join(SANDBOX, "backup", "worker.mjs"), report);
+  const { viewer, line } = await startViewer("backing-up-viewer", [
+    "import { spawn } from 'node:child_process';",
+    `const { runBackupPassInWorker } = await import(${JSON.stringify(path.join(REPO, "src/lib/state/durability.ts"))});`,
+    `void runBackupPassInWorker(${JSON.stringify(state)}, new Map(), { launch: { executable: process.execPath, workerPath: ${JSON.stringify(worker)} } }).catch(() => {});`,
+    ...AGENT,
+    "process.stdout.write(JSON.stringify({ agent: agent.pid }) + '\\n');",
+  ], { env: { LLV_STATE_DIR: state, LLV_HELPER_LEASE_ENTRY: LEASE_ENTRY } });
+  const helper = await readReport(report);
+  expect(JSON.parse(fs.readFileSync(report, "utf8")).request).toContain(JSON.stringify(state));
+  expect(fs.readdirSync(path.join(state, "helpers")).filter((file) => file.endsWith(".json"))).toHaveLength(1);
+  viewer.kill("SIGKILL");
+  expect(await gone([helper.helper, helper.child])).toBe(true);
+  expect(() => process.kill(line.agent!, 0)).not.toThrow();
+}, 30_000);
+
+const PYTHON = Bun.which("python3");
+
+test.if(process.platform === "linux" && PYTHON !== null)("a local transcription ends when the Viewer that started it dies", async () => {
+  const cwd = path.join(SANDBOX, "whisper-viewer");
+  const venv = path.join(SANDBOX, "whisper-venv");
+  const report = path.join(SANDBOX, "whisper.json");
+  fs.mkdirSync(path.join(cwd, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(venv, "bin"), { recursive: true });
+  fs.symlinkSync(PYTHON!, path.join(venv, "bin", "python"));
+  fs.writeFileSync(path.join(cwd, "scripts", "whisper_transcribe.py"), [
+    "import json, os, subprocess, sys, time",
+    "child = subprocess.Popen(['sleep', '300'])",
+    `json.dump({'helper': os.getpid(), 'child': child.pid}, open(${JSON.stringify(report)}, 'w'))`,
+    "time.sleep(300)",
+    "",
+  ].join("\n"));
+  const { viewer, line } = await startViewer("transcribing-viewer", [
+    "import { spawn } from 'node:child_process';",
+    `const { localTranscribe } = await import(${JSON.stringify(path.join(REPO, "src/lib/transcribe/local.ts"))});`,
+    "void localTranscribe('/dev/null', 'en').catch(() => {});",
+    ...AGENT,
+    "process.stdout.write(JSON.stringify({ agent: agent.pid }) + '\\n');",
+  ], { cwd, env: { LLV_STATE_DIR: path.join(SANDBOX, "whisper-state"), LLV_WHISPER_VENV: venv, LLV_HELPER_LEASE_ENTRY: LEASE_ENTRY } });
+  const helper = await readReport(report);
+  viewer.kill("SIGKILL");
+  expect(await gone([helper.helper, helper.child])).toBe(true);
+  expect(() => process.kill(line.agent!, 0)).not.toThrow();
+}, 30_000);
+
+test("a local transcription passes the helper's answer through its guardian", async () => {
+  const { localTranscribe } = await import("@/lib/transcribe/local");
+  const cwd = path.join(SANDBOX, "whisper-answer");
+  const venv = path.join(SANDBOX, "whisper-answer-venv");
+  fs.mkdirSync(path.join(cwd, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(venv, "bin"), { recursive: true });
+  /* Any interpreter: the stand-in prints the answer line the script prints. */
+  fs.writeFileSync(path.join(venv, "bin", "python"), "#!/bin/sh\necho 'loading model'\necho '{\"text\": \"cobalt\"}'\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(cwd, "scripts", "whisper_transcribe.py"), "");
+  const savedVenv = process.env.LLV_WHISPER_VENV;
+  const savedCwd = process.cwd();
+  process.env.LLV_WHISPER_VENV = venv;
+  process.env.LLV_HELPER_LEASE_ENTRY = LEASE_ENTRY;
+  process.chdir(cwd);
+  try {
+    expect(await localTranscribe("/dev/null", "en")).toEqual({ text: "cobalt" });
+    fs.writeFileSync(path.join(venv, "bin", "python"), "#!/bin/sh\nexit 3\n", { mode: 0o755 });
+    await expect(localTranscribe("/dev/null", "en")).rejects.toThrow("exited with 3");
+  } finally {
+    process.chdir(savedCwd);
+    delete process.env.LLV_HELPER_LEASE_ENTRY;
+    if (savedVenv === undefined) delete process.env.LLV_WHISPER_VENV; else process.env.LLV_WHISPER_VENV = savedVenv;
+  }
+}, 10_000);
+
+/* macOS has no /proc. The guardian ran its Linux identity reader there, read
+   "owner gone" on its first poll and ended every helper after a second. Node
+   with a preload stands in for that platform: /proc reads fail and
+   process.platform is darwin. */
+const NODE = Bun.which("node");
+const NO_PROC = path.join(SANDBOX, "no-proc.mjs");
+fs.writeFileSync(NO_PROC, [
+  "import fs from 'node:fs';",
+  "import { syncBuiltinESMExports } from 'node:module';",
+  "const read = fs.readFileSync;",
+  "fs.readFileSync = function (file, ...rest) {",
+  "  if (String(file).startsWith('/proc/')) { const error = new Error('ENOENT'); error.code = 'ENOENT'; throw error; }",
+  "  return read.call(this, file, ...rest);",
+  "};",
+  "Object.defineProperty(process, 'platform', { value: 'darwin' });",
+  "syncBuiltinESMExports();",
+  "",
+].join("\n"));
+
+test.if(NODE !== null && process.platform === "linux")("without /proc a guardian keeps its helper while the lease is open, and ends it at end of file", async () => {
+  const report = path.join(SANDBOX, "no-proc.json");
+  const program = waitingHelper(path.join(SANDBOX, "no-proc", "helper.mjs"), report);
+  const guardian = spawn(NODE!, ["--import", NO_PROC, LEASE_ENTRY, "no-proc", "--", NODE!, program], {
+    stdio: ["pipe", "ignore", "inherit"],
+    env: { ...process.env, LLV_HELPER_LEASE_STATE: path.join(SANDBOX, "no-proc-state") },
+  });
+  owned.push({ pid: guardian.pid!, identity: procBackend.processIdentity(guardian.pid!)! });
+  const exited = new Promise<number | null>((resolve) => guardian.once("exit", (code) => resolve(code)));
+  const helper = await readReport(report);
+  /* Three owner polls. */
+  await Bun.sleep(3_200);
+  expect(guardian.exitCode).toBeNull();
+  expect(procBackend.processExited(helper.helper)).toBe(false);
+  guardian.stdin!.end();
+  expect(await Promise.race([exited, Bun.sleep(6_000).then(() => "timeout")])).toBe(143);
+  expect(await gone([helper.helper, helper.child])).toBe(true);
+}, 20_000);
+
+test.if(NODE !== null && process.platform === "linux")("without /proc a guardian whose owner dies while the lease stays open ends its helper", async () => {
+  const report = path.join(SANDBOX, "no-proc-owner.json");
+  const program = waitingHelper(path.join(SANDBOX, "no-proc-owner", "helper.mjs"), report);
+  /* The owner hands the guardian its own stdin, which this test holds: the
+     lease stays open after the owner dies, so only re-parenting reveals it. */
+  const owner = spawn(NODE!, ["-e", [
+    "const { spawn } = require('node:child_process');",
+    `const guardian = spawn(process.execPath, ['--import', ${JSON.stringify(NO_PROC)}, ${JSON.stringify(LEASE_ENTRY)}, 'no-proc-owner', '--', process.execPath, ${JSON.stringify(program)}], { stdio: [0, 'ignore', 'inherit'] });`,
+    "process.stdout.write(JSON.stringify({ guardian: guardian.pid }) + '\\n');",
+    "setInterval(() => {}, 1000);",
+  ].join("\n")], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, LLV_HELPER_LEASE_STATE: path.join(SANDBOX, "no-proc-owner-state") } });
+  owned.push({ pid: owner.pid!, identity: procBackend.processIdentity(owner.pid!)! });
+  const { guardian } = await new Promise<{ guardian: number }>((resolve) => {
+    let buffered = "";
+    owner.stdout!.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString();
+      if (buffered.includes("\n")) resolve(JSON.parse(buffered.split("\n")[0]!));
+    });
+  });
+  owned.push({ pid: guardian, identity: procBackend.processIdentity(guardian)! });
+  const helper = await readReport(report);
+  await Bun.sleep(1_500);
+  expect(procBackend.processExited(helper.helper)).toBe(false);
+  owner.kill("SIGKILL");
+  try {
+    expect(await gone([guardian, helper.helper, helper.child])).toBe(true);
+  } finally {
+    owner.stdin!.end();
+  }
+}, 20_000);

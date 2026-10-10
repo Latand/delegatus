@@ -34,7 +34,7 @@ let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNo
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
 let lockLauncherStartup;
-let retireTelegramConnector, retireViewerHelpers, viewerProcessTree;
+let retireTelegramConnector, retireViewerDescendants, retireViewerHelpers, viewerProcessTree;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -897,15 +897,18 @@ async function stopAll(serverProcess, tailscaleProcess, runtimeHostSupervisor, s
     tailscaleProcess ? stopChild(tailscaleProcess) : Promise.resolve(),
     runtimeHostSupervisor ? runtimeHostSupervisor.stop() : Promise.resolve(),
   ]);
-  /* After the Viewer: its Telegram connector and its leased helpers end with
-     it, and must be gone before this process exits and the service manager
-     starts the next one. */
-  const [connector, helpers] = await Promise.all([
+  /* After the Viewer: its Telegram connector, its leased helpers and every
+     other process it left in its own process group end with it, and must be
+     gone before this process exits and the service manager starts the next
+     one. Agents lead groups of their own and are never among them. */
+  const [connector, helpers, descendants] = await Promise.all([
     retireTelegramConnector(stateDirectory, owners),
     retireViewerHelpers(stateDirectory, owners),
+    retireViewerDescendants(serverProcess?.child.pid, owners),
   ]);
   if (connector === "survived") console.error("[delegatus] the Telegram connector did not stop with the Viewer");
   if (helpers.survived.length) console.error(`[delegatus] helpers did not stop with the Viewer: ${helpers.survived.join(", ")}`);
+  if (descendants.survived.length) console.error(`[delegatus] processes did not stop with the Viewer: ${descendants.survived.join(", ")}`);
 }
 
 /* `serverRef.current` is whichever web process runs at shutdown: a
@@ -1550,7 +1553,7 @@ async function checkoutLauncher() {
   ({ assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost } = await import("./launcher-adoption.mjs"));
   ({ lockLauncherStartup } = await import("./launcher-lock.mjs"));
   ({ retireTelegramConnector } = await import("./telegram-connector-retire.mjs"));
-  ({ retireViewerHelpers, viewerProcessTree } = await import("./viewer-helpers-retire.mjs"));
+  ({ retireViewerDescendants, retireViewerHelpers, viewerProcessTree } = await import("./viewer-helpers-retire.mjs"));
   delete process.env.LLV_LAUNCHER_REEXEC;
   delete process.env.LLV_LAUNCHER_CHECKOUT;
   await main();

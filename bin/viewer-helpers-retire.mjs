@@ -9,7 +9,14 @@
    waits for that, and finishes only what the stopped Viewer owned: a record is
    acted on when its owner's start identity is one the launcher read from that
    Viewer's own process tree before stopping it. A successor sharing the state
-   directory records helpers under its own identity, which never matches. */
+   directory records helpers under its own identity, which never matches.
+
+   The Viewer's other non-agent children (a git or gh command, a worker that
+   is not leased) stay in its process group, while every agent, structured
+   host, workflow setup command and sign-in is started detached, leading a
+   group of its own, so that it outlives the Viewer. The launcher therefore
+   also waits for, then ends, each process it read in the stopped Viewer's
+   tree that is still in the Viewer's own group (retireViewerDescendants). */
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -32,11 +39,11 @@ export function liveIdentity(pid) {
 }
 
 /**
- * The identities of `pid` and its descendants, read while they run. Called
- * before the Viewer is stopped: these are the owners whose records the
- * launcher may finish afterwards.
+ * The identities of `pid` and its descendants, read while they run, with the
+ * process group of each. Called before the Viewer is stopped: these are the
+ * owners whose records the launcher may finish afterwards.
  * @param {number | undefined} pid
- * @returns {Array<{ pid: number, identity: string }>}
+ * @returns {Array<{ pid: number, identity: string, group: number }>}
  */
 export function viewerProcessTree(pid) {
   if (process.platform !== "linux" || !Number.isInteger(pid) || pid <= 1) return [];
@@ -57,9 +64,9 @@ export function viewerProcessTree(pid) {
     const next = pending.pop();
     if (seen.has(next)) continue;
     seen.add(next);
-    const identity = liveIdentity(next);
-    if (!identity) continue;
-    owners.push({ pid: next, identity });
+    const fields = statFields(next);
+    if (!fields || fields[0] === "Z" || fields[0] === "X") continue;
+    owners.push({ pid: next, identity: `${next}:${fields[19]}`, group: Number(fields[2]) });
     pending.push(...(children.get(next) ?? []));
   }
   return owners;
@@ -177,5 +184,56 @@ export async function retireViewerHelpers(stateDirectory, owners, options = {}) 
   for (const { file, record } of owned) {
     if (!guardianIsRunning(record) && groupMembers(record).length === 0) rmSync(file, { force: true });
   }
+  return outcome;
+}
+
+/**
+ * After the Viewer `viewerPid` has stopped: the processes of its tree, as read
+ * before the stop, that are still running in the Viewer's own process group.
+ * Each is matched by its start identity, so a recycled pid is never one.
+ * @param {number | undefined} viewerPid
+ * @param {Array<{ pid: number, identity: string, group?: number }>} owners
+ */
+export function viewerGroupLeftovers(viewerPid, owners) {
+  const viewer = owners.find((owner) => owner.pid === viewerPid);
+  if (!viewer || !Number.isInteger(viewer.group)) return [];
+  return owners.filter((owner) => owner.pid !== viewerPid && owner.group === viewer.group
+    && liveIdentity(owner.pid) === owner.identity && Number(statFields(owner.pid)?.[2]) === viewer.group);
+}
+
+/**
+ * Waits for the stopped Viewer's non-agent descendants (its process-group
+ * members read before the stop) to exit, then terminates and kills what
+ * remains. Bounded: at most `waitMs + termMs + killMs`. Never throws.
+ * @param {number | undefined} viewerPid
+ * @param {Array<{ pid: number, identity: string, group?: number }>} owners the Viewer's tree read before the stop
+ * @param {{ waitMs?: number, termMs?: number, killMs?: number, pollMs?: number }} [options]
+ * @returns {Promise<{ exited: number, terminated: number, killed: number, survived: string[] }>}
+ */
+export async function retireViewerDescendants(viewerPid, owners, options = {}) {
+  const { waitMs = 3_000, termMs = 1_500, killMs = 1_500, pollMs = 25 } = options;
+  const outcome = { exited: 0, terminated: 0, killed: 0, survived: [] };
+  if (process.platform !== "linux") return outcome;
+  const initial = viewerGroupLeftovers(viewerPid, owners);
+  if (initial.length === 0) return outcome;
+  const remaining = () => viewerGroupLeftovers(viewerPid, initial.concat(owners.filter((owner) => owner.pid === viewerPid)));
+  if (await until(() => remaining().length === 0, waitMs, pollMs)) {
+    outcome.exited = initial.length;
+    return outcome;
+  }
+  const signalled = remaining();
+  outcome.exited = initial.length - signalled.length;
+  signalVerified(signalled, "SIGTERM");
+  if (await until(() => remaining().length === 0, termMs, pollMs)) {
+    outcome.terminated = signalled.length;
+    return outcome;
+  }
+  const killed = remaining();
+  outcome.terminated = signalled.length - killed.length;
+  signalVerified(killed, "SIGKILL");
+  await until(() => remaining().length === 0, killMs, pollMs);
+  const survivors = remaining();
+  outcome.killed = killed.length - survivors.length;
+  outcome.survived = survivors.map((owner) => String(owner.pid));
   return outcome;
 }

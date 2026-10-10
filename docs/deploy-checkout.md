@@ -64,13 +64,21 @@ read, refuses as well.
 
 The Viewer's own helpers do not reach that refusal in normal operation. The
 Telegram connector holds its Viewer's stdin as a lease and ends at end of file.
-The connector provisioner and the transcript search index worker run under
+The connector provisioner, the transcript search index worker, the file scan
+worker, the state backup pass and local transcription run under
 `bin/helper-lease.mjs`, which ends the helper's whole process group when the
-Viewer exits, however it exits, or hands release traffic to a successor. When
-the launcher stops its Viewer, it waits for those processes and signals any
-that remain. It acts only on records whose owner identity it read from that
-Viewer's process tree before the stop, so a successor's runner and helpers are
-left alone.
+Viewer exits, however it exits. The provisioner and the index worker also end
+when their Viewer hands release traffic to a successor. A worker that reads a
+request on its standard input gets it on the guardian's fd 3, so the lease is
+never the request pipe. When the launcher stops its Viewer, it waits for those
+processes and signals any that remain. It acts only on records whose owner
+identity it read from that Viewer's process tree before the stop, so a
+successor's runner and helpers are left alone. The same tree read also covers
+everything else the Viewer started without detaching it, such as a git or gh
+command: what is still running in the Viewer's process group after the stop
+gets three seconds to finish, then is terminated and killed. Agents,
+structured hosts, workflow setup commands and sign-ins start detached, in a
+group of their own, and are never among them.
 
 Validate without publishing or restarting:
 

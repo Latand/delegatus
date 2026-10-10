@@ -12,6 +12,15 @@
    gone, the whole group is terminated, then killed, and this process exits.
    Otherwise this process exits with the helper's status.
 
+   A helper that reads a request on its standard input (the file scanner, the
+   backup pass) gets the guardian's fd 3 as that input when
+   LLV_HELPER_LEASE_INPUT=3: the Viewer writes the request there, and the
+   lease on fd 0 is never shared with the helper.
+
+   The owner's start identity is read from /proc, so it is checked on Linux
+   only. Elsewhere the owner is gone when this process is re-parented, which
+   `process.ppid` reports live.
+
    Each guardian records itself in `<state>/helpers/<pid>.json` with its
    owner's start identity, so the launcher that stops that Viewer can wait for
    it and finish what it could not (bin/viewer-helpers-retire.mjs). Nothing
@@ -37,6 +46,7 @@ if (!name || !command) {
 const stateDirectory = process.env.LLV_HELPER_LEASE_STATE || "";
 const releasePort = process.env.LLV_HELPER_LEASE_PORT?.trim() || "";
 const releaseTarget = process.env.LLV_HELPER_LEASE_TARGET || (stateDirectory ? join(stateDirectory, "viewer-release.json") : "");
+const input = process.env.LLV_HELPER_LEASE_INPUT === "3" ? 3 : "ignore";
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (key.startsWith("LLV_HELPER_LEASE_")) delete env[key];
 
@@ -56,7 +66,7 @@ const ownerPid = process.ppid;
 const ownerIdentity = identity(ownerPid);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const child = spawn(command, args, { cwd: process.cwd(), env, stdio: ["ignore", "inherit", "inherit"], detached: true });
+const child = spawn(command, args, { cwd: process.cwd(), env, stdio: [input, "inherit", "inherit"], detached: true });
 const group = child.pid;
 let childExit = null;
 const childDone = new Promise((resolve) => {
@@ -150,10 +160,13 @@ process.stdin.once("close", end);
 process.stdin.on("error", end);
 process.stdin.resume();
 /* A Viewer already gone before the lease was read, or one that left its
-   stdin open somewhere, is caught by its identity. */
-const ownerTimer = setInterval(() => { if (!ownerIdentity || identity(ownerPid) !== ownerIdentity) void end(); }, OWNER_POLL_MS);
+   stdin open somewhere, is caught by its identity on Linux and by the
+   re-parenting of this process everywhere. */
+const procIdentity = process.platform === "linux";
+const ownerGone = () => process.ppid !== ownerPid || (procIdentity && (!ownerIdentity || identity(ownerPid) !== ownerIdentity));
+const ownerTimer = setInterval(() => { if (ownerGone()) void end(); }, OWNER_POLL_MS);
 const releaseTimer = setInterval(() => { if (!ownsRelease()) void end(); }, RELEASE_POLL_MS);
-if (!ownerIdentity && process.platform === "linux") void end();
+if (ownerGone()) void end();
 if (!ownsRelease()) void end();
 
 await childDone;
