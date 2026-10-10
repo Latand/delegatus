@@ -16,6 +16,7 @@ import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } 
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
+import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
@@ -1789,10 +1790,17 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      or is refused; any other push is the one it always was. The App's
      variables are spread over the hook environment, which removes the
      Viewer's own settings first. */
+  /* Role memory's stored lessons are known values for the publication privacy
+     gate, which refuses a push that carries one. Memory that cannot be read
+     cannot be checked, so nothing is pushed. */
+  let lessons: ReturnType<typeof lessonPublicationEnv>;
+  try { lessons = lessonPublicationEnv(); } catch (error) {
+    return { ok: false, error: error instanceof RoleMemoryRefusal ? error.message : "role memory could not be read for the publication privacy gate; nothing was published" };
+  }
   /* The hook is handed the moment it must be done by, a minute before this
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
-  const pushEnv = { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv(),
+  const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
     LLV_GATE_PUSH_DEADLINE: String(Date.now() + PUBLICATION_PUSH_TIMEOUT_MS - PUBLICATION_PACK_MARGIN_MS) };
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: PUBLICATION_PUSH_TIMEOUT_MS }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };

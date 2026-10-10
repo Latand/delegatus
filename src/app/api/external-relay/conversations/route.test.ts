@@ -116,7 +116,10 @@ const answerRecord = (targetId: string, requestId: string, startedAt: string, ov
 function keepAnswer(record: ReturnType<typeof answerRecord>) {
   const directory = statePath(`external-relay/answers/${record.relayId}/${record.targetId}`);
   fs.mkdirSync(directory, { recursive: true });
+  const modified = new Date(fs.statSync(directory).mtimeMs + 1);
   fs.writeFileSync(path.join(directory, `${Date.parse(record.startedAt)}_${record.requestId}.json`), JSON.stringify(record));
+  /* A directory change must advance the cache signature even on a coarse clock. */
+  fs.utimesSync(directory, modified, modified);
 }
 
 test("an install whose chats hold no conversation lists its kept answers under their relay, newest first, across targets", async () => {

@@ -27,6 +27,7 @@ export type PairedRelay = {
   name: string;
   description: string;
   credential: string;
+  features?: string[];
   owner: ExternalRelayOwner;
   pairedAt: string;
   paused: boolean;
@@ -43,6 +44,7 @@ export type PendingRelay = {
   api_base: string;
   name: string;
   description: string;
+  features?: string[];
   limits: PairedRelay["limits"];
   pairing_id: string;
   poll_secret: string;

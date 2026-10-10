@@ -222,7 +222,8 @@ wait. Ordinary Node/Bun children retain their original handles.
 | `src/lib/flows/exec.test.ts` | Sleeper handles replace PID-only signals; final teardown waits for every retained handle. |
 | `src/lib/flows/engine.test.ts` | Reviewer cleanup retains and awaits the original child handle. |
 | `src/lib/pipelines/engine.test.ts` | Release fault injection uses the original child handle; every fixture teardown awaits its exit. |
-| `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; every shutdown waits for that identity to be reaped before returning. |
+| `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; shutdown retains and awaits the pool's original child handle. Private-namespace regressions exercise both worker and files-route helpers against actual PID reuse and a live worker. |
+| `src/app/api/files/route.test.ts` | Worker cleanup retains the pool's original child handle and awaits its exit before removing fixture directories. An exited root's diagnostics PID grants no signal authority. |
 | `scripts/owned-runner.integration.test.ts` | Hard-kill fault injection uses the shared identity signal; recovery already retains original identities. |
 | `scripts/local-gate.test.ts` | Refused-root and group-preparation fixtures capture PID/start/boot identities from live launch reports before awaiting hook exit; group fault release follows capture, and bounded cleanup revalidates each original identity. Transient-scope fixtures launch actual scopes directly and retain live root/helper/neighbor identities; gate-slot service containment keeps its independent verification. |
 | `scripts/local-gate.noproc.test.ts` | Root/helper identities are captured while alive before awaiting the step deadline. Lifetime capture and bounded cleanup use real OS evidence outside the injected missing-/proc and ps faults; original root handles are retained from spawn and reaped before runner teardown. |
@@ -295,8 +296,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 266 files: 176 with asynchronous primitives and
-90 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 270 files: 176 with asynchronous primitives and
+94 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -483,13 +484,13 @@ repeated for this inventory correction.
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
 | `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
-| `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
+| `src/runtime-host/hostRollback.test.ts` | 253, 279 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
 | `src/runtime-host/journalStartup.test.ts` | 78 | owned; preload records the original Bun handle before return, the interrupted backfill child deliberately signals itself and its exit is awaited inside the private runner service |
 | `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
 | `src/runtime-host/mcpRuntimeRelease.test.ts` | 78, 120, 175, 280, 318 | owned |
 | `src/runtime-host/runtimeHostFence.test.ts` | 60, 115, 124 | owned |
-| `src/runtime-host/runtimeHostStartup.test.ts` | 175 | owned |
+| `src/runtime-host/runtimeHostStartup.test.ts` | 176 | owned |
 | `src/runtime-host/runtimeHostSuccession.process.test.ts` | 36 | owned; original host handles are retained before readiness, finally cleanup awaits TERM with three-second KILL escalation, and the private runner service contains interrupted succession |
 | `test-preload.ts` | 19 | contained helper |
 
@@ -550,6 +551,9 @@ repeated for this inventory correction.
 | `src/lib/mcp/compactAnswers.test.ts` | 38 | synchronous |
 | `src/lib/mcp/spawnRecovery.integration.test.ts` | 251 | synchronous |
 | `src/lib/mcp/workLinks.test.ts` | 21 | synchronous |
+| `src/lib/memory/roleEgress.test.ts` | 74, 97, 183 | synchronous; privacy and Git probe results return before fixture cleanup; the runner contains interrupted descendants |
+| `src/lib/memory/roleEgressUnreadable.test.ts` | 23, 59 | synchronous; isolated store and publication probes return before fixture cleanup; the runner contains interrupted descendants |
+| `src/lib/memory/roleLaunch.test.ts` | 28 | synchronous; Git fixture commands return before the private checkout is removed; the runner contains interrupted descendants |
 | `src/lib/onboarding/healthCheck.test.ts` | 342, 346, 357, 365 | synchronous |
 | `src/lib/orchestrator/seatProjectIdentity.test.ts` | 22 | synchronous |
 | `src/lib/pipelines/controllerArtifacts.test.ts` | 22, 129 | synchronous |
@@ -568,6 +572,7 @@ repeated for this inventory correction.
 | `src/lib/runtime/pipelineStageHostAccess.integration.test.ts` | 36 | synchronous |
 | `src/lib/runtime/sendSettlement.test.ts` | 1558, 1666 | synchronous |
 | `src/lib/scanner/describe.test.ts` | 661, 701, 726 | synchronous |
+| `src/lib/scanner/filesResponseWorker.test.ts` | Private-namespace spawnSync | synchronous; each seven-second probe retains original worker and bystander handles, awaits bounded cleanup, and the runner contains namespace descendants on interruption |
 | `src/lib/search/projectScope.test.ts` | 30, 31 | synchronous |
 | `src/lib/selfUpdate/auto.test.ts` | 39, 114, 517, 551, 725, 807, 864, 913, 1615 | synchronous |
 | `src/lib/selfUpdate/package.test.ts` | 35 | synchronous |
@@ -605,7 +610,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/telegram/reportRunner.test.ts` | A substituted launch port creates synthetic reports. |
 
 Referenced production and operational companions are explicitly excluded from
-the 256-file test/helper census. They remain reconciled by the independent
+the test/helper census. They remain reconciled by the independent
 reference scan. Their execution by a test is contained by the same service;
 this disposition does not change their production process contract.
 
@@ -643,6 +648,7 @@ this disposition does not change their production process contract.
 | `src/lib/runtime/cpuPlacement.ts` | Product CPU-placement port; synchronous systemd queries have five-second timeouts and test executions stay in the owning service; live agent placement is outside fixture cleanup |
 | `src/lib/processIdentity.ts` | Product boot identity probes; bounded synchronous sysctl on macOS, contained test calls |
 | `src/lib/resources.ts` | Product resource commands exercised by tests; actual primitive calls contained by preload/service |
+| `src/lib/scanner/filesResponseWorker.ts` | Production projection worker pool; namespace tests retain its original child handles and await exit, while the owning runner contains inherited-pipe descendants |
 | `src/lib/runtime/claudeStreamBrokerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
 | `src/lib/runtime/codexAppServerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
 | `src/lib/runtime/copilotAcpHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |

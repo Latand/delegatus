@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
@@ -38,6 +39,7 @@ import {
 } from "@/lib/scanner/scanCache";
 import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -118,7 +120,21 @@ beforeEach(() => {
   resetPresenceForTest();
 });
 
-afterEach(() => {
+async function stopTestWorker(): Promise<void> {
+  // The pool retains the original launch handle even after exit while inherited
+  // stdio stays open. Its diagnostic PID can already belong to another process.
+  const child = (globalThis as typeof globalThis & {
+    __llvFilesResponseWorker?: { child: ChildProcess } | null;
+  }).__llvFilesResponseWorker?.child;
+  shutdownFilesResponseWorker("test");
+  if (child) {
+    await stopFixtureProcess(child);
+    expect(child.exitCode !== null || child.signalCode !== null, "test worker was reaped before fixture cleanup").toBe(true);
+  }
+}
+
+afterEach(async () => {
+  await stopTestWorker();
   injectStateWriteFaultForTests(null);
   setStateFreeBytesProbeForTests(null);
   noteStateCommit();
@@ -759,7 +775,7 @@ test("a worker-built projection is dated by the scan snapshot the worker actuall
   } finally {
     release?.();
     setFilesResponseWorkerRuntimeForTests(null);
-    shutdownFilesResponseWorker("test");
+    await stopTestWorker();
   }
 }, 60_000);
 
@@ -3994,7 +4010,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
     expect(response.status).toBe(200);
     expect((await response.json()).systemHealth.storage.writes.state).toBe("disk-full");
     expect(response.headers.get("etag")).not.toBe(warm.headers.get("etag"));
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 const classifiedWorkerFull = new StateDiskFullError("state transaction", Object.assign(new Error("full"), { code: "SQLITE_FULL" })).message;
@@ -4031,7 +4047,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
     expect(response.headers.get("etag")).not.toBe(warm.headers.get("etag"));
     const unchanged = await GET(new Request("http://127.0.0.1/api/files", { headers: { "if-none-match": response.headers.get("etag")! } }));
     expect(unchanged.status).toBe(304);
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 test("a cached board resumes after worker ENOSPC and a cross-process data commit", async () => {
   scannedFiles = [];
@@ -4048,7 +4064,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {const {id}=J
   try {
     const full = await GET(new Request("http://127.0.0.1/api/files"));
     expect((await full.json()).systemHealth.storage.writes.state).toBe("disk-full");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
   const storePath = path.resolve(import.meta.dir, "../../../lib/pipelines/store.ts");
   const child = Bun.spawn([process.execPath, "-e", `import { buildPipeline, savePipelines } from ${JSON.stringify(storePath)}; savePipelines([buildPipeline({id:'recovered',task:'Recovered fixture',project:'fixture',repoDir:process.env.LLV_STATE_DIR,stages:[],srcPath:null,srcConversationId:null,now:'2026-10-01T00:00:00.000Z',state:'draft'})]);`], {
     env: { ...process.env, LLV_STATE_DIR: stateDir }, stdout: "pipe", stderr: "pipe",
@@ -4094,7 +4110,7 @@ process.stdout.write(JSON.stringify(reply)+'\\n');});`);
       payload = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
     }
     expect(payload.systemHealth.storage.writes.state).toBe("ok");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 async function warmFilesProjectionForWorkerTest(): Promise<string> {
   let warm = await GET(new Request("http://127.0.0.1/api/files"));
@@ -4154,7 +4170,7 @@ test("worker transport recovery preserves a concurrent SQLite commit failure unt
     savePipelines([pipeline]);
     expect(readStateCollectionRevision(database, "pipelines")).toBeGreaterThan(revision!);
     expect((await (await GET(new Request("http://127.0.0.1/api/files?view=storage-health"))).json()).state).toBe("ok");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 test("successful worker transport preserves disk-full state health reported in its body", async () => {
@@ -4173,7 +4189,7 @@ test("successful worker transport preserves disk-full state health reported in i
     expect(health.state).toBe("disk-full");
     expect(health.since).toBe(body.systemHealth.storage.writes.since);
     expect(stateWriteHealth(stateDir).state).toBe("disk-full");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 test("worker ENOSPC fallback retains input A until input B rebuilds after an unrelated commit", async () => {
@@ -4196,7 +4212,7 @@ test("worker ENOSPC fallback retains input A until input B rebuilds after an unr
     expect(rebuilt.systemHealth.storage.writes.state).toBe("ok");
     expect(response.headers.get("x-llv-files-projection-cache")).toBe("miss");
     expect(fs.readFileSync(path.join(stateDir, "worker-attempts"), "utf8")).toBe("2");
-  } finally { setFilesResponseWorkerRuntimeForTests(null); await shutdownFilesResponseWorker(); }
+  } finally { setFilesResponseWorkerRuntimeForTests(null); await stopTestWorker(); }
 });
 
 test("disk-full alert overlays a persisted representation from before write health existed", async () => {

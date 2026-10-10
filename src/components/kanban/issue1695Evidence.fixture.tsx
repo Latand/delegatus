@@ -7,6 +7,7 @@ import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
 import { translate } from "@/lib/i18n";
+import { insertLearnedRules, lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
@@ -2066,9 +2067,40 @@ const tool = (secondsAgo: number, id: string, name: string, input: Record<string
   line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } }),
   line(secondsAgo - 2, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }),
 ];
+/* Role memory's variant 5, the stage as its agent sees it (`&rolememory=1`): the
+   builder's launch message with its learned rules below the brief, its
+   stage_report and the lesson request in the answer, then its leave_lesson. The
+   text is the product's own renderer's. */
+function roleMemoryStageTranscript(): string {
+  const rule = (id: string, text: string, why: string) => ({ kind: "rule", id, scope: "", rule: text, why, state: "active", hints: [], source: {}, createdAt: "", changedAt: "" }) as never;
+  const block = renderLearnedRules([
+    { scope: "role:atlas:builder", rules: [rule("r_5d0e21aa", "Keep a fix round to the handed findings and what they reveal; a wider rewrite restarts the review from zero.", "A fix round that also refactored drew five new findings.")] },
+    { scope: "project:atlas", rules: [rule("r_9b47c3f0", "Run the test files you touched by path; a whole-directory sweep reaches live runtime state.", "A sweep once stopped the host of a running conversation.")] },
+    { scope: "machine", rules: [rule("r_1f8a6d52", "Give a browser started from a pipeline stage a short temporary directory for its sockets.", "The driver died on the socket path limit until TMPDIR was shortened.")] },
+  ]);
+  const brief = ["Move the delta chain off the request thread; the worker must own it.", "", "Role prompt scaffold:", "You are a Builder in plain mode. Implement the brief with focused checks.", "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings, summary }."].join("\n");
+  const finding = "The delta chain is rebuilt on the request thread; the worker must own it.";
+  const tool = (secondsAgo: number, id: string, name: string, input: Record<string, unknown>) => line(secondsAgo, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: `mcp__viewer__${name}`, input }] } });
+  const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
+  const lessons = [
+    { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
+    { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
+  ];
+  return `${[
+    asked(46 * 60, insertLearnedRules(brief, block)),
+    said(43 * 60, L("The worker owns the chain now; one check still fails on the request thread.", "Ланцюгом тепер володіє воркер; одна перевірка ще падає в потоці запиту.")),
+    tool(41 * 60 + 5, "toolu_role_memory_report", "stage_report", { clientRequestId: "md-impl-report", verdict: "fail", findings: [{ severity: "P1", text: finding }], summary: finding }),
+    result(41 * 60, "toolu_role_memory_report", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, replaced: false, report: { seq: 1, verdict: { status: "fail", findingCount: 1 } }, lessonRequest: lessonRequestLines(null) }),
+    tool(40 * 60 + 30, "toolu_role_memory_lesson", "leave_lesson", { clientRequestId: "md-impl-lesson", lessons }),
+    result(40 * 60 + 25, "toolu_role_memory_lesson", { pipelineId: "p-md-decision", stageId: "implement", attempt: 1, left: [{ id: "r_8c1e04b7", scope: "role:atlas:builder", state: "active", scopeChars: 606 }, { id: "r_2a7f9c13", scope: "role:atlas:visual-critic", state: "active", scopeChars: 214 }], none: null }),
+    said(40 * 60, L("Two lessons left; the stage itself is complete.", "Лишив два уроки; сам етап завершено.")),
+  ].join("\n")}\n`;
+}
+
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
+  if (ROLE_MEMORY && (file as { conversationId?: string }).conversationId === "conversation_md-impl") return roleMemoryStageTranscript();
   /* A launch the transcript has not appeared for reads nothing. */
   if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
@@ -3034,6 +3066,7 @@ Object.assign(window, { launchRun });
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -3046,6 +3079,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
+  if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
   if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
