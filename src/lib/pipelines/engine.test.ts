@@ -24330,6 +24330,70 @@ for (const engine of ["claude", "codex"] as const) {
   }
 }
 
+// Incomplete history can open confirmation before any provider wait exists.
+for (const engine of ["claude", "codex"] as const) {
+  for (const pool of [false, true]) {
+    test.each(["hours-later", "same-wait", "closure-tick", "same-chain"] as const)(`${engine} first-tick incomplete chain owns its confirmation window (pool=${pool}, %s)`, async shape => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
+      f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+      f.h.ports.allowedAccountIds = () => pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT];
+      const records: Record<string, unknown>[] = [];
+      const file = stageTranscript(`chain-first-incomplete-${engine}-${pool}-${shape}`, []);
+      const k = cutChainKit(f, engine, () => file, records);
+      const oversized = () => records.push({ type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(9 * 1024 * 1024) });
+      k.notice("10pm", CHAIN_RESET["10pm"]);
+      oversized();
+      f.advance(1_000);
+      k.notice("10pm", CHAIN_RESET["10pm"]);
+      k.write();
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      // Fresh ports on each tick read the persisted wait and the real transcript.
+      const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
+      const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
+      await tick();
+      const firstStartedAt = f.h.ports.now();
+      expect(attempt().providerWait).toBeUndefined();
+      expect(attempt().controllerWait?.startedAt).toBe(firstStartedAt);
+      expect(loadPipelines()[0]!.state).toBe("running");
+
+      f.advance(20_000);
+      await k.harnessWake();
+      if (shape !== "same-chain") k.output();
+      if (shape === "closure-tick") {
+        k.write();
+        await tick();
+        expect(attempt().controllerWait).toBeUndefined();
+      }
+      f.advance(Date.parse(shape === "hours-later" ? "2026-10-05T21:30:00Z" : "2026-10-05T17:22:50Z") - f.now());
+      k.notice("2am", CHAIN_RESET["2am"]);
+      oversized();
+      f.advance(1_000);
+      k.notice("2am", CHAIN_RESET["2am"]);
+      k.write();
+      await tick();
+      const startedAt = shape === "same-chain" ? firstStartedAt : f.h.ports.now();
+      expect({ state: loadPipelines()[0]!.state, startedAt: attempt().controllerWait?.startedAt })
+        .toEqual({ state: "running", startedAt });
+      expect(attempt().providerWait).toBeUndefined();
+      expect(f.sends).toHaveLength(0);
+      expect(f.h.spawnInputs).toHaveLength(1);
+
+      // The new chain gets the full ten minutes; repeated cuts cannot extend it.
+      f.advance(Date.parse(startedAt) + 9 * 60_000 + 59_000 - f.now());
+      await tick();
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(attempt().controllerWait?.startedAt).toBe(startedAt);
+      f.advance(1_000);
+      await tick();
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.stateDetail).toContain("provider transport recovery exhausted after 10 minutes");
+      expect(attempt().providerWait?.stageRetry).toBeUndefined();
+      expect(f.sends).toHaveLength(0);
+      expect(f.h.spawnInputs).toHaveLength(1);
+    });
+  }
+}
+
 // A parked retry's confirmation wait goes with its chain when the next chain,
 // read with no tick between, runs past the read bound.
 for (const engine of ["claude", "codex"] as const) {

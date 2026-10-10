@@ -486,7 +486,11 @@ export type PipelineStageAttempt = {
       activation may run. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
-  controllerWait?: PipelineBoundedWait;
+  controllerWait?: PipelineBoundedWait & {
+    /** Cut whose chain owns an incomplete-history confirmation wait, before
+        providerWait can open. The reader must prove closure before clearing it. */
+    providerCutAt?: number;
+  };
   outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
   memoryWait?: PipelineBoundedWait;
   /** Bounded wait for the remote pipeline branch after an approved review
