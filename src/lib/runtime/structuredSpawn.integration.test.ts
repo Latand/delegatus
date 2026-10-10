@@ -3031,6 +3031,9 @@ test("startup recovery preserves a live adopted writer while settling its stale 
     },
   });
 
+  // The interrupted foreground has handed admission back; the host writer
+  // (where present) is independent and keeps its existing ownership assertions.
+  registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!);
   await recoverPendingStructuredSpawns(registry, client);
 
   expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "failed" });
@@ -3134,6 +3137,9 @@ test("startup recovery preserves a live adopted writer while settling its stale 
     },
   });
 
+  // The interrupted foreground has handed admission back; the host writer
+  // (where present) is independent and keeps its existing ownership assertions.
+  registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!);
   await recoverPendingStructuredSpawns(registry, client);
 
   expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "failed" });
@@ -4172,6 +4178,9 @@ test("startup recovery terminalizes an admitted spawn interrupted before identit
     conversationId: begun.receipt.conversationId, engine: "codex", cwd, prompt: "durably admitted", accountId: "codex-subscription", parentConversationId: null,
   });
 
+  // The interrupted foreground has handed admission back; the host writer
+  // (where present) is independent and keeps its existing ownership assertions.
+  registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!);
   await recoverPendingStructuredSpawns(registry, client);
   await recoverPendingStructuredSpawns(registry, client);
 
@@ -4208,6 +4217,9 @@ test("startup recovery settles a structured receipt after a crash before runtime
   });
   if (structured.kind !== "created" || tmux.kind !== "created") throw new Error("spawn receipt was unavailable");
 
+  // The interrupted foreground has handed admission back; the host writer
+  // (where present) is independent and keeps its existing ownership assertions.
+  registry.releaseStructuredSpawnAdmissionOwner(structured.receipt.launchId, structured.receipt.admissionOwner!);
   await recoverPendingStructuredSpawns(registry, client);
   await recoverPendingStructuredSpawns(registry, client);
 
@@ -4256,6 +4268,9 @@ test.each(["failed", "delivered"] as const)("startup recovery settles a keyless 
     ...(terminalStatus === "failed" ? { reason: "runtime spawn failed before identity" } : {}),
   });
 
+  // The interrupted foreground has handed admission back; the host writer
+  // (where present) is independent and keeps its existing ownership assertions.
+  registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!);
   await recoverPendingStructuredSpawns(registry, client);
   await recoverPendingStructuredSpawns(registry, client);
 
@@ -6949,4 +6964,153 @@ test("owner relay cutoff after host publication releases its host before the fir
     expect(registry.snapshot().receipts[begun.receipt.launchId]?.state).toBe("failed");
     expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).toBeNull();
   } finally { await host.release(); journal.close(); }
+});
+
+function publicationLatch() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function publicationBoundary<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("publication fixture boundary timed out")), 5_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+test.each(["off", "sqlite", "sqlite superseded"] as const)("startup recovery does not retire its live restart replacement from an obsolete pre-staging snapshot (%s)", async (scenario) => {
+  const sqliteMode = scenario === "off" ? "off" : "sqlite";
+  const cwd = fs.mkdtempSync(path.join(sandbox, "publication-race-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode });
+  const journal = new RuntimeJournal(path.join(cwd, "journal.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const id = crypto.randomUUID();
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const profile = emptyLaunchProfile({ cwd });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "account-a",
+    clientAttemptId: "pipeline_fixture_review_2", launchProfile: profile, requestDigest: "d".repeat(64),
+  });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const starting = publicationLatch();
+  const allowStart = publicationLatch();
+  const recoveryRead = publicationLatch();
+  const allowRecoveryRead = publicationLatch();
+  const published = publicationLatch();
+  const allowPublish = publicationLatch();
+  let starts = 0;
+  let publications = 0;
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+  const originalStatus = client.operationStatus;
+  let trap = false;
+  client.operationStatus = async (operationId) => {
+    if (trap && operationId === begun.receipt.launchId) {
+      trap = false;
+      recoveryRead.resolve();
+      await allowRecoveryRead.promise;
+    }
+    return originalStatus(operationId);
+  };
+  const spawning = spawnStructuredConversation({
+    engine: "codex", receipt: begun.receipt, registry, client,
+    "prompt": "Review the already published stage",
+    spec: { command: "codex", cwd, windowName: "fixture", engine: "codex", launchProfile: profile },
+    account: { engine: "codex", accountId: "account-a", kind: "managed", home: cwd,
+      transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+  }, {
+    startHost: async () => {
+      starts += 1;
+      starting.resolve();
+      await allowStart.promise;
+      return host;
+    },
+    bindHost: async (store, key, runningHost, owner, epoch) => {
+      const state = await runningHost.health();
+      store.setStructuredHostClaimed(key, {
+        kind: "codex-app-server", endpoint: state.endpoint, process: captureProcessIdentity(process.pid),
+        eventCursor: state.eventCursor, protocolVersion: state.protocolVersion, writerClaimEpoch: epoch,
+        activeTurnRef: state.activeTurnRef, pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+      }, "idle", owner, epoch);
+      return () => {};
+    },
+    publishHost: async (key, runningHost, owns) => {
+      publications += 1;
+      const detach = await publishStructuredDeliveryHost({ key, host: runningHost }, owns);
+      published.resolve();
+      await allowPublish.promise;
+      return detach;
+    },
+    processIdentity: () => captureProcessIdentity(process.pid), durableSetupTimeoutMs: 10_000,
+  }).then((response) => ({ response, error: null }), (error) => ({ response: null, error: String(error.message) }));
+  let recovering: Promise<void> | undefined;
+  try {
+    await publicationBoundary(starting.promise);
+    if (scenario === "sqlite superseded") {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      const replacement = beginLegacySpawnFixture(registry, {
+        engine: "codex", cwd, transport: "structured", accountId: "account-a",
+        clientAttemptId: "pipeline_fixture_review_3", launchProfile: profile,
+        requestDigest: "d".repeat(64),
+      });
+      expect(replacement.kind).toBe("created");
+    }
+    trap = true;
+    recovering = recoverPendingStructuredSpawns(registry, client);
+    await publicationBoundary(Promise.race([recoveryRead.promise, recovering]));
+    trap = false;
+    allowStart.resolve();
+    await publicationBoundary(published.promise);
+    allowRecoveryRead.resolve();
+    await publicationBoundary(recovering);
+    allowPublish.resolve();
+    const outcome = await publicationBoundary(spawning);
+    if (outcome.error) {
+      expect(outcome.error).toBe("staged launch was released before publication completed");
+      expect(starts).toBe(1);
+      expect(publications).toBe(1);
+      expect(host.sent).toHaveLength(0);
+    }
+    expect(outcome.error).toBeNull();
+    expect(outcome.response).toMatchObject({ state: "settled", initialMessage: "delivered" });
+    expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]?.state).toBe("completed");
+    expect(starts).toBe(1);
+    expect(publications).toBe(1);
+    expect(host.sent).toHaveLength(1);
+    await recoverPendingStructuredSpawns(registry, client);
+    await recoverPendingStructuredSpawns(registry, client);
+    expect(starts).toBe(1);
+    expect(publications).toBe(1);
+    expect(host.sent).toHaveLength(1);
+  } finally {
+    allowStart.resolve();
+    allowRecoveryRead.resolve();
+    allowPublish.resolve();
+    await spawning;
+    await recovering?.catch(() => {});
+    await host.release();
+    await bindStructuredDeliveryQueue([]);
+    journal.close();
+  }
+}, 15_000);
+
+test("starting recovery respects the current admission owner and retains its stale deadline", async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "starting-recovery-fence-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured",
+    launchProfile: emptyLaunchProfile({ cwd }) });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const createdAt = Date.parse(begun.receipt.createdAt);
+  const reason = `structured spawn interrupted before identity staging: ${begun.receipt.launchId}`;
+  expect((await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, {
+    startingRecovery: { now: createdAt + 1, timeoutMs: STALE_STRUCTURED_SPAWN_TIMEOUT_MS },
+  })).claimed).toBe(false);
+  expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]!.state).toBe("starting");
+  expect((await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, {
+    startingRecovery: { now: createdAt + STALE_STRUCTURED_SPAWN_TIMEOUT_MS, timeoutMs: STALE_STRUCTURED_SPAWN_TIMEOUT_MS },
+  })).claimed).toBe(true);
+  expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]!.state).toBe("failed");
 });
