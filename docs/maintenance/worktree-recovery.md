@@ -33,8 +33,9 @@ The MCP apply path is removed for every caller, including the operator root;
 repository. Dry-run performs no writes, no rescan and no MCP receipt
 publication, even when a request key is supplied.
 
-A removed checkout must share its parent directory with a known repository
-and match one of its sibling names: `<repo>-lane-<n>`,
+An agreeing recorded mapping can recover a removed checkout at an arbitrary
+path. Without that mapping, the checkout must share its parent directory with
+a known repository and match one of its sibling names: `<repo>-lane-<n>`,
 `<repo>-pipeline-<id>`, `<repo>-review`, or `<repo>-v<version>-<suffix>`.
 Subdirectory cwds record the checkout root. Recovery requires a recorded mapping,
 an agreeing native transcript repository hint, or a branch hint confirmed against
