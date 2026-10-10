@@ -300,6 +300,24 @@ test("a retained predecessor mark keeps its native receipt foreign after replay 
   expect((await probe()).quiet).toBe(true);
 });
 
+test.each(["missing pid", "missing health identity", "foreign health identity", "missing saved identity"])(
+  "an idle handle without comparable ownership cannot release an answering recorded process: %s", async (shape) => {
+    const path = transcript("unmarked"), c = conversation(path), worker = spawn();
+    const saved = shape === "missing saved identity" ? { ...worker.identity, startIdentity: null } : worker.identity;
+    const claim = claimHost(c.key, path, saved, "idle");
+    const held = heldHost(worker.child.pid, { status: "idle", activeTurnRef: null,
+      ...(shape === "missing pid" ? { pid: null } : {}),
+      processStartIdentity: shape === "missing health identity" ? null : shape === "foreign health identity" ? "earlier-process" : worker.identity.startIdentity });
+    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after),
+      readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map([[sessionKeyId(c.key), held.host]]) }) });
+    expect((await probe(p, Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+    writeFileSync(path, transcriptText("settled", new Date(Date.now() + 1_000).toISOString()));
+    expect((await probe(p)).quiet).toBe(true);
+    release(c.key, claim);
+    await exit(worker);
+    expect((await probe(p)).quiet).toBe(true);
+  });
+
 function spawn(): { child: ReturnType<typeof Bun.spawn>; identity: ProcessIdentity } {
   const child = Bun.spawn(["sleep", "60"]);
   children.push(child);

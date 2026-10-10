@@ -428,7 +428,9 @@ export function ownerCensusReader(
           let handle: "busy" | "idle" | null = null;
           if (owner.structuredHost && owner.entryKey && held.has(owner.entryKey)) {
             const state = await health(owner.entryKey);
-            if (state && (state.pid === null || state.pid === owner.pid)) {
+            if (state && state.pid === owner.pid && state.processStartIdentity !== null
+              && owner.identities.some((identity) => identity.pid === state.pid && identity.startIdentity !== null
+                && identity.startIdentity === state.processStartIdentity)) {
               handle = handleTurn(state);
               spoken.add(owner.entryKey);
             }

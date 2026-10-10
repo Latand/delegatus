@@ -662,6 +662,10 @@ A handle supplies its own process identity. A gone registry identity at its
 pid suppresses the handle only when both saved start identities are present
 and equal. A busy answering handle whose start identity is null retains its
 own custody; reuse proven for an older registry process cannot release it.
+The same attribution test precedes settlement for a live registry owner:
+idle health speaks for that owner only when the pid and both non-null saved
+start identities match. Missing or different identity fields leave the
+recorded answering owner held until its own attributable completion or death.
 
 **Bounded grace covers a launch that never proved work.** An ownerless hosted
 row, an open receipt with no admission process or an unregistered claim may
