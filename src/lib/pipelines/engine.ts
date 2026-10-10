@@ -4150,9 +4150,9 @@ async function commitPassedStage(
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   const repair = attempt.commitRepair;
   const commitControl = repair ? {
-    recoverOnly: !!repair.recommitAt,
-    beforeCommit: async () => {
-      repair.recommitAt = ports.now();
+    recoveryHead: repair.recommit?.head,
+    beforeCommit: async (head: string) => {
+      repair.recommit = { at: ports.now(), head };
       await persist();
     },
   } : undefined;

@@ -323,6 +323,7 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
     ancestryAnswers: (result: ExecResult) => { ancestry = result; },
     branchRefAnswers: (result: ExecResult) => { branchRef = result; },
     stageLeaves: (...files: string[]) => { dirty = files; },
+    headMovesTo: (sha: string) => { head = sha; },
     spawnCount: () => spawns,
   };
 }
@@ -580,6 +581,36 @@ test.each(["read-only", "read-write"] as const)("an interrupted %s refusal check
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
   expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(h.requests).toHaveLength(1);
+});
+
+test.each([
+  ["read-only", BASE_SHA],
+  ["read-write", BASE_SHA],
+  ["read-write", STAGE_HEAD],
+] as const)("a clean %s checkout at unchanged retry head %s cannot hide an interrupted refusal checkpoint", async (access, head) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  h.advance(TICK_MS);
+  h.headMovesTo(head);
+  h.hookAnswers(refusal("pre-commit: second refusal"));
+  h.endTurn("Fixed line 15.");
+  await interruptStageSettlement(h, "refusal-checkpoint");
+
+  h.stageLeaves();
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain("one commit retry was already started");
+  expect(parked.stateDetail).toContain(WHITESPACE_REFUSAL);
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
   expect(h.requests).toHaveLength(1);
 });
 
