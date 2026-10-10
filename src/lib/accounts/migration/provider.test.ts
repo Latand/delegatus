@@ -584,7 +584,7 @@ test("a migrated Claude successor whose Telegram grant is withdrawn while Telegr
   expect(engine.telegramDefinition).toBeNull();
 });
 
-test("a migrated Claude successor names itself by a fresh capability that resolves to the migrated conversation", async () => {
+test.each([false, true])("a migrated Claude successor preserves predecessor identity through publication and discard (restart: %s)", async (restart) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-successor-capability-"));
   roots.push(base);
   const source = accountRoot("claude", base, "source");
@@ -616,7 +616,7 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     adoptOptions.push(options as { env?: NodeJS.ProcessEnv });
     return fakeHost;
   });
-  const provider = new RegisteredSuccessorProvider({
+  const dependencies: ProviderDependencies = {
     accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
     startCodex: async () => { throw new Error("unexpected Codex client"); },
     claudeStatus: async () => ({ loggedIn: true }),
@@ -624,7 +624,8 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     cancelClaude: async () => "absent",
     registry,
     now: () => "2026-07-22T09:00:00.000Z",
-  });
+  };
+  const provider = new RegisteredSuccessorProvider(dependencies);
   const receipt: ProviderReceipt = {
     operationId: "claude-successor-capability",
     nativeId,
@@ -650,16 +651,18 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     await provider.publishHost(receipt, input);
     expect(adoptOptions).toHaveLength(1);
     const capability = adoptOptions[0]!.env?.LLV_SPAWN_CAPABILITY ?? "";
-    /* Under stdio the successor was found by process ancestry; the shared HTTP
-       endpoint can find it only by this. The predecessor's is cleared. */
+    /* Both hosts can make HTTP calls until the successor commits. */
     expect(capability).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const digest = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBe(launch.conversationId);
-    expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBeNull();
+    expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBe(launch.conversationId);
 
     /* The predecessor serves until the migration commits. A discarded
        successor hands its identity back. */
-    await provider.cleanup(receipt);
+    const cleanupProvider = restart
+      ? new RegisteredSuccessorProvider({ ...dependencies, registry: new AgentRegistry(registry.filename) })
+      : provider;
+    await cleanupProvider.cleanup(receipt);
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(before))).toBe(launch.conversationId);
     expect(registry.conversationIdForSpawnCapabilityDigest(digest(capability))).toBeNull();
 
