@@ -104,7 +104,10 @@ import { composeStageInput } from "./stageInput";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
-import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
+import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
+import { learnedRulesReserve, withLearnedRules } from "@/lib/memory/roleLaunch";
+import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
@@ -254,6 +257,14 @@ export interface PipelinePorts {
     /** Prior-attempt conversation this stage retry terminally supersedes
         (issue #383); attempt chains become round chains automatically. */
     supersedes?: string | null;
+    /** Role memory's learned rules (docs/design/role-memory.md §3.1), expanded
+        into the prompt only at dispatch. Never part of the persisted input or
+        the request digest, so no pipeline record holds rule text. */
+    learnedRules?: string | null;
+    /** A clean stage (a reviewer, a verifier, the issue reporter or a review
+        gate): its launch profile carries the mark, so the shared-memory hook
+        and the engine's own memory stay off for it on every resume too. */
+    cleanMemory?: boolean;
   }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>): Promise<PipelineStageSpawn>;
   spawnReceipt(launchId: string): PipelineSpawnReceipt | null;
   /** Fresh keyed state at an asynchronous retry boundary. */
@@ -500,13 +511,6 @@ function sizingBriefer(briefer: PipelineBriefer, fallbackConversationId: string 
   return { kind: "agent", runtime: conversationId ? ports.conversationRuntime?.(conversationId) ?? null : null };
 }
 
-/** A stage that judges another stage's work, which R1 reads as reviewer work
-    whatever role it names: a review-loop stage, or the stage a conversion
-    made of one, which carries the fail edge to its fix stage. */
-function isReviewGate(stage: Pick<PipelineStage, "kind" | "onFail">): boolean {
-  return stage.kind === "review-loop" || Boolean(stage.onFail);
-}
-
 /** The sizing rules (docs/design/model-sizing-tiers.md §2) over stages already
     normalized, as create violations. `only` limits the check to the stages a
     graph edit touched; stages already admitted are not re-judged. */
@@ -607,6 +611,10 @@ async function spawnPipelineAgent(
   input: Parameters<PipelinePorts["spawnAgent"]>[0],
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
 ): Promise<PipelineStageSpawn> {
+  /* The message as it is sent: a lesson the brief quotes withheld, the
+     learned rules added. Built before any account or launch is reserved, so
+     a message that cannot carry its rules reserves nothing. */
+  const message = withLearnedRules(withoutStoredLessons(input.prompt), input.learnedRules);
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
      A bound one draws from its allowed set only: a stage naming an account
@@ -664,6 +672,7 @@ async function spawnPipelineAgent(
     sandbox,
     parentConversationId: parent.conversationId,
     title: input.title,
+    ...(input.cleanMemory ? { cleanMemory: true } : {}),
   });
   const registry = agentRegistry();
   /* Stage-retry supersedence (issue #383): the retry names the prior attempt's
@@ -765,7 +774,7 @@ async function spawnPipelineAgent(
       receipt: begun.receipt,
       spec,
       account,
-      "prompt": input.prompt,
+      "prompt": message,
       registry,
       client,
     });
@@ -5287,6 +5296,10 @@ async function spawnRunStage(
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   try {
+    /* Role memory, read once per activation and before the composer, so the
+       composed input leaves room for the learned rules' pointer. A clean
+       stage carries the clean mark and no rules. */
+    const memory = stageMemoryForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null);
     if (attempt.activation?.prepareInput || prepareInput) {
       const bound = attemptStage(stage, attempt);
       const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
@@ -5303,7 +5316,8 @@ async function spawnRunStage(
         return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
       };
       try {
-        const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec), attempt);
+        const reserve = learnedRulesReserve(memory.learnedRules) + Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
+        const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
         revalidate();
         if (abort.signal.aborted) throw new ActivationSuperseded();
         spawnInput = { ...spawnInput, prompt };
@@ -5356,6 +5370,8 @@ async function spawnRunStage(
         spawned = await ports.spawnAgent({
           ...spawnInput,
           clientAttemptId: callId,
+          ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
+          ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;
@@ -5719,8 +5735,10 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       }
       await driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
         const bound = attemptStage(stage, attempt);
-        const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
+        const memory = stageMemoryForLaunch(pipeline, stage, role.roleId ?? null);
+        const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec, learnedRulesReserve(memory.learnedRules));
         return { role, runtimeProfile: pipelineStageRuntimeProfile(bound), cwd: pipeline.worktreeDir!, project: pipeline.project,
+          ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}), ...(memory.cleanMemory ? { cleanMemory: true } : {}),
           requestedAccountId: record.to.accountId, title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,
           parentPath: record.from.agentPath, clientAttemptId: `switch_${record.seq}_${clientAttemptId(pipeline, stage, attempt)}`.slice(0,128),
           creatorConversationId: pipeline.srcConversationId, supersedes: record.from.conversationId,

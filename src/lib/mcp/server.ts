@@ -32,6 +32,8 @@ import {
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
+import { LESSON_MATCH_MIN_CHARS } from "@/lib/memory/roleConsolidate";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -61,6 +63,7 @@ export const MCP_TOOL_NAMES = [
   "create_pipeline",
   "pipeline_action",
   "stage_report",
+  "leave_lesson",
   "link_task_to_pipeline",
   "list_conversations",
   "search_transcripts",
@@ -126,6 +129,10 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      recorded rather than replace it a second time, and that record outlives
      this process. */
   "stage_report",
+  /* Appends the calling attempt's lessons to role memory. A replayed
+     clientRequestId must answer with the rules the first call left rather than
+     leave them a second time. */
+  "leave_lesson",
   "link_task_to_pipeline",
   "deploy_exact_sha",
   "flow_action",
@@ -3315,6 +3322,13 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
+    "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
+  ].join(" "),
+  leave_lesson: [
+    "Leave what this pipeline stage taught you as learned rules (role memory) for the agents who come after you; the answer to an accepted stage_report asks for it.",
+    "Give one to three lessons, each an abstract rule (a class of mistake or situation and what to do about it) with a one-line why and a scope: role (the next agent of your role on this project, or of the role you name), project (every role on this project) or machine (every project on this machine). Or give none with one line saying why.",
+    "The server resolves the calling conversation to its own attempt and records every piece of provenance itself. Reviewers, verifiers, the issue reporter and review-gate stages leave no lessons, and no rule may be addressed to them. A project with learned rules switched off refuses the call.",
+    "Rules are kept on this machine only. Write no names of people, accounts, emails, tokens, ids or absolute paths; the answer names any such text it sees as a hint and stores the rule.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
@@ -3448,6 +3462,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
 };
 
 const clientRequestIdSchema = z.string().min(1).describe("Stable idempotency key for this logical call.");
+/** Lesson text limits count code points, as the role memory store does; a
+    UTF-16 bound would refuse valid text in supplementary scripts. */
+const lessonTextSchema = (min: number, max: number) => z.string()
+  .refine((value) => { const length = lessonTextLength(value); return length >= min && length <= max; }, { message: `must be ${min}–${max} characters (Unicode code points)` });
 /* #1490: the one recovery switch. Excluded from the argument digest, so the
    same logical call with and without it is one call. */
 const recoveryOnlySchema = z.boolean().optional()
@@ -3860,6 +3878,16 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     stageId: z.string().min(1).optional()
       .describe("Only when this conversation holds more than one live stage; the refusal lists them."),
   }).passthrough(),
+  leave_lesson: z.object({
+    clientRequestId: clientRequestIdSchema,
+    lessons: z.array(z.object({
+      scope: z.enum(["role", "project", "machine"]).describe("role: the next agent of a role on this project (yours unless role names another); project: every role on this project; machine: every project on this machine."),
+      role: z.enum(ROLE_IDS).optional().describe("With scope role only: the role the rule is for, when another role would have prevented or caught the problem earlier."),
+      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe(`One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it. ${RULE_MIN_CHARS}–${RULE_MAX_CHARS} characters.`),
+      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters; at least ${LESSON_MATCH_MIN_CHARS} letters or digits, as the rule needs too.`),
+    })).max(MAX_LESSONS_PER_ATTEMPT).optional(),
+    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe(`When this stage taught nothing new: one line saying why, at most ${WHY_MAX_CHARS} characters.`),
+  }),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,

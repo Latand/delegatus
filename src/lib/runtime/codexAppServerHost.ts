@@ -194,6 +194,8 @@ export interface CodexAppServerHostOptions {
   model?: string;
   effort?: string;
   allowSubagents?: boolean;
+  /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
+  cleanMemory?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
   /** Codex plugins granted to this session (issue #687). Empty or absent
@@ -1433,7 +1435,7 @@ export class CodexAppServerHost implements EngineHost {
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
-    try { if (options.codexHome) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
+    try { if (options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
@@ -1444,6 +1446,8 @@ export class CodexAppServerHost implements EngineHost {
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
     const granted = grantedPlugins(options.plugins);
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
+    /* A clean launch reads none of Codex's own memories. */
+    if (options.cleanMemory) subagentFeatures.memories = false;
     const args = [
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
@@ -1524,6 +1528,7 @@ export class CodexAppServerHost implements EngineHost {
            over HTTP. */
         viewerMcpTransportForLaunch(childEnv),
         features,
+        options.cleanMemory === true,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       if (memoryHook) {

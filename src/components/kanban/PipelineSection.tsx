@@ -11,6 +11,7 @@ import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLab
 /* The stage-name rule lives beside `stageChipLabel` so the phone reads it
    without pulling a kanban component (#1865). */
 export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineModel";
+import { StageLessonLine } from "@/components/roleMemory/LearnedRules";
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline, KanbanRecordedConversation } from "./kanbanModel";
@@ -114,6 +115,7 @@ export function StageReportLine({ pipeline, entry, names, shown = SHOWN_STAGE_FI
           ) : null}
         </ul>
       ) : null}
+      <StageLessonLine pipeline={pipeline} entry={entry} />
     </>
   );
 }

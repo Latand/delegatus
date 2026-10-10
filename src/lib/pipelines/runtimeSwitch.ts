@@ -12,6 +12,8 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { StructuredControlResult } from "@/lib/runtime/structuredControls";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineRuntimeSeat, PipelineRuntimeSwitch, EffectivePipelineRole } from "./types";
+import { learnedRulesReserve } from "@/lib/memory/roleLaunch";
+import { withoutStoredLessons } from "@/lib/memory/roleStore";
 
 export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
@@ -250,7 +252,8 @@ export async function driveRuntimeSwitch(
           const result = await ports.exec("git", args, pipeline.worktreeDir);
           tail.push(result.code === 0 ? result.stdout.split("\n").slice(0,40).join("\n") : "Git observation unavailable");
         }
-        const content = hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`);
+        /* The transcript tail can hold the learned rules the attempt started with; they stay out of the checkout. */
+        const content = withoutStoredLessons(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
         const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, ports.exec);
         const digest = crypto.createHash("sha256").update(content).digest("hex");
         const file = path.join(directory, `runtime-handoff-${digest}.md`);
@@ -258,7 +261,7 @@ export async function driveRuntimeSwitch(
         const suffix = `\nContinuing on a new runtime. Read the complete handoff: ${file}\n${content.slice(0,4000)}`;
         // Externalize the bound brief if its framing and the handoff exceed the transport limit.
         let brief = input.prompt;
-        if (Buffer.byteLength(brief + suffix) > 32000) {
+        if (Buffer.byteLength(brief + suffix) > 32000 - learnedRulesReserve(input.learnedRules)) {
           const briefFile = path.join(directory, `runtime-brief-${crypto.createHash("sha256").update(brief).digest("hex")}.md`);
           writeArtifact(briefFile, brief); brief = `Read the complete stage brief: ${briefFile}`;
         }

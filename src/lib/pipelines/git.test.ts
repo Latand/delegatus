@@ -1699,6 +1699,32 @@ async function siblingHunkRebaseSandbox(targetPath: string, siblingPath: string)
   return { ...box, accepted, head, target: (first: number, second: number) => target(first, second, 11) };
 }
 
+test("an unreadable role memory refuses publication before the push, quoting no lesson", async () => {
+  const box = (await publishSandbox());
+  try {
+    const head = (await box.commit("accepted.txt", "accepted\n"));
+    const rule = "When a change adds a branch for empty or missing input, write the test for that branch in the same commit.";
+    /* Stored by another process and then damaged, so this one first opens it damaged. */
+    const request = { pipelineId: "p-unreadable", stageId: "fix", attempt: 1 };
+    const stored = spawnSync(process.execPath, ["-e", `const store = await import(${JSON.stringify(path.resolve(import.meta.dir, "../memory/roleStore.ts"))});
+store.recordLessonRequest({ ...${JSON.stringify(request)}, project: "viewer", roleId: "builder", conversationId: "conversation_unreadable", at: "2026-10-07T12:00:00.000Z" });
+store.leaveLessons({ request: ${JSON.stringify(request)}, source: { ...${JSON.stringify(request)}, project: "viewer", roleId: "builder", fixRound: true, conversationId: "conversation_unreadable" },
+  lessons: [{ scope: "role", rule: ${JSON.stringify(rule)}, why: "Review failed on an untested empty-input path." }], none: null });`], { env: { ...process.env, LLV_STATE_DIR: publicationState }, encoding: "utf8" });
+    expect(stored.stderr).toBe("");
+    expect(stored.status).toBe(0);
+    const database = new Database(path.join(publicationState, "state.sqlite"));
+    expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule })).changes).toBe(1);
+    database.close();
+
+    const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
+
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).toContain("role memory could not be read");
+    expect(JSON.stringify(result)).not.toContain("empty or missing input");
+    expect((await box.originHead())).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
 test.each(["update", "revert"])("stage reconciliation retains accepted history followed by a builder %s", async (operation) => {
   const box = (await rebasedStageSandbox());
   try {
