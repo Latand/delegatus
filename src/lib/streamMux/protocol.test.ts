@@ -59,5 +59,24 @@ test("a control request names its connection and its channels, or it is not one"
     { c, ops: [{ op: "open", id: "has space", url: "/api/runtime/stream" }] },
     { c, ops: [{ op: "steal", id: "1" }] },
     { c, ops: Array.from({ length: 33 }, () => ({ op: "close", id: "1" })) },
+    { c, ops: [{ op: "open", id: "1", url: "/api/runtime/stream", lastEventId: 41 }] },
+    { c, ops: [{ op: "open", id: "1", url: "/api/runtime/stream", lastEventId: "" }] },
+    { c, ops: [{ op: "open", id: "1", url: "/api/runtime/stream", lastEventId: "41\r\nx-injected: 1" }] },
+    { c, ops: [{ op: "open", id: "1", url: "/api/runtime/stream", lastEventId: "4\u00001" }] },
+    { c, ops: [{ op: "open", id: "1", url: "/api/runtime/stream", lastEventId: "4".repeat(1025) }] },
   ]) expect(parseMuxOps(body)).toBeNull();
+});
+
+test("a channel reopened with its last event id carries it, and the stream continues from it", () => {
+  const c = "abcdefghijklmnop";
+  expect(parseMuxOps({ c, ops: [{ op: "open", id: "1", url: "/api/runtime/stream?after=40", lastEventId: "41" }] })).toEqual({
+    connection: c,
+    ops: [{ op: "open", id: "1", url: "/api/runtime/stream?after=40", lastEventId: "41" }],
+  });
+  const parser = createSseParser("41");
+  expect(parser.push("data: same stream\n\nid: 42\ndata: next\n\nid:\ndata: reset\n\n")).toEqual([
+    { event: "message", data: "same stream", id: "41" },
+    { event: "message", data: "next", id: "42" },
+    { event: "message", data: "reset", id: "" },
+  ]);
 });

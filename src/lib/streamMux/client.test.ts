@@ -39,6 +39,9 @@ function harness() {
      flight until the test answers it. */
   const answers: Array<number | "later"> = [];
   const inFlight: Array<(status: number) => void> = [];
+  /* What the route answers a bodiless GET that names no connection: 400 while it is there. */
+  const probeAnswers: number[] = [];
+  let probes = 0;
   const deps: StreamMuxDeps = {
     createEventSource: (url) => {
       const source = new FakeSource(url);
@@ -46,7 +49,13 @@ function harness() {
       return source;
     },
     fetch: async (_url, init) => {
-      posts.push(JSON.parse(init.body) as { c: string; ops: MuxOp[] });
+      if (init.method === "GET") {
+        probes += 1;
+        const status = probeAnswers.shift() ?? 400;
+        if (status === 0) throw new Error("network");
+        return { ok: false, status };
+      }
+      posts.push(JSON.parse(init.body!) as { c: string; ops: MuxOp[] });
       const answer = answers.shift() ?? 200;
       const status = answer === "later" ? await new Promise<number>((resolve) => { inFlight.push(resolve); }) : answer;
       if (status === 0) throw new Error("network");
@@ -72,6 +81,8 @@ function harness() {
     posts,
     answers,
     inFlight,
+    probeAnswers,
+    probes: () => probes,
     settle,
     /** Lets time pass, running what came due in order. */
     advance: async (ms: number) => {
@@ -317,4 +328,90 @@ test("a reader that throws breaks only its own stream", async () => {
   h.physical()[0]!.carry("1", "chunk", "x");
   h.physical()[0]!.carry("2", "state", "fine");
   expect(seen).toEqual(["state fine"]);
+});
+
+test("a reopened channel resumes from its own last event id, on a new connection and after its stream ended", async () => {
+  const h = harness();
+  const runtime = watch(h.mux.open("/api/runtime/stream?after=40"));
+  const logs = watch(h.mux.open("/api/logs/stream?subs=x"), ["chunk"]);
+  const update = h.mux.open("/api/self-update/events");
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+  h.physical()[0]!.carry("1", "message", "{\"seq\":41}", "41");
+  h.physical()[0]!.carry("2", "chunk", "a", "log-7");
+  /* The update feed set an id and then cleared it: an EventSource sends none after that. */
+  h.physical()[0]!.carry("3", "state", "{}", "3");
+  h.physical()[0]!.carry("3", "state", "{}", "");
+  expect(runtime).toEqual(["message {\"seq\":41} #41"]);
+  expect(logs).toEqual(["chunk a"]);
+  void update;
+
+  h.physical()[0]!.fail();
+  await h.advance(500);
+  h.physical()[1]!.say("ready", "{}");
+  await h.settle();
+  expect(h.posts.at(-1)).toEqual({
+    c: "connection-00000002",
+    ops: [
+      { op: "open", id: "1", url: "/api/runtime/stream?after=40", lastEventId: "41" },
+      { op: "open", id: "2", url: "/api/logs/stream?subs=x", lastEventId: "log-7" },
+      { op: "open", id: "3", url: "/api/self-update/events" },
+    ],
+  });
+
+  h.physical()[1]!.carry("1", "message", "{\"seq\":42}", "42");
+  h.physical()[1]!.say("end", JSON.stringify(["1", 0]));
+  await h.advance(3_000);
+  expect(h.posts.at(-1)).toEqual({ c: "connection-00000002", ops: [{ op: "open", id: "1", url: "/api/runtime/stream?after=40", lastEventId: "42" }] });
+});
+
+test("a page whose connection worked falls back to plain streams once the route is gone", async () => {
+  const h = harness();
+  const seen = watch(h.mux.open("/api/runtime/stream?after=0"), ["heartbeat"]);
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+  h.physical()[0]!.carry("1", "heartbeat", "{}");
+
+  /* A rollback to LLV_STREAM_MUX=0: every later connection fails, and the route answers 404. */
+  h.probeAnswers.push(404, 404, 404);
+  h.physical()[0]!.fail();
+  await h.advance(500);
+  h.physical()[1]!.fail();
+  await h.advance(1_000);
+  expect(h.plain()).toHaveLength(0);
+  h.physical()[2]!.fail();
+  await h.settle();
+
+  expect(h.probes()).toBe(1);
+  expect(h.physical().every((source) => source.closed)).toBe(true);
+  expect(h.plain().map((source) => source.url)).toEqual(["/api/runtime/stream?after=0"]);
+  h.plain()[0]!.say("heartbeat", "{}");
+  expect(seen.at(-1)).toBe("heartbeat {}");
+  await h.advance(60_000);
+  expect(h.physical()).toHaveLength(3);
+});
+
+test("a page whose connection worked keeps reconnecting while the route is still there", async () => {
+  const h = harness();
+  const seen = watch(h.mux.open("/api/self-update/events"), ["state"]);
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+
+  /* A restart: connections fail for a while; the route, when it answers at all, is there. */
+  h.probeAnswers.push(0, 502, 400, 400);
+  h.physical()[0]!.fail();
+  for (let index = 1; index <= 5; index += 1) {
+    await h.advance(8_000);
+    h.physical()[index]!.fail();
+    await h.settle();
+  }
+  expect(h.probes()).toBeGreaterThanOrEqual(3);
+  expect(h.plain()).toHaveLength(0);
+
+  await h.advance(8_000);
+  h.physical()[6]!.say("ready", "{}");
+  await h.settle();
+  expect(h.posts.at(-1)).toEqual({ c: "connection-00000007", ops: [{ op: "open", id: "1", url: "/api/self-update/events" }] });
+  h.physical()[6]!.carry("1", "state", "back");
+  expect(seen.at(-1)).toBe("state back");
 });

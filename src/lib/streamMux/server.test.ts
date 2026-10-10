@@ -44,7 +44,7 @@ function source() {
   const encoder = new TextEncoder();
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const state = { opened: [] as string[], aborted: false, cancelled: false };
-  const open: MuxStreamOpener = (url, signal) => {
+  const open = (url: URL, signal: AbortSignal): Response => {
     state.opened.push(url.pathname + url.search);
     signal.addEventListener("abort", () => { state.aborted = true; });
     return new Response(new ReadableStream<Uint8Array>({
@@ -196,4 +196,32 @@ test("a connection nobody reads ends by itself, and one that is read does not", 
   expect(muxChannelsForTests(read)).toEqual([]);
   expect(reader.pings()).toBeGreaterThan(3);
   await reader.leave();
+});
+
+test("a channel reopened with its last event id hands it to its route and carries it until the route sets another", async () => {
+  const id = connectionId();
+  const stream = openMuxConnection(id, new AbortController().signal);
+  const reader = stream.getReader();
+  const parser = createSseParser();
+  const decoder = new TextDecoder();
+  const runtime = source();
+  const resumedFrom: string[] = [];
+  applyMuxOps(id, [{ op: "open", id: "1", url: "/api/runtime/stream?after=40", lastEventId: "41" }], BASE, (url, signal, lastEventId) => {
+    resumedFrom.push(lastEventId);
+    return runtime.open(url, signal);
+  });
+  await settle();
+  runtime.say("event: heartbeat\ndata: {}\n\nid: 42\ndata: {\"seq\":42}\n\n");
+  await settle();
+  const events: SseEvent[] = [];
+  while (events.filter((event) => event.event === "e").length < 2) {
+    const { value } = await reader.read();
+    events.push(...parser.push(decoder.decode(value, { stream: true })));
+  }
+  expect(resumedFrom).toEqual(["41"]);
+  expect(events.filter((event) => event.event === "e").map((event) => decodeMuxEvent(event.data))).toEqual([
+    { channel: "1", event: "heartbeat", id: "41", data: "{}" },
+    { channel: "1", event: "message", id: "42", data: "{\"seq\":42}" },
+  ]);
+  await reader.cancel();
 });

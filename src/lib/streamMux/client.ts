@@ -22,7 +22,7 @@ export interface EventStream {
 /** The seams a test drives: the transports, the clock and the connection's name. */
 export interface StreamMuxDeps {
   createEventSource(url: string): EventStream;
-  fetch(url: string, init: { method: string; headers: Record<string, string>; body: string }): Promise<{ ok: boolean; status: number }>;
+  fetch(url: string, init: { method: string; headers: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number }>;
   setTimeout(run: () => void, ms: number): unknown;
   clearTimeout(timer: unknown): void;
   randomId(): string;
@@ -36,7 +36,8 @@ const RECONNECT_MAX_MS = 8_000;
 const QUIET_MS = MUX_PING_MS * 3 + 5_000;
 /* A reader that closes one stream to open another in the next moment keeps its connection. */
 const LINGER_MS = 2_000;
-/* The connection never came up this many times in a row: this server has none, and each stream gets its own. */
+/* The connection never came up this many times in a row: this server has none, and each stream gets its own.
+   A page that had it asks the route whether it is still there instead (see `probe`). */
 const GIVE_UP_AFTER = 3;
 const CONTROL_RETRY_MS = 1_000;
 const CONTROL_ATTEMPTS = 3;
@@ -60,6 +61,7 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
   let ready = false;
   let everReady = false;
   let failures = 0;
+  let probing = false;
   let direct = false;
   let nextChannel = 0;
   let outbox: MuxOp[] = [];
@@ -77,6 +79,8 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
     native: EventStream | null = null;
     /** The route refused the stream: it is over until the reader opens another. */
     refused = false;
+    /** The stream's last event id, sent back when the channel is reopened, as an EventSource sends it. */
+    lastEventId = "";
     private closed = false;
     private retryTimer: unknown = null;
     private readonly listeners = new Map<string, StreamListener[]>();
@@ -128,8 +132,12 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
       if (this.closed || this.refused) return;
       this.retryTimer = deps.setTimeout(() => {
         this.retryTimer = null;
-        if (!this.closed && ready && !this.native) send({ op: "open", id: this.id, url: this.url });
+        if (!this.closed && ready && !this.native) send(this.openOp());
       }, RETRY_MS);
+    }
+
+    openOp(): MuxOp {
+      return this.lastEventId ? { op: "open", id: this.id, url: this.url, lastEventId: this.lastEventId } : { op: "open", id: this.id, url: this.url };
     }
 
     /** The stream on a connection of its own. */
@@ -239,7 +247,7 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
       everReady = true;
       failures = 0;
       outbox = [];
-      for (const channel of channels.values()) if (!channel.native && !channel.refused) outbox.push({ op: "open", id: channel.id, url: channel.url });
+      for (const channel of channels.values()) if (!channel.native && !channel.refused) outbox.push(channel.openOp());
       touch();
       void flush();
     });
@@ -260,7 +268,10 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
       if (!mine()) return;
       touch();
       const frame = decodeMuxEvent(event.data);
-      if (frame) channels.get(frame.channel)?.emit(frame.event, frame.data, frame.id);
+      const channel = frame ? channels.get(frame.channel) : undefined;
+      if (!frame || !channel) return;
+      channel.lastEventId = frame.id;
+      channel.emit(frame.event, frame.data, frame.id);
     });
     source.addEventListener("ping", () => { if (mine()) touch(); });
     source.onerror = () => { if (mine()) lost(); };
@@ -302,7 +313,26 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
       return;
     }
     for (const channel of [...channels.values()]) if (!channel.native) channel.interrupted();
+    if (failures >= GIVE_UP_AFTER) void probe();
     scheduleConnect();
+  }
+
+  /** A page that had the connection keeps losing it: either the server is down for a while, and the
+      connection comes back with it, or the server it now reaches has no route (a rollback with
+      `LLV_STREAM_MUX=0`, an older release), and only plain streams will ever work. The route itself
+      tells the two apart: without a connection id it answers 400 when it is there. */
+  async function probe(): Promise<void> {
+    if (probing || direct) return;
+    probing = true;
+    let status = 0;
+    try {
+      status = (await deps.fetch(MUX_ENDPOINT, { method: "GET", headers: { accept: "application/json" } })).status;
+    } catch {
+      status = 0;
+    }
+    probing = false;
+    if (direct || ready) return;
+    if (status === 404 || status === 401 || status === 403) goDirect();
   }
 
   function goDirect(): void {

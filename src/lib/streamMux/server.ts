@@ -8,8 +8,8 @@ import {
   type MuxOp,
 } from "./protocol";
 
-/** Answers a channel's URL with the response its own route gives. */
-export type MuxStreamOpener = (url: URL, signal: AbortSignal) => Response | Promise<Response>;
+/** Answers a channel's URL with the response its own route gives, resuming after `lastEventId` when there is one. */
+export type MuxStreamOpener = (url: URL, signal: AbortSignal, lastEventId: string) => Response | Promise<Response>;
 
 interface Channel {
   abort: AbortController;
@@ -113,7 +113,7 @@ function allowed(url: URL, base: URL): boolean {
   return url.origin === base.origin && (MUX_STREAM_PATHS as readonly string[]).includes(url.pathname);
 }
 
-async function run(connection: Connection, id: string, channel: Channel, url: URL, open: MuxStreamOpener): Promise<void> {
+async function run(connection: Connection, id: string, channel: Channel, url: URL, lastEventId: string, open: MuxStreamOpener): Promise<void> {
   const current = () => connection.channels.get(id) === channel;
   /* What the reader is told when the channel ends: 0 for a stream that ended or broke, the route's own
      status when it refused, 500 when it threw before answering. */
@@ -123,7 +123,7 @@ async function run(connection: Connection, id: string, channel: Channel, url: UR
   const release = () => { void reader?.cancel().catch(() => undefined); };
   channel.abort.signal.addEventListener("abort", release, { once: true });
   try {
-    const response = await open(url, channel.abort.signal);
+    const response = await open(url, channel.abort.signal, lastEventId);
     const stream = response.ok && (response.headers.get("content-type") ?? "").includes("text/event-stream") ? response.body : null;
     if (!stream) {
       status = response.ok ? 502 : response.status;
@@ -137,7 +137,7 @@ async function run(connection: Connection, id: string, channel: Channel, url: UR
     }
     reader = stream.getReader();
     connection.write(encodeMuxControl("up", id));
-    const parser = createSseParser();
+    const parser = createSseParser(lastEventId);
     const decoder = new TextDecoder();
     for (;;) {
       const { done, value } = await reader.read();
@@ -186,7 +186,7 @@ export function applyMuxOps(connectionId: string, ops: readonly MuxOp[], base: U
     }
     const channel: Channel = { abort: new AbortController() };
     connection.channels.set(op.id, channel);
-    void run(connection, op.id, channel, url, open);
+    void run(connection, op.id, channel, url, op.lastEventId ?? "", open);
   }
   return "ok";
 }

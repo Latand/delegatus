@@ -44,7 +44,11 @@ export const MUX_MAX_BODY_BYTES = 256 * 1024;
 export const MUX_CONNECTION_ID = /^[A-Za-z0-9_-]{16,64}$/;
 export const MUX_CHANNEL_ID = /^[A-Za-z0-9_-]{1,32}$/;
 
-export type MuxOp = { op: "open"; id: string; url: string } | { op: "close"; id: string };
+/** An event id an EventSource would send back as `Last-Event-ID`: one line, no NUL. */
+export const MUX_LAST_EVENT_ID = /^[^\0\r\n]{1,1024}$/;
+
+/** `lastEventId` is the channel's last event id when it is reopened, sent to its route as `Last-Event-ID`. */
+export type MuxOp = { op: "open"; id: string; url: string; lastEventId?: string } | { op: "close"; id: string };
 
 export interface SseEvent {
   /** The event's type; "message" when the source named none. */
@@ -58,14 +62,15 @@ export interface SseEvent {
  * Server-sent events out of a text stream, by the rules an EventSource reads
  * them with: `data` lines join with a newline, a blank line dispatches, an
  * event with no data line is dropped, comments are skipped, and an id stays
- * until another replaces it. Lines end with LF or CRLF, which is what every
+ * until another replaces it, starting from `lastEventId`. Lines end with LF or CRLF, which is what every
  * stream here writes.
  */
-export function createSseParser(): { push(text: string): SseEvent[] } {
+export function createSseParser(lastEventId = ""): { push(text: string): SseEvent[] } {
   let buffer = "";
   let event = "";
   let data: string[] = [];
-  let id = "";
+  /* A stream reopened with an id carries it on until the stream sets another, as an EventSource does. */
+  let id = lastEventId;
   return {
     push(text) {
       buffer += text;
@@ -124,11 +129,14 @@ export function parseMuxOps(body: unknown): { connection: string; ops: MuxOp[] }
   if (!record || typeof record.c !== "string" || !MUX_CONNECTION_ID.test(record.c)) return null;
   if (!Array.isArray(record.ops) || record.ops.length === 0 || record.ops.length > MUX_MAX_OPS) return null;
   const ops: MuxOp[] = [];
-  for (const entry of record.ops as Array<{ op?: unknown; id?: unknown; url?: unknown } | null>) {
+  for (const entry of record.ops as Array<{ op?: unknown; id?: unknown; url?: unknown; lastEventId?: unknown } | null>) {
     if (!entry || typeof entry.id !== "string" || !MUX_CHANNEL_ID.test(entry.id)) return null;
     if (entry.op === "close") ops.push({ op: "close", id: entry.id });
-    else if (entry.op === "open" && typeof entry.url === "string" && entry.url.length <= 64 * 1024) ops.push({ op: "open", id: entry.id, url: entry.url });
-    else return null;
+    else if (entry.op === "open" && typeof entry.url === "string" && entry.url.length <= 64 * 1024) {
+      if (entry.lastEventId === undefined) ops.push({ op: "open", id: entry.id, url: entry.url });
+      else if (typeof entry.lastEventId === "string" && MUX_LAST_EVENT_ID.test(entry.lastEventId)) ops.push({ op: "open", id: entry.id, url: entry.url, lastEventId: entry.lastEventId });
+      else return null;
+    } else return null;
   }
   return { connection: record.c, ops };
 }
