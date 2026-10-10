@@ -317,6 +317,9 @@ test("the runtime pill's account rows carry the same weekly bar and percent", as
   }
   expect(rows[1]!.getAttribute("aria-label")).toBe("Work · 41% of the weekly limit left");
   expect(rows[1]!.getAttribute("title")).toContain("Week left 41%");
+  /* The weekly column ends every row, after the chosen row's check, so the bars form one column. */
+  expect(rows.map((row) => row.lastElementChild!.hasAttribute("data-weekly-meter"))).toEqual([true, true, true, true]);
+  expect(rows[0]!.querySelector("svg + [data-weekly-meter]")).not.toBeNull();
 });
 
 test("on the phone the runtime pill's account sheet carries the same weekly bar and percent", async () => {
@@ -333,4 +336,9 @@ test("on the phone the runtime pill's account sheet carries the same weekly bar 
   /* A signed-out account shows its state, no reading. */
   expect(percent(row("old"))).toBeNull();
   expect(row("work").getAttribute("aria-label")).toContain("41% of the weekly limit left");
+  /* The weekly column ends every row whatever state it names before it; a row with no reading keeps the room empty. */
+  for (const id of ["main", "work", "backup"]) expect(row(id).lastElementChild!.hasAttribute("data-weekly-meter")).toBe(true);
+  expect(row("old").lastElementChild!.hasAttribute("data-weekly-empty")).toBe(true);
+  /* The phone lets a long name wrap rather than cut it. */
+  expect(row("team").querySelector("[data-runtime-account-label]")!.className).not.toContain("truncate");
 });

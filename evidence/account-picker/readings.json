@@ -241,28 +241,48 @@
         "name": "Main · 92% of the weekly limit left",
         "percent": "92%",
         "bar": "92",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Main",
+          "cut": false
+        }
       },
       {
         "text": "Work 41%",
         "name": "Work · 41% of the weekly limit left",
         "percent": "41%",
         "bar": "41",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Work",
+          "cut": false
+        }
       },
       {
         "text": "Backup 7%",
         "name": "Backup · 7% of the weekly limit left",
         "percent": "7%",
         "bar": "7",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Backup",
+          "cut": false
+        }
       },
       {
         "text": "Review lanes · shared team workspace (night shift) 64%",
         "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
         "percent": "64%",
         "bar": "64",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Review lanes · shared team workspace (night shift)",
+          "cut": true
+        }
       }
     ]
   },
@@ -274,35 +294,60 @@
         "name": "Main · 92% of the weekly limit left",
         "percent": "92%",
         "bar": "92",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Main",
+          "cut": false
+        }
       },
       {
-        "text": "Work 41% ready",
+        "text": "Work ready 41%",
         "name": "Start the agent on Work · 41% of the weekly limit left",
         "percent": "41%",
         "bar": "41",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Work",
+          "cut": false
+        }
       },
       {
-        "text": "Backup 7% ready",
+        "text": "Backup ready 7%",
         "name": "Start the agent on Backup · 7% of the weekly limit left",
         "percent": "7%",
         "bar": "7",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Backup",
+          "cut": false
+        }
       },
       {
         "text": "Old login sign in",
         "name": "Sign in to Old login — it takes no message until it returns",
         "percent": null,
         "bar": null,
-        "overflow": false
+        "overflow": false,
+        "barRight": null,
+        "label": {
+          "text": "Old login",
+          "cut": false
+        }
       },
       {
-        "text": "Review lanes · shared team workspace (night shift) 64% ready",
+        "text": "Review lanes · shared team workspace (night shift) ready 64%",
         "name": "Start the agent on Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
         "percent": "64%",
         "bar": "64",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Review lanes · shared team workspace (night shift)",
+          "cut": false
+        }
       }
     ]
   },
@@ -548,28 +593,48 @@
         "name": "Main · лишилось 92% тижневого ліміту",
         "percent": "92%",
         "bar": "92",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Main",
+          "cut": false
+        }
       },
       {
         "text": "Work 41%",
         "name": "Work · лишилось 41% тижневого ліміту",
         "percent": "41%",
         "bar": "41",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Work",
+          "cut": false
+        }
       },
       {
         "text": "Backup 7%",
         "name": "Backup · лишилось 7% тижневого ліміту",
         "percent": "7%",
         "bar": "7",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Backup",
+          "cut": false
+        }
       },
       {
         "text": "Review lanes · shared team workspace (night shift) 64%",
         "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
         "percent": "64%",
         "bar": "64",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Review lanes · shared team workspace (night shift)",
+          "cut": true
+        }
       }
     ]
   },
@@ -581,35 +646,60 @@
         "name": "Main · лишилось 92% тижневого ліміту",
         "percent": "92%",
         "bar": "92",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Main",
+          "cut": false
+        }
       },
       {
-        "text": "Work 41% готовий",
+        "text": "Work готовий 41%",
         "name": "Запустити агента на Work · лишилось 41% тижневого ліміту",
         "percent": "41%",
         "bar": "41",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Work",
+          "cut": false
+        }
       },
       {
-        "text": "Backup 7% готовий",
+        "text": "Backup готовий 7%",
         "name": "Запустити агента на Backup · лишилось 7% тижневого ліміту",
         "percent": "7%",
         "bar": "7",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Backup",
+          "cut": false
+        }
       },
       {
         "text": "Old login увійти",
         "name": "Увійти в Old login — він не бере повідомлень, доки не повернеться",
         "percent": null,
         "bar": null,
-        "overflow": false
+        "overflow": false,
+        "barRight": null,
+        "label": {
+          "text": "Old login",
+          "cut": false
+        }
       },
       {
-        "text": "Review lanes · shared team workspace (night shift) 64% готовий",
+        "text": "Review lanes · shared team workspace (night shift) готовий 64%",
         "name": "Запустити агента на Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
         "percent": "64%",
         "bar": "64",
-        "overflow": false
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Review lanes · shared team workspace (night shift)",
+          "cut": false
+        }
       }
     ]
   },
@@ -843,7 +933,7 @@
         }
       ]
     },
-    "hint": "Work · Тиждень лишилось 41% · скид через 3 д · 13 жовт. 17:30"
+    "hint": "Work · Тиждень лишилось 41% · скид через 3 д · 13 жовт. 18:43"
   },
   {
     "shot": "build-rotate-390-en-dark-codex",
@@ -1491,28 +1581,113 @@
         "name": "Main · лишилось 92% тижневого ліміту",
         "percent": "92%",
         "bar": "92",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Main",
+          "cut": false
+        }
       },
       {
         "text": "Work 41%",
         "name": "Work · лишилось 41% тижневого ліміту",
         "percent": "41%",
         "bar": "41",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Work",
+          "cut": false
+        }
       },
       {
         "text": "Backup 7%",
         "name": "Backup · лишилось 7% тижневого ліміту",
         "percent": "7%",
         "bar": "7",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Backup",
+          "cut": false
+        }
       },
       {
         "text": "Review lanes · shared team workspace (night shift) 64%",
         "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
         "percent": "64%",
         "bar": "64",
-        "overflow": false
+        "overflow": false,
+        "barRight": 807,
+        "label": {
+          "text": "Review lanes · shared team workspace (night shift)",
+          "cut": true
+        }
+      }
+    ]
+  },
+  {
+    "shot": "build-pill-390-uk-light-rest",
+    "rows": [
+      {
+        "text": "Main 92%",
+        "name": "Main · лишилось 92% тижневого ліміту",
+        "percent": "92%",
+        "bar": "92",
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Main",
+          "cut": false
+        }
+      },
+      {
+        "text": "Work готовий 41%",
+        "name": "Запустити агента на Work · лишилось 41% тижневого ліміту",
+        "percent": "41%",
+        "bar": "41",
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Work",
+          "cut": false
+        }
+      },
+      {
+        "text": "Backup готовий 7%",
+        "name": "Запустити агента на Backup · лишилось 7% тижневого ліміту",
+        "percent": "7%",
+        "bar": "7",
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Backup",
+          "cut": false
+        }
+      },
+      {
+        "text": "Old login увійти",
+        "name": "Увійти в Old login — він не бере повідомлень, доки не повернеться",
+        "percent": null,
+        "bar": null,
+        "overflow": false,
+        "barRight": null,
+        "label": {
+          "text": "Old login",
+          "cut": false
+        }
+      },
+      {
+        "text": "Review lanes · shared team workspace (night shift) готовий 64%",
+        "name": "Запустити агента на Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+        "percent": "64%",
+        "bar": "64",
+        "overflow": false,
+        "barRight": 370,
+        "label": {
+          "text": "Review lanes · shared team workspace (night shift)",
+          "cut": false
+        }
       }
     ]
   }

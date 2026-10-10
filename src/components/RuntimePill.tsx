@@ -20,7 +20,7 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { RuntimeSettingsCapability } from "@/lib/runtime/contracts";
 import type { FileEntry, RateLimitState } from "@/lib/types";
 
-import { accountWeeklyLeft, WeeklyMeter, weeklyLeftAria, weeklyLeftHint, type WeeklyLeft } from "./accountWeekly";
+import { accountWeeklyLeft, WeeklyColumn, weeklyLeftAria, weeklyLeftHint, type WeeklyLeft } from "./accountWeekly";
 import type { StripSurface } from "./agentCapabilities";
 import { browserPipelinePorts } from "./kanban/pipelinePorts";
 import type { RuntimeSession } from "./runtime/runtimeModel";
@@ -1235,6 +1235,8 @@ interface Row {
   role: "menuitemradio" | "menuitem";
   /** An account row's weekly limit left, drawn as the footer draws it; absent without a weekly reading. */
   weekly?: WeeklyLeft | null;
+  /** Some account row of the list has a weekly reading, so every account row keeps the weekly column. */
+  weeklyColumn?: boolean;
   /** The pointer's hint: the weekly window with its reset. */
   hint?: string;
   activate: () => void;
@@ -1301,10 +1303,12 @@ function buildRows({
       ? options
       : [{ id: accountChoice.runsOn, label: nameOf(accountChoice.runsOn) }, ...options];
     const tint = engineTintOf(engine).color;
+    const weeklies = listed.map((option) => engine === "copilot" ? null : accountWeeklyLeft(option.limits, now, tint));
+    const weeklyColumn = weeklies.some(Boolean);
     return [
       back(t("mobile2.composer.accountGroup")),
-      ...listed.map((option): Row => {
-        const weekly = engine === "copilot" ? null : accountWeeklyLeft(option.limits, now, tint);
+      ...listed.map((option, index): Row => {
+        const weekly = weeklies[index];
         /* While a pick waits, the running account is the way back, and says so as the action it is: the head
            above already names it as the one the conversation runs on (#1846 critique). */
         const detail: Pick<Row, "detail" | "detailAction"> = option.id !== accountChoice.runsOn || accountStart !== null
@@ -1321,6 +1325,7 @@ function buildRows({
           ...detail,
           /* The weekly limit left, as the footer and the launch chips draw it; the name says it in words. */
           weekly,
+          weeklyColumn,
           ...(weekly ? { hint: weeklyLeftHint(t, weekly, now), ariaLabel: [option.label, weeklyLeftAria(t, weekly), detail.detail].filter(Boolean).join(" · ") } : {}),
           checked: option.id === accountChoice.next,
           /* A move under way cannot be taken back, so the account it leaves is not a choice until it lands. */
@@ -1420,13 +1425,13 @@ function MenuRow({
         row.checked ? "text-primary" : "text-secondary"
       }`}
     >
-      <span className="min-w-0 flex-1 truncate">{row.label}</span>
-      {row.weekly ? <WeeklyMeter weekly={row.weekly} /> : null}
+      <span className="min-w-0 flex-1 truncate" data-runtime-row-label>{row.label}</span>
       {row.detail ? (
         <span className={`shrink-0 text-caption ${row.detailAction ? "font-semibold text-accent" : "text-muted"}`} data-runtime-row-detail={row.detailAction ? "action" : undefined}>{row.detail}</span>
       ) : null}
       {row.checked ? <Check className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden /> : null}
       {isSubmenu ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : null}
+      {row.kind === "account" ? <WeeklyColumn weekly={row.weekly} shown={Boolean(row.weeklyColumn)} /> : null}
     </button>
   );
 }
@@ -1640,6 +1645,10 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
      in the order the accounts screen lists them. */
   const rank = (id: string) => (limit && id === limit.accountId ? 0 : id === account ? 1 : 2);
   const ordered = [...state.accounts].sort((a, b) => rank(a.id) - rank(b.id));
+  const authenticatedOf = (option: (typeof ordered)[number]) => option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending;
+  /* An account that cannot take a message shows its state instead of its weekly reading. */
+  const weeklies = ordered.map((option) => authenticatedOf(option) ? accountWeeklyLeft(option.limits, now, tint) : null);
+  const weeklyColumn = weeklies.some(Boolean);
   return (
     <div className="mb-2" data-runtime-sheet-accounts>
       <div className="mb-1 flex min-w-0 items-baseline gap-2 px-1">
@@ -1650,7 +1659,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
           {error ?? start ?? accountLine(t, account, choice, nameOf)}
         </span>
       </div>
-      {ordered.map((option) => {
+      {ordered.map((option, index) => {
         const blocked = limit !== null && option.id === limit.accountId;
         /* Two different facts, and the sheet was only telling one of them: where
            this conversation RUNS (its transcript's account) and where the NEXT
@@ -1658,7 +1667,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
            below moves). A tap that moved the second one changed nothing on
            screen while only the first was marked (#1795 critique P1). */
         const current = option.id === account;
-        const authenticated = option.authPresent && (option.authHealth ?? "unknown") !== "signed_out" && !option.loginPending;
+        const authenticated = authenticatedOf(option);
         const signInReachable = !authenticated && engine === "claude";
         /* Credentials outrank the selection. The accounts API keeps an account
            selected across a sign-out and a credential expiry, so the account
@@ -1673,9 +1682,8 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
         const switching = leaving && choice!.applying;
         const cancels = leaving && !switching;
         const inert = blocked || next || switching || (!authenticated && !signInReachable);
-        /* The weekly limit left, as the footer and the launch chips draw it; an account that cannot take a
-           message shows its state instead. */
-        const weekly = authenticated ? accountWeeklyLeft(option.limits, now, tint) : null;
+        /* The weekly limit left, as the footer and the launch chips draw it. */
+        const weekly = weeklies[index];
         const stateName = blocked
           ? t("mobile2.composer.accountAtLimit", { account: option.label, time: reset ?? "" }).trim()
           : !authenticated
@@ -1708,12 +1716,12 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
               else if (choice) choice.pick(option.id);
               else void state.select(option.id);
             }}
-            className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 text-left text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-100 ${
+            className={`flex min-h-11 w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-100 ${
               blocked || (!authenticated && !signInReachable) ? "text-secondary" : "text-primary"
             } ${inert ? "" : "active:bg-sunken"}`}
           >
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
-            {weekly ? <WeeklyMeter weekly={weekly} /> : null}
+            {/* The weekly column takes room the label had, so a long name wraps between words instead of losing its end. */}
+            <span className="min-w-0 flex-1 break-words" data-runtime-account-label>{option.label}</span>
             {/* Where the conversation runs, wherever that row ends up. */}
             {current && start === null ? (
               <span className="shrink-0 text-label font-semibold text-muted" data-runtime-account-current-tag>
@@ -1743,6 +1751,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
             ) : (
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountReady")}</span>
             )}
+            <WeeklyColumn weekly={weekly} shown={weeklyColumn} />
           </button>
         );
       })}

@@ -27908,6 +27908,7 @@ describe("account chips with the weekly limit left: the launch chooser and the r
     { surface: "rotate", phone: false, lang: "en", scheme: "light", state: "picked" },
     { surface: "create", phone: false, lang: "uk", scheme: "light", state: "picked" },
     { surface: "pill", phone: false, lang: "uk", scheme: "light", state: "rest" },
+    { surface: "pill", phone: true, lang: "uk", scheme: "light", state: "rest" },
   );
 
   /* What one chip row looks like on screen: each chip's box (left and right measured from the row's visible left edge) and text, whether its parts stand inside it, and how the row scrolls. */
@@ -27974,8 +27975,18 @@ describe("account chips with the weekly limit left: the launch chooser and the r
               text: (element as HTMLElement).innerText.replace(/\s+/g, " ").trim(), name: element.getAttribute("aria-label"),
               percent: element.querySelector("[data-weekly-percent]")?.textContent ?? null, bar: element.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null,
               overflow: element.scrollWidth > element.clientWidth + 0.5,
+              barRight: (() => { const meter = element.querySelector("[data-meter-bar]"); return meter ? Math.round(meter.getBoundingClientRect().right * 10) / 10 : null; })(),
+              label: (() => {
+                const label = element.querySelector<HTMLElement>("[data-runtime-account-label], [data-runtime-row-label]")!;
+                return { text: label.textContent, cut: label.scrollWidth > label.clientWidth + 0.5 };
+              })(),
             })));
             reading.rows = rows;
+            /* Every row's bar ends on one edge, whatever the row names before it (a check, «ready», «current»). */
+            const rights = rows.flatMap((row) => row.barRight === null ? [] : [row.barRight]);
+            expect(Math.max(...rights) - Math.min(...rights), `${name} bars in one column: ${JSON.stringify(rights)}`).toBeLessThanOrEqual(1);
+            /* The phone wraps a long name; the desktop popover truncated it before the bars came, so only the phone is held to it. */
+            if (shot.phone) expect(rows.filter((row) => row.label.cut).map((row) => row.label.text), `${name} every account name whole`).toEqual([]);
             const byLabel = (label: string) => rows.find((row) => row.text.startsWith(label));
             expect([byLabel("Main")?.percent, byLabel("Work")?.percent, byLabel("Backup")?.percent], `${name} weekly left per row`).toEqual(["92%", "41%", "7%"]);
             expect([byLabel("Main")?.bar, byLabel("Work")?.bar, byLabel("Backup")?.bar], `${name} bars`).toEqual(["92", "41", "7"]);

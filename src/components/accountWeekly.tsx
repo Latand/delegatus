@@ -46,13 +46,23 @@ export function weeklyLeftHint(t: TFunction, weekly: WeeklyLeft, now: number): s
 }
 
 /** The percent and its bar, drawn as the footer draws them: the number turns to the bar's colour once 30 % or less is left. */
-export function WeeklyMeter({ weekly, barClassName = "w-6" }: { weekly: WeeklyLeft; barClassName?: string }) {
+export function WeeklyMeter({ weekly, barClassName = "w-6", className = "" }: { weekly: WeeklyLeft; barClassName?: string; className?: string }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5" data-weekly-meter="">
+    <span className={`flex shrink-0 items-center gap-1.5 ${className}`} data-weekly-meter="">
       <span data-weekly-percent="" className="whitespace-nowrap text-[11px] font-bold tabular-nums" style={{ color: weekly.left <= 30 ? weekly.color : "var(--color-primary)" }}>
         {Math.round(weekly.left)}%
       </span>
       <ReserveBar percent={weekly.left} color={weekly.color} className={barClassName} />
     </span>
   );
+}
+
+/**
+ * A menu row's weekly column, the last thing in the row: every row's percent and bar end on the same edge
+ * whatever the row says before it (a check, «ready», «current»), and a row with no reading keeps the room
+ * empty, so the state words line up too. `shown` is false when no row of the list has a reading.
+ */
+export function WeeklyColumn({ weekly, shown }: { weekly: WeeklyLeft | null | undefined; shown: boolean }) {
+  if (weekly) return <WeeklyMeter weekly={weekly} className="w-16 justify-end" />;
+  return shown ? <span className="w-16 shrink-0" aria-hidden data-weekly-empty="" /> : null;
 }
