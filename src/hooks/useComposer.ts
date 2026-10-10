@@ -162,10 +162,16 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   const setTextRef = useRef(setText);
   useLayoutEffect(() => { setTextRef.current = setText; });
   const detachInput = useRef<(() => void) | null>(null);
+  /* The field as a render input, so a remounted one is sized on arrival: the
+     autosize below otherwise re-measures only when the text changes, and a
+     fresh empty field kept its one default row under a two-line placeholder
+     (the phone's composer right after a rotation). */
+  const [field, setField] = useState<HTMLTextAreaElement | null>(null);
   const attachInput = useCallback((el: HTMLTextAreaElement | null) => {
     detachInput.current?.();
     detachInput.current = null;
     inputRef.current = el;
+    setField(el);
     if (!el) return;
     let composing = false;
     const onCompositionStart = () => { composing = true; };
@@ -253,6 +259,7 @@ export function useComposer({ initialText, persistText, submit, disabled = false
      stay visible; while typing it pins only when the caret is at the end. */
   useAutosizePinned(inputRef, displayText, {
     active: viewActive,
+    field,
     maxPx,
     pinned: Boolean(dictation.liveText),
   });

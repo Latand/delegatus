@@ -5,7 +5,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { attentionId } from "../attention";
 import { pipelineAsks } from "../mobile/mobileBoardModel";
-import { layerDismissal, overlayDismissals, resetDismissalOverlayForTests, sendDismissal, unlayerDismissal } from "./dismissalOverlay";
+import { layerDismissal, layerPrototypeDismissal, overlayPrototypeDismissals, overlayDismissals, resetDismissalOverlayForTests, sendDismissal, unlayerDismissal } from "./dismissalOverlay";
 
 /*
  * The click's side of a dismissal (docs/design/needs-attention.md §5): drawn
@@ -92,4 +92,17 @@ test("a lane the server answers changed comes off the layer when the answer land
   const result = await sendDismissal({ kind: "subjects", subjects }, subjects, { surface: "desktop", fetchFn });
   expect(result).toMatchObject({ ok: true, outcome: { changed: [{ kind: "pipeline", pipelineId: "lane-1" }] } });
   expect(overlayDismissals([], [parked(NOW - 120)])).toBeNull();
+});
+
+test("prototype hide layers the exact round immediately; undo and refusal restore the real wait", () => {
+  const task = { id: "task-layout", prototypeReview: { latestReviewId: "round-layout", waitingReviewId: "round-layout", title: "Layout", rounds: 1, createdAt: iso(NOW) } } as import("@/lib/tasks/types").BoardTask;
+  const mark = { at: iso(NOW), by: { kind: "operator" as const } };
+  layerPrototypeDismissal(task.id, "round-layout", mark);
+  expect(overlayPrototypeDismissals([task])[0]!.prototypeReview!.waitingDismissal).toEqual(mark);
+  const next = { ...task, prototypeReview: { ...task.prototypeReview!, latestReviewId: "round-new", waitingReviewId: "round-new" } };
+  expect(overlayPrototypeDismissals([next])[0]!.prototypeReview!.waitingDismissal).toBeUndefined();
+  layerPrototypeDismissal(task.id, "round-layout", null);
+  expect(overlayPrototypeDismissals([{ ...task, prototypeReview: { ...task.prototypeReview!, waitingDismissal: mark } }])[0]!.prototypeReview!.waitingDismissal).toBeUndefined();
+  layerPrototypeDismissal(task.id, "round-layout", undefined);
+  expect(overlayPrototypeDismissals([task])[0]!.prototypeReview!.waitingReviewId).toBe("round-layout");
 });

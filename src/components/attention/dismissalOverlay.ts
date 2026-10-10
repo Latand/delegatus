@@ -5,6 +5,7 @@ import { requestFilesRefresh } from "@/lib/filesEvents";
 import { laneMovedAt, laneMovedSince } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
+import type { BoardTask } from "@/lib/tasks/types";
 
 /*
  * The click's side of a dismissal (docs/design/needs-attention.md §5): the one
@@ -55,6 +56,7 @@ const pipelines = new Map<string, PipelineEntry>();
 /* An orchestrator's decision request, by its seq: the needs-you row and the
    report log's tick read this one layer, so both change on the same click. */
 const reports = new Map<number, ReportEntry>();
+const prototypes = new Map<string, { taskId: string; mark: AttentionDismissalMark | null; until: number }>();
 const listeners = new Set<() => void>();
 let version = 0;
 
@@ -78,6 +80,7 @@ function drop(now: number): void {
   for (const [key, entry] of conversations) if (entry.until <= now) conversations.delete(key);
   for (const [key, entry] of pipelines) if (entry.until <= now) pipelines.delete(key);
   for (const [key, entry] of reports) if (entry.until <= now) reports.delete(key);
+  for (const [key, entry] of prototypes) if (entry.until <= now) prototypes.delete(key);
 }
 
 /** Layer a dismissal (or its undo) over what the board draws, now. `local`
@@ -183,6 +186,28 @@ export function useDismissalLayerVersion(): number {
   return useSyncExternalStore(subscribe, () => version, () => 0);
 }
 
+/** A review's hide/undo reaches the card, waiting notices and count together. */
+export function layerPrototypeDismissal(taskId: string, reviewId: string, mark: AttentionDismissalMark | null | undefined): void {
+  if (mark === undefined) prototypes.delete(reviewId);
+  else prototypes.set(reviewId, { taskId, mark, until: Date.now() + OVERLAY_TTL_MS });
+  notify();
+}
+
+export function overlayPrototypeDismissals(tasks: BoardTask[], nowMs = Date.now()): BoardTask[] {
+  if (!prototypes.size) return tasks;
+  return tasks.map(task => {
+    const summary = task.prototypeReview;
+    const layer = summary?.waitingReviewId ? prototypes.get(summary.waitingReviewId) : undefined;
+    if (!summary || !layer || layer.taskId !== task.id || layer.until <= nowMs) return task;
+    return { ...task, prototypeReview: { ...summary, waitingDismissal: layer.mark ?? undefined } };
+  });
+}
+
+export function usePrototypeDismissalOverlay(tasks: BoardTask[]): BoardTask[] {
+  const layered = useDismissalLayerVersion();
+  return useMemo(() => { void layered; return overlayPrototypeDismissals(tasks); }, [tasks, layered]);
+}
+
 /** The Viewer's one read: the polled files and lanes with pending dismissals
     drawn over them. */
 export function useDismissalOverlay(files: FileEntry[], lanes: Pipeline[]): { files: FileEntry[]; pipelines: Pipeline[] } {
@@ -261,5 +286,6 @@ export function resetDismissalOverlayForTests(): void {
   conversations.clear();
   pipelines.clear();
   reports.clear();
+  prototypes.clear();
   notify();
 }

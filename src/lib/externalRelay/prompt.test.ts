@@ -2,9 +2,28 @@ import { createHash } from "node:crypto";
 import legacyHashes from "./fixtures/legacy-prompt-hashes.json";
 import { expect, test } from "bun:test";
 import { answerPrompt, toolRoundPrompt } from "./prompt";
-import { x1Request } from "./toolLoop.fixture";
+import { ownerRequest, x1Request } from "./toolLoop.fixture";
+import { setRelaySwitch } from "./switches";
 import { requestSchema } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
+
+test("owner sequential-write guidance is scoped to enabled owner-action claims", () => {
+  const prompt = (request: ReturnType<typeof x1Request>) => toolRoundPrompt(request, 1, { results: [], callsLeft: 16, final: false });
+  const legacy = [x1Request("owner"), x1Request("actions_admin"), x1Request("member")];
+  const before = legacy.map(prompt);
+  const owner = ownerRequest();
+  const disabled = prompt(owner);
+  setRelaySwitch("relay:owner_tools:enabled", true);
+  try {
+    expect(legacy.map(prompt)).toEqual(before);
+    expect(prompt(owner)).toContain("further distinct owner writes requested in <request>");
+    expect(prompt(owner)).toContain("Never resend an action that returned ok");
+    expect(prompt(owner)).toContain("at most three retries");
+    owner.input.tools = owner.input.tools!.filter((tool) => tool.effect !== "action");
+    expect(prompt(owner)).not.toContain("further distinct owner writes");
+  } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
+  expect(prompt(ownerRequest())).toBe(disabled);
+});
 
 test("a request without requester_context gets the Phase 1 prompt unchanged", () => {
   expect(answerPrompt(requestSchema.parse(sampleRequest))).toBe(

@@ -72,10 +72,11 @@ export function usePrototypeReviewsSeen(): ReadonlySet<string> {
 }
 
 /** What the card's button says about a task's review. */
-export type PrototypeButtonState = "ready" | "opened" | "decided" | "unsent";
+export type PrototypeButtonState = "ready" | "opened" | "decided" | "unsent" | "hidden";
 
 export function prototypeButtonState(summary: PrototypeReviewSummary | undefined, seenIds: ReadonlySet<string>): PrototypeButtonState | null {
   if (!summary) return null;
+  if (summary.waitingReviewId && summary.waitingDismissal) return "hidden";
   if (summary.waitingReviewId) return seenIds.has(summary.waitingReviewId) ? "opened" : "ready";
   if (!summary.decision) return null;
   return summary.decision.delivery === "failed" || summary.decision.delivery === "uncertain" ? "unsent" : "decided";

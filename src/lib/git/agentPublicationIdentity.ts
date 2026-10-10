@@ -1,6 +1,7 @@
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard";
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
+import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
@@ -23,6 +24,9 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
+    /* The pre-push privacy gate refuses a push that carries a stored
+       role-memory lesson (src/lib/memory/roleStore.ts). */
+    ...agentLessonPublicationEnv(),
     ...forge,
     ...agentHistoryGuardEnv({ ...source, ...forge }, name, email),
   };
