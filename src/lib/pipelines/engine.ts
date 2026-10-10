@@ -8245,9 +8245,11 @@ function controllerFailureReason(failure: string): string {
   return failure.replace(/; retry shortly$/, "");
 }
 
+const PREPUBLICATION_RETRY_REFUSAL_SUFFIX = "; original launch and first-message journal evidence do not prove a safe replacement";
+
 function unverifiedLaunchRetryRefusal(failure: string): string {
   if (isPrepublicationSpawnFailure(failure)) {
-    return `${controllerFailureReason(failure)}; original launch and first-message journal evidence do not prove a safe replacement`;
+    return `${controllerFailureReason(failure)}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`;
   }
   return `${controllerFailureReason(failure)}; the stage transcript exists, so the prompt may already have reached the agent and is not sent again`;
 }
@@ -8276,7 +8278,11 @@ function isUnverifiedDeliverySpawnFailure(failure: string): boolean {
 }
 
 function isPrepublicationSpawnFailure(failure: string): boolean {
-  return failure === "staged launch was released before publication completed"
+  const releasedBeforePublication = "staged launch was released before publication completed";
+  // A journal outage can park the live failure with our evidence diagnostic.
+  // Keep its retry identity so later ticks recheck the same safety fences.
+  return failure === releasedBeforePublication
+    || failure === `${releasedBeforePublication}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`
     || failure.startsWith("structured spawn interrupted before identity staging: ")
     || failure.startsWith("structured spawn interrupted before runtime admission: ");
 }

@@ -24933,6 +24933,62 @@ test.each([false, true])("pre-publication recovery retains uncertain delivery ev
   expect(box.order).toEqual(publication);
 });
 
+test.each([
+  [false, false], [false, true], [true, false], [true, true],
+] as const)("pre-publication journal outage is rechecked after reopen (parked=%s, safe=%s)", async (parked, safe) => {
+  const { h, box, claims, stops, callIds, advance } = await publicationInterruptedReview("read-only", parked);
+  const publication = [...box.order];
+  let available = false;
+  let reads = 0;
+  Object.assign(h.ports, { unpublishedLaunchRetrySafe: async () => {
+    reads++;
+    if (!available) throw new Error("runtime host request timed out");
+    return safe;
+  } });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const outageReads = reads;
+  expect(outageReads).toBeGreaterThan(0);
+  expect(claims).toHaveLength(0);
+  expect(stops).toHaveLength(0);
+
+  available = true;
+  savePipelines(loadPipelines());
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  expect(reads).toBeGreaterThan(outageReads);
+  if (safe) {
+    expect(loadPipelines()[0]!.runs[1]!.attempts[1]).toMatchObject({ state: "pending", launchId: null,
+      retiredLaunches: [{ launchId: "launch-publication-cut" }] });
+  }
+  advance(5_000);
+  await tickPipelines([], h.ports);
+  savePipelines(loadPipelines());
+  await tickPipelines([], h.ports);
+  const current = loadPipelines()[0]!;
+  const attempt = current.runs[1]!.attempts[1]!;
+  expect(current.runs[1]!.attempts).toHaveLength(2);
+  if (safe) {
+    expect(current.state).toBe("running");
+    expect(attempt).toMatchObject({ n: 2, state: "running", launchId: "launch-2" });
+    expect(attempt.retiredLaunches).toHaveLength(1);
+    expect(claims).toEqual(["launch-publication-cut"]);
+    expect(stops).toEqual(["launch-publication-cut"]);
+    expect(h.spawnInputs).toHaveLength(2); // builder and exactly one replacement reviewer prompt
+    expect(callIds).toHaveLength(parked ? 1 : 2);
+    expect(new Set(callIds).size).toBe(callIds.length);
+    expect(callIds.at(-1)).toStartWith("handshake_retry_1_");
+  } else {
+    expect(current.state).toBe("needs_decision");
+    expect(attempt.launchId).toBe("launch-publication-cut");
+    expect(attempt.retiredLaunches).toBeUndefined();
+    expect(claims).toHaveLength(0);
+    expect(stops).toHaveLength(0);
+    expect(h.spawnInputs).toHaveLength(1);
+  }
+  expect(box.order).toEqual(publication);
+});
+
 test("a pre-publication reviewer whose identity-fenced stop failed is never replaced", async () => {
   const { h, claims } = await publicationInterruptedReview("read-only", false);
   h.ports.stopStageAgent = async () => ({ outcome: "failed", error: "recorded process could not be stopped" });
