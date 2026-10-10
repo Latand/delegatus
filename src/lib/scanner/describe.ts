@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { readWorktreeRecoveries } from "@/lib/projects/worktreeRecoveryStore";
+
 import { stateDir } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -524,11 +526,12 @@ type WorktreeInfo = { repo: string; worktree: string };
 let worktreeMemory: { dir: string; map: Map<string, WorktreeInfo>; learned: Map<string, WorktreeInfo>; stamp: string | null } | null = null;
 
 function worktreeMapStamp(file: string): string | null {
+  const recovered = JSON.stringify(readWorktreeRecoveries().map(({ cwd, repo, worktree }) => [cwd, repo, worktree]));
   try {
     const stat = fs.statSync(file);
-    return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${recovered}`;
   } catch {
-    return null;
+    return recovered;
   }
 }
 
@@ -543,6 +546,11 @@ function readWorktreeMapFile(file: string): Map<string, WorktreeInfo> {
     }
   } catch {
     /* no map yet or unreadable — start empty */
+  }
+  for (const { cwd, repo, worktree } of readWorktreeRecoveries()) {
+    const held = map.get(cwd);
+    if (held && held.repo !== repo) throw new Error("Worktree recovery conflicts with a recorded mapping");
+    map.set(cwd, { repo, worktree });
   }
   return map;
 }

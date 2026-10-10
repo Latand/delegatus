@@ -91,7 +91,10 @@ export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicat
 }
 /** A read's round. Superseded rounds name the later decided round that retired
     them; the mark is derived on read and never crosses to another installation. */
-export interface PrototypeRoundRead extends PrototypeRoundView { supersededBy?: string }
+export interface PrototypeRoundRead extends PrototypeRoundView {
+  supersededBy?: string;
+  hidden?: { at: string; by: import("@/lib/attention/dismissalTypes").DismissedBy };
+}
 export interface PrototypeReviewRead {
   taskId: string;
   rounds: PrototypeRoundRead[];

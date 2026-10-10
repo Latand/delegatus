@@ -72,6 +72,9 @@ export interface ProvenanceLookup {
    * id, it is "not yet"; after that it is whatever they said.
    */
   messagePending(engineMessageId: string | null | undefined): boolean;
+  /** Whether this native id is still awaiting its first evidence read. Ordinary SDK
+      rows wait only for that answer; outbox joins keep the bounded wait above. */
+  messageReadPending(engineMessageId: string | null | undefined): boolean;
   /**
    * WHO sent a human message (sign-in-and-team §6.7): the member the team
    * recorded against the submission this row is the record of, reached by
@@ -103,6 +106,7 @@ export const NO_PROVENANCE: ProvenanceLookup = {
   submissionFor: () => null,
   submissionPending: () => false,
   messagePending: () => false,
+  messageReadPending: () => false,
   senderFor: () => null,
   senderForSubmission: () => null,
 };
@@ -395,6 +399,7 @@ function lookupFor(
   assignment: Map<Item, MatchedDeliveryProvenance>,
   resolving: boolean,
   settledMessages?: ReadonlySet<string>,
+  readMessages?: ReadonlySet<string>,
 ): ProvenanceLookup {
   const pending = (dedup: string | undefined) =>
     Boolean(dedup) && resolving && !(data && dedup! in data.submissions);
@@ -402,7 +407,9 @@ function lookupFor(
      is no read in flight to wait for. */
   const messagePending = (id: string | null | undefined) =>
     Boolean(id) && settledMessages !== undefined && !settledMessages.has(id!) && !(data && id! in data.messages);
-  if (!data) return { ...NO_PROVENANCE, submissionPending: pending, messagePending };
+  const messageReadPending = (id: string | null | undefined) =>
+    Boolean(id) && readMessages !== undefined && !readMessages.has(id!) && !(data && id! in data.messages);
+  if (!data) return { ...NO_PROVENANCE, submissionPending: pending, messagePending, messageReadPending };
   const forItem = (item: Item): MatchedDeliveryProvenance | null => {
     if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
       const byId = data.messages[item.deliveredMessage.engineMessageId];
@@ -428,6 +435,7 @@ function lookupFor(
     submissionFor: (dedup) => (dedup ? data.submissions[dedup] ?? null : null),
     submissionPending: pending,
     messagePending,
+    messageReadPending,
     senderFor: (item) => {
       if (item.structuredUserRef && !item.structuredUserRef.startsWith("h.")) {
         const token = structuredUserReferenceKey(item.structuredUserRef);
@@ -519,6 +527,16 @@ export function useDeliveredMessageProvenance(
      revalidation after it ran, or nothing was left to ask. Only grows for a
      path; see {@link ProvenanceLookup.messagePending}. */
   const [settledMessages, setSettledMessages] = useState<ReadonlySet<string>>(() => new Set());
+  /* Key first answers by path and id: an empty answer for one row says
+     nothing about a later row or a different conversation in this pane. */
+  const [readMessages, setReadMessages] = useState<{ path: string | null; ids: ReadonlySet<string> }>(() => ({ path, ids: new Set() }));
+  const markMessagesRead = (wanted: WantedEvidence): void => {
+    const ids = wanted.drivers.flatMap((driver) => driver.engineMessageId ? [driver.engineMessageId] : []);
+    if (!ids.length) return;
+    setReadMessages((previous) => previous.path === path && ids.every((id) => previous.ids.has(id))
+      ? previous
+      : { path, ids: new Set([...(previous.path === path ? previous.ids : []), ...ids]) });
+  };
   const settleMessages = (wanted: WantedEvidence): void => {
     const ids = wanted.drivers.flatMap((driver) => driver.engineMessageId ? [driver.engineMessageId] : []);
     if (!ids.length) return;
@@ -537,6 +555,7 @@ export function useDeliveredMessageProvenance(
     if (!wantedKey || !unresolvedDrivers(wanted, cached, false, Date.now())) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing is outstanding for this path
       setResolving(false);
+      markMessagesRead(wanted);
       settleMessages(wanted);
       return;
     }
@@ -576,7 +595,10 @@ export function useDeliveredMessageProvenance(
       } catch {
         /* quiet: absence renders as today's row */
       } finally {
-        if (alive && retry === 0) setResolving(false);
+        if (alive && retry === 0) {
+          setResolving(false);
+          markMessagesRead(wanted);
+        }
         if (alive && !revalidating) settleMessages(wanted);
       }
     };
@@ -612,11 +634,11 @@ export function useDeliveredMessageProvenance(
   }, [assignment]);
   return useMemo(
     () => {
-      const lookup = lookupFor(data, assignment, resolving, settledMessages);
+      const lookup = lookupFor(data, assignment, resolving, settledMessages, readMessages.path === path ? readMessages.ids : new Set());
       return { ...lookup, forItem: (item: Item) => lookup.forItem(item) ??
         (item.structuredUserRef ? structuredForItem(item) : null) };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the assignment's CONTENT (assignmentKey) and the submissions it can resolve; a same-content map keeps the lookup
-    [data, assignmentKey, submissionsKey, resolving, settledMessages, structuredForItem],
+    [data, assignmentKey, submissionsKey, resolving, settledMessages, readMessages, path, structuredForItem],
   );
 }

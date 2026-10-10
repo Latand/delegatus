@@ -82,7 +82,7 @@ function isoSeconds(iso: string): number | null {
  */
 export function blockingStuckDelivery(file: FileEntry, now: number): number | null {
   const delivery = file.stuckDelivery;
-  if (!delivery) return null;
+  if (!delivery || delivery.origin?.kind === "agent") return null;
   const since = isoSeconds(delivery.since);
   if (since === null) return null;
   if (delivery.state === "delivery-uncertain") return since;
@@ -93,7 +93,7 @@ export function blockingStuckDelivery(file: FileEntry, now: number): number | nu
     queue's own wait: the conversation header's «held» (five minutes). */
 export function heldStuckDelivery(file: FileEntry, now: number): number | null {
   const delivery = file.stuckDelivery;
-  if (!delivery) return null;
+  if (!delivery || delivery.origin?.kind === "agent") return null;
   const since = isoSeconds(delivery.since);
   if (since === null) return null;
   return now - since >= DELIVERY_WAIT_HELD_MS / 1000 ? since : null;

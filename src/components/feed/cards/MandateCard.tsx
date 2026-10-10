@@ -42,17 +42,26 @@ export function MandateCard({ item }: { item: MandateItem }) {
       ? tr("mandateCard.custom")
       : null;
   return (
-    <div className="my-3 ml-9 overflow-hidden rounded-surface border border-border bg-card shadow-1" data-mandate-card>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3.5 pt-2">
+    <div className="@container my-3 ml-9 overflow-hidden rounded-surface border border-border bg-card shadow-1" data-mandate-card>
+      {/* One line where the card is wide enough for it; where it is not (the
+          phone, the dock), the title keeps its row with the copy control and
+          the time, and the meta takes the line under the title. Before, the
+          row wrapped wherever it ran out: on a phone the meta began its own
+          line with a dangling «·», and the copy control and time took a third
+          line of their own, a 44 px tap target with nothing beside it. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3.5 pt-2" data-mandate-card-head>
         {/* The mandate is written by Delegatus itself, so it carries the product's mark. */}
         <span className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg bg-sunken">
           <DelegatusMark size={20} />
         </span>
-        <span className="text-[13px] font-semibold">{qualifier ? `${title} ${qualifier}` : title}</span>
-        <span className="text-[11px] text-muted">
-          · {tr("mandateCard.lines", { count: message.lines })} · {tr("mandateCard.sent")}
+        <span className="min-w-0 text-[13px] font-semibold">{qualifier ? `${title} ${qualifier}` : title}</span>
+        <span className="order-last basis-full pl-8.5 text-[11px] text-muted @lg:order-none @lg:basis-auto @lg:pl-0" data-mandate-card-meta>
+          <span className="hidden @lg:inline" aria-hidden>· </span>
+          {tr("mandateCard.lines", { count: message.lines })} · {tr("mandateCard.sent")}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1">
+        {/* The coarse pointer's 44 px tap target reaches into the padding
+            around the row instead of making the row 44 px tall. */}
+        <span className="ml-auto flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:-my-2">
           <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
           {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}
         </span>

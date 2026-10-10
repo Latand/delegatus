@@ -703,7 +703,9 @@ class Checkout:
             chunks = re.findall(r'["\x27](/_next/static/[^"\x27?#]+\.js)["\x27]', page)
             if not chunks or not self.http(port, chunks[0], self.token):
                 raise RuntimeError("page script unavailable")
-            if not isinstance(json.loads(self.http(port, "/api/tasks", self.token)).get("tasks"), list):
+            # Tasks require a nonempty project. The empty-project filter still
+            # loads the board store, but its answer is independent of board size.
+            if not isinstance(json.loads(self.http(port, "/api/tasks?project=", self.token)).get("tasks"), list):
                 raise RuntimeError("board read unavailable")
             update = json.loads(self.http(port, "/api/self-update", self.token))
             if update["auto"]["enabled"] or update["auto"].get("drain"):

@@ -44,7 +44,13 @@ Only then the **disk-dependent** resolvers, as fallbacks:
    thing that saves an **arbitrary-path** `git worktree add ../sibling` checkout
    (e.g. `~/.agents/tools/live-log-viewer-<branch>`), which has NO recognizable
    path layout, once it is deleted. Consulted only when no path recognizer
-   matched and the cwd is gone.
+   matched and the cwd is gone. Automatic recovery of older directory projects
+   supplies the same lookup with atomic recovery rows in `state.sqlite`; those
+   rows commit their mappings, aliases, board migration and lifecycle reason
+   together. Recovery runs at Viewer startup under the release fence and after
+   a complete catalog rescan. A recorded mapping, agreeing native repository
+   hint or branch hint confirmed against refs must prove the match; a sibling
+   name alone never folds, and conflicts or ambiguity keep the project separate.
 
 **The invariant that keeps biting:** a worktree's grouping must survive the
 checkout being **deleted**. Any mapping that finds the parent repo only by

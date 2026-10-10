@@ -4,6 +4,8 @@ import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestra
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
+import { ruleReports } from "./ruleReports";
+import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -29,7 +31,7 @@ import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
-import { readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
+import { appendBridgeReports, readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { BridgeReportV1, BridgeResolvedAskV1 } from "@/lib/bridge/types";
 import { operatorLocale } from "@/lib/operator/settings";
@@ -465,6 +467,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  recordRuleReports?: (project: string, at: string) => void;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
@@ -644,6 +647,20 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    recordRuleReports(project, at) {
+      const seat = orchestratorSeatForCurrentProject(project).active;
+      if (!seat?.conversationId) return;
+      const registry = agentRegistry().readOnlySnapshot();
+      const log = readBridgeReportLog();
+      appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
+        tasks: loadTasks(), pipelines: loadPipelinesForList().map(lane => ({ ...lane, project: canonicalOrchestratorProject(lane.project) })), deliveries: Object.values(registry.heldDeliveries),
+        maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
+        deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
+        deliveryProject: delivery => {
+          const held = delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project;
+          return held ? canonicalOrchestratorProject(held) : null;
+        } }));
+    },
     seatContextUsage: (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as never);
       const generation = conversation?.generations.at(-1);

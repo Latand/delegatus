@@ -26941,6 +26941,122 @@ describe("idle seat interval eligibility", () => {
   }, 120_000);
 });
 
+
+describe("operator-selected needs-you rules", () => {
+  browserTest("completed reports and reversible prototype hiding at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/needs-you-rules");
+    fs.mkdirSync(out, { recursive: true });
+    const reportsServer = await serveEvidenceFixture(path.join(out, "reports"), "src/components/attention/needsYouPanel.fixture.tsx");
+    const prototypeServer = await serveEvidenceFixture(path.join(out, "prototype"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const list = phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+        const counter = phone ? "[data-mobile2-attention-count]" : "[data-attention-count]";
+        const report = await openFixture(browser, `${reportsServer.base}?rules=1&seat=beside`, viewport, "light", "uk", "reduce", phone);
+        try {
+          await report.page.locator(counter).waitFor({ timeout: 30_000 });
+          await report.page.locator(counter).click();
+          await report.page.locator(`${list} [data-needs-you-row]`).first().waitFor();
+          await report.page.waitForTimeout(300);
+          const waits = await report.page.locator(list).innerText();
+          expect(waits).not.toContain("бюджет");
+          expect(waits).not.toContain("Слати нічний дайджест");
+          expect(waits).not.toContain("Повідомлення не доставлене");
+          await report.page.screenshot({ path: path.join(out, `needs-you-${width}.png`) });
+          await report.page.keyboard.press("Escape");
+          if (phone) {
+            await report.page.evaluate(() => { location.hash = "reports"; });
+          } else {
+            await report.page.locator("[data-report-log-toggle]").click();
+          }
+          await report.page.locator("[data-report-entry]").first().waitFor();
+          await report.page.waitForTimeout(300);
+          const completed = report.page.locator('[data-report-entry][data-report-class="completed"]');
+          const completedCount = await completed.count();
+          // The existing renderer carries the outcome's card and PR links.
+          const reports = await report.page.locator("[data-report-log]").innerText();
+          expect(reports).toContain("останні зауваження виправлено");
+          expect(reports).toContain("Нічний дайджест завершено");
+          const links: unknown[] = [];
+          await report.page.screenshot({ path: path.join(out, `reports-${width}.png`) });
+          for (const [text, cardId] of [["Повідомлення агента не доставлено", "t-voice"], ["Оркестратор зняв вирішене питання", "t-seat"]]) {
+            // Opening a card leaves the log; restore it before the next link.
+            if (links.length) {
+              await report.page.reload();
+              await report.page.locator(counter).waitFor({ timeout: 30_000 });
+              if (phone) await report.page.evaluate(() => { location.hash = "reports"; });
+              else await report.page.locator("[data-report-log-toggle]").click();
+              await report.page.locator("[data-report-entry]").first().waitFor();
+            }
+            const outcome = completed.filter({ hasText: text });
+            expect(await outcome.count()).toBe(1);
+            const link = outcome.locator(`[data-report-card="${cardId}"]`);
+            await link.scrollIntoViewIfNeeded();
+            const geometry = await link.boundingBox();
+            expect(geometry).not.toBeNull();
+            expect(geometry!.x).toBeGreaterThanOrEqual(0);
+            expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+            expect(await link.isEnabled()).toBe(true);
+            await report.page.screenshot({ path: path.join(out, `report-card-${cardId}-${width}.png`) });
+            await report.page.evaluate(() => {
+              (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = null;
+              window.addEventListener("llv:mcp-navigate", event => {
+                (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = (event as CustomEvent).detail;
+              }, { once: true });
+            });
+            await link.click();
+            const navigation = await report.page.evaluate(() => (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation);
+            expect(navigation).toEqual({ kind: "task", id: cardId });
+            links.push({ cardId, geometry, navigation });
+          }
+          readings.push({ width, waits, reports, links, completed: completedCount, errors: report.pageErrors });
+          expect(report.pageErrors).toEqual([]);
+        } finally { await report.context.close(); }
+
+        const proto = await openFixture(browser, `${prototypeServer.base}?proto=1`, viewport, "light", "uk", "reduce", phone);
+        try {
+          await proto.page.locator(counter).waitFor({ timeout: 30_000 });
+          const count = () => proto.page.locator(counter).innerText().then(text => Number(text.replace(/\D/g, "")));
+          await proto.page.waitForFunction(selector => Number((document.querySelector(selector)?.textContent ?? "").replace(/\D/g, "")) >= 3, counter);
+          const before = await count();
+          if (phone) await proto.page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await proto.page.locator(phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]').click();
+          const hide = proto.page.locator("[data-prototype-hide]");
+          await hide.waitFor();
+          expect(await hide.innerText()).toBe("Сховати");
+          const geometry = await hide.boundingBox();
+          expect(geometry).not.toBeNull();
+          expect(geometry!.x).toBeGreaterThanOrEqual(0);
+          expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+          if (phone) expect(geometry!.height).toBeGreaterThanOrEqual(44);
+          await proto.page.screenshot({ path: path.join(out, `hide-${width}.png`) });
+          await hide.click();
+          await proto.page.locator('[data-prototype-hidden="r-search"]').waitFor();
+          expect(await count()).toBe(before - 1);
+          expect(await proto.page.locator("[data-prototype-save]").count()).toBe(0);
+          await proto.page.screenshot({ path: path.join(out, `history-${width}.png`) });
+          await proto.page.locator("[data-prototype-undo-hide]").click();
+          await hide.waitFor();
+          expect(await count()).toBe(before);
+          expect(await proto.page.locator("[data-prototype-save]").count()).toBe(1);
+          readings.push({ width, before, hidden: before - 1, restored: await count(), hide: geometry, errors: proto.pageErrors });
+          expect(proto.pageErrors).toEqual([]);
+        } finally { await proto.context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-rules", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-rules/rendered.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      reportsServer.stop();
+      prototypeServer.stop();
+    }
+  });
+});
+
 /** Registry-enriched rows use the existing read-only remote-agent surface. */
 describe("linked seats and shared-project agent activity", () => {
   browserTest("a remote deployer stays under its task and the peer seat appears in its machine group", async () => {
@@ -26985,60 +27101,8 @@ describe("linked seats and shared-project agent activity", () => {
   }, 90_000);
 });
 
-describe("operator worktree recovery maintenance", () => {
-  browserTest("preview and apply show reasons and fit desktop and phone in both languages", async () => {
-    const out = path.resolve(".artifacts/worktree-recovery");
-    fs.mkdirSync(out, { recursive: true });
-    const calls: boolean[] = [];
-    const excludedReasons = ["missing-native-evidence", "unproven-branch-hint", "unreadable-transcript",
-      "conflicting-repository-hint", "conflicting-project-identity", "conflicting-recorded-worktree",
-      "ambiguous-repository", "target-outside-project"] as const;
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/board/maintenance/worktrees": async (request: Request) => {
-        const { dryRun } = await request.json() as { dryRun: boolean };
-        calls.push(dryRun);
-        return Response.json({ dryRun, rescanned: !dryRun,
-          folded: [{ cwd: "/repo/widgets-review", source: "fixture", sessions: 3, reason: "sibling-name-and-branch-hint" }],
-          leftAlone: excludedReasons.map((reason, index) => ({ cwd: `/repo/widgets-lane-${index}`, source: "other", sessions: 1, reason })),
-        });
-      },
-    });
-    const browser = await chromium.launch(LAUNCH);
-    const readings: unknown[] = [];
-    try {
-      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=worktree-recovery`, { width, height: 900 }, "dark", lang, "reduce", width < 640);
-        try {
-          const panel = page.locator("[data-worktree-recovery]");
-          await panel.waitFor();
-          expect(await panel.locator("button").count()).toBe(1);
-          await panel.locator("button").first().click();
-          await panel.locator("details").waitFor();
-          expect(await panel.locator("button").count()).toBe(2);
-          await panel.locator("summary").click();
-          expect(await panel.locator("li").count()).toBe(1 + excludedReasons.length);
-          const reasons = await panel.locator("li").allTextContents();
-          for (const reason of excludedReasons) {
-            expect(reasons.some(text => text.includes(translate(lang, `worktreeRecovery.reason.${reason}`)))).toBe(true);
-          }
-          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
-          expect(fits).toBe(true);
-          await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}-preview.png`) });
-          await panel.locator("button").nth(1).click();
-          await page.waitForFunction(() => document.querySelector("[data-worktree-recovery]")?.querySelectorAll("button").length === 1);
-          expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, fits, preview: true, applied: true, excludedReasons });
-        } finally { await context.close(); }
-      }
-      expect(calls).toEqual([true, false, true, false, true, false, true, false]);
-      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
-      fs.writeFileSync("evidence/worktree-recovery/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); server.stop(); }
-  }, 30_000);
-});
-
 describe("worktree recovery from the board maintenance panel", () => {
-  browserTest("the real board opens recovery beside maintenance settings", async () => {
+  browserTest("the real board maintenance controls have no worktree recovery buttons in either language", async () => {
     const out = path.resolve(".artifacts/worktree-recovery/board");
     fs.mkdirSync(out, { recursive: true });
     const tick = {
@@ -27053,27 +27117,42 @@ describe("worktree recovery from the board maintenance panel", () => {
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": tick,
       "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
-      "/api/board/maintenance/worktrees": { dryRun: true, rescanned: false, folded: [], leftAlone: [] },
+      "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
     });
     const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
     try {
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width: 1440, height: 900 }, "dark", "en", "reduce");
-      try {
-        await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
-        await page.locator("[data-kanban-seat]").waitFor();
-        if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
-        await page.locator("[data-kanban-seat] [data-seat-tick-thumb]").click();
-        const panel = page.locator("[data-seat-tick-maintenance] [data-worktree-recovery]");
-        await panel.waitFor();
-        await panel.locator("button").click();
-        await panel.locator("details").waitFor();
-        expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-        expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.resolve(".artifacts/worktree-recovery/variant-1-1440-en-board.png") });
-        fs.writeFileSync("evidence/worktree-recovery/maintenance.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", reachable: true, preview: true, fits: true }, null, 2) + "\n");
-      } finally { await context.close(); }
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: 900 }, "dark", lang, "reduce", phone);
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
+          await seat.locator("[data-seat-tick-thumb]").click();
+          const panel = page.locator("[data-seat-tick-maintenance]:visible").first();
+          await panel.waitFor();
+          expect(await page.locator("[data-worktree-recovery]").count()).toBe(0);
+          const text = await panel.innerText();
+          for (const removed of ["Recover worktree projects", "Preview recovery", "Apply recovery", "Об’єднати проєкти робочих копій", "Переглянути зміни", "Застосувати зміни"]) {
+            expect(text).not.toContain(removed);
+          }
+          expect(await panel.locator("[data-seat-tick-maintenance-about]").count()).toBe(1);
+          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+          expect(fits).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await panel.screenshot({ path: path.join(out, `${width}-${lang}-maintenance.png`) });
+          readings.push({ width, lang, reachable: true, recoveryControls: 0, fits, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
+      for (const filename of ["maintenance.json", "rendered.json"]) fs.writeFileSync(`evidence/worktree-recovery/${filename}`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 30_000);
+  }, 120_000);
 });
 
 describe("fresh context rotation advice", () => {

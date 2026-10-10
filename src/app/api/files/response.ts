@@ -419,6 +419,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   };
   const owedDeliveries = new Map<string, StuckDelivery>();
   for (const delivery of Object.values(registrySnapshot.heldDeliveries)) {
+    if (delivery.command.origin?.kind === "agent") continue;
     if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
     const conversationId = conversationLookup.canonicalConversationId(delivery.conversationId);
     const current = owedDeliveries.get(conversationId);
@@ -427,6 +428,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       since: delivery.createdAt,
       attempts: delivery.attempts,
       state: delivery.state,
+      origin: delivery.command.origin,
     });
   }
   for (const file of files) {

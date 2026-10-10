@@ -59,6 +59,9 @@ const negotiation = {
     codex: { supported: true, reason: null, formats: ["image/png"], maxImages: 2, maxRawBytesPerImage: 3, maxEncodedBytesPerRequest: 8 },
   },
 };
+const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
+let rotateSeat: (() => void) | null = null;
+let seatBody: unknown = { exists: false, seat: null, pending: null };
 const OVERRIDES: Record<string, unknown> = {
   window: dom,
   document: dom.document,
@@ -78,6 +81,11 @@ const OVERRIDES: Record<string, unknown> = {
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/orchestrator/rotate" && init?.method === "POST") {
+      rotateSeat?.();
+      return jsonResponse({ ok: true, state: "path-pending", launched: true, transport: "structured", launchId: LAUNCH_ID, conversationId: NEW_CONVERSATION, path: null, initialMessage: "queued" }, 202);
+    }
+    if (url.startsWith("/api/orchestrator/seat")) return jsonResponse(seatBody);
     if (url.startsWith("/api/board")) {
       return jsonResponse({ board: {
         schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {}, explicitManual: [],
@@ -160,10 +168,10 @@ const scanned = entry({
    projection this case has put in. */
 let setScanned: (files: FileEntry[]) => void = () => {};
 const NONE: never[] = [];
-const INITIAL = [previous];
+let initialFiles = [previous];
 const noop = () => {};
 function Host() {
-  const [base, setBase] = useState<FileEntry[]>(INITIAL);
+  const [base, setBase] = useState<FileEntry[]>(initialFiles);
   const [overlay, setOverlay] = useState<FileEntry | null>(null);
   useEffect(() => {
     const listener = (file: FileEntry) => setOverlay(file);
@@ -188,6 +196,10 @@ function Host() {
 let roots: Root[] = [];
 beforeEach(() => {
   roots = [];
+  initialFiles = [previous];
+  resetOrchestratorSeatCacheForTests();
+  rotateSeat = null;
+  seatBody = { exists: false, seat: null, pending: null };
   overlayListeners.clear();
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
@@ -254,4 +266,84 @@ test("one Back from the launched conversation reaches the board", async () => {
   flushSync(() => getMobileNav().back());
   await settle();
   expect(topScreen(getMobileNav().getState()).kind).toBe("board");
+});
+
+
+test("opening a provisional seat without a draft retains its identity across a scan gap and transcript adoption", async () => {
+  const provisional = entry({ path: `spawn:${LAUNCH_ID}`, title: "The new seat", conversationId: NEW_CONVERSATION });
+  initialFiles = [previous, provisional];
+  seatBody = { exists: true, pending: null, seat: { project: PROJECT, conversationId: NEW_CONVERSATION, path: provisional.path, state: "active", mandate: "Run the board", promptVersion: 44, designatedAt: new Date().toISOString(), intent: { launchId: LAUNCH_ID, clientRequestId: "seat-open-fixture", mode: "spawn" } } };
+  const container = dom.document.createElement("div");
+  dom.document.body.appendChild(container);
+  const root = createRoot(container as unknown as Element);
+  roots.push(root);
+  flushSync(() => root.render(<Host />));
+  const host = container as unknown as HTMLElement;
+  expect(await waitFor(() => q(host, '[data-mobile2-seat-open]') !== null)).toBe(true);
+  const row = q(host, '[data-mobile2-seat-open]')!;
+  flushSync(() => row.click());
+  await settle();
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "chat", id: provisional.path });
+  expect(host.textContent).toContain("The new seat");
+  const frames: string[] = [];
+  const observer = new dom.MutationObserver(() => frames.push(paneText(host)));
+  observer.observe(container, { childList: true, subtree: true, characterData: true });
+  // The placeholder can disappear one scan before its same-ID transcript arrives.
+  flushSync(() => setScanned([previous]));
+  await settle();
+  expect(paneText(host)).not.toContain(PREVIOUS_QUESTION);
+  expect(host.textContent).toContain("The new seat");
+  flushSync(() => setScanned([{ ...previous, mtime: NOW + 100 }, scanned]));
+  await settle();
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "chat", id: NEW_PATH }]);
+  expect(host.textContent).toContain("The new agent");
+  expect(frames.some((frame) => frame.includes(PREVIOUS_QUESTION))).toBe(false);
+  observer.disconnect();
+  // A later deliberate choice is authoritative even while seat polling continues.
+  flushSync(() => getMobileNav().replace({ kind: "chat", id: previous.path }));
+  await settle();
+  expect(paneText(host)).toContain(PREVIOUS_QUESTION);
+  flushSync(() => setScanned([{ ...previous, mtime: NOW + 200 }, { ...scanned }]));
+  await settle();
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "chat", id: previous.path });
+});
+
+
+test("rotation from the conversation menu replaces navigation once and follows the successor without a predecessor frame", async () => {
+  const seat = (file: FileEntry) => ({ exists: true, pending: null, seat: { project: PROJECT, seatEpoch: file === previous ? 1 : 2, conversationId: file.conversationId, path: file.path, state: "active", mandate: "Run the board", promptVersion: 44, designatedAt: new Date().toISOString(), intent: { launchId: file === previous ? null : LAUNCH_ID, clientRequestId: "rotation-menu-fixture", mode: "spawn" } } });
+  seatBody = seat(previous);
+  const provisional = entry({ path: `spawn:${LAUNCH_ID}`, title: "The rotated seat", conversationId: NEW_CONVERSATION });
+  rotateSeat = () => { seatBody = seat(provisional); flushSync(() => setScanned([previous, provisional])); };
+  getMobileNav().push({ kind: "chat", id: previous.path });
+  const container = dom.document.createElement("div"); dom.document.body.appendChild(container);
+  const root = createRoot(container as unknown as Element); roots.push(root);
+  flushSync(() => root.render(<Host />));
+  const host = container as unknown as HTMLElement;
+  const click = async (selector: string) => {
+    expect(await waitFor(() => q(host, selector) !== null)).toBe(true);
+    flushSync(() => q(host, selector)!.click()); await settle();
+  };
+  await click('[data-mobile2-open="menu"]');
+  await click('[data-testid="mobile-menu-seat"]');
+  await click('[data-orchestrator-rotate]');
+  await click('[data-orchestrator-confirm]');
+  expect(await waitFor(() => host.textContent?.includes("The rotated seat") ?? false)).toBe(true);
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "chat", id: provisional.path }]);
+  const frames: string[] = [];
+  const observer = new dom.MutationObserver(() => frames.push(paneText(host)));
+  observer.observe(container, { childList: true, subtree: true, characterData: true });
+  flushSync(() => setScanned([{ ...previous, mtime: NOW + 100 }, scanned]));
+  await settle();
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }, { kind: "chat", id: NEW_PATH }]);
+  expect(host.textContent).toContain("The new agent");
+  expect(frames.some((frame) => frame.includes(PREVIOUS_QUESTION))).toBe(false);
+  observer.disconnect();
+  flushSync(() => root.unmount()); roots = [];
+  initialFiles = [previous, scanned];
+  const reopened = createRoot(container as unknown as Element); roots.push(reopened);
+  flushSync(() => reopened.render(<Host />)); await settle();
+  expect(host.textContent).toContain("The new agent");
+  expect(paneText(host)).not.toContain(PREVIOUS_QUESTION);
+  await click('[data-mobile2-back]');
+  expect(topScreen(getMobileNav().getState())).toEqual({ kind: "board" });
 });
