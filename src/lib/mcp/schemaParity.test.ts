@@ -1187,3 +1187,15 @@ test("search order is optional and advertised with relevance and newest choices"
     expect(schema.required).not.toContain("order");
   });
 });
+
+
+test("voice task, pipeline and conversation filters keep the MCP read schema names", async () => {
+  const { COMPANION_TOOLS } = await import("@/lib/voiceCompanion/tools");
+  for (const name of ["list_tasks","get_task","list_pipelines","get_pipeline","agent_activity","conversation_messages","search_transcripts"] as const) {
+    const voice = COMPANION_TOOLS.find(tool=>tool.name===name)!;
+    const input = TOOL_INPUT_SCHEMAS[name].shape;
+    // Project selection and refresh are the voice wrapper's context/cache controls.
+    for (const property of Object.keys(voice.parameters.properties)) expect(property === "project" || property === "refresh" || Object.hasOwn(input,property)).toBe(true);
+    expect(voice.parameters.additionalProperties).toBe(false);
+  }
+});

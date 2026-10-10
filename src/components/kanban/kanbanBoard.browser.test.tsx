@@ -22,9 +22,11 @@ import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
+import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { browserCase, caseChromium as chromium, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
+import { WIRE_RIDE_ID } from "./orchestratorWires";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -19505,7 +19507,7 @@ describe("parallel ask idle fallback", () => {
  * buttons, and is answered by voice with no tap; that a read call and the
  * delegation are told apart; the failures in plain words; the settings rows and the
  * product mount; the delegated message's own tint in the production conversation pane;
- * and the eleven scripted scenarios, each measured and then recorded at both widths,
+ * and the twelve scripted scenarios, each measured and then recorded at both widths,
  * in both languages and both themes.
  *
  * `LLV_VOICE_COMPANION_HANDOFF=<dir>` is where the recordings and screenshots go (they
@@ -19648,7 +19650,7 @@ describe("floating voice companion", () => {
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${base}?scenario=voice-companion${query}${options.surface ? `&surface=${options.surface}` : ""}`);
     if (!options.product) await page.waitForSelector("[data-voice-companion][data-placed]", { timeout: 20_000 });
-    if (!options.surface) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
+    if (!options.surface && !(options.product && options.viewport.width === 390)) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
     /* The board arrives after the first placement; the companion re-reads the page 250 ms after it changes. */
     await page.waitForTimeout(1_400);
     return { context, page, pageErrors };
@@ -21301,13 +21303,19 @@ describe("floating voice companion", () => {
     const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites }; });
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
-      await page.locator("[data-rail-menu]").click();
-      await page.locator("[data-rail-menu-settings]").click();
-      await page.locator("[data-rail-menu-voice-companion]").click();
+      if (page.viewportSize()?.width === 390) {
+        await page.locator('[data-mobile2-open="menu"]').click();
+        await page.locator('[data-mobile2-menu-row="settings"]').click();
+        await page.locator('[data-mobile2-menu-row="voice-companion"]').click();
+      } else {
+        await page.locator("[data-rail-menu]").click();
+        await page.locator("[data-rail-menu-settings]").click();
+        await page.locator("[data-rail-menu-voice-companion]").click();
+      }
       await page.waitForSelector("[data-voice-companion-settings] [data-voice-companion-setting]", { timeout: 10_000 });
     };
     try {
-      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "light"], [NARROW, "en", "dark"]] as const) {
+      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "light"], [NARROW, "en", "dark"], [{ width: 390, height: 844 }, "en", "light"], [{ width: 390, height: 844 }, "uk", "dark"]] as const) {
         const label = `${viewport.width}-${lang}-${scheme}`;
         const { context, page, pageErrors } = await openVoice(browser, server.base, "&mount=product&usage=3.4", { viewport, scheme, lang, motion: "reduce", product: true });
         try {
@@ -21319,7 +21327,7 @@ describe("floating voice companion", () => {
           await page.screenshot({ path: path.join(HANDOFF, `settings-off-${label}.png`) });
           await section.locator("[data-voice-companion-enable]").click();
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
-          await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
+          if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
           /* The key: typed once, sent once, cleared, and nowhere on the page afterwards. */
           expect((await section.locator("[data-voice-companion-key-status]").innerText()).startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
@@ -21341,13 +21349,16 @@ describe("floating voice companion", () => {
           /* The cap and the month's usage. */
           const cap = section.locator("[data-voice-companion-cap] input");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: "2026-10", spent: "$3.40", cap: "$20.00" }));
+          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$20.00" }));
           await cap.fill("35");
           await cap.press("Enter");
           await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.settingsWrites.length === 2, null, { timeout: 10_000 });
           expect((await writes(page)).settings[1], `${label}: the cap was written`).toEqual({ monthlyCapUsd: 35 });
           await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: "2026-10", spent: "$3.40", cap: "$35.00" }));
+          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$35.00" }));
+          const lastCall = await section.locator("[data-voice-companion-last-call]").innerText();
+          expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
+          expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
           /* On is the real voice: the dialog offers no backend, no demo, and no word of one. */
           const choices = await section.evaluate((node) => ({
@@ -21364,6 +21375,15 @@ describe("floating voice companion", () => {
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
+          if (viewport.width === 390) {
+            expect(await page.locator("[data-voice-companion-settings]").isVisible(), `${label}: phone settings stay mounted`).toBe(true);
+            expect(await page.locator("[data-voice-companion]").count(), `${label}: the phone has the settings surface`).toBe(0);
+            expect(pageErrors, label).toEqual([]);
+            const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+            expect(await section.locator("[data-companion-spend-meter]").count(), `${label}: the published phone fallback retains its two settings rows`).toBe(0);
+            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, dialog, monthSpend, lastCall, phoneSettingsMounted: true, openedThrough: "header menu Settings → Voice Delegatus" });
+            continue;
+          }
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
           await page.waitForTimeout(900);
@@ -21426,7 +21446,7 @@ describe("floating voice companion", () => {
     });
   }, 900_000);
 
-  /* The eleven scripted scenarios, each at 1440 and 1000, in en and uk, light and dark: eight runs a scenario.
+  /* The twelve scripted scenarios, each at 1440 and 1000, in en and uk, light and dark: eight runs a scenario.
      Each runs twice: once measured (no recording, no screenshot,
      no sampler, so the frame clock reads the page alone) and once recorded as a video with screenshots and the
      geometry sampler. Every measured run comes before the first recording. */
@@ -21472,14 +21492,30 @@ describe("floating voice companion", () => {
             const box = view.getBoundingClientRect();
             const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
             const lane = document.querySelector<HTMLElement>("[data-companion-lane]");
+            const spend = view.querySelector<HTMLElement>("[data-companion-spend]")!;
+            const spendBox = spend.getBoundingClientRect();
+            const meter = spend.querySelector<HTMLElement>("[data-companion-spend-meter]")!;
+            const meterBox = meter.getBoundingClientRect();
+            const monthFill = meter.querySelector<HTMLElement>("[data-spend-month-fill]")!;
+            const callFill = meter.querySelector<HTMLElement>("[data-spend-call-fill]")!;
             const toggles = [...view.querySelectorAll<HTMLElement>("[data-transcript-toggle]")];
             const messages = [...view.querySelectorAll<HTMLElement>('[data-kind="speech"]')];
             return {
+              spend: [...spend.querySelector<HTMLElement>("[data-spend-amounts]")!.children].map(node => (node as HTMLElement).innerText).join(" · "),
+              spendHeight: view.querySelector<HTMLElement>("[data-companion-spend]")?.getBoundingClientRect().height ?? 0,
+              spendEmphasis: Object.fromEntries([...spend.querySelectorAll<HTMLElement>("[data-spend-amounts] [data-spend-value]")].map(node => [node.dataset.spendValue, { text: node.innerText, weight: getComputedStyle(node).fontWeight, color: getComputedStyle(node).color }])),
+              spendWords: getComputedStyle(spend).color,
+              spendFooter: { belowBody: spendBox.top >= body.getBoundingClientRect().bottom - 1, atFoot: Math.abs(spendBox.bottom - box.bottom) <= 2,
+                meterHeight: meterBox.height, meterAfterAmounts: meterBox.top >= spend.querySelector("[data-spend-amounts]")!.getBoundingClientRect().bottom,
+                inside: meterBox.left >= spendBox.left && meterBox.right <= spendBox.right && meterBox.bottom <= spendBox.bottom,
+                monthShare: monthFill.getBoundingClientRect().width / meterBox.width, callShare: callFill.getBoundingClientRect().width / meterBox.width,
+                callColor: getComputedStyle(callFill).backgroundColor, monthColor: getComputedStyle(monthFill).backgroundColor },
               box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
               inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
               scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
               laneHidden: !lane || getComputedStyle(lane).visibility === "hidden",
               reports: [...view.querySelectorAll<HTMLElement>("[data-transcript-answer] .vc-answer")].map((node) => node.textContent ?? ""),
+              standaloneReports: [...view.querySelectorAll<HTMLElement>("[data-transcript-report]")].map(node => ({ text: node.innerText, copyable: !!node.querySelector("button") })),
               lines: toggles.length, expanded: toggles.filter((toggle) => toggle.getAttribute("aria-expanded") === "true").length,
               detailsOnPage: view.querySelectorAll("[data-transcript-detail], pre").length,
               messages: messages.length, copyControls: messages.filter((message) => message.querySelector("button")).length,
@@ -21492,6 +21528,20 @@ describe("floating voice companion", () => {
             };
           });
           await page.screenshot({ path: path.join(out, `transcript-${label}-2-collapsed.png`) });
+          expect(reading.spend, `${label}: call and month spend`).toBe(lang === "uk" ? "Ця розмова $0.19 · жовтень $0.51 із $20.00" : "This call $0.19 · October $0.51 of $20.00");
+          expect(reading.spendHeight, `${label}: sums and thin meter fit the footer`).toBeLessThanOrEqual(48);
+          /* Variant 2's emphasis: the two sums spent are bold, the cap is muted and set apart from both the sums and the words. */
+          const emphasis = reading.spendEmphasis as Record<string, { text: string; weight: string; color: string }>;
+          expect(Object.fromEntries(Object.entries(emphasis).map(([role, value]) => [role, [value.text, Number(value.weight) >= 600]])), `${label}: the sums spent bold, the cap not`)
+            .toEqual({ usd: ["$0.19", true], spent: ["$0.51", true], cap: ["$20.00", false] });
+          expect([emphasis.cap!.color === emphasis.spent!.color, emphasis.cap!.color === reading.spendWords, emphasis.usd!.color === emphasis.spent!.color], `${label}: the cap muted apart from the sums and the words`).toEqual([false, false, true]);
+          expect({ belowBody: reading.spendFooter.belowBody, atFoot: reading.spendFooter.atFoot, meterAfterAmounts: reading.spendFooter.meterAfterAmounts, inside: reading.spendFooter.inside }, `${label}: variant 2 geometry`).toEqual({ belowBody: true, atFoot: true, meterAfterAmounts: true, inside: true });
+          expect(reading.spendFooter.meterHeight, `${label}: a thin meter`).toBe(3);
+          expect(reading.spendFooter.monthShare).toBeCloseTo(0.51 / 20, 3);
+          expect(reading.spendFooter.callShare).toBeCloseTo(0.19 / 20, 3);
+          expect(reading.spendFooter.callColor).not.toBe(reading.spendFooter.monthColor);
+          expect(reading.standaloneReports, `${label}: saved standalone report stays readable and copyable`).toEqual([{ text: expect.stringContaining("Atlas"), copyable: true }]);
+          expect(reading.standaloneReports[0].text).toContain(lang === "uk" ? "Усі перевірки завершено." : "All checks completed.");
           expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
           expect(reading.laneHidden, `${label}: the lane gives way`).toBe(true);
           expect(reading.atEnd, `${label}: opens at the newest line`).toBe(true);
@@ -21537,6 +21587,7 @@ describe("floating voice companion", () => {
       server.stop();
       const processes = await close();
       expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      record("transcript.json", { driver: DRIVER, variant: 2, rule: "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal", processes, readings });
     }
   }, 1_800_000);
 
@@ -21564,6 +21615,7 @@ describe("floating voice companion", () => {
         const reads = name === "read" || name === "reads" || name === "readLong" || name === "burst";
         const toolsShown = new Set<string>();
         let delegationCards = 0;
+        let reportsRead: unknown = null;
         const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=${name}`, { viewport, scheme, lang, ...(recorded ? { video: path.join(OUT, "video"), init: appearanceProbe } : {}) });
         try {
           const shots: string[] = [];
@@ -21574,6 +21626,73 @@ describe("floating voice companion", () => {
             const tick = (now: number) => { meter.stamps.push(now); if (document.visibilityState !== "visible") meter.hidden += 1; requestAnimationFrame(tick); };
             requestAnimationFrame(tick);
           });
+          if (name === "long") await page.evaluate(() => {
+            const probe = { paused: [] as Array<{ key: string; arrival: string | undefined }>, resumed: [] as Array<{ key: string; arrival: string | undefined }>, resumeFrames: 0, done: false };
+            (window as unknown as { __voicePause: typeof probe }).__voicePause = probe;
+            const snapshot = () => [...document.querySelectorAll<HTMLElement>('.vc-stack > [data-floater^="companion:item_co_1#"]')].map(node => ({ key: node.dataset.floater!, arrival: node.dataset.arrival }));
+            const tick = () => {
+              const events = (window as unknown as { voiceCompanion: { events: Array<{ eventId: string }> } }).voiceCompanion.events;
+              const paused = events.some(event => event.eventId.endsWith(":pause"));
+              const resumed = events.some(event => event.eventId.endsWith(":resume"));
+              if (paused && !resumed) probe.paused = snapshot();
+              if (resumed && ++probe.resumeFrames >= 2) { probe.resumed = snapshot(); probe.done = true; }
+              if (!probe.done) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          });
+          /* The standalone reports, read every frame: the held report cards in lane order, each first sighting with
+             whether the companion was speaking then, each departure with how many newer cards stood beside it, and
+             the operator's bubble as it read while the reports came in. */
+          if (name === "reports") await page.evaluate(({ prefix }) => {
+            const probe = { frames: 0, firstSeen: [] as Array<{ id: string; at: number; speaking: boolean; operator: string | null }>, orderFaults: [] as string[], returned: [] as string[],
+              departures: [] as Array<{ id: string; heldMs: number; newerHeld: number; olderHeld: number; scriptFinished: boolean; neededPx: number; roomPx: number; before: string[]; after: string[] }>, maxHeld: 0, operator: [] as string[] };
+            (window as unknown as { __voiceReports: typeof probe }).__voiceReports = probe;
+            const number = (id: string) => Number(id.slice(prefix.length));
+            let held: string[] = [];
+            /* The lane as the previous frame showed it: each element's height and arrival, and the room the lane gives. */
+            let shown: Array<{ key: string; arrival: number; height: number }> = [];
+            let roomPx = 0;
+            const gone = new Set<string>();
+            const tick = () => {
+              const root = document.querySelector<HTMLElement>("[data-voice-companion]");
+              const ids = [...(root?.querySelectorAll<HTMLElement>('.vc-stack > [data-floater^="report:"]') ?? [])].map((node) => node.dataset.floater!.slice("report:".length));
+              const voice = (window as unknown as { voiceCompanion: { finished: boolean; events: Array<{ type: string; speaker?: string }> } }).voiceCompanion;
+              const operatorNode = root?.querySelector<HTMLElement>('.vc-stack > [data-floater^="operator:item_op_1#"]');
+              const now = [...(root?.querySelectorAll<HTMLElement>(".vc-stack > [data-floater]") ?? [])].map((node) => ({ key: node.dataset.floater!, arrival: Number(node.dataset.arrival ?? Infinity), height: node.offsetHeight }));
+              const operator = operatorNode ? `${operatorNode.dataset.floater}@${operatorNode.dataset.arrival}:${(operatorNode.textContent ?? "").replace(/\s+/g, " ").trim()}` : null;
+              if (ids.length || held.length) {
+                probe.frames += 1;
+                if (ids.some((id, index) => index > 0 && number(id) <= number(ids[index - 1]!))) probe.orderFaults.push(ids.join(","));
+                for (const id of ids) {
+                  if (gone.has(id)) probe.returned.push(id);
+                  if (!probe.firstSeen.some((seen) => seen.id === id)) {
+                    const playback = voice.events.filter((event) => event.type === "playback.started" || event.type === "playback.stopped").at(-1);
+                    probe.firstSeen.push({ id, at: performance.now(), speaking: playback?.type === "playback.started", operator });
+                  }
+                }
+                for (const id of held) if (!ids.includes(id)) {
+                  gone.add(id);
+                  /* What it and everything newer needed, against the lane's room: more than the room means the lane
+                     could not hold them all, so the oldest left from the far end. */
+                  const was = shown.find((entry) => entry.key === `report:${id}`);
+                  /* It, what newer stood beside it, and what arrived as it left: those that left with it in the same frame count. */
+                  const stayed = was ? [was, ...shown.filter((entry) => entry.arrival > was.arrival), ...now.filter((entry) => entry.arrival > was.arrival && !shown.some((other) => other.key === entry.key))] : [];
+                  const neededPx = Math.round(stayed.reduce((sum, entry) => sum + entry.height, 0) + Math.max(0, stayed.length - 1) * 8);
+                  const lane = (list: typeof now) => list.map((entry) => `${entry.key}@${entry.arrival}:${entry.height}`);
+                  probe.departures.push({ id, neededPx, roomPx: Math.round(roomPx), before: lane(shown), after: lane(now), heldMs: Math.round(performance.now() - (probe.firstSeen.find((seen) => seen.id === id)?.at ?? 0)), newerHeld: ids.filter((other) => number(other) > number(id)).length, olderHeld: ids.filter((other) => number(other) < number(id)).length, scriptFinished: voice.finished });
+                }
+              }
+              /* Read from the moment the operator's words are final. */
+              if (operator && !probe.operator.includes(operator) && voice.events.some((event) => event.type === "transcript.final" && event.speaker === "operator")) probe.operator.push(operator);
+              held = ids;
+              shown = now;
+              const lane = root?.querySelector<HTMLElement>("[data-companion-lane]");
+              roomPx = lane ? lane.getBoundingClientRect().height - 26 : 0;
+              probe.maxHeld = Math.max(probe.maxHeld, ids.length);
+              if (!voice.finished || ids.length) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }, { prefix: DEMO_IDS.burstReportPrefix });
           const idleFrom = await page.evaluate(() => performance.now());
           await page.waitForTimeout(1_500);
           const idleTo = await page.evaluate(() => performance.now());
@@ -21649,7 +21768,7 @@ describe("floating voice companion", () => {
           });
           await page.locator("[data-companion-talk]").click();
           let peak = 0;
-          /* `proposal` stays null: no scenario of the eleven asks the operator to confirm. */
+          /* `proposal` stays null: no scenario of the twelve asks the operator to confirm. */
           const proposal: unknown = null;
           let sent: { firstStageShown: string | null; taps: 0 } | null = null;
           let buttonsOffered = 0;
@@ -21698,6 +21817,13 @@ describe("floating voice companion", () => {
           const scriptEnded = await page.evaluate(() => performance.now());
           const after = await voiceOf(page);
           expect(after.finished, `${label}: the script played out`).toBe(true);
+          if (name === "long") {
+            const pause = await page.evaluate(() => (window as unknown as { __voicePause: { paused: Array<{ key: string; arrival: string | undefined }>; resumed: Array<{ key: string; arrival: string | undefined }>; done: boolean } }).__voicePause);
+            expect(pause.done, `${label}: the scripted 300 ms pause and restart were sampled`).toBe(true);
+            expect(pause.paused.length, `${label}: bubbles were present during the pause`).toBeGreaterThan(0);
+            for (const bubble of pause.paused) expect(pause.resumed, `${label}: a shown bubble retains its key and arrival after restart`).toContainEqual(bubble);
+          }
+
           await page.waitForTimeout(700);
           await shot("end");
           if (recorded && name === "delegation") {
@@ -21732,6 +21858,33 @@ describe("floating voice companion", () => {
             const called = after.events.filter((event) => event.type === "tool.called").length;
             expect(called, `${label}: read calls`).toBe(name === "read" || name === "readLong" ? 1 : name === "reads" ? 3 : 4);
             expect(after.events.findLastIndex((event) => event.type === "tool.result"), `${label}: the answer follows the last result`).toBeLessThan(after.events.findLastIndex((event) => event.type === "response.started"));
+          }
+          /* More standalone reports than the lane holds, arriving while the companion speaks: every one is shown, in
+             arrival order, as many as the cap together; one leaves only from the far end, never to come back, and the
+             operator's bubble reads the same throughout. The transcript keeps all of them, in order. */
+          if (name === "reports") {
+            await page.waitForFunction(() => !document.querySelector('[data-voice-companion] .vc-stack > [data-floater^="report:"]'), null, { timeout: 60_000, polling: 100 });
+            const probe = await page.evaluate(() => (window as unknown as { __voiceReports: { firstSeen: Array<{ id: string; at: number; speaking: boolean; operator: string | null }>; orderFaults: string[]; returned: string[]; departures: Array<{ id: string; heldMs: number; newerHeld: number; olderHeld: number; scriptFinished: boolean; neededPx: number; roomPx: number; before: string[]; after: string[] }>; maxHeld: number; operator: string[] } }).__voiceReports);
+            reportsRead = { firstSeen: probe.firstSeen.map(({ id, speaking, operator }) => ({ id, speaking, operatorShown: operator !== null })), departures: probe.departures, maxHeld: probe.maxHeld, orderFaults: probe.orderFaults, returned: probe.returned, operatorReadings: probe.operator.length };
+            const expected = scenarioText(lang).reports.map((_, index) => `${DEMO_IDS.burstReportPrefix}${index + 1}`);
+            expect(expected.length, `${label}: more reports than the lane holds`).toBeGreaterThan(REPORT_CAP);
+            expect(probe.firstSeen.map((seen) => seen.id), `${label}: every report shown, in arrival order`).toEqual(expected);
+            expect(probe.firstSeen.filter((seen) => !seen.speaking).map((seen) => seen.id), `${label}: reports that arrived while the companion was silent`).toEqual([]);
+            expect({ orderFaults: probe.orderFaults, returned: probe.returned }, `${label}: in order, none back after leaving`).toEqual({ orderFaults: [], returned: [] });
+            /* The cap shown together where the lane is tallest; a shorter lane holds what fits, never more than the cap. */
+            expect(probe.maxHeld, `${label}: report cards shown together, never more than the cap`).toBeLessThanOrEqual(REPORT_CAP);
+            if (viewport.width === VIEWPORT.width) expect(probe.maxHeld, `${label}: the cap shown together in the tallest lane`).toBe(REPORT_CAP);
+            expect(probe.departures.filter((left) => left.olderHeld > 0), `${label}: a report left while an older one stayed`).toEqual([]);
+            /* Mid-call, a report leaves only once the cap's worth of newer ones stands beside it, its time is up, or it
+               and what stayed after it need more than the lane's room. Speech said after it never sends it away. */
+            expect(probe.departures.filter((left) => !left.scriptFinished && left.newerHeld < REPORT_CAP && left.heldMs < DELEGATION_LINGER_MS - 250 && left.neededPx <= left.roomPx), `${label}: a report left the lane mid-call with room for it, before the cap or its time sent it`).toEqual([]);
+            /* The operator's bubble reads one way for as long as it is shown. Being older than the reports, it is what
+               leaves first when they need the room: in the tallest lane it still stands beside the first report. */
+            expect(probe.operator.length, `${label}: the operator's bubble unchanged (${probe.operator.join(" | ")})`).toBe(1);
+            if (viewport.width === VIEWPORT.width) expect(probe.firstSeen[0]?.operator, `${label}: the operator's bubble beside the first report`).toBe(probe.operator[0]);
+            expect(probe.operator[0]!.endsWith(scenarioText(lang).reportsAsk), `${label}: the operator's bubble says what was asked`).toBe(true);
+            const spoken = after.events.filter((event) => event.type === "transcript.final" && event.speaker === "companion").length;
+            expect(spoken, `${label}: one spoken line for each report, after the acknowledgement`).toBe(expected.length + 1);
           }
           if (name === "interrupt") expect(await page.locator("[data-companion-cut]").count() + (await page.locator("[data-companion-transcript] li").allInnerTexts()).filter((text) => text.includes(translate(lang, "voiceCompanion.cutAfter", { s: "" }).split(" ")[0]!)).length, `${label}: the cut is marked`).toBeGreaterThan(0);
           expect(pageErrors, label).toEqual([]);
@@ -21804,7 +21957,7 @@ describe("floating voice companion", () => {
             await context.close();
             await video.saveAs(path.join(HANDOFF, `scenario-${label}.webm`));
             await video.delete();
-            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, travel, appearance, glowAtLaneEndWhenScriptEnded: glow, stoodWhileRecorded: stood, afterLaneEmptied, ...(relay ? { delegatedRowAsItAppeared: relay, requestAndAnswerShown: shownAt } : {}) });
+            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, travel, appearance, glowAtLaneEndWhenScriptEnded: glow, stoodWhileRecorded: stood, afterLaneEmptied, ...(relay ? { delegatedRowAsItAppeared: relay, requestAndAnswerShown: shownAt } : {}), ...(reportsRead ? { reports: reportsRead } : {}) });
             continue;
           }
           const meter = await page.evaluate(() => {
@@ -21861,7 +22014,7 @@ describe("floating voice companion", () => {
             label, scenario: name, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, look: "final", measuredOnAttempt: attempt, motion: "no-preference", recordingDuringMeasurement: false,
             idle: { frames: idle.length, medianMs: two(frame), p95Ms: two(percentile(idle, 0.95)), maxMs: two(Math.max(...idle)) },
             windows, conversation, afterScript, hiddenTabSamples: meter.hidden,
-            contract: { dispatches: after.dispatches, events: after.events.length, proposal, ...(sent ? { sent } : {}) }, stood,
+            contract: { dispatches: after.dispatches, events: after.events.length, proposal, ...(sent ? { sent } : {}) }, stood, ...(reportsRead ? { reports: reportsRead } : {}),
           });
         } finally { await context.close().catch(() => undefined); }
       }
@@ -21908,7 +22061,7 @@ describe("floating voice companion", () => {
       missedFramesEstimate: "sum over intervals of max(0, round(dt / T) - 1); an estimate of missed animation opportunities, read from the frame clock; no compositor trace and no video frame counter was taken",
       look: "one final look: the character in a lit halo, glass bubbles with a tail on the newest, call cards with an icon tile, the delegation as a rounded teal card",
       matrix: "every scenario at 1440x900 and 1000x800, in en and uk, light and dark: eight measured runs and eight recorded runs a scenario",
-      scenarios: "the operator's eight, and three with the read-only board tools: read (one read call answers a question about the board), reads (several), readLong (a long spoken answer after one); none of the three delegates",
+      scenarios: "the operator's eight, three with the read-only board tools: read (one read call answers a question about the board), reads (several), readLong (a long spoken answer after one); none of the three delegates; and reports: more standalone orchestrator reports than the lane's report cap arriving while the companion speaks, each spoken once after",
       windowFaults,
       remeasured: { rule: "a measured run with an animation window off target is measured again, up to three attempts; the case holds the first attempt with every window on target (measuredOnAttempt), each discarded attempt is listed here with the windows it showed off target and the longest frame of its idle reference, and a scenario with no clean attempt is a windowFault", attempts: remeasured },
       limits: { bubbleMaxWidthPx: 280, bubbleMaxLines: 4, bubbleMaxChars: 116, speechBubblesShown: 4, callElementsShown: 4, laneHeightsPx: LANE_HEIGHTS, narrowLaneWidthsPx: NARROW_LANE_WIDTHS, narrowLane: "where no place holds a lane of a bubble's full width (at 1000 once a request is sent and the feed is kept clear whole), a narrower lane is taken before the tile, and the lines said while it stands there are split shorter for its width" },
@@ -25910,8 +26063,8 @@ describe("orchestrator wires after a seat action", () => {
      reads it from the board's next reload. The layer's clock is moved through its
      probe, so a minute of hold takes no minute here. */
   const out = path.resolve(".artifacts/orchestrator-wires");
-  const seatAt = (placement: "top" | "side") => `try {
-    localStorage.setItem("llv_lang", "en");
+  const seatAt = (placement: "top" | "side", lang: "en" | "uk" = "en") => `try {
+    localStorage.setItem("llv_lang", "${lang}");
     localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: ${placement === "top" ? "{ atlas: true }" : "{}"}, placement: "${placement}", width: null, topWidths: {}, sideWidths: {}, heightV: 2 }));
     ${placement === "side" ? 'localStorage.setItem("llv:rail-hidden:v1", "hidden");' : ""}
   } catch {}`;
@@ -25944,10 +26097,10 @@ describe("orchestrator wires after a seat action", () => {
       overflow: document.documentElement.scrollWidth > innerWidth,
     };
   });
-  const open = async (browser: Browser, form: "desktop" | "phone", query: string, motion: "no-preference" | "reduce" = "no-preference", placement: "top" | "side" = "side") => {
+  const open = async (browser: Browser, form: "desktop" | "phone", query: string, motion: "no-preference" | "reduce" = "no-preference", placement: "top" | "side" = "side", lang: "en" | "uk" = "en") => {
     const phone = form === "phone";
     const context = await browser.newContext({ viewport: FORMS[form], colorScheme: "light", reducedMotion: motion, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
-    await context.addInitScript(seatAt(placement));
+    await context.addInitScript(seatAt(placement, lang));
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -26100,7 +26253,8 @@ describe("orchestrator wires after a seat action", () => {
           let state = await record(page, "desktop-reduced", "action");
           expect(state.wires.map((wire) => wire.taskId)).toEqual(["t-onboarding"]);
           expect(state.dots).toBe(0);
-          expect(await page.evaluate(() => document.querySelector("[data-orchestrator-wires]")!.getAnimations({ subtree: true }).length)).toBe(0);
+          /* The riders that keep a wire on its card are no motion of their own: they follow the scroll. */
+          expect(await page.evaluate((ride) => document.querySelector("[data-orchestrator-wires]")!.getAnimations({ subtree: true }).filter((animation) => animation.id !== ride).length, WIRE_RIDE_ID)).toBe(0);
           await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS);
           state = await record(page, "desktop-reduced", "after");
           expect(state.layer).toBe(false);
@@ -26123,7 +26277,7 @@ describe("orchestrator wires after a seat action", () => {
         .map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0 && box.left < innerWidth && box.right > 0);
       const heads = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .col-head")].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0);
       const inside = (x: number, top: number, bottom: number) => scrollers.some((box) => x >= box.left - 12 && x <= box.right && top >= box.top && bottom <= box.bottom);
-      const ports = [...document.querySelectorAll<SVGCircleElement>("[data-orchestrator-wires] g[data-wire] .oa-port")]
+      const ports = [...document.querySelectorAll<SVGCircleElement>("[data-orchestrator-wires] g[data-wire-end] .oa-port")]
         .map((port) => ({ x: Number(port.getAttribute("cx")), y: Number(port.getAttribute("cy")) }));
       const rings = [...document.querySelectorAll<SVGRectElement>("[data-orchestrator-wires] rect.oa-ring")].filter((ring) => ring.getAttribute("visibility") !== "hidden")
         .map((ring) => ({ x: Number(ring.getAttribute("x")), top: Number(ring.getAttribute("y")), bottom: Number(ring.getAttribute("y")) + Number(ring.getAttribute("height")) }));
@@ -26209,7 +26363,7 @@ describe("orchestrator wires after a seat action", () => {
       /* Reduced motion switched on during a pulse and during a fade: the dot, the ring and the fade stop, the wire stays still. */
       {
         const { context, page, pageErrors, shoot } = await open(browser, "desktop", "");
-        const animations = () => page.evaluate(() => document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }).filter((animation) => animation.playState !== "finished").length ?? null);
+        const animations = () => page.evaluate((ride) => document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }).filter((animation) => animation.playState !== "finished" && animation.id !== ride).length ?? null, WIRE_RIDE_ID);
         try {
           await act(page, { kind: "stage", taskId: "t-upload" });
           expect(await animations()).toBeGreaterThan(0);
@@ -26242,7 +26396,7 @@ describe("orchestrator wires after a seat action", () => {
           document.dispatchEvent(new Event("visibilitychange"));
         }, hidden);
         const held = () => page.evaluate(() => {
-          const animations = document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }) ?? [];
+          const animations = document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }).filter((animation) => animation.id !== "oa-ride") ?? [];
           return {
             dots: document.querySelectorAll(".oa-dot").length, rings: document.querySelectorAll(".oa-ring").length,
             elements: document.querySelectorAll("[data-orchestrator-wires] *").length,
@@ -26361,6 +26515,425 @@ describe("orchestrator wires after a seat action", () => {
       }
       fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
       fs.writeFileSync("evidence/orchestrator-wires/cost.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cost }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 300_000);
+
+  /* docs/research/orchestrator-wires-hover-scroll.md §6, cases 8–10. Where a wire's port stands against its
+     card is read from screenshots taken while the scroll runs: they are the compositor's frames, and an
+     in-page reading only ever sees the main thread's, where the two always agree. A blue bar marks the
+     card's top edge inside the scroller, and the wire's port is painted red. */
+  const markCard = (page: Page, phone: boolean, taskId: string) => page.evaluate(({ phone, taskId }) => {
+    const card = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${taskId}"]` : `[data-kanban-board] .card[data-id="task:${taskId}"]`)!;
+    if (getComputedStyle(card).position === "static") card.style.position = "relative";
+    const bar = document.createElement("i");
+    bar.setAttribute("data-test-marker", "");
+    bar.style.cssText = "position:absolute;left:0;top:0;width:10px;height:3px;background:#0000ff;z-index:9;pointer-events:none";
+    card.append(bar);
+    const style = document.createElement("style");
+    style.setAttribute("data-test-marker", "");
+    style.textContent = `[data-orchestrator-wires] :is(g[data-wire="${taskId}"], g[data-wire-end="${taskId}"]) .oa-port { fill: #ff0000 !important; stroke: #ff0000 !important; }`;
+    document.head.append(style);
+    const scroller = (phone ? card.closest<HTMLElement>("[data-phone-kanban-column]") : card.closest<HTMLElement>(".col-body"))!;
+    /* Room to scroll the card up the whole column and back. */
+    const spacer = Object.assign(document.createElement("div"), { style: "height: 1600px; flex: none" });
+    spacer.setAttribute("data-test-spacer", "");
+    (phone ? scroller.firstElementChild! : scroller).append(spacer);
+  }, { phone, taskId });
+  /** The column's visible box and the card's top against it. */
+  const where = (page: Page, phone: boolean, taskId: string) => page.evaluate(({ phone, taskId }) => {
+    const card = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${taskId}"]` : `[data-kanban-board] .card[data-id="task:${taskId}"]`)!;
+    const scroller = (phone ? card.closest<HTMLElement>("[data-phone-kanban-column]") : card.closest<HTMLElement>(".col-body"))!;
+    const view = scroller.getBoundingClientRect();
+    const box = card.getBoundingClientRect();
+    return { view: { left: view.left, top: view.top, width: view.width, height: view.height }, card: { left: box.left, top: box.top }, scrollTop: scroller.scrollTop };
+  }, { phone, taskId });
+  const scrollCardTo = (page: Page, phone: boolean, taskId: string, top: number) => page.evaluate(({ phone, taskId, top }) => {
+    const card = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${taskId}"]` : `[data-kanban-board] .card[data-id="task:${taskId}"]`)!;
+    const scroller = (phone ? card.closest<HTMLElement>("[data-phone-kanban-column]") : card.closest<HTMLElement>(".col-body"))!;
+    scroller.scrollTop += card.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + top);
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }, { phone, taskId, top });
+  /** The bar's and the port's centres in one screenshot of a strip round the card's left edge, or null where either is not painted. */
+  async function measure(png: Buffer, clip: { x: number; y: number }) {
+    const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
+    const found = { bar: [] as [number, number][], port: [] as [number, number][] };
+    for (let y = 0; y < info.height; y++) {
+      for (let x = 0; x < info.width; x++) {
+        const at = (y * info.width + x) * info.channels;
+        const [r, g, b] = [data[at]!, data[at + 1]!, data[at + 2]!];
+        if (b > 180 && r < 70 && g < 70) found.bar.push([x, y]);
+        else if (r > 180 && g < 70 && b < 70) found.port.push([x, y]);
+      }
+    }
+    const centre = (points: [number, number][]) => points.length < 3 ? null : {
+      x: clip.x + (Math.min(...points.map(([x]) => x)) + Math.max(...points.map(([x]) => x))) / 2,
+      y: clip.y + (Math.min(...points.map(([, y]) => y)) + Math.max(...points.map(([, y]) => y))) / 2,
+    };
+    return { bar: centre(found.bar), port: centre(found.port) };
+  }
+
+  browserTest("a wire stays on its card on every frame of a scroll: wheel, touch, script and a smooth scroll, at 1440 and 390, CPU ×4", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const runs: Record<string, unknown>[] = [];
+    try {
+      for (const [form, placement, lang] of [["desktop", "side", "en"], ["desktop", "top", "uk"], ["phone", "side", "en"], ["phone", "side", "uk"]] as const) {
+        const phone = form === "phone";
+        const name = `${form}-${placement}-${lang}`;
+        const { context, page, pageErrors, tab } = await open(browser, form, "", "no-preference", placement, lang);
+        const cdp = await context.newCDPSession(page);
+        try {
+          await tab("assigned");
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "settle");
+          await probe(page, "freeze");
+          await markCard(page, phone, "t-upload");
+          const start = await where(page, phone, "t-upload");
+          const low = start.view.height - 110;
+          await scrollCardTo(page, phone, "t-upload", low);
+          await page.waitForTimeout(150);
+          const at = await where(page, phone, "t-upload");
+          const clip = { x: Math.round(at.card.left - 12), y: Math.round(at.view.top), width: 30, height: Math.round(at.view.height) };
+          const rest = await measure(await page.screenshot({ clip }), clip);
+          expect(rest.bar).not.toBeNull();
+          expect(rest.port).not.toBeNull();
+          const gap = rest.port!.y - rest.bar!.y;
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+          const samples: { how: string; gap: number | null; off: number | null }[] = [];
+          let midScroll = false;
+          /* Screenshots while `motion` runs; `motion` is never awaited before the loop, and its failure after the page closed is caught. */
+          const during = async (how: string, motion: Promise<unknown>) => {
+            let running = true;
+            void motion.catch(() => {}).finally(() => { running = false; });
+            while (running) {
+              const shot = await measure(await page.screenshot({ clip }), clip);
+              const seen = shot.bar && shot.port ? shot.port.y - shot.bar.y : null;
+              samples.push({ how, gap: seen, off: seen === null ? null : Math.abs(seen - gap) });
+              if (!midScroll && seen !== null && samples.length >= 3) {
+                midScroll = true;
+                await page.screenshot({ path: path.join(out, `${name}-mid-scroll.png`) });
+              }
+            }
+            await motion.catch(() => {});
+          };
+          const distance = Math.round(low - 110);
+          const centre = { x: Math.round(at.view.left + at.view.width / 2), y: Math.round(at.view.top + at.view.height / 2) };
+          const gesture = (down: boolean) => cdp.send("Input.synthesizeScrollGesture", { ...centre, yDistance: down ? -distance : distance, speed: 450, gestureSourceType: phone ? "touch" : "mouse", preventFling: true });
+          /* The lag shows in one frame of twenty or thirty on the old layer, so a run measures at least thirty. */
+          for (let round = 0; round < 8 && samples.filter((sample) => sample.gap !== null).length < 30; round++) await during(phone ? "touch" : "wheel", gesture(round % 2 === 0));
+          await scrollCardTo(page, phone, "t-upload", low);
+          /* A script scrolling the column a little each frame from a frame callback, as an animation library
+             does: down and back, so the card stays in view. Such a scroll moves the column after the frame
+             read its timelines, and a wire riding them missed by one step in about one frame of fifty, so a
+             form measures at least 150 frames of it. */
+          const scripted = () => samples.filter((sample) => sample.how === "script" && sample.off !== null).length;
+          for (let round = 0; round < 24 && scripted() < 150; round++) {
+            await during("script", page.evaluate(async ({ phone, distance }) => {
+              const scroller = document.querySelector<HTMLElement>(phone ? '[data-phone-kanban-column="assigned"]' : '[data-kanban-board] section.column[data-status="assigned"] .col-body')!;
+              for (let step = 0; step < 160; step++) {
+                scroller.scrollTop += (Math.floor(step / 40) % 2 ? -1 : 1) * (distance / 40);
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+              }
+            }, { phone, distance }));
+          }
+          /* The board's own smooth scroll to a card, as a jump along a wire runs it. */
+          await scrollCardTo(page, phone, "t-upload", low);
+          await during("smooth", page.evaluate(async ({ phone, distance }) => {
+            const scroller = document.querySelector<HTMLElement>(phone ? '[data-phone-kanban-column="assigned"]' : '[data-kanban-board] section.column[data-status="assigned"] .col-body')!;
+            scroller.scrollBy({ top: distance, behavior: "smooth" });
+            await new Promise((resolve) => setTimeout(resolve, 900));
+          }, { phone, distance }));
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+          const measured = samples.filter((sample) => sample.off !== null);
+          const off = measured.filter((sample) => sample.off! > 1);
+          runs.push({ form, placement, lang, cpu: 4, restGap: gap, samples: samples.length, measured: measured.length, off: off.length, worst: Math.max(0, ...measured.map((sample) => sample.off!)), byHow: Object.fromEntries(["wheel", "touch", "script", "smooth"].map((how) => [how, measured.filter((sample) => sample.how === how).length])) });
+          expect(measured.length).toBeGreaterThanOrEqual(30);
+          expect(scripted()).toBeGreaterThanOrEqual(150);
+          expect(off).toEqual([]);
+
+          /* The board scrolled sideways under its seat: the card's end of the wire stays on the card. */
+          if (!phone) {
+            const sideways = await page.evaluate(() => {
+              const board = document.querySelector<HTMLElement>("[data-kanban-board] .board");
+              return board && board.scrollWidth > board.clientWidth ? board.scrollWidth - board.clientWidth : 0;
+            });
+            if (sideways > 0) {
+              await scrollCardTo(page, phone, "t-upload", Math.round(low / 2));
+              const now = await where(page, phone, "t-upload");
+              const strip = { x: 0, y: Math.round(now.card.top - 8), width: FORMS.desktop.width, height: 40 };
+              const before = await measure(await page.screenshot({ clip: strip }), strip);
+              const across: (number | null)[] = [];
+              const drift = Math.min(sideways, 200);
+              const shots = async () => { for (let shot = 0; shot < 8; shot++) { const seen = await measure(await page.screenshot({ clip: strip }), strip); across.push(seen.bar && seen.port ? seen.port.x - seen.bar.x : null); } };
+              const swipe = cdp.send("Input.synthesizeScrollGesture", { x: centre.x, y: Math.round(now.card.top + 60), xDistance: -drift, speed: 300, gestureSourceType: "mouse", preventFling: true });
+              await shots();
+              await swipe.catch(() => {});
+              const restX = before.port && before.bar ? before.port.x - before.bar.x : null;
+              runs.push({ form, placement, lang, sideways: drift, restX, across });
+              if (restX !== null) for (const seen of across) if (seen !== null) expect(Math.abs(seen - restX)).toBeLessThanOrEqual(1);
+            }
+          }
+          await page.evaluate(() => document.querySelectorAll("[data-test-marker], [data-test-spacer]").forEach((node) => node.remove()));
+          expect(pageErrors).toEqual([]);
+        } finally { await cdp.detach().catch(() => {}); await context.close(); }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/scroll.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", method: "screenshots during the scroll; a blue bar on the card's top edge, the wire's port painted red", runs }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 600_000);
+
+  browserTest("a wire under the pointer names its task, and a click, Tab and Enter or a tap go to it, in English and Ukrainian; no card loses a click", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown>[] = [];
+    const TITLE = "Redesign attachment upload for large files";
+    /* A point of the wire to `taskId` that the pointer takes: the middle of those where its hit stroke is on top. */
+    const wirePoint = (page: Page, taskId: string) => page.evaluate((taskId) => {
+      const points: { x: number; y: number }[] = [];
+      for (const path of document.querySelectorAll<SVGPathElement>(`[data-orchestrator-wires] path.oa-hit[data-oa-hit="wire:${taskId}"]`)) {
+        for (let at = 0, length = path.getTotalLength(); at <= length; at += 3) {
+          const local = path.getPointAtLength(at);
+          const matrix = path.getScreenCTM()!;
+          const point = { x: Math.round(matrix.a * local.x + matrix.c * local.y + matrix.e), y: Math.round(matrix.b * local.x + matrix.d * local.y + matrix.f) };
+          if (point.x < 0 || point.y < 0 || point.x >= innerWidth || point.y >= innerHeight) continue;
+          if (document.elementFromPoint(point.x, point.y)?.getAttribute("data-oa-hit") === `wire:${taskId}`) points.push(point);
+        }
+      }
+      return points[Math.floor(points.length / 2)] ?? null;
+    }, taskId);
+    const bubble = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[role=tooltip]")].map((node) => node.textContent).filter(Boolean));
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* The desktop: hover, click, then Tab and Enter. */
+        {
+          const { context, page, pageErrors, shoot } = await open(browser, "desktop", "", "no-preference", "side", lang);
+          try {
+            await act(page, { kind: "stage", taskId: "t-upload" });
+            await act(page, { kind: "pipeline", taskId: "t-onboarding" });
+            await probe(page, "settle");
+            await probe(page, "freeze");
+            const point = (await wirePoint(page, "t-upload"))!;
+            expect(point).not.toBeNull();
+            /* Before the pointer arrives nothing is named. */
+            expect(await bubble(page)).toEqual([]);
+            await page.mouse.move(point.x, point.y);
+            await page.waitForTimeout(400);
+            const hovered = await page.evaluate(() => ({
+              marked: [...document.querySelectorAll("[data-orchestrator-wires] [data-hover]")].map((node) => node.getAttribute("data-wire") ?? node.getAttribute("data-wire-end") ?? node.getAttribute("class")).sort(),
+              hovering: document.querySelector("[data-orchestrator-wires]")!.hasAttribute("data-hovering"),
+              label: document.querySelector('[data-orchestrator-wires] g[data-wire-end="t-upload"] path.oa-hit')!.getAttribute("aria-label"),
+              width: getComputedStyle(document.querySelector('[data-orchestrator-wires] g[data-wire-end="t-upload"] path.oa-wire')!).strokeWidth,
+              dimmed: getComputedStyle(document.querySelector('[data-orchestrator-wires] g[data-wire-end="t-onboarding"] path.oa-wire')!).opacity,
+            }));
+            frames.push({ form: "desktop", lang, frame: "hover", point, bubble: await bubble(page), ...hovered });
+            await shoot(`hover-${lang}`);
+            expect(await bubble(page)).toEqual([TITLE]);
+            expect(hovered.hovering).toBe(true);
+            expect(hovered.marked).toEqual(["oa-port", "t-upload", "t-upload"]);
+            expect(hovered.width).toBe("2.5px");
+            expect(Number(hovered.dimmed)).toBeCloseTo(0.35, 2);
+            expect(hovered.label).toBe(translate(lang, "kanban.wire.goTo", { title: TITLE }));
+            /* The pointer leaves: nothing named, nothing marked. */
+            await page.mouse.move(point.x + 200, point.y);
+            await page.waitForTimeout(250);
+            expect(await bubble(page)).toEqual([]);
+            /* Wires stay out of the cards' way: every wired card takes a click at its centre and just inside its left edge, at its port. */
+            const cardsTake = await page.evaluate(() => ["t-upload", "t-onboarding"].map((taskId) => {
+              const card = document.querySelector<HTMLElement>(`[data-kanban-board] .card[data-id="task:${taskId}"]`)!;
+              const box = card.getBoundingClientRect();
+              const at = [[box.left + box.width / 2, box.top + Math.min(box.height / 2, 60)], [box.left + 4, box.top + 22], [box.left + 1, box.top + 22]];
+              return at.every(([x, y]) => card.contains(document.elementFromPoint(x!, y!)));
+            }));
+            expect(cardsTake).toEqual([true, true]);
+            /* A click goes to the card: revealed, flashed and focused, inside its column. */
+            await page.mouse.click(point.x, point.y);
+            await page.waitForTimeout(500);
+            const clicked = await page.evaluate(() => {
+              const card = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-upload"]')!;
+              const box = card.getBoundingClientRect();
+              const view = card.closest(".col-body")!.getBoundingClientRect();
+              return { focused: document.activeElement === card, flash: card.classList.contains("flash"), inside: box.top >= view.top - 1 && box.top < view.bottom };
+            });
+            frames.push({ form: "desktop", lang, frame: "click", ...clicked });
+            await shoot(`click-${lang}`);
+            expect(clicked).toEqual({ focused: true, flash: true, inside: true });
+            /* The keyboard: Tab from the control before it reaches the wire, which names its task at once; Enter goes to the card. */
+            await page.mouse.move(5, 5);
+            const before = await page.evaluate(() => {
+              const hit = document.querySelector<SVGElement>('[data-orchestrator-wires] g[data-wire-end="t-upload"] path.oa-hit')!;
+              const tabbable = [...document.querySelectorAll<HTMLElement | SVGElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])')]
+                .filter((node) => (node as HTMLElement).tabIndex >= 0 && (node === hit || node.getClientRects().length > 0) && !node.closest("[inert]"));
+              const index = tabbable.indexOf(hit);
+              const previous = tabbable[index - 1] as HTMLElement | undefined;
+              /* The control before it is on the last column's card: focused with a scroll, it would carry the
+                 board right until the wired card is under the board's edge, where it has no wire. */
+              previous?.focus({ preventScroll: true });
+              return { index, previous: !!previous, focused: document.activeElement === previous };
+            });
+            expect(before.index).toBeGreaterThan(0);
+            await page.keyboard.press("Tab");
+            const tabbed = await page.evaluate(() => document.activeElement?.getAttribute("data-oa-hit"));
+            expect(tabbed).toBe("wire:t-upload");
+            await page.waitForTimeout(100);
+            expect(await bubble(page)).toEqual([TITLE]);
+            await shoot(`focus-${lang}`);
+            await page.evaluate(() => document.querySelector('[data-kanban-board] .card[data-id="task:t-upload"]')!.classList.remove("flash"));
+            await page.keyboard.press("Enter");
+            await page.waitForTimeout(400);
+            const entered = await page.evaluate(() => {
+              const card = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-upload"]')!;
+              return { focused: document.activeElement === card, flash: card.classList.contains("flash") };
+            });
+            frames.push({ form: "desktop", lang, frame: "keyboard", tabbed, ...entered });
+            expect(entered).toEqual({ focused: true, flash: true });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        /* The phone: a tap on the wire brings its card into view, focuses it and rings it. */
+        {
+          const { context, page, pageErrors, tab, shoot } = await open(browser, "phone", "", "no-preference", "side", lang);
+          try {
+            await tab("assigned");
+            await act(page, { kind: "stage", taskId: "t-upload" });
+            await probe(page, "settle");
+            await probe(page, "freeze");
+            /* The card scrolled most of the way under the column's foot, its port still in view. */
+            const view = await where(page, true, "t-upload");
+            await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>('[data-phone-kanban-column="assigned"]')!;
+              const spacer = Object.assign(document.createElement("div"), { style: "height: 1200px" });
+              spacer.setAttribute("data-test-spacer", "");
+              scroller.firstElementChild!.prepend(spacer);
+            });
+            await scrollCardTo(page, true, "t-upload", view.view.height - 60);
+            await page.waitForTimeout(150);
+            const point = (await wirePoint(page, "t-upload"))!;
+            expect(point).not.toBeNull();
+            const cardTakes = await page.evaluate(() => {
+              const card = document.querySelector<HTMLElement>('[data-phone-card="task:t-upload"]')!;
+              const box = card.getBoundingClientRect();
+              return [[box.left + box.width / 2, box.top + 30], [box.left + 1, box.top + 20]].every(([x, y]) => card.contains(document.elementFromPoint(x!, y!)));
+            });
+            expect(cardTakes).toBe(true);
+            await page.touchscreen.tap(point.x, point.y);
+            await page.waitForTimeout(500);
+            const tapped = await page.evaluate(() => {
+              const card = document.querySelector<HTMLElement>('[data-phone-card="task:t-upload"]')!;
+              const box = card.getBoundingClientRect();
+              const view = card.closest("[data-phone-kanban-column]")!.getBoundingClientRect();
+              return {
+                focused: document.activeElement === card, inView: box.top >= view.top - 1 && box.bottom <= view.bottom + 1,
+                ring: [...document.querySelectorAll<SVGRectElement>("[data-orchestrator-wires] .oa-ring")].filter((ring) => ring.getAttribute("visibility") !== "hidden").length,
+                opened: !document.querySelector('[data-phone-kanban-column="assigned"]'),
+              };
+            });
+            frames.push({ form: "phone", lang, frame: "tap", point, ...tapped });
+            await shoot(`tap-${lang}`);
+            expect(tapped).toEqual({ focused: true, inView: true, ring: 1, opened: false });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/hover-jump.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", frames }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 300_000);
+
+  browserTest("a wire takes no pointer over a column tab, and none outside the board's visible part once it scrolls sideways: 1440 with the seat at the side and on top, and 390", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const runs: Record<string, unknown>[] = [];
+    /* Every point of every tab on a 2 px grid, inside its rounded corners: how many of them the tab does not take. */
+    const tabsTake = (page: Page, phone: boolean) => page.evaluate((phone) => [...document.querySelectorAll<HTMLElement>(phone ? "[data-phone-kanban-tab]" : "[data-kanban-board] .tabs-nav button")]
+      .filter((tab) => tab.getBoundingClientRect().width > 0).map((tab) => {
+        const box = tab.getBoundingClientRect();
+        const radius = parseFloat(getComputedStyle(tab).borderTopLeftRadius) || 0;
+        let points = 0, lost = 0;
+        for (let y = Math.ceil(box.top) + 1; y < box.bottom - 1; y += 2) {
+          for (let x = Math.ceil(box.left) + 1; x < box.right - 1; x += 2) {
+            /* Past a rounded corner the point is the row's, not the tab's. */
+            const [dx, dy] = [Math.max(box.left + radius - x, 0, x - box.right + radius), Math.max(box.top + radius - y, 0, y - box.bottom + radius)];
+            if (radius > 1 && Math.hypot(dx, dy) > radius - 1) continue;
+            points += 1;
+            if (!tab.contains(document.elementFromPoint(x, y))) lost += 1;
+          }
+        }
+        return { tab: tab.getAttribute("data-phone-kanban-tab") ?? tab.getAttribute("data-tab") ?? tab.textContent!.trim(), points, lost };
+      }), phone);
+    /* Left of the board's visible edge on a 2 px grid: the points the layer takes with its hit strokes, and
+       those its drawn wires would take were they as wide as the hit strokes (a stroke the layer draws there). */
+    const outside = (page: Page) => page.evaluate(() => {
+      const board = document.querySelector<HTMLElement>("[data-kanban-board] .board")!;
+      const edge = board.getBoundingClientRect().left;
+      const scan = () => {
+        const taken: Record<string, number> = {};
+        let points = 0, hits = 0;
+        for (let y = 1; y < innerHeight; y += 2) {
+          for (let x = 1; x < edge - 1; x += 2) {
+            points += 1;
+            const found = document.elementFromPoint(x, y);
+            if (!found?.closest("[data-orchestrator-wires]")) continue;
+            hits += 1;
+            const under = document.elementsFromPoint(x, y).find((node) => !node.closest("[data-orchestrator-wires]"));
+            const name = under?.closest("[data-kanban-seat]") ? "seat" : under?.closest("nav, aside") ? "sidebar" : under?.tagName.toLowerCase() ?? "?";
+            taken[name] = (taken[name] ?? 0) + 1;
+          }
+        }
+        return { points, hits, taken };
+      };
+      const hit = scan();
+      const style = document.createElement("style");
+      style.textContent = "[data-orchestrator-wires] :is(.oa-wire, .oa-flow) { pointer-events: stroke !important; stroke-width: 12px !important; }";
+      document.head.append(style);
+      const drawn = scan();
+      style.remove();
+      return { edge, scrollLeft: board.scrollLeft, hit, drawn };
+    });
+    const wiresShown = (page: Page) => page.evaluate(() => [...document.querySelectorAll<SVGGElement>("[data-orchestrator-wires] g[data-wire]")].map((group) => group.dataset.wire!).sort());
+    try {
+      for (const [form, placement] of [["desktop", "side"], ["desktop", "top"], ["phone", "side"]] as const) {
+        const phone = form === "phone";
+        const name = phone ? "390" : `1440-${placement}`;
+        const { context, page, pageErrors, tab, shoot } = await open(browser, form, "", "no-preference", placement);
+        try {
+          await tab("assigned");
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await act(page, { kind: "pipeline", taskId: "t-onboarding" });
+          await probe(page, "settle");
+          await probe(page, "freeze");
+          const shown = await wiresShown(page);
+          expect(shown).toEqual(phone ? ["t-upload"] : ["t-onboarding", "t-upload"]);
+          const tabs = await tabsTake(page, phone);
+          runs.push({ form: name, frame: "tabs", wires: shown, tabs });
+          expect(tabs.length).toBe(4);
+          expect(tabs.filter((reading) => reading.lost > 0)).toEqual([]);
+          if (!phone) {
+            /* The board scrolled all the way right: the cards it carried out under its left edge have no wire. */
+            await page.evaluate(() => {
+              const board = document.querySelector<HTMLElement>("[data-kanban-board] .board")!;
+              board.scrollLeft = board.scrollWidth;
+              return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            });
+            await page.waitForTimeout(300);
+            const reading = await outside(page);
+            const after = await wiresShown(page);
+            runs.push({ form: name, frame: "scrolled-right", wires: after, ...reading, tabs: await tabsTake(page, false) });
+            await shoot(`out-of-the-way-${name}-scrolled`);
+            expect(reading.scrollLeft).toBeGreaterThan(100);
+            expect(reading.hit.hits).toBe(0);
+            expect(reading.drawn.hits).toBe(0);
+            /* The wire into the column still in view stays. */
+            expect(after).toEqual(placement === "top" ? ["t-upload"] : []);
+            expect((runs.at(-1)!.tabs as { lost: number }[]).filter((tab) => tab.lost > 0)).toEqual([]);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/out-of-the-way.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", method: "elementFromPoint on a 2 px grid; the drawn wires made hit-testable at the hit stroke's width", runs }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); server = null; }
   }, 300_000);
 });
@@ -26711,7 +27284,8 @@ describe("orchestrator wire routing across the board's layouts", () => {
     const stripControls = quiet ? [...seatNode!.querySelector(".seat-head")!.children].filter((child) => child !== avatar && child !== title && !child.classList.contains("grow")).map(box).filter(shown) : [];
     const text = [...[...document.querySelectorAll("[data-kanban-board] .col-head, [data-kanban-board] .tabs-nav button, [data-phone-kanban-tab], [data-orchestrator-wires] .oa-stub, [data-kanban-board] .open-rail")].map(box).filter(shown), ...stripControls];
     const columns = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column[data-status], [data-phone-kanban-column]")].map((node) => ({ status: node.dataset.status ?? node.dataset.phoneKanbanColumn, ...box(node) })).filter(shown);
-    const paths = [...document.querySelectorAll<SVGPathElement>("[data-orchestrator-wires] path.oa-wire")];
+    /* The whole route of each wire and each count; a card's piece repeats the route's end where the column shows. */
+    const paths = [...document.querySelectorAll<SVGPathElement>("[data-orchestrator-wires] path.oa-wire")].filter((path) => !path.closest("g[data-wire-end]"));
     const sample = (path: SVGPathElement) => { const points: { x: number; y: number }[] = []; for (let at = 0, length = path.getTotalLength(); at <= length; at += 2) { const p = path.getPointAtLength(at); points.push({ x: p.x, y: p.y }); } return points; };
     const samples = paths.map(sample);
     const wires = paths.map((path, index) => {
@@ -26941,6 +27515,122 @@ describe("idle seat interval eligibility", () => {
   }, 120_000);
 });
 
+
+describe("operator-selected needs-you rules", () => {
+  browserTest("completed reports and reversible prototype hiding at 1440 and 390", async () => {
+    const out = path.resolve(".artifacts/needs-you-rules");
+    fs.mkdirSync(out, { recursive: true });
+    const reportsServer = await serveEvidenceFixture(path.join(out, "reports"), "src/components/attention/needsYouPanel.fixture.tsx");
+    const prototypeServer = await serveEvidenceFixture(path.join(out, "prototype"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const list = phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+        const counter = phone ? "[data-mobile2-attention-count]" : "[data-attention-count]";
+        const report = await openFixture(browser, `${reportsServer.base}?rules=1&seat=beside`, viewport, "light", "uk", "reduce", phone);
+        try {
+          await report.page.locator(counter).waitFor({ timeout: 30_000 });
+          await report.page.locator(counter).click();
+          await report.page.locator(`${list} [data-needs-you-row]`).first().waitFor();
+          await report.page.waitForTimeout(300);
+          const waits = await report.page.locator(list).innerText();
+          expect(waits).not.toContain("бюджет");
+          expect(waits).not.toContain("Слати нічний дайджест");
+          expect(waits).not.toContain("Повідомлення не доставлене");
+          await report.page.screenshot({ path: path.join(out, `needs-you-${width}.png`) });
+          await report.page.keyboard.press("Escape");
+          if (phone) {
+            await report.page.evaluate(() => { location.hash = "reports"; });
+          } else {
+            await report.page.locator("[data-report-log-toggle]").click();
+          }
+          await report.page.locator("[data-report-entry]").first().waitFor();
+          await report.page.waitForTimeout(300);
+          const completed = report.page.locator('[data-report-entry][data-report-class="completed"]');
+          const completedCount = await completed.count();
+          // The existing renderer carries the outcome's card and PR links.
+          const reports = await report.page.locator("[data-report-log]").innerText();
+          expect(reports).toContain("останні зауваження виправлено");
+          expect(reports).toContain("Нічний дайджест завершено");
+          const links: unknown[] = [];
+          await report.page.screenshot({ path: path.join(out, `reports-${width}.png`) });
+          for (const [text, cardId] of [["Повідомлення агента не доставлено", "t-voice"], ["Оркестратор зняв вирішене питання", "t-seat"]]) {
+            // Opening a card leaves the log; restore it before the next link.
+            if (links.length) {
+              await report.page.reload();
+              await report.page.locator(counter).waitFor({ timeout: 30_000 });
+              if (phone) await report.page.evaluate(() => { location.hash = "reports"; });
+              else await report.page.locator("[data-report-log-toggle]").click();
+              await report.page.locator("[data-report-entry]").first().waitFor();
+            }
+            const outcome = completed.filter({ hasText: text });
+            expect(await outcome.count()).toBe(1);
+            const link = outcome.locator(`[data-report-card="${cardId}"]`);
+            await link.scrollIntoViewIfNeeded();
+            const geometry = await link.boundingBox();
+            expect(geometry).not.toBeNull();
+            expect(geometry!.x).toBeGreaterThanOrEqual(0);
+            expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+            expect(await link.isEnabled()).toBe(true);
+            await report.page.screenshot({ path: path.join(out, `report-card-${cardId}-${width}.png`) });
+            await report.page.evaluate(() => {
+              (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = null;
+              window.addEventListener("llv:mcp-navigate", event => {
+                (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation = (event as CustomEvent).detail;
+              }, { once: true });
+            });
+            await link.click();
+            const navigation = await report.page.evaluate(() => (window as unknown as { reportLinkNavigation: unknown }).reportLinkNavigation);
+            expect(navigation).toEqual({ kind: "task", id: cardId });
+            links.push({ cardId, geometry, navigation });
+          }
+          readings.push({ width, waits, reports, links, completed: completedCount, errors: report.pageErrors });
+          expect(report.pageErrors).toEqual([]);
+        } finally { await report.context.close(); }
+
+        const proto = await openFixture(browser, `${prototypeServer.base}?proto=1`, viewport, "light", "uk", "reduce", phone);
+        try {
+          await proto.page.locator(counter).waitFor({ timeout: 30_000 });
+          const count = () => proto.page.locator(counter).innerText().then(text => Number(text.replace(/\D/g, "")));
+          await proto.page.waitForFunction(selector => Number((document.querySelector(selector)?.textContent ?? "").replace(/\D/g, "")) >= 3, counter);
+          const before = await count();
+          if (phone) await proto.page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await proto.page.locator(phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]').click();
+          const hide = proto.page.locator("[data-prototype-hide]");
+          await hide.waitFor();
+          expect(await hide.innerText()).toBe("Сховати");
+          const geometry = await hide.boundingBox();
+          expect(geometry).not.toBeNull();
+          expect(geometry!.x).toBeGreaterThanOrEqual(0);
+          expect(geometry!.x + geometry!.width).toBeLessThanOrEqual(width);
+          if (phone) expect(geometry!.height).toBeGreaterThanOrEqual(44);
+          await proto.page.screenshot({ path: path.join(out, `hide-${width}.png`) });
+          await hide.click();
+          await proto.page.locator('[data-prototype-hidden="r-search"]').waitFor();
+          expect(await count()).toBe(before - 1);
+          expect(await proto.page.locator("[data-prototype-save]").count()).toBe(0);
+          await proto.page.screenshot({ path: path.join(out, `history-${width}.png`) });
+          await proto.page.locator("[data-prototype-undo-hide]").click();
+          await hide.waitFor();
+          expect(await count()).toBe(before);
+          expect(await proto.page.locator("[data-prototype-save]").count()).toBe(1);
+          readings.push({ width, before, hidden: before - 1, restored: await count(), hide: geometry, errors: proto.pageErrors });
+          expect(proto.pageErrors).toEqual([]);
+        } finally { await proto.context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-rules", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-rules/rendered.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      reportsServer.stop();
+      prototypeServer.stop();
+    }
+  });
+});
+
 /** Registry-enriched rows use the existing read-only remote-agent surface. */
 describe("linked seats and shared-project agent activity", () => {
   browserTest("a remote deployer stays under its task and the peer seat appears in its machine group", async () => {
@@ -26985,60 +27675,8 @@ describe("linked seats and shared-project agent activity", () => {
   }, 90_000);
 });
 
-describe("operator worktree recovery maintenance", () => {
-  browserTest("preview and apply show reasons and fit desktop and phone in both languages", async () => {
-    const out = path.resolve(".artifacts/worktree-recovery");
-    fs.mkdirSync(out, { recursive: true });
-    const calls: boolean[] = [];
-    const excludedReasons = ["missing-native-evidence", "unproven-branch-hint", "unreadable-transcript",
-      "conflicting-repository-hint", "conflicting-project-identity", "conflicting-recorded-worktree",
-      "ambiguous-repository", "target-outside-project"] as const;
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/board/maintenance/worktrees": async (request: Request) => {
-        const { dryRun } = await request.json() as { dryRun: boolean };
-        calls.push(dryRun);
-        return Response.json({ dryRun, rescanned: !dryRun,
-          folded: [{ cwd: "/repo/widgets-review", source: "fixture", sessions: 3, reason: "sibling-name-and-branch-hint" }],
-          leftAlone: excludedReasons.map((reason, index) => ({ cwd: `/repo/widgets-lane-${index}`, source: "other", sessions: 1, reason })),
-        });
-      },
-    });
-    const browser = await chromium.launch(LAUNCH);
-    const readings: unknown[] = [];
-    try {
-      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=worktree-recovery`, { width, height: 900 }, "dark", lang, "reduce", width < 640);
-        try {
-          const panel = page.locator("[data-worktree-recovery]");
-          await panel.waitFor();
-          expect(await panel.locator("button").count()).toBe(1);
-          await panel.locator("button").first().click();
-          await panel.locator("details").waitFor();
-          expect(await panel.locator("button").count()).toBe(2);
-          await panel.locator("summary").click();
-          expect(await panel.locator("li").count()).toBe(1 + excludedReasons.length);
-          const reasons = await panel.locator("li").allTextContents();
-          for (const reason of excludedReasons) {
-            expect(reasons.some(text => text.includes(translate(lang, `worktreeRecovery.reason.${reason}`)))).toBe(true);
-          }
-          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
-          expect(fits).toBe(true);
-          await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}-preview.png`) });
-          await panel.locator("button").nth(1).click();
-          await page.waitForFunction(() => document.querySelector("[data-worktree-recovery]")?.querySelectorAll("button").length === 1);
-          expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, fits, preview: true, applied: true, excludedReasons });
-        } finally { await context.close(); }
-      }
-      expect(calls).toEqual([true, false, true, false, true, false, true, false]);
-      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
-      fs.writeFileSync("evidence/worktree-recovery/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); server.stop(); }
-  }, 30_000);
-});
-
 describe("worktree recovery from the board maintenance panel", () => {
-  browserTest("the real board opens recovery beside maintenance settings", async () => {
+  browserTest("the real board maintenance controls have no worktree recovery buttons in either language", async () => {
     const out = path.resolve(".artifacts/worktree-recovery/board");
     fs.mkdirSync(out, { recursive: true });
     const tick = {
@@ -27053,27 +27691,42 @@ describe("worktree recovery from the board maintenance panel", () => {
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": tick,
       "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
-      "/api/board/maintenance/worktrees": { dryRun: true, rescanned: false, folded: [], leftAlone: [] },
+      "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
     });
     const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
     try {
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width: 1440, height: 900 }, "dark", "en", "reduce");
-      try {
-        await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
-        await page.locator("[data-kanban-seat]").waitFor();
-        if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
-        await page.locator("[data-kanban-seat] [data-seat-tick-thumb]").click();
-        const panel = page.locator("[data-seat-tick-maintenance] [data-worktree-recovery]");
-        await panel.waitFor();
-        await panel.locator("button").click();
-        await panel.locator("details").waitFor();
-        expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-        expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.resolve(".artifacts/worktree-recovery/variant-1-1440-en-board.png") });
-        fs.writeFileSync("evidence/worktree-recovery/maintenance.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", reachable: true, preview: true, fits: true }, null, 2) + "\n");
-      } finally { await context.close(); }
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: 900 }, "dark", lang, "reduce", phone);
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
+          await seat.locator("[data-seat-tick-thumb]").click();
+          const panel = page.locator("[data-seat-tick-maintenance]:visible").first();
+          await panel.waitFor();
+          expect(await page.locator("[data-worktree-recovery]").count()).toBe(0);
+          const text = await panel.innerText();
+          for (const removed of ["Recover worktree projects", "Preview recovery", "Apply recovery", "Об’єднати проєкти робочих копій", "Переглянути зміни", "Застосувати зміни"]) {
+            expect(text).not.toContain(removed);
+          }
+          expect(await panel.locator("[data-seat-tick-maintenance-about]").count()).toBe(1);
+          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+          expect(fits).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await panel.screenshot({ path: path.join(out, `${width}-${lang}-maintenance.png`) });
+          readings.push({ width, lang, reachable: true, recoveryControls: 0, fits, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
+      for (const filename of ["maintenance.json", "rendered.json"]) fs.writeFileSync(`evidence/worktree-recovery/${filename}`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 30_000);
+  }, 120_000);
 });
 
 describe("fresh context rotation advice", () => {

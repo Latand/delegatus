@@ -14,15 +14,15 @@ import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
-import { WorktreeRecovery } from "@/components/orchestrator/WorktreeRecovery";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
-import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
-import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
+import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
@@ -151,6 +151,7 @@ const voice = { delivered: new URLSearchParams(location.search).get("delivered")
 const voiceSettings = {
   enabled: false, monthlyCapUsd: 20,
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
+  lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
 };
 const VOICE_RELAY_UUID = "engine_message_voice_delegation";
@@ -2722,10 +2723,13 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto");
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
+const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
 /* The Viewer's own selectors: which round waits and which a later decision retired. */
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
-  return prototypeReviewSummary(rounds)!;
+  const summary = prototypeReviewSummary(rounds)!;
+  const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
+  return { ...summary, ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -3089,6 +3093,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (held) await new Promise((resolve) => setTimeout(resolve, held));
     return json({ text: L("Take the header from the two columns and keep the dense rows of the table.", "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.") });
   }
+  if (PROTO && url.pathname === "/api/attention/dismissals" && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { target: DismissalTarget; undo?: boolean; surface: "desktop" | "phone" };
+    const target = body.target;
+    if (target.kind === "prototype") {
+      const at = new Date().toISOString();
+      const by = { kind: "operator" as const, surface: body.surface };
+      if (body.undo) protoHidden.delete(target.reviewId);
+      else protoHidden.set(target.reviewId, { at, by });
+      protoPublish();
+      return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
+    }
+  }
   if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
@@ -3109,8 +3125,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       protoPublish();
     }
     return json({
-      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return by ? { ...entry, supersededBy: by } : entry; }),
-      waitingReviewId: rounds.length ? protoSummary(rounds).waitingReviewId : null,
+      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return { ...entry, ...(by ? { supersededBy: by } : {}), ...(protoHidden.has(entry.id) ? { hidden: protoHidden.get(entry.id) } : {}) }; }),
+      waitingReviewId: rounds.length && !protoSummary(rounds).waitingDismissal ? protoSummary(rounds).waitingReviewId : null,
       ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
@@ -3852,25 +3868,50 @@ function voiceCompanionScene() {
   const script = params.get("script");
   const failure = params.get("failure");
   const readsTranscript = params.get("transcript") === "1";
+  const clock = realClock();
+  let pauseFrame = false;
   const adapter = createSimulatedCompanion({
+    clock: { ...clock, frame: async () => { if (pauseFrame) { pauseFrame = false; await clock.sleep(SCENARIO_PLAYBACK_PAUSE.long.silenceMs); } await clock.frame(); } },
     script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
     recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
     dispatch: () => { voice.dispatches += 1; voice.delivered = true; },
   });
-  adapter.subscribe((event) => {
-    if (event.type !== "playback.level") voice.events.push(event);
-    if (event.type === "orchestrator.answer") voice.answered = true;
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0, pausedOnce = false;
+  let paused: Extract<CompanionEvent, { type: "playback.level" }> | null = null;
+  const publish = (event: CompanionEvent) => {
+    const normalized = { ...event, seq: ++seq } as CompanionEvent;
+    if (normalized.type !== "playback.level") voice.events.push(normalized);
+    if (normalized.type === "orchestrator.answer") voice.answered = true;
+    for (const emit of listeners) emit(normalized);
+  };
+  adapter.subscribe(event => {
+    if (event.type === "session.ready") { pausedOnce = false; paused = null; seq = 0; }
+    if (paused && event.type === "playback.level") {
+      publish({ ...paused, type: "playback.started", eventId: `${paused.eventId}:resume`, atMs: event.atMs });
+      paused = null;
+    }
+    publish(event);
+    if (script === "long" && !pausedOnce && event.type === "playback.level" && event.playedMs >= SCENARIO_PLAYBACK_PAUSE.long.afterMs) {
+      pausedOnce = true; paused = event; pauseFrame = true;
+      publish({ ...event, type: "playback.stopped", reason: "ended", eventId: `${event.eventId}:pause` });
+    }
   });
   void adapter.finished.then(() => { voice.finished = true; });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
-  const shown: VoiceCompanionAdapter = !sendLost && !readsTranscript ? adapter : {
-    mode: adapter.mode, start: (options) => adapter.start(options), subscribe: (emit) => adapter.subscribe(emit), close: () => adapter.close(),
-    command: async (command) => {
+  const shown: VoiceCompanionAdapter = {
+    mode: adapter.mode, start: options => adapter.start(options), subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); }, close: () => adapter.close(),
+    command: async command => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
     },
-    ...(readsTranscript ? { transcript: async () => sampleTranscript(UK ? "uk" : "en", PROJECT) } : {}),
+    ...(readsTranscript ? { transcript: async () => {
+      const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
+      record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
+        data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
+      return { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
+    } } : {}),
   };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
      the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
@@ -3903,7 +3944,7 @@ createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene(
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "worktree-recovery" ? <div className="bg-panel p-4" style={{ maxWidth: 440, margin: "24px auto" }}><WorktreeRecovery project="atlas" phone={innerWidth < 640} /></div> : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

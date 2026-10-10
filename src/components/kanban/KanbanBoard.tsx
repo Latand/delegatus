@@ -2232,6 +2232,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     });
   }, [cardsById, flash, mode]);
 
+  /* A wire of the seat's goes to its card the way a pipeline link does. */
+  const jumpToWiredCard = useCallback((taskId: string) => {
+    revealCard(`task:${taskId}`);
+    focusCard(`task:${taskId}`);
+  }, [revealCard, focusCard]);
+
   /* ── Presence: what the operator can actually see ────────────────────── */
   /* A card counts as seen when it intersects its column's scroll box, the
      board and the window, in a column that is displayed (one tab at a time on
@@ -2839,7 +2845,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     <KanbanDraftContext.Provider value={draftActions}>
     <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
       <CardFlights placements={placements} rootRef={rootRef} />
-      {props.overview ? null : <SeatActionWires rootRef={rootRef} phone={false} seatRefs={seatRefs} tasks={storedTasks} pipelines={pipelines} files={files} />}
+      {props.overview ? null : <SeatActionWires rootRef={rootRef} phone={false} seatRefs={seatRefs} tasks={storedTasks} pipelines={pipelines} files={files} onJump={jumpToWiredCard} />}
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
           happening, one spacer, find, view, create, panels, more. The two ends are the project's own
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}

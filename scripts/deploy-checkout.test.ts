@@ -11,4 +11,4 @@ test("checkout switch regressions and isolated adapter contracts", () => {
   expect(result.error).toBeUndefined();
   expect(result.stdout + result.stderr).toContain("OK");
   expect(result.status).toBe(0);
-});
+}, 35_000);

@@ -16,8 +16,8 @@ const VARIANT_3_PRESSES: Record<HeaderItem, number> = {
 };
 /* Where the phone keeps what its menu does not hold: the drawer header and the Team page. */
 const PHONE_ELSEWHERE: HeaderItem[] = ["language", "qr", "push", "signOut"];
-/* Desktop surfaces with no phone row: the voice companion (#2519) is not on the phone at all. */
-const DESKTOP_ONLY: HeaderItem[] = ["voice"];
+/* Every voice settings entry is reachable on both surfaces. */
+const DESKTOP_ONLY: HeaderItem[] = [];
 /* The desktop keeps the device rows in the board's ⋯. */
 const DESKTOP_ELSEWHERE: HeaderItem[] = ["sound", "awake"];
 

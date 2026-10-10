@@ -105,7 +105,7 @@ test("provisioning names its disk wait and clears the reason after recovery", ()
   expect(pipelineReason(t, parked({ state: "provisioning", stateDetail: null }), nameOf)).toBeNull();
 });
 
-test("a decision is answered with Skip and Retry on the stage it waits on, a stop after the last fix with Accept as is and Review again", () => {
+test("a decision is answered with Skip and Retry on the stage it waits on, a stop after the last fix with Accept as is", () => {
   const decision = pipelineAnswers(parked(), nameOf)!;
   expect(decision.kind).toBe("decision");
   expect(decision.choices).toEqual([
@@ -121,10 +121,10 @@ test("a decision is answered with Skip and Retry on the stage it waits on, a sto
   const answers = pipelineAnswers(review, nameOf)!;
   expect(answers.kind).toBe("review");
   expect(answers.stage?.id).toBe("review");
-  expect(answers.choices.map((choice) => choice.action)).toEqual(["accept-head", "continue-review"]);
+  expect(answers.choices.map((choice) => choice.action)).toEqual(["accept-head"]);
   expect(answers.stop?.kind).toBe("stop-after-fix");
-  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, false))).toEqual(["Accept as is", "Review again"]);
-  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, true))).toEqual(["Accept as is", "Review again"]);
+  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, false))).toEqual(["Accept as is"]);
+  expect(answers.choices.map((choice) => answerLabel(t, answers, choice, true))).toEqual(["Accept as is"]);
   expect(pipelineReason(t, review, nameOf)).toBe("Stopped after the last fix, as this pipeline asked: the fix is not reviewed.");
   /* Any other decision keeps the stage's own words. */
   expect(decision.stop).toBeNull();

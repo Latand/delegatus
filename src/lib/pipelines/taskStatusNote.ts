@@ -27,8 +27,8 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
     ? "Вичерпано ліміт використання. Очікуємо на його оновлення для повторної спроби."
     : "The usage limit was reached. Waiting for it to reset before retrying.";
   if (reason?.kind === "review-budget") return uk
-    ? "Бюджет рев’ю вичерпано. continue-review з addRounds продовжить цей пайплайн: виправлення зауважень, потім нове рев’ю."
-    : "The review budget is spent. continue-review with addRounds continues this pipeline: fix findings, then fresh review.";
+    ? "Бюджет рев’ю зафіксовано. Вирішіть залишене питання або закрийте цю лінію."
+    : "The review budget is fixed. Resolve the retained question or close this lane.";
   if (/budget|round limit|exhausted/i.test(detail)) return uk
     ? "Бюджет спроб вичерпано. Очікує рішення про продовження."
     : "The attempt budget is spent. Waiting for a decision on continuing.";

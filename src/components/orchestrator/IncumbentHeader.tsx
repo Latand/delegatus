@@ -195,13 +195,22 @@ export function IncumbentHeader({
            and 186 px in Ukrainian, and left the Ukrainian model name at 37 px
            of its 111 px at 1280 px and at 19 px at 1048 px. The dock's row
            wraps, so there the link is a line of its own and costs the identity
-           nothing; it keeps its words. */
+           nothing; it keeps its words.
+
+           Inline it also wears the row's button frame, at the row's height and
+           centred on it: a bare glyph pinned to the top of the row sat 5 px
+           above the bordered buttons beside it and read as a stray icon, not
+           as the way back to the predecessor. */
         <a
           href={"#c=" + encodeURIComponent(predecessorConversationId)}
           data-orchestrator-predecessor={predecessorConversationId}
           aria-label={inline ? t("orchPanel.predecessor") : undefined}
           title={inline ? `${t("orchPanel.predecessor")}\n${t("orchPanel.predecessorTitle")}` : t("orchPanel.predecessorTitle")}
-          className="inline-flex min-w-0 items-center gap-1 self-start text-caption text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className={`inline-flex min-w-0 items-center gap-1 text-caption text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            inline
+              ? "h-6 w-6 shrink-0 justify-center self-center rounded-control border border-border bg-card text-secondary hover:border-accent/45"
+              : "self-start"
+          }`}
         >
           <CornerDownRight className="h-3 w-3 shrink-0" aria-hidden />
           {inline ? null : <span className="truncate">{t("orchPanel.predecessor")}</span>}

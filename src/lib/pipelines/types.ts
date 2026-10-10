@@ -707,8 +707,8 @@ export type PipelineReviewPending = {
   at: string;
 };
 
-/** One accepted `continue-review` (#1938), append-only. `rounds` adds to the
-    review stage's fail-edge `maxRounds`, which itself stays frozen evidence. */
+/** Historical accepted budget extension, append-only. New extensions are
+    refused; existing records remain readable and their receipts replayable. */
 export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;

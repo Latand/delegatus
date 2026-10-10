@@ -90,6 +90,31 @@ test("GET answers from the shared frozen list without writing into it, and a wri
   expect(shared[0]?.text).toBe("Shared shared-1");
 });
 
+test("empty-project health read loads a board larger than 4 MiB and answers a bounded task list", async () => {
+  const tasks: BoardTask[] = Array.from({ length: 1500 }, (_, index) => ({
+    id: `health-task-${index}`, project: `health-project-${index % 3}`, status: "inbox",
+    text: "x".repeat(3000), placement: "unplaced", assignments: [],
+    createdAt: "2026-10-10T00:00:00.000Z", updatedAt: "2026-10-10T00:00:00.000Z",
+  }));
+  saveTasks(tasks);
+  savePipelines([]);
+  const full = await route.GET(new NextRequest("http://localhost/api/tasks"));
+  expect(full.status).toBe(200);
+  expect(Buffer.byteLength(await full.text())).toBeGreaterThan(4 * 1024 * 1024);
+
+  const bounded = await route.GET(new NextRequest("http://localhost/api/tasks?project="));
+  expect(bounded.status).toBe(200);
+  expect(await bounded.text()).toBe('{"tasks":[]}');
+  // Empty projects cannot own tasks, so the probe remains empty as the board grows.
+  const refused = await route.POST(new NextRequest("http://localhost/api/tasks", {
+    method: "POST", headers: { "content-type": "application/json", host: "localhost" },
+    body: JSON.stringify({ project: "", text: "Invalid project", placement: "unplaced" }),
+  }));
+  expect(refused.status).toBe(400);
+  expect((await refused.json()).error).toBe("project is required");
+  expect(loadTasksForList()).toHaveLength(tasks.length);
+});
+
 test("REST creates, patches, lists and undoes a hold without changing another hidden card", async () => {
   const { PATCH } = await import("./[id]/route");
   const createdResponse = await route.POST(new NextRequest("http://localhost/api/tasks", { method: "POST", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ project: "motion-fixture", text: "Wait for capacity", placement: "unplaced", hold: { kind: "worker", note: "After a worker is free" } }) }));

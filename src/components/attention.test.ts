@@ -52,6 +52,14 @@ function owed(sinceSeconds: number, state: StuckDelivery["state"] = "held"): Stu
 
 const HALF_HOUR = 30 * 60;
 
+test("rule 4: held agent messages never ask the operator; the operator's uncertain delivery still does", () => {
+  const stuckDelivery = { ...owed(NOW - 4 * HALF_HOUR), origin: { kind: "agent" as const, role: "orchestrator" } };
+  expect(attentionId(entry({ path: "/agent-delivery", stuckDelivery }), NOW)).toBeNull();
+  expect(attentionId(entry({ path: "/agent-uncertain", stuckDelivery: { ...stuckDelivery, state: "delivery-uncertain" } }), NOW)).toBeNull();
+  expect(attentionReason(entry({ path: "/operator-delivery", stuckDelivery: { ...stuckDelivery, state: "delivery-uncertain", origin: { kind: "operator" } } }), NOW)?.kind).toBe("delivery");
+  expect(attentionReason(entry({ path: "/real-question", stuckDelivery, pendingQuestion: question("real-choice", NOW - 30) }), NOW)?.id).toBe("real-choice");
+});
+
 describe("attentionId", () => {
   test("precedence: question > waiting > owed message > null; a wall and a stall raise nothing", () => {
     const both = entry({

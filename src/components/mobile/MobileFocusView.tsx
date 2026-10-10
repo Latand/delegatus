@@ -228,11 +228,15 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
      same reason: on the phone this view is mounted by an open (mobile v2 lane
      2 pushes it as the conversation screen), so the remembered pin is the
      conversation the operator just left, and starting there painted and
-     mounted that other conversation's feed for a frame. */
-  const [focusState, setFocusState] = useState<{ project: string; key: string | null }>(() => ({ project, key: focus ?? rememberedFocus(project) }));
-  if (focusState.project !== project) setFocusState({ project, key: focus ?? rememberedFocus(project) });
+     mounted that other conversation's feed for a frame. The parent's next
+     focus also takes effect during render, before transcript adoption can
+     retire the pinned launch path and expose the attention fallback. */
+  const [focusState, setFocusState] = useState<{ project: string; key: string | null; requested: typeof focus }>(() => ({ project, key: focus ?? rememberedFocus(project), requested: focus }));
+  if (focusState.project !== project || focusState.requested !== focus) {
+    setFocusState({ project, key: focus ?? (focusState.project === project ? focusState.key : rememberedFocus(project)), requested: focus });
+  }
   const focusPath = focusState.key;
-  const setFocusPath = useCallback((key: string | null) => setFocusState((prev) => (prev.key === key ? prev : { project: prev.project, key })), []);
+  const setFocusPath = useCallback((key: string | null) => setFocusState((prev) => (prev.key === key ? prev : { ...prev, key })), []);
   /* Bumped by the menu's Rename row: the editor opens over the bar, where the
      title cell is (§4.2, #1348). The editor reports the effective title back,
      so the cell under it shows an optimistic rename at once instead of waiting
@@ -287,13 +291,6 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     },
     restoreCamera: () => false,
   }), [project, focusIndex, byKey, setFocusPath]);
-
-  /* Any open (overview card, toast, switch of a quiet branch) arrives as the
-     transient highlight: pin it. */
-  useEffect(() => {
-    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the opener's highlight is the pin */
-    if (focus) setFocusPath(focus);
-  }, [focus, setFocusPath]);
 
   /* The pinned key while it exists; otherwise the most attention-worthy node,
      so a closed pane falls through to the next thing that matters. */
@@ -505,8 +502,11 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     if (!seatHandoff || !seatKey || seatKey === resolvedKey || !byKey.has(seatKey)) return;
     setSeatSheetOpen(false);
     setSeatHandoff(false);
+    const file = byKey.get(seatKey)?.file;
+    if (topScreen(navState).kind === "chat") nav.replace({ kind: "chat", id: seatKey });
+    if (file) onSelect(file);
     setFocusPath(seatKey);
-  }, [seatHandoff, seatKey, resolvedKey, byKey, setFocusPath]);
+  }, [seatHandoff, seatKey, resolvedKey, byKey, setFocusPath, nav, navState, onSelect]);
   /* And it is armed for THAT rotation only. A rotation that failed, or a draft
      the operator abandoned, closes the sheet without a successor; leaving the
      wait armed would hand the phone's focus to whatever seat change happened

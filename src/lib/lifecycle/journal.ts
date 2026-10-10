@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 
+import { readWorktreeRecoveries } from "@/lib/projects/worktreeRecoveryStore";
+
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
@@ -177,7 +179,7 @@ function normalizeJournal(value: unknown, journalPath: string): LifecycleJournal
   return { version: LIFECYCLE_JOURNAL_VERSION, lastSeq, events, retired };
 }
 
-function readJournalFile(): LifecycleJournalFile {
+function readLegacyJournalFile(): LifecycleJournalFile {
   const journalPath = lifecycleJournalPath();
   let contents: string;
   try {
@@ -195,6 +197,24 @@ function readJournalFile(): LifecycleJournalFile {
     throw new LifecycleJournalCorruptError(journalPath, "it is not valid JSON — the last write was truncated");
   }
   return normalizeJournal(parsed, journalPath);
+}
+
+function readJournalFile(): LifecycleJournalFile {
+  const file = readLegacyJournalFile();
+  const known = new Set([...file.events.map(event => event.id), ...file.retired]);
+  const legacyLastSeq = file.lastSeq;
+  for (const { event } of readWorktreeRecoveries()) {
+    if (known.has(event.id) || event.seq <= legacyLastSeq) continue;
+    file.events.push(event);
+    known.add(event.id);
+    file.lastSeq = Math.max(file.lastSeq, event.seq);
+  }
+  file.events.sort((a, b) => a.seq - b.seq);
+  if (file.events.length > LIFECYCLE_JOURNAL_CAPACITY) {
+    const trimmed = file.events.splice(0, file.events.length - LIFECYCLE_JOURNAL_CAPACITY);
+    file.retired = [...file.retired, ...trimmed.map(event => event.id)].slice(-RETIRED_ID_CAPACITY);
+  }
+  return file;
 }
 
 function writeJournalFile(file: LifecycleJournalFile): void {
