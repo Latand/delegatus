@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { indexTranscriptSources } from "@/lib/search/transcriptSearch";
+import { shutdownTranscriptSearchWorker } from "@/lib/search/transcriptSearchWorker";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 
 import { GET, type TranscriptSearchRow } from "./route";
@@ -24,7 +25,8 @@ const previousEnvironment = {
   TMPDIR: process.env.TMPDIR,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  await shutdownTranscriptSearchWorker();
   process.env.HOME = path.join(sandbox, "home");
   process.env.XDG_CONFIG_HOME = path.join(sandbox, "config");
   process.env.LLV_STATE_DIR = path.join(sandbox, "state");
@@ -33,7 +35,8 @@ beforeEach(() => {
   fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await shutdownTranscriptSearchWorker();
   for (const [key, value] of Object.entries(previousEnvironment)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;

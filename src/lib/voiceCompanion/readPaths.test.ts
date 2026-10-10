@@ -13,7 +13,11 @@ const { saveTasks } = await import("@/lib/tasks/store");
 const { savePipelines, buildPipeline } = await import("@/lib/pipelines/store");
 const { createCompanionBoardReadPaths } = await import("./readPaths");
 const { CompanionBoardReads } = await import("./boardReads");
-afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+const { shutdownTranscriptSearchWorker } = await import("@/lib/search/transcriptSearchWorker");
+afterAll(async () => {
+  await shutdownTranscriptSearchWorker();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 test("ordinary pipeline reads retain the cursor verdict and stage kinds and roles without history", async () => {
   const { pipelineCorpus, CORPUS_BODY_MARKERS } = await import("@/lib/pipelines/fixtures/corpus");
