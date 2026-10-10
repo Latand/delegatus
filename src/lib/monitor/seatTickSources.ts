@@ -488,7 +488,7 @@ export interface SeatTickSources {
   registry: () => ReturnType<typeof agentRegistry>;
   /** The registry's own activity verdict — `agent_activity`'s answer, which is
       the only thing this module is allowed to call a stall. */
-  liveness: (request: { project?: string; conversationId?: string; stallAfterMs: number; limit: number }) => Promise<AgentLivenessRecord[]>;
+  liveness: (request: { reconcileStructuredIdle?: boolean; project?: string; conversationId?: string; stallAfterMs: number; limit: number }) => Promise<AgentLivenessRecord[]>;
   /** The lifecycle journal, read whole and paged in-process, so the tick's own
       cursor decides what is unread rather than a cursor that advanced at poll
       time. */
@@ -689,6 +689,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     registry: () => agentRegistry(),
     liveness: async (request) => {
       const snapshot = await agentLivenessSnapshot({
+        ...(request.reconcileStructuredIdle ? { reconcileStructuredIdle: true } : {}),
         ...(request.conversationId ? { conversationId: request.conversationId } : {}),
         ...(request.project ? { project: request.project, liveOnly: true } : {}),
         stallAfterMs: request.stallAfterMs,
@@ -1176,7 +1177,7 @@ export async function seatInput(project: string, policy: SeatTickPolicy, sources
   let activity: SeatTickActivity | null = null;
   if (turn === "busy") {
     try {
-      const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
+      const rows = await sources.liveness({ reconcileStructuredIdle: true, conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
       activity = activityOf(rows[0]);
     } catch {
       /* An unanswerable liveness read says nothing. The decision treats an
