@@ -623,6 +623,22 @@ settlement. A turn explicitly attributed to another key or writer remains
 foreign; absent that proof, the outcome cannot make an earlier idle release
 newly admitted work.
 
+Native custody also survives retention. The journal's optional
+`nativeTurnClaims` projection retains unresolved admissions by turn id,
+session key, writer claim and session revision. It keeps known predecessor
+attribution before the deciding publications are pruned. Publishers cannot
+replace this projection; a matching engine terminal under that writer clears
+its claim. A later keyed running publication can attribute an initially
+unfenced admission. An older turn's terminal and an idle engine cursor supply
+no settlement for another native turn. An absent or null legacy checkpoint
+keeps custody when replay is incomplete.
+
+Before accepting idle journal evidence, the reader validates fresh revisions
+for every conversation that supplied its own replay statements, together with
+its listed and keyed rows. The snapshot's inactive-row cap does not bound that
+proof population. Missing rows, uncovered revisions and unresolved own native
+claims hold the answering owner; proven process death still releases it.
+
 A retained `writerStatus` is a publication checkpoint. An older own idle mark
 cannot outrank a newer own `turn-started`, even while the registry reference
 and queued running publication lag. `captureStructuredTerminationSurvivors`
@@ -634,8 +650,11 @@ is missing, the drain holds rather than inventing a newer settlement.
 
 A replay reset explicitly marks history incomplete. The existing durable
 `producerCursor` for the owner's `engine-host:<key>:` prefix survives event
-retention and producer-receipt maintenance. An own idle publication must be
-strictly newer than that cursor before it can settle the missing history.
+retention and producer-receipt maintenance. An own idle publication settles
+the missing history when its cursor is strictly newer than that bound, or
+when it includes an attributable retained terminal and replay covers the
+durable engine cursor. A retained newer start invalidates that terminal;
+a queued busy sample preserves it only when its source cursor is older.
 Absent, zero or unreadable bounds keep the owner held; neither an empty
 retained replay nor an older retained idle mark proves completion. The drain
 reads this checkpoint through the existing runtime client, without changing
@@ -651,10 +670,10 @@ and settlement; the numeric engine bound alone cannot clear it.
 An unordered positive handle, registry reference or transcript tail keeps its
 hold until its own evidence settles. A standalone host without a journal
 writer treats its own `live`, `starting` or `handoff` entry as an admission
-claim. Its completed transcript releases that claim only when the completion
-record itself is strictly newer than the entry's timestamp. A newer unrelated
-record cannot advance an older completion. This covers a prompt acknowledged
-before the next transcript start is written and works with a fresh reader.
+claim without a per-prompt acceptance boundary. An older completed transcript
+can remain after another prompt is acknowledged, even when it is newer than
+the registry timestamp. The answering owner keeps that ambiguity until its own
+entry reports idle or its process dies.
 Setup and reviewer custody continue to hold while their processes
 answer.
 
