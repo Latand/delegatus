@@ -9,7 +9,6 @@ import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
-import { WorktreeRecovery } from "./WorktreeRecovery";
 import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type MaintenanceReading, type SeatTickReading, type StatusSegment } from "./seatTickView";
 import { runtimeForEngine, runtimeForModel, useMaintainerRole, type MaintainerRoleRead, type MaintainerRuntime } from "./useMaintainerRole";
 import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings";
@@ -726,7 +725,6 @@ function SeatTickMaintenance({ project, maintenance, view, state, control, row, 
           : t("seatTick.maintenance.aboutNoAgent")}
       </p>
       <p className="text-caption leading-4 text-muted">{t("seatTick.maintenance.clause")}</p>
-      <WorktreeRecovery key={project} project={project} phone={phone} />
 
       {runtime && maintainer.choices.length > 0 ? (
         <AgentPicker runtime={runtime} maintainer={maintainer} state={state} phone={phone} />

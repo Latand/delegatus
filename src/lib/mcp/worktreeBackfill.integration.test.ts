@@ -48,3 +48,12 @@ test("maintenance endpoint rejects cross-origin and malformed requests before re
   expect((await POST(new NextRequest(url, { method: "POST", headers: { host: "127.0.0.1", origin: "https://foreign.invalid" }, body: "{}" }))).status).toBe(403);
   expect((await POST(new NextRequest(url, { method: "POST", headers: { host: "127.0.0.1" }, body: JSON.stringify({ dryRun: "false" }) }))).status).toBe(400);
 });
+
+
+test("operator apply is refused now that recovery is automatic", async () => {
+  const result = await POST(new NextRequest("http://127.0.0.1/api/board/maintenance/worktrees", {
+    method: "POST", headers: { host: "127.0.0.1" }, body: JSON.stringify({ dryRun: false }),
+  }));
+  expect(result.status).toBe(400);
+  expect(await result.json()).toEqual({ error: "Worktree recovery runs automatically; this endpoint supports dry-run diagnostics only." });
+});

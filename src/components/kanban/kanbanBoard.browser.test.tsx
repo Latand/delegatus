@@ -26985,60 +26985,8 @@ describe("linked seats and shared-project agent activity", () => {
   }, 90_000);
 });
 
-describe("operator worktree recovery maintenance", () => {
-  browserTest("preview and apply show reasons and fit desktop and phone in both languages", async () => {
-    const out = path.resolve(".artifacts/worktree-recovery");
-    fs.mkdirSync(out, { recursive: true });
-    const calls: boolean[] = [];
-    const excludedReasons = ["missing-native-evidence", "unproven-branch-hint", "unreadable-transcript",
-      "conflicting-repository-hint", "conflicting-project-identity", "conflicting-recorded-worktree",
-      "ambiguous-repository", "target-outside-project"] as const;
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/board/maintenance/worktrees": async (request: Request) => {
-        const { dryRun } = await request.json() as { dryRun: boolean };
-        calls.push(dryRun);
-        return Response.json({ dryRun, rescanned: !dryRun,
-          folded: [{ cwd: "/repo/widgets-review", source: "fixture", sessions: 3, reason: "sibling-name-and-branch-hint" }],
-          leftAlone: excludedReasons.map((reason, index) => ({ cwd: `/repo/widgets-lane-${index}`, source: "other", sessions: 1, reason })),
-        });
-      },
-    });
-    const browser = await chromium.launch(LAUNCH);
-    const readings: unknown[] = [];
-    try {
-      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=worktree-recovery`, { width, height: 900 }, "dark", lang, "reduce", width < 640);
-        try {
-          const panel = page.locator("[data-worktree-recovery]");
-          await panel.waitFor();
-          expect(await panel.locator("button").count()).toBe(1);
-          await panel.locator("button").first().click();
-          await panel.locator("details").waitFor();
-          expect(await panel.locator("button").count()).toBe(2);
-          await panel.locator("summary").click();
-          expect(await panel.locator("li").count()).toBe(1 + excludedReasons.length);
-          const reasons = await panel.locator("li").allTextContents();
-          for (const reason of excludedReasons) {
-            expect(reasons.some(text => text.includes(translate(lang, `worktreeRecovery.reason.${reason}`)))).toBe(true);
-          }
-          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
-          expect(fits).toBe(true);
-          await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}-preview.png`) });
-          await panel.locator("button").nth(1).click();
-          await page.waitForFunction(() => document.querySelector("[data-worktree-recovery]")?.querySelectorAll("button").length === 1);
-          expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, fits, preview: true, applied: true, excludedReasons });
-        } finally { await context.close(); }
-      }
-      expect(calls).toEqual([true, false, true, false, true, false, true, false]);
-      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
-      fs.writeFileSync("evidence/worktree-recovery/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); server.stop(); }
-  }, 30_000);
-});
-
 describe("worktree recovery from the board maintenance panel", () => {
-  browserTest("the real board opens recovery beside maintenance settings", async () => {
+  browserTest("the real board maintenance controls have no worktree recovery buttons in either language", async () => {
     const out = path.resolve(".artifacts/worktree-recovery/board");
     fs.mkdirSync(out, { recursive: true });
     const tick = {
@@ -27053,27 +27001,42 @@ describe("worktree recovery from the board maintenance panel", () => {
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": tick,
       "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
-      "/api/board/maintenance/worktrees": { dryRun: true, rescanned: false, folded: [], leftAlone: [] },
+      "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
     });
     const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
     try {
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width: 1440, height: 900 }, "dark", "en", "reduce");
-      try {
-        await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
-        await page.locator("[data-kanban-seat]").waitFor();
-        if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
-        await page.locator("[data-kanban-seat] [data-seat-tick-thumb]").click();
-        const panel = page.locator("[data-seat-tick-maintenance] [data-worktree-recovery]");
-        await panel.waitFor();
-        await panel.locator("button").click();
-        await panel.locator("details").waitFor();
-        expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-        expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.resolve(".artifacts/worktree-recovery/variant-1-1440-en-board.png") });
-        fs.writeFileSync("evidence/worktree-recovery/maintenance.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", reachable: true, preview: true, fits: true }, null, 2) + "\n");
-      } finally { await context.close(); }
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: 900 }, "dark", lang, "reduce", phone);
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
+          await seat.locator("[data-seat-tick-thumb]").click();
+          const panel = page.locator("[data-seat-tick-maintenance]:visible").first();
+          await panel.waitFor();
+          expect(await page.locator("[data-worktree-recovery]").count()).toBe(0);
+          const text = await panel.innerText();
+          for (const removed of ["Recover worktree projects", "Preview recovery", "Apply recovery", "Об’єднати проєкти робочих копій", "Переглянути зміни", "Застосувати зміни"]) {
+            expect(text).not.toContain(removed);
+          }
+          expect(await panel.locator("[data-seat-tick-maintenance-about]").count()).toBe(1);
+          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+          expect(fits).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await panel.screenshot({ path: path.join(out, `${width}-${lang}-maintenance.png`) });
+          readings.push({ width, lang, reachable: true, recoveryControls: 0, fits, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
+      for (const filename of ["maintenance.json", "rendered.json"]) fs.writeFileSync(`evidence/worktree-recovery/${filename}`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 30_000);
+  }, 120_000);
 });
 
 describe("fresh context rotation advice", () => {

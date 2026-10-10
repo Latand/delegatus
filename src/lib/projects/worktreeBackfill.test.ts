@@ -7,6 +7,7 @@ import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } 
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
+import { readWorktreeRecoveries } from "./worktreeRecoveryStore";
 import { backfillWorktreeProjects, planWorktreeBackfill } from "./worktreeBackfill";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-recovery-"));
@@ -64,7 +65,7 @@ test("apply records checkout roots, folds directory keys, rescans and can be rep
   const result = await backfillWorktreeProjects({ dryRun: false }, async () => { scans++; });
   expect(result).toMatchObject({ dryRun: false, rescanned: true });
   expect(scans).toBe(1);
-  expect(JSON.parse(fs.readFileSync(path.join(f.state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo: f.repo, worktree: path.basename(checkout) });
+  expect(readWorktreeRecoveries()[0]).toMatchObject({ cwd: checkout, repo: f.repo, worktree: path.basename(checkout) });
   expect(canonicalProject(directoryProjectId(cwd))).toBe(f.identity.project);
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: f.identity.project, displayName: f.identity.displayName });
   await backfillWorktreeProjects({ dryRun: false }, async () => { scans++; });
@@ -93,7 +94,7 @@ test("corrupt maps refuse apply without replacing state", async () => {
 test("incomplete rescan is reported and a retry retains the mapping", async () => {
   const f = fixture(); f.transcript(f.repo + "-review", { branch: "lane/7" }); f.write();
   await expect(backfillWorktreeProjects({ dryRun: false }, async () => { throw Error("rescan failed"); })).rejects.toThrow("rescan failed");
-  expect(fs.existsSync(path.join(f.state, "worktree-map.json"))).toBe(true);
+  expect(readWorktreeRecoveries()).toHaveLength(1);
   expect((await backfillWorktreeProjects({ dryRun: false }, async () => {})).rescanned).toBe(true);
 });
 
@@ -159,17 +160,18 @@ test("conflicting descendants veto the whole checkout and remain separate after 
   const raw = Object.keys(f.files).map(filename => ({
     rootName: "codex-sessions" as const, root: f.disk, path: filename, st: fs.statSync(filename),
   }));
-  await projectCatalogSnapshotFromRaw(raw);
+  await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   const preview = await backfillWorktreeProjects();
   expect(preview.folded).toEqual([]);
   expect(preview.leftAlone).toHaveLength(2);
   expect(preview.leftAlone.every(item => item.reason === "conflicting-repository-hint")).toBe(true);
   let rescanned: Awaited<ReturnType<typeof projectCatalogSnapshotFromRaw>> | undefined;
   const applied = await backfillWorktreeProjects({ dryRun: false }, async () => {
-    rescanned = await projectCatalogSnapshotFromRaw(raw);
+    rescanned = await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   });
   expect(applied.folded).toEqual([]);
   expect(applied.leftAlone).toEqual(preview.leftAlone);
+  rescanned ??= await projectCatalogSnapshotFromRaw(raw);
   expect(rescanned!.projectByPath.get(mainFile)).toBe(directoryProjectId(checkout));
   expect(rescanned!.projectByPath.get(foreignFile)).toBe(directoryProjectId(foreignCwd));
   expect(canonicalProject(directoryProjectId(foreignCwd))).toBe(directoryProjectId(foreignCwd));
@@ -189,7 +191,7 @@ test("large native metadata retains conflicting hints through preview, apply and
   const raw = Object.keys(f.files).map(filename => ({
     rootName: "codex-sessions" as const, root: f.disk, path: filename, st: fs.statSync(filename),
   }));
-  const first = await projectCatalogSnapshotFromRaw(raw);
+  const first = await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   expect(first.projectByPath.get(foreignFile)).toBe(directoryProjectId(foreignCwd));
   const before = fs.readFileSync(path.join(f.state, "project-catalog.json"));
   const preview = await backfillWorktreeProjects();
@@ -198,10 +200,11 @@ test("large native metadata retains conflicting hints through preview, apply and
   expect(fs.readFileSync(path.join(f.state, "project-catalog.json"))).toEqual(before);
   let rescanned: typeof first | undefined;
   const applied = await backfillWorktreeProjects({ dryRun: false }, async () => {
-    rescanned = await projectCatalogSnapshotFromRaw(raw);
+    rescanned = await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   });
   expect(applied.folded).toEqual([]);
   expect(applied.leftAlone).toEqual(preview.leftAlone);
+  rescanned ??= await projectCatalogSnapshotFromRaw(raw);
   expect(rescanned!.projectByPath.get(mainFile)).toBe(directoryProjectId(checkout));
   expect(rescanned!.projectByPath.get(foreignFile)).toBe(directoryProjectId(foreignCwd));
   expect(fs.existsSync(path.join(f.state, "worktree-map.json"))).toBe(false);
@@ -316,13 +319,13 @@ test("corroborated checkout evidence folds every compatible descendant after cat
   const raw = Object.keys(f.files).map(filename => ({
     rootName: "codex-sessions" as const, root: f.disk, path: filename, st: fs.statSync(filename),
   }));
-  await projectCatalogSnapshotFromRaw(raw);
+  await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   const preview = await backfillWorktreeProjects({ project: f.identity.project });
   expect(preview.folded).toHaveLength(2);
   expect(preview.leftAlone).toEqual([]);
   let rescanned: Awaited<ReturnType<typeof projectCatalogSnapshotFromRaw>> | undefined;
   const applied = await backfillWorktreeProjects({ project: f.identity.project, dryRun: false }, async () => {
-    rescanned = await projectCatalogSnapshotFromRaw(raw);
+    rescanned = await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   });
   expect(applied.folded).toEqual(preview.folded);
   expect([...rescanned!.projectByPath.values()].every(project => project === f.identity.project)).toBe(true);

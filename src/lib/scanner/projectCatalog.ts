@@ -507,6 +507,8 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
   excludedSummaryPaths?: ReadonlySet<string>;
   scanToken?: ProjectCatalogScanToken;
   complete?: boolean;
+  /** Internal second projection after an atomic recovery, using the same raw inventory. */
+  recoverWorktrees?: boolean;
 } = {}): Promise<{
   projectCatalog: ProjectCatalogEntry[];
   projectByPath: Map<string, string>;
@@ -764,6 +766,17 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
     scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       writeState({ version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: nextFiles });
+      if (options.persist !== false && options.recoverWorktrees !== false) {
+        try {
+          const { recoverWorktreeProjects } = await import("@/lib/projects/worktreeBackfill");
+          const recovery = isProjectCatalogScanCurrent(scanToken)
+            && projectCatalogRuntime.__llvProjectCatalogPersistenceGeneration === scanToken.persistence
+            ? recoverWorktreeProjects("rescan", nextFiles) : null;
+          if (recovery?.folded.length) return projectCatalogSnapshotFromRaw(raw, { ...options, scanToken, recoverWorktrees: false });
+        } catch {
+          console.error("[worktree recovery] catalog recovery deferred; the next startup or full catalog scan retries");
+        }
+      }
     } else {
       console.error("[project catalog] board project migration deferred; a later scan will retry");
     }
