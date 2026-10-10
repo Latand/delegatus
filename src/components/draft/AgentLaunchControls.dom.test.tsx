@@ -127,17 +127,18 @@ test("the account offered is per engine, and the value shown is the value sent",
   await settle();
   flushSync(() => undefined);
 
-  const claudeSelect = host.querySelector('select[aria-label*="Claude"]') as HTMLSelectElement;
-  expect([...claudeSelect.options].map((option) => option.value)).toEqual(["primary", "spare"]);
+  const claudeChips = [...host.querySelectorAll('[role="radiogroup"][aria-label*="Claude"] [role="radio"]')];
+  expect(claudeChips.map((chip) => chip.getAttribute("data-launch-account"))).toEqual(["primary", "spare"]);
   /* A signed-out profile stays listed for history, but cannot be picked. */
-  expect([...claudeSelect.options].map((option) => option.disabled)).toEqual([false, true]);
+  expect(claudeChips.map((chip) => chip.getAttribute("aria-disabled"))).toEqual([null, "true"]);
+  expect(claudeChips.map((chip) => chip.getAttribute("aria-checked"))).toEqual(["true", "false"]);
   expect(draft().launchAccountId).toBe("primary");
 
   flushSync(() => draft().setEngine("codex"));
   await settle();
   flushSync(() => undefined);
-  expect(host.querySelector('select[aria-label*="Claude"]')).toBeNull();
-  expect(host.querySelector('select[aria-label*="Codex"]')).not.toBeNull();
+  expect(host.querySelector('[role="radiogroup"][aria-label*="Claude"]')).toBeNull();
+  expect(host.querySelector('[role="radiogroup"][aria-label*="Codex"]')).not.toBeNull();
 });
 
 test("both engines' chips are offered, and the speed picker is codex-only", async () => {
@@ -146,7 +147,7 @@ test("both engines' chips are offered, and the speed picker is codex-only", asyn
   await settle();
   flushSync(() => undefined);
 
-  expect([...host.querySelectorAll('[role="radio"]')].map((node) => node.textContent)).toEqual(["Claude", "Codex"]);
+  expect([...host.querySelector('[role="radiogroup"]')!.querySelectorAll('[role="radio"]')].map((node) => node.textContent)).toEqual(["Claude", "Codex"]);
   expect(host.querySelector('select[aria-label*="Speed"]')).toBeNull();
 
   flushSync(() => draft().setEngine("codex"));

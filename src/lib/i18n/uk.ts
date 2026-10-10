@@ -1161,8 +1161,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.sourceFolderRemoved": "Робочу копію розмови, яку продовжує цей агент, видалено, тому агент не може в ній стартувати.",
   "draft.engineAria": "Двигун агента",
   "draft.accountAria": "Обліковий запис {engine} для цього запуску",
-  "draft.accountDefault": "{label} · активний",
-  "draft.accountNeedsLogin": "{label} · потрібен вхід",
+  "draft.accountWeeklyLeft": "лишилось {percent}% тижневого ліміту",
 
   "dirPicker.empty": "директорію не вибрано",
   "dirPicker.searchAria": "Відфільтруй відомі директорії або впиши шлях",

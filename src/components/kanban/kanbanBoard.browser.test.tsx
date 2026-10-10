@@ -27874,3 +27874,260 @@ describe("short questionnaire rendered evidence", () => {
     } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
   }, 900_000);
 });
+
+describe("account chips with the weekly limit left: the launch chooser and the runtime pill's account menu", () => {
+  /*
+   * The account picker the operator chose on 2026-10-10 (variant 2, «Чипи без відкриття»), over the board fixture
+   * with `&accountpicker=1`: Claude «Main» 92 % (active), «Work» 41 %, «Backup» 7 %, a signed-out «Old login» and a
+   * long label; Codex 78 %, 23 % and one with no weekly reading. Drawn on the rotate sheet at 390 and 1440, the
+   * orchestrator create draft's «Runs on» row at 1440, and the new agent's runtime pill account menu at 1440 and
+   * 390; en and uk, dark, and light once per surface.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 ACCOUNT_PICKER_OUT=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "account chips with the weekly limit left"
+   *
+   * The frames go to `ACCOUNT_PICKER_OUT`, outside the repository; the readings go to evidence/account-picker.
+   */
+  const OUT = process.env.ACCOUNT_PICKER_OUT ? path.resolve(process.env.ACCOUNT_PICKER_OUT) : null;
+  type Surface = "rotate" | "create" | "pill";
+  type Shot = { surface: Surface; phone: boolean; lang: "en" | "uk"; scheme: "dark" | "light"; state: "rest" | "picked" | "codex" | "hint" };
+  const shots: Shot[] = [];
+  for (const lang of ["en", "uk"] as const) {
+    shots.push({ surface: "rotate", phone: true, lang, scheme: "dark", state: "rest" });
+    shots.push({ surface: "rotate", phone: false, lang, scheme: "dark", state: "rest" });
+    shots.push({ surface: "create", phone: false, lang, scheme: "dark", state: "rest" });
+    shots.push({ surface: "pill", phone: false, lang, scheme: "dark", state: "rest" });
+    shots.push({ surface: "pill", phone: true, lang, scheme: "dark", state: "rest" });
+  }
+  shots.push(
+    { surface: "rotate", phone: true, lang: "uk", scheme: "dark", state: "picked" },
+    { surface: "rotate", phone: true, lang: "uk", scheme: "dark", state: "hint" },
+    { surface: "rotate", phone: true, lang: "en", scheme: "dark", state: "codex" },
+    { surface: "rotate", phone: false, lang: "uk", scheme: "dark", state: "codex" },
+    { surface: "rotate", phone: true, lang: "uk", scheme: "light", state: "rest" },
+    { surface: "rotate", phone: false, lang: "en", scheme: "light", state: "picked" },
+    { surface: "create", phone: false, lang: "uk", scheme: "light", state: "picked" },
+    { surface: "pill", phone: false, lang: "uk", scheme: "light", state: "rest" },
+  );
+
+  /* What one chip row looks like on screen: each chip's box (left and right measured from the row's visible left edge) and text, whether its parts stand inside it, and how the row scrolls. */
+  const readRow = (page: Page) => page.evaluate(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-launch-account-row]')].filter((element) => element.getClientRects().length);
+    const row = rows.at(-1)!;
+    const box = row.getBoundingClientRect();
+    const chips = [...row.querySelectorAll<HTMLElement>("[data-launch-account]")].map((chip) => {
+      const rect = chip.getBoundingClientRect();
+      /* No part loses a letter inside its chip: a label wider than the row breaks between words instead. */
+      const parts = [...chip.querySelectorAll<HTMLElement>("[data-launch-account-label], [data-launch-account-signed-out], [data-weekly-percent]")];
+      const cut = parts.filter((part) => {
+        const own = part.getBoundingClientRect();
+        return part.scrollWidth > part.clientWidth + 0.5 || own.left < rect.left - 0.5 || own.right > rect.right + 0.5;
+      }).map((part) => part.textContent);
+      return {
+        id: chip.getAttribute("data-launch-account"), text: chip.innerText.replace(/\s+/g, " ").trim(), name: chip.getAttribute("aria-label"),
+        checked: chip.getAttribute("aria-checked") === "true", left: Math.round(rect.left - box.left), right: Math.round(rect.right - box.left),
+        top: Math.round(rect.top - box.top), height: Math.round(rect.height), cut,
+        percent: chip.querySelector("[data-weekly-percent]")?.textContent ?? null, bar: chip.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null,
+      };
+    });
+    const mask = getComputedStyle(row).maskImage || getComputedStyle(row).getPropertyValue("-webkit-mask-image");
+    return { mode: row.getAttribute("data-launch-account-row"), width: Math.round(box.width), scrollLeft: Math.round(row.scrollLeft), scrollWidth: row.scrollWidth, clientWidth: row.clientWidth, mask, chips };
+  });
+
+  browserTest("chips name the weekly limit left on every launch surface, and the pill's account rows carry the same bar", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "account-picker-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const shot of shots) {
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(shot.lang, key, params);
+        const width = shot.phone ? 390 : 1440;
+        const scenario = shot.surface === "rotate" ? "seat-head" : shot.surface === "create" ? "seat-create-cls" : "new-agent";
+        const name = `build-${shot.surface}-${width}-${shot.lang}-${shot.scheme}-${shot.state}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=${scenario}&accountpicker=1`, { width, height: shot.phone ? 844 : 900 }, shot.scheme, shot.lang, "reduce", shot.phone);
+        try {
+          await page.locator("[data-kanban-board] .card[data-id], [data-phone-card], [data-mobile2-open=seat], [data-orchestrator-rotate], [data-orchestrator-draft]").first().waitFor({ state: "attached", timeout: 40_000 });
+          await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+          await page.waitForTimeout(400);
+          const reading: Record<string, unknown> = { shot: name };
+          if (shot.surface === "pill") {
+            if (shot.phone) {
+              await page.locator('[data-mobile2-open="menu"]').click();
+              await page.locator('[data-mobile2-menu-row="new-agent"]').click();
+            } else if (await page.locator("[data-new-agent]").isVisible()) {
+              await page.locator("[data-new-agent]").click();
+            } else {
+              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
+            }
+            const draft = page.locator("[data-draft-pane]:visible").first();
+            await draft.locator("[data-runtime-pill]").waitFor({ timeout: 15_000 });
+            await draft.locator("[data-runtime-pill]").click();
+            const rowSelector = shot.phone ? "[data-runtime-sheet] [data-runtime-sheet-account]" : '[data-runtime-popover] [data-runtime-row="account"]';
+            if (!shot.phone) await page.locator('[data-runtime-popover] [data-runtime-value="account"]').click();
+            await page.locator(rowSelector).first().waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(300);
+            const rows = await page.locator(rowSelector).evaluateAll((elements) => elements.map((element) => ({
+              text: (element as HTMLElement).innerText.replace(/\s+/g, " ").trim(), name: element.getAttribute("aria-label"),
+              percent: element.querySelector("[data-weekly-percent]")?.textContent ?? null, bar: element.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null,
+              overflow: element.scrollWidth > element.clientWidth + 0.5,
+            })));
+            reading.rows = rows;
+            const byLabel = (label: string) => rows.find((row) => row.text.startsWith(label));
+            expect([byLabel("Main")?.percent, byLabel("Work")?.percent, byLabel("Backup")?.percent], `${name} weekly left per row`).toEqual(["92%", "41%", "7%"]);
+            expect([byLabel("Main")?.bar, byLabel("Work")?.bar, byLabel("Backup")?.bar], `${name} bars`).toEqual(["92", "41", "7"]);
+            expect(rows.filter((row) => row.overflow).map((row) => row.text), `${name} rows hold their contents`).toEqual([]);
+            expect(byLabel("Work")?.name, `${name} percent in the row's name`).toContain(tr("draft.accountWeeklyLeft", { percent: 41 }));
+          } else {
+            if (shot.surface === "rotate") {
+              if (shot.phone) {
+                await page.locator("[data-mobile2-open=seat]").first().click();
+                await page.locator('[data-mobile2-open="rotate"]').first().click();
+                await page.waitForSelector('[data-mobile2-sheet="rotate"] [data-orchestrator-draft="rotate"]', { timeout: 20_000 });
+              } else {
+                await page.locator("[data-orchestrator-rotate]").first().click();
+                await page.waitForSelector("[data-orchestrator-launch-choices]", { timeout: 20_000 });
+              }
+            } else {
+              await page.locator("[data-orchestrator-runs-on-change]").first().click();
+            }
+            await page.locator("[data-launch-account-row]").last().waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(500);
+            const opened = await readRow(page);
+            reading.opened = opened;
+            const claude = opened.chips.map((chip) => [chip.id, chip.percent, chip.bar]);
+            expect(claude, `${name} chips`).toEqual([["default", "92%", "92"], ["work", "41%", "41"], ["backup", "7%", "7"], ["old", null, null], ["team", "64%", "64"]]);
+            expect(opened.chips.find((chip) => chip.id === "old")!.text, `${name} signed out`).toBe(`Old login ${tr("kanban.account.tagSignedOut")}`);
+            expect(opened.chips.flatMap((chip) => chip.cut), `${name} no label, tag or percent cut`).toEqual([]);
+            const check = (row: typeof opened, label: string) => {
+              const chosen = row.chips.find((chip) => chip.checked)!;
+              if (shot.phone) {
+                expect(row.mode, `${label} the phone scrolls`).toBe("scroll");
+                expect(row.scrollWidth, `${label} more chips than room`).toBeGreaterThan(row.clientWidth);
+                expect(chosen.left >= -1 && chosen.right <= row.width + 1, `${label} the chosen chip in view: ${JSON.stringify({ chosen, scrollLeft: row.scrollLeft, width: row.width })}`).toBe(true);
+                expect(row.mask, `${label} the edge fades`).toContain("linear-gradient");
+                expect(new Set(row.chips.map((chip) => chip.top)).size, `${label} one line`).toBe(1);
+              } else {
+                expect(row.mode, `${label} the desktop wraps`).toBe("wrap");
+                expect(row.scrollWidth, `${label} nothing scrolls sideways`).toBeLessThanOrEqual(row.clientWidth + 1);
+                expect(Math.max(...row.chips.map((chip) => chip.right)), `${label} every chip inside the row`).toBeLessThanOrEqual(row.width + 1);
+              }
+            };
+            check(opened, `${name} opened`);
+            if (shot.state === "picked") {
+              await page.locator("[data-launch-account-row] [data-launch-account=work]").last().click();
+              await page.waitForTimeout(300);
+              const picked = await readRow(page);
+              reading.picked = picked;
+              expect(picked.chips.find((chip) => chip.checked)!.id, `${name} the pick`).toBe("work");
+              check(picked, `${name} picked`);
+              /* The signed-out chip takes no pick (on the desktop, where pressing it scrolls nothing out of the frame). */
+              if (!shot.phone) {
+                await page.locator("[data-launch-account-row] [data-launch-account=old]").last().click({ force: true });
+                await page.waitForTimeout(200);
+                expect((await readRow(page)).chips.find((chip) => chip.checked)!.id, `${name} the signed-out chip stays unpicked`).toBe("work");
+              }
+            }
+            if (shot.state === "codex") {
+              const scope = shot.phone ? '[data-mobile2-sheet="rotate"]' : "[data-orchestrator-launch-choices]";
+              await page.locator(`${scope} [role="radiogroup"] [role="radio"]`, { hasText: "Codex" }).first().click();
+              await page.waitForTimeout(500);
+              const codex = await readRow(page);
+              reading.codex = codex;
+              expect(codex.chips.map((chip) => [chip.id, chip.percent, chip.bar]), `${name} codex chips`).toEqual([["default", "78%", "78"], ["review", "23%", "23"], ["fresh", null, null]]);
+              expect(codex.chips.find((chip) => chip.checked)!.id, `${name} the engine's active account`).toBe("default");
+              if (shot.phone) {
+                const chosen = codex.chips.find((chip) => chip.checked)!;
+                expect(chosen.left >= -1 && chosen.right <= codex.width + 1, `${name} the chosen chip in view`).toBe(true);
+              } else check(codex, `${name} codex`);
+            }
+            if (shot.state === "hint") {
+              /* A long press shows the hint a pointer would read, the reset included, and picks nothing. */
+              const target = await page.locator("[data-launch-account-row] [data-launch-account=work]").last().boundingBox();
+              const cdp = await context.newCDPSession(page);
+              const point = { x: Math.round(target!.x + target!.width / 2), y: Math.round(target!.y + target!.height / 2) };
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+              await page.waitForTimeout(800);
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+              await page.waitForTimeout(300);
+              const hint = await page.locator("[data-launch-account-hint]").last().innerText();
+              reading.hint = hint;
+              expect(hint, `${name} hint`).toContain(`${tr("limits.week")} ${tr("limits.left")} 41%`);
+              expect((await readRow(page)).chips.find((chip) => chip.checked)!.id, `${name} a long press picks nothing`).toBe("default");
+            }
+          }
+          if (!shot.phone) await page.mouse.move(0, 0);
+          await page.waitForTimeout(250);
+          const file = path.join(out, `${name}.png`);
+          /* The phone and the pill's popover are drawn whole; the orchestrator panel is cut to its draft. */
+          if (shot.phone || shot.surface === "pill") {
+            await page.screenshot({ path: file });
+          } else {
+            const panel = (await page.locator("[data-orchestrator-mode]").first().boundingBox())!;
+            const top = Math.max(0, panel.y - 12);
+            const left = Math.max(0, panel.x - 16);
+            const bottom = Math.min(900, shot.surface === "rotate" ? Math.min(panel.y + panel.height, 560) : Math.min(panel.y + panel.height, 480));
+            const right = Math.min(1440, panel.x + panel.width + 16);
+            await page.screenshot({ path: file, clip: { x: left, y: top, width: right - left, height: bottom - top } });
+          }
+          expect(pageErrors, `${name} page errors`).toEqual([]);
+          readings.push(reading);
+        } finally {
+          await context.close();
+        }
+      }
+      fs.mkdirSync("evidence/account-picker", { recursive: true });
+      fs.writeFileSync("evidence/account-picker/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 900_000);
+
+  browserTest("on the phone the chosen chip stays in view when the readings land after the sheet opens, and the long label is never cut", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "account-picker-late-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&accountpicker=1&pickeractive=team&pickerdelay=6000`, { width: 390, height: 844 }, "dark", "uk", "reduce", true);
+      try {
+        await page.locator("[data-mobile2-open=seat]").first().waitFor({ state: "attached", timeout: 40_000 });
+        await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+        await page.locator("[data-mobile2-open=seat]").first().click();
+        await page.locator('[data-mobile2-open="rotate"]').first().click();
+        await page.waitForSelector('[data-mobile2-sheet="rotate"] [data-orchestrator-draft="rotate"]', { timeout: 20_000 });
+        await page.locator("[data-launch-account-row]").last().waitFor({ timeout: 10_000 });
+        const inView = (row: Awaited<ReturnType<typeof readRow>>, label: string) => {
+          const chosen = row.chips.find((chip) => chip.checked)!;
+          expect(chosen.id, `${label} the long-labelled account is chosen`).toBe("team");
+          expect(chosen.left >= -1 && chosen.right <= row.width + 1, `${label} the chosen chip in view: ${JSON.stringify({ chosen, scrollLeft: row.scrollLeft, width: row.width })}`).toBe(true);
+        };
+        const early = await readRow(page);
+        expect(early.chips.every((chip) => chip.percent === null), "no reading has landed yet").toBe(true);
+        inView(early, "before the readings");
+        await page.locator("[data-launch-account-row] [data-weekly-percent]").first().waitFor({ timeout: 15_000 });
+        await page.waitForTimeout(500);
+        const late = await readRow(page);
+        expect(late.scrollWidth, "the readings widened the row").toBeGreaterThan(early.scrollWidth);
+        inView(late, "after the readings");
+        expect(late.chips.find((chip) => chip.checked)!.percent, "the chosen chip shows its percent").toBe("64%");
+        const fadesAtEnd = late.scrollLeft + late.clientWidth < late.scrollWidth - 1;
+        expect(late.mask.includes("linear-gradient"), "the end fade flag matches the scroll width").toBe(fadesAtEnd || late.scrollLeft > 1);
+        expect(late.chips.flatMap((chip) => chip.cut), "every label, tag and percent whole at 390").toEqual([]);
+        const labels = await page.locator("[data-launch-account-row] [data-launch-account-label]").evaluateAll((elements) => elements.map((element) => ({ text: element.textContent, whole: element.scrollWidth <= element.clientWidth })));
+        expect(labels.filter((label) => !label.whole), "no label wider than its box").toEqual([]);
+        await page.mouse.move(0, 0);
+        await page.screenshot({ path: path.join(out, "build-rotate-390-uk-dark-late-readings.png") });
+        expect(pageErrors, "page errors").toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 300_000);
+});

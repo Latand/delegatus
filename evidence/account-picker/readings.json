@@ -1,0 +1,1519 @@
+[
+  {
+    "shot": "build-rotate-390-en-dark-rest",
+    "opened": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 861,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · active · 92% of the weekly limit left",
+          "checked": true,
+          "left": 0,
+          "right": 122,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · 41% of the weekly limit left",
+          "checked": false,
+          "left": 126,
+          "right": 236,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · 7% of the weekly limit left",
+          "checked": false,
+          "left": 240,
+          "right": 357,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login signed out",
+          "name": "Old login · signed out",
+          "checked": false,
+          "left": 361,
+          "right": 491,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+          "checked": false,
+          "left": 495,
+          "right": 861,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-rotate-1440-en-dark-rest",
+    "opened": {
+      "mode": "wrap",
+      "width": 1014,
+      "scrollLeft": 0,
+      "scrollWidth": 1014,
+      "clientWidth": 1014,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · active · 92% of the weekly limit left",
+          "checked": true,
+          "left": 0,
+          "right": 115,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · 41% of the weekly limit left",
+          "checked": false,
+          "left": 119,
+          "right": 223,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · 7% of the weekly limit left",
+          "checked": false,
+          "left": 227,
+          "right": 337,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login signed out",
+          "name": "Old login · signed out",
+          "checked": false,
+          "left": 341,
+          "right": 463,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+          "checked": false,
+          "left": 467,
+          "right": 815,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-create-1440-en-dark-rest",
+    "opened": {
+      "mode": "wrap",
+      "width": 795,
+      "scrollLeft": 0,
+      "scrollWidth": 795,
+      "clientWidth": 795,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · active · 92% of the weekly limit left",
+          "checked": true,
+          "left": 0,
+          "right": 111,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · 41% of the weekly limit left",
+          "checked": false,
+          "left": 115,
+          "right": 215,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · 7% of the weekly limit left",
+          "checked": false,
+          "left": 219,
+          "right": 325,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login signed out",
+          "name": "Old login · signed out",
+          "checked": false,
+          "left": 329,
+          "right": 447,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+          "checked": false,
+          "left": 451,
+          "right": 795,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-pill-1440-en-dark-rest",
+    "rows": [
+      {
+        "text": "Main 92%",
+        "name": "Main · 92% of the weekly limit left",
+        "percent": "92%",
+        "bar": "92",
+        "overflow": false
+      },
+      {
+        "text": "Work 41%",
+        "name": "Work · 41% of the weekly limit left",
+        "percent": "41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "text": "Backup 7%",
+        "name": "Backup · 7% of the weekly limit left",
+        "percent": "7%",
+        "bar": "7",
+        "overflow": false
+      },
+      {
+        "text": "Review lanes · shared team workspace (night shift) 64%",
+        "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+        "percent": "64%",
+        "bar": "64",
+        "overflow": false
+      }
+    ]
+  },
+  {
+    "shot": "build-pill-390-en-dark-rest",
+    "rows": [
+      {
+        "text": "Main 92%",
+        "name": "Main · 92% of the weekly limit left",
+        "percent": "92%",
+        "bar": "92",
+        "overflow": false
+      },
+      {
+        "text": "Work 41% ready",
+        "name": "Start the agent on Work · 41% of the weekly limit left",
+        "percent": "41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "text": "Backup 7% ready",
+        "name": "Start the agent on Backup · 7% of the weekly limit left",
+        "percent": "7%",
+        "bar": "7",
+        "overflow": false
+      },
+      {
+        "text": "Old login sign in",
+        "name": "Sign in to Old login — it takes no message until it returns",
+        "percent": null,
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "text": "Review lanes · shared team workspace (night shift) 64% ready",
+        "name": "Start the agent on Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+        "percent": "64%",
+        "bar": "64",
+        "overflow": false
+      }
+    ]
+  },
+  {
+    "shot": "build-rotate-390-uk-dark-rest",
+    "opened": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 867,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 122,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 126,
+          "right": 236,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 240,
+          "right": 357,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 361,
+          "right": 497,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 501,
+          "right": 867,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-rotate-1440-uk-dark-rest",
+    "opened": {
+      "mode": "wrap",
+      "width": 1014,
+      "scrollLeft": 0,
+      "scrollWidth": 1014,
+      "clientWidth": 1014,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 115,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 119,
+          "right": 223,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 227,
+          "right": 337,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 341,
+          "right": 469,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 473,
+          "right": 821,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-create-1440-uk-dark-rest",
+    "opened": {
+      "mode": "wrap",
+      "width": 801,
+      "scrollLeft": 0,
+      "scrollWidth": 801,
+      "clientWidth": 801,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 111,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 115,
+          "right": 215,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 219,
+          "right": 325,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 329,
+          "right": 453,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 457,
+          "right": 801,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-pill-1440-uk-dark-rest",
+    "rows": [
+      {
+        "text": "Main 92%",
+        "name": "Main · лишилось 92% тижневого ліміту",
+        "percent": "92%",
+        "bar": "92",
+        "overflow": false
+      },
+      {
+        "text": "Work 41%",
+        "name": "Work · лишилось 41% тижневого ліміту",
+        "percent": "41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "text": "Backup 7%",
+        "name": "Backup · лишилось 7% тижневого ліміту",
+        "percent": "7%",
+        "bar": "7",
+        "overflow": false
+      },
+      {
+        "text": "Review lanes · shared team workspace (night shift) 64%",
+        "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+        "percent": "64%",
+        "bar": "64",
+        "overflow": false
+      }
+    ]
+  },
+  {
+    "shot": "build-pill-390-uk-dark-rest",
+    "rows": [
+      {
+        "text": "Main 92%",
+        "name": "Main · лишилось 92% тижневого ліміту",
+        "percent": "92%",
+        "bar": "92",
+        "overflow": false
+      },
+      {
+        "text": "Work 41% готовий",
+        "name": "Запустити агента на Work · лишилось 41% тижневого ліміту",
+        "percent": "41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "text": "Backup 7% готовий",
+        "name": "Запустити агента на Backup · лишилось 7% тижневого ліміту",
+        "percent": "7%",
+        "bar": "7",
+        "overflow": false
+      },
+      {
+        "text": "Old login увійти",
+        "name": "Увійти в Old login — він не бере повідомлень, доки не повернеться",
+        "percent": null,
+        "bar": null,
+        "overflow": false
+      },
+      {
+        "text": "Review lanes · shared team workspace (night shift) 64% готовий",
+        "name": "Запустити агента на Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+        "percent": "64%",
+        "bar": "64",
+        "overflow": false
+      }
+    ]
+  },
+  {
+    "shot": "build-rotate-390-uk-dark-picked",
+    "opened": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 867,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 122,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 126,
+          "right": 236,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 240,
+          "right": 357,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 361,
+          "right": 497,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 501,
+          "right": 867,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    },
+    "picked": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 868,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": false,
+          "left": 0,
+          "right": 120,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": true,
+          "left": 124,
+          "right": 237,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 241,
+          "right": 358,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 362,
+          "right": 498,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 502,
+          "right": 868,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-rotate-390-uk-dark-hint",
+    "opened": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 867,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 122,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 126,
+          "right": 236,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 240,
+          "right": 357,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 361,
+          "right": 497,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 501,
+          "right": 867,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    },
+    "hint": "Work · Тиждень лишилось 41% · скид через 3 д · 13 жовт. 17:30"
+  },
+  {
+    "shot": "build-rotate-390-en-dark-codex",
+    "opened": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 861,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · active · 92% of the weekly limit left",
+          "checked": true,
+          "left": 0,
+          "right": 122,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · 41% of the weekly limit left",
+          "checked": false,
+          "left": 126,
+          "right": 236,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · 7% of the weekly limit left",
+          "checked": false,
+          "left": 240,
+          "right": 357,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login signed out",
+          "name": "Old login · signed out",
+          "checked": false,
+          "left": 361,
+          "right": 491,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+          "checked": false,
+          "left": 495,
+          "right": 861,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    },
+    "codex": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 366,
+      "clientWidth": 366,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Personal 78%",
+          "name": "Personal · active · 78% of the weekly limit left",
+          "checked": true,
+          "left": 0,
+          "right": 147,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "78%",
+          "bar": "78"
+        },
+        {
+          "id": "review",
+          "text": "Review 23%",
+          "name": "Review · 23% of the weekly limit left",
+          "checked": false,
+          "left": 151,
+          "right": 274,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "23%",
+          "bar": "23"
+        },
+        {
+          "id": "fresh",
+          "text": "Fresh",
+          "name": "Fresh",
+          "checked": false,
+          "left": 278,
+          "right": 333,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-rotate-1440-uk-dark-codex",
+    "opened": {
+      "mode": "wrap",
+      "width": 1014,
+      "scrollLeft": 0,
+      "scrollWidth": 1014,
+      "clientWidth": 1014,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 115,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 119,
+          "right": 223,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 227,
+          "right": 337,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 341,
+          "right": 469,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 473,
+          "right": 821,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    },
+    "codex": {
+      "mode": "wrap",
+      "width": 1014,
+      "scrollLeft": 0,
+      "scrollWidth": 1014,
+      "clientWidth": 1014,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Personal 78%",
+          "name": "Personal · активний · лишилось 78% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 139,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "78%",
+          "bar": "78"
+        },
+        {
+          "id": "review",
+          "text": "Review 23%",
+          "name": "Review · лишилось 23% тижневого ліміту",
+          "checked": false,
+          "left": 143,
+          "right": 258,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "23%",
+          "bar": "23"
+        },
+        {
+          "id": "fresh",
+          "text": "Fresh",
+          "name": "Fresh",
+          "checked": false,
+          "left": 262,
+          "right": 311,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-rotate-390-uk-light-rest",
+    "opened": {
+      "mode": "scroll",
+      "width": 366,
+      "scrollLeft": 0,
+      "scrollWidth": 867,
+      "clientWidth": 366,
+      "mask": "linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0) calc(100% - 24px), rgba(0, 0, 0, 0))",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 122,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 126,
+          "right": 236,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 240,
+          "right": 357,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 361,
+          "right": 497,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 501,
+          "right": 867,
+          "top": 0,
+          "height": 44,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-rotate-1440-en-light-picked",
+    "opened": {
+      "mode": "wrap",
+      "width": 1014,
+      "scrollLeft": 0,
+      "scrollWidth": 1014,
+      "clientWidth": 1014,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · active · 92% of the weekly limit left",
+          "checked": true,
+          "left": 0,
+          "right": 115,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · 41% of the weekly limit left",
+          "checked": false,
+          "left": 119,
+          "right": 223,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · 7% of the weekly limit left",
+          "checked": false,
+          "left": 227,
+          "right": 337,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login signed out",
+          "name": "Old login · signed out",
+          "checked": false,
+          "left": 341,
+          "right": 463,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+          "checked": false,
+          "left": 467,
+          "right": 815,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    },
+    "picked": {
+      "mode": "wrap",
+      "width": 1014,
+      "scrollLeft": 0,
+      "scrollWidth": 1014,
+      "clientWidth": 1014,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · active · 92% of the weekly limit left",
+          "checked": false,
+          "left": 0,
+          "right": 114,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · 41% of the weekly limit left",
+          "checked": true,
+          "left": 118,
+          "right": 224,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · 7% of the weekly limit left",
+          "checked": false,
+          "left": 228,
+          "right": 338,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login signed out",
+          "name": "Old login · signed out",
+          "checked": false,
+          "left": 342,
+          "right": 464,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · 64% of the weekly limit left",
+          "checked": false,
+          "left": 468,
+          "right": 816,
+          "top": 0,
+          "height": 32,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-create-1440-uk-light-picked",
+    "opened": {
+      "mode": "wrap",
+      "width": 801,
+      "scrollLeft": 0,
+      "scrollWidth": 801,
+      "clientWidth": 801,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": true,
+          "left": 0,
+          "right": 111,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": false,
+          "left": 115,
+          "right": 215,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 219,
+          "right": 325,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 329,
+          "right": 453,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 457,
+          "right": 801,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    },
+    "picked": {
+      "mode": "wrap",
+      "width": 802,
+      "scrollLeft": 0,
+      "scrollWidth": 802,
+      "clientWidth": 802,
+      "mask": "none",
+      "chips": [
+        {
+          "id": "default",
+          "text": "Main 92%",
+          "name": "Main · активний · лишилось 92% тижневого ліміту",
+          "checked": false,
+          "left": 0,
+          "right": 110,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "92%",
+          "bar": "92"
+        },
+        {
+          "id": "work",
+          "text": "Work 41%",
+          "name": "Work · лишилось 41% тижневого ліміту",
+          "checked": true,
+          "left": 114,
+          "right": 216,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "41%",
+          "bar": "41"
+        },
+        {
+          "id": "backup",
+          "text": "Backup 7%",
+          "name": "Backup · лишилось 7% тижневого ліміту",
+          "checked": false,
+          "left": 220,
+          "right": 326,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "7%",
+          "bar": "7"
+        },
+        {
+          "id": "old",
+          "text": "Old login не ввійшли",
+          "name": "Old login · не ввійшли",
+          "checked": false,
+          "left": 330,
+          "right": 454,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": null,
+          "bar": null
+        },
+        {
+          "id": "team",
+          "text": "Review lanes · shared team workspace (night shift) 64%",
+          "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+          "checked": false,
+          "left": 458,
+          "right": 802,
+          "top": 0,
+          "height": 28,
+          "cut": [],
+          "percent": "64%",
+          "bar": "64"
+        }
+      ]
+    }
+  },
+  {
+    "shot": "build-pill-1440-uk-light-rest",
+    "rows": [
+      {
+        "text": "Main 92%",
+        "name": "Main · лишилось 92% тижневого ліміту",
+        "percent": "92%",
+        "bar": "92",
+        "overflow": false
+      },
+      {
+        "text": "Work 41%",
+        "name": "Work · лишилось 41% тижневого ліміту",
+        "percent": "41%",
+        "bar": "41",
+        "overflow": false
+      },
+      {
+        "text": "Backup 7%",
+        "name": "Backup · лишилось 7% тижневого ліміту",
+        "percent": "7%",
+        "bar": "7",
+        "overflow": false
+      },
+      {
+        "text": "Review lanes · shared team workspace (night shift) 64%",
+        "name": "Review lanes · shared team workspace (night shift) · лишилось 64% тижневого ліміту",
+        "percent": "64%",
+        "bar": "64",
+        "overflow": false
+      }
+    ]
+  }
+]
