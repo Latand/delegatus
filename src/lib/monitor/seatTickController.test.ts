@@ -9331,9 +9331,11 @@ test("rule outcomes reach the report during a seat check without needing an oper
 test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cursor-ahead", "sequence-gap", "unreadable-ledger", "unknown-owner"] as const)(
   "a recovered idle writer wakes its settled deploy before timeout and once across controller restart: %s", async control => {
     const f = childFixture("recovered-deploy-seat");
-    const { ROOTS } = await import("@/lib/scanner/roots");
-    const seatPath = path.join(ROOTS["claude-projects"], path.basename(f.dir), `${crypto.randomUUID()}.jsonl`);
-    expect([SANDBOX, RESTORE.HOME].some(root => root && seatPath.startsWith(root + path.sep))).toBe(true);
+    const { claudeProjectRoots } = await import("@/lib/accounts/claude");
+    const isolatedRoots = [SANDBOX, path.dirname(RESTORE.HOME!)];
+    const scannerRoot = claudeProjectRoots().find(root => isolatedRoots.some(isolated => root.startsWith(isolated + path.sep)));
+    expect(scannerRoot).toBeDefined();
+    const seatPath = path.join(scannerRoot!, path.basename(f.dir), `${crypto.randomUUID()}.jsonl`);
     fs.mkdirSync(path.dirname(seatPath), { recursive: true });
     const rooted = f.registry.ensureConversation("claude", seatPath, null);
     f.seat = { conversationId: rooted.id, seatEpoch: 7, path: seatPath };
@@ -9376,6 +9378,10 @@ test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cur
     if (control !== "closed-idle") f.registry.upsert(entry!);
     const { defaultSeatTickSources } = await import("./seatTickSources");
     const production = defaultSeatTickSources();
+    const activity = await production.liveness({ reconcileStructuredIdle: true, conversationId: f.seat.conversationId,
+      stallAfterMs: DEFAULT_SEAT_TICK_POLICY.stallAfterMs, limit: 1 });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]!.turnState).toBe(control === "closed-idle" ? "idle" : "busy");
     const deploys = { seatDeployments: [{ deploymentId: "deploy-recovered", conversationId: f.seat.conversationId }],
       deployments: { "deploy-recovered": { phase: "succeeded", terminal: true, revision: "abcdef1234" } } };
     const rig = () => {
