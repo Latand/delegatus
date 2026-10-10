@@ -1907,9 +1907,9 @@ export class StructuredDeliveryQueue {
       // Only in-turn steering joins the original cohort. Interrupt fallback
       // replaces that turn and must wait along with other fresh turn starts.
       if ((!maySteer || steerByInterrupt) && heldForUpdate()) { updateHeld = true; this.noteWait(effect, "update-drain"); continue; }
-      /* A host that DECLARED it cannot steer, which is the Claude broker: its
-         write would land as an interrupt the operator never asked for, so the
-         message is refused here rather than delivered as something else.
+      /* A host that DECLARED it cannot steer, which is the Claude broker,
+         refuses an explicit steer before dispatch. Its queued sends preserve
+         the running turn and cannot promise in-turn steering.
          An undeclared capability is unknown and is no refusal — a host that says
          nothing about steering keeps the delivery path it has always had. */
       if (maySteer && host.supportsSteer === false && !steerByInterrupt) {
@@ -1935,7 +1935,10 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
         continue;
       }
-      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) {
+      const queuesDuringTurn = host.supportsQueuedSend === true && effect.kind === "send"
+        && (effect.policy === "queue" || steerOrQueue)
+        && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef);
+      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
         if (reconciled === "delivered") continue;

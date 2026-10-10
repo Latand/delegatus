@@ -11,6 +11,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import { RuntimeJournal } from "@/runtime-host/journal";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
@@ -29,6 +30,7 @@ import {
 } from "./claudeStreamBrokerHost";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
+import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { normalizeQueueEntry, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
 import { structuredContent, type StructuredImageRef } from "./structuredContent";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES } from "./runtimeImageStore";
@@ -1193,6 +1195,89 @@ describe("ClaudeStreamBrokerHost", () => {
     await sent.catch(() => {});
 
     expect(confirmed).toEqual({ outcome: "turn-started", turnId: "utf8-replay" });
+  });
+
+  test.each([
+    { policy: "queue", status: "active" },
+    { policy: "steer-or-queue", status: "active" },
+    { policy: "queue", status: "attention" },
+    { policy: "steer-or-queue", status: "attention" },
+  ] as const)("durable $policy delivery enters Claude's native queue during $status exactly once", async ({ policy, status }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-queued-delivery-"));
+    const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    const ledger = new RecordingDeliveryLedger();
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: directory,
+      eventStore: new MemoryEventStore(),
+      deliveryLedger: ledger,
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    const echo = (text: string, uuid: string) => child.emitJson({
+      type: "user", isReplay: true, session_id: host.identity.sessionId, uuid,
+      message: { role: "user", content: [{ type: "text", text }] },
+    });
+    const command = {
+      kind: "send" as const, operationId: "queued-follow-up", idempotencyKey: "queued-follow-up",
+      conversationId: "conversation-queued", text: "follow-up", policy,
+    };
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: async () => "fixture-owner",
+      transition: async (id, status, details, guard) => { journal.transitionOperation(id, status, details, guard); },
+    }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+    try {
+      const running = host.send({ id: "running-turn", text: "work" });
+      echo("work", "user-running");
+      await running;
+      if (status === "attention") {
+        child.emitJson({ type: "control_request", request_id: "permission-running", request: {
+          subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" },
+        } });
+        await Bun.sleep(0);
+      }
+      journal.append({ scope: `session:${command.conversationId}`, kind: "session-status", payload: {
+        conversationId: command.conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId },
+        hostKind: "claude-broker", host: "hosted", turn: "running", activeTurnId: "running-turn",
+        capabilities: { steer: false, structuredAttention: true },
+      } });
+      journal.executeOperation(command);
+      await queue.drain();
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
+      expect(journal.operationResult(command.operationId)?.receipt.status).toBe("delivering");
+      expect(await host.health()).toMatchObject({
+        status, activeTurnRef: "running-turn", pendingAttention: status === "attention" ? ["permission-running"] : [],
+      });
+      expect(child.inputs.filter(input => input.type !== "user")).toEqual([]);
+
+      // A repeated pass and request still own the original input awaiting its echo.
+      expect(journal.executeOperation(command).replayed).toBe(true);
+      await queue.drain();
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
+      echo("follow-up", "user-follow-up");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (journal.operationResult(command.operationId)?.receipt.status === "delivered") break;
+        await Bun.sleep(5);
+      }
+      expect(journal.operationResult(command.operationId)?.receipt).toMatchObject({
+        status: "delivered", turnId: command.operationId,
+      });
+      expect(ledger.load(host.identity.sessionId).at(-1)).toMatchObject({
+        disposition: "queued-next-turn", delivered: true,
+      });
+      expect((await host.health()).activeTurnRef).toBe("running-turn");
+      child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
+      expect((await host.health()).activeTurnRef).toBe(command.operationId);
+      await queue.drain();
+      expect(child.inputs.filter(input => input.type === "user")).toHaveLength(2);
+    } finally {
+      await host.release();
+      journal.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("queues ordinary active-turn sends and resumes the same durable session", async () => {

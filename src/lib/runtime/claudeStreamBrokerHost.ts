@@ -617,6 +617,7 @@ export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUse
 /** One durable writer around a long-lived Claude stream-json process. */
 export class ClaudeStreamBrokerHost implements EngineHost {
   readonly supportsSteer = false;
+  readonly supportsQueuedSend = true;
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;
