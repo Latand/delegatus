@@ -1392,6 +1392,26 @@ test("tool replay masks parsed newline fragments and pairs opaque call reference
   } finally { await f.service.close(s.sessionId); }
 });
 
+test("refused provider arguments scrub parameter names as well as values before replay and storage", async () => {
+  const f = await credentialReadFixture();
+  const parameter = f.key.slice(0,6)+"\n"+f.key.slice(6);
+  f.provider.responder = (request,index) => {
+    const call = request.input.find(item=>item.type === "function_call");
+    return backendResponse(`resp_parameter_${index}`,call ? [message(call.arguments as string)]
+      : [functionCall("untrusted-parameter","list_tasks",{openOnly:true,[parameter]:parameter})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    f.provider.replay(s.providerId,delegationCreated("parameter-mask",1)); await f.service.drain(s.sessionId);
+    const call = f.provider.requests[1].input.find(item=>item.type === "function_call")!;
+    const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!;
+    expect(JSON.parse(call.arguments as string)).toEqual({openOnly:true,"[redacted]":"[redacted]"});
+    expect(JSON.parse(output.output as string)).toMatchObject({code:"INVALID_TOOL_ARGUMENTS"});
+    expect(f.sends()).toBe(0);
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
 for (const locale of ["en","uk"] as const) test(`${locale} starting and switched project labels are scrubbed before backend context and echoed speech`, async () => {
   const key = ["Zr9QvB","label","private","0123456789abcdef"].join("-");
   const privatePath = ["","home","fixture-private","label.txt"].join("/");

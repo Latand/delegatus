@@ -322,7 +322,7 @@ export class CompanionLiveSessions {
           const replayId = scrub(item.call_id as string) === item.call_id ? item.call_id
             : `voice_call_${createHash("sha256").update(item.call_id as string).digest("hex").slice(0,32)}`;
           let replayArguments: string;
-          try { replayArguments = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),scrub)); }
+          try { replayArguments = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),scrub,true)); }
           catch { replayArguments = scrub(item.arguments as string); }
           input.push({ type: "function_call", call_id: replayId,
             name: scrub(item.name as string) === item.name ? item.name : "redacted_tool", arguments: replayArguments });
@@ -357,7 +357,7 @@ export class CompanionLiveSessions {
     const atMs = this.now() - active.createdAt;
     let argumentsText: string;
     try { argumentsText = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
-      text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2); } catch { argumentsText = String(item.arguments); }
+      text=>withoutLocalPaths(withoutCredentials(text,active.secrets)),true), null, 2); } catch { argumentsText = String(item.arguments); }
     const toolData = { name, callId, delegationId, arguments: withoutLocalPaths(withoutCredentials(argumentsText, active.secrets)).slice(0, 4_000) };
     this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
     this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });

@@ -27,10 +27,11 @@ export function withoutCredentials(text: string, secrets: readonly string[]): st
   return maskedSlice(clean, credentialSpans(clean, secrets, PARTIAL), 0, clean.length);
 }
 
-/** Every string of a value, at any depth. Keys are the contract's own. */
-export function cleanStrings<T>(value: T, clean: (text: string) => string): T {
+/** Every string of a value, at any depth. Contract keys are preserved; raw
+ * provider arguments can opt into cleaning their untrusted parameter names. */
+export function cleanStrings<T>(value: T, clean: (text: string) => string, cleanKeys = false): T {
   if (typeof value === "string") return clean(value) as T;
-  if (Array.isArray(value)) return value.map(row => cleanStrings(row, clean)) as T;
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, row]) => [key, cleanStrings(row, clean)])) as T;
+  if (Array.isArray(value)) return value.map(row => cleanStrings(row, clean, cleanKeys)) as T;
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, row]) => [cleanKeys ? clean(key) : key, cleanStrings(row, clean, cleanKeys)])) as T;
   return value;
 }
