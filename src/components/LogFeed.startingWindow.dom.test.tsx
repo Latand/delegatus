@@ -1,4 +1,12 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { RegistryFile } from "@/lib/agent/registry";
+import { ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
+import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
+import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -1142,4 +1150,78 @@ test("a seat confirm names its mandate by the approved version, or leaves it unq
   expect(seatMandateDelivery(3)).toEqual({ kind: "version", version: 3 });
   expect(seatMandateDelivery(undefined)).toEqual({ kind: "unqualified" });
   expect(seatMandateDelivery("3")).toEqual({ kind: "unqualified" });
+});
+
+
+test("rotation mandate survives live adoption, warm reopen and cold catalog open with production UUID provenance", async () => {
+  const text = MANDATE + "\n\n## Handoff from your predecessor\nThe predecessor can finish its revoked turn.";
+  const session = "rotation-render-fixture";
+  const launchId = "rotation-render-launch";
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rotation-render-ledger-"));
+  const ledger = new FileClaudeDeliveryLedger(directory);
+  ledger.recordQueued(session, { id: `spawn_message_${launchId}`, text, origin: { kind: "operator" } }, "turn-started");
+  ledger.confirmDelivered(session, `spawn_message_${launchId}`, "rotation-render-uuid");
+  // The same text pasted later is a separate operator delivery.
+  ledger.recordQueued(session, { id: "operator-paste", text, origin: { kind: "operator" } }, "turn-started");
+  ledger.confirmDelivered(session, "operator-paste", "paste-uuid");
+  const seat = { project: "atlas", promptVersion: 44, mandate: ORCHESTRATOR_SYSTEM_PROMPT, intent: { clientRequestId: "rotation-render", launchId } } as OrchestratorSeat;
+  const evidence = { messages: claudeMessageProvenance(`/sessions/${session}.jsonl`, {
+    ledger, registrySnapshot: () => ({ receipts: {}, conversations: {}, deliveryOperationOwners: {} } as RegistryFile),
+    orchestratorSeats: () => ({ schemaVersion: 1, nextSeatEpoch: 2, seats: { atlas: seat }, pending: {}, history: [], revocations: [], rollbacks: {} }),
+  }), occurrences: [] };
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { await gate; return { ok: true, status: 200, json: async () => evidence } as Response; }) as unknown as typeof fetch;
+  const record = (id: string, at: number) => JSON.stringify({ type: "user", uuid: id, promptSource: "sdk", timestamp: new Date(at).toISOString(), message: { role: "user", content: text } });
+  const file = { ...answered("conversation_rotation_render", launchId), path: `/sessions/${session}.jsonl`, engine: "claude", fmt: "claude", launch: undefined } as FileEntry;
+  const settleEvidence = async () => { for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+  const assertCard = (host: HTMLElement) => {
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(1);
+    expect(host.querySelector("[data-mandate-card]")!.textContent).toContain("v44");
+    expect(host.querySelector("[data-mandate-card]")!.textContent).toContain(translate("en", "mandateCard.handoff"));
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+  };
+  try {
+    resetMessageProvenanceCacheForTests();
+    const live = render({ ...placeholder(file.conversationId!, launchId), spawn: launchFacts(file.conversationId!, launchId, { mandate: { kind: "version", version: 44 }, prompt: text, promptEcho: text }) } as FileEntry);
+    tailLines = [record("rotation-render-uuid", RECORD_AT)];
+    rerender(live.root, file);
+    assertCard(live.host);
+    release(); await settleEvidence(); assertCard(live.host);
+    flushSync(() => live.root.unmount()); roots.delete(live.root);
+    const warm = render(file); await settleEvidence(); assertCard(warm.host);
+    flushSync(() => warm.root.unmount()); roots.delete(warm.root);
+    resetHeldMandatesForTests(); resetMessageProvenanceCacheForTests();
+    const cold = render(file);
+    expect(cold.host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+    expect(cold.host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(0);
+    await settleEvidence(); assertCard(cold.host);
+    tailLines = [record("paste-uuid", ANSWER_AT)]; tailStart = 500;
+    rerender(cold.root, { ...file, size: 4 }); await settleEvidence();
+    expect(cold.host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(cold.host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+  } finally {
+    release(); globalThis.fetch = realFetch;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("a cold SDK row waits for its first provenance read without a pending outbox", async () => {
+  resetMessageProvenanceCacheForTests();
+  tailLines = [JSON.stringify({ type: "user", uuid: "cold-sdk-uuid", promptSource: "sdk", timestamp: new Date(RECORD_AT).toISOString(), message: { role: "user", content: "An ordinary operator delivery" } })];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { await gate; return { ok: true, status: 200, json: async () => ({ messages: { "cold-sdk-uuid": { origin: "operator" } }, occurrences: [] }) } as Response; }) as unknown as typeof fetch;
+  try {
+    const { host } = render({ ...answered("conversation_cold_sdk", "cold-sdk-launch"), engine: "claude", fmt: "claude", launch: undefined } as FileEntry);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(0);
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(0);
+    release();
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
+  } finally { release(); globalThis.fetch = realFetch; }
 });

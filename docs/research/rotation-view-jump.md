@@ -232,3 +232,20 @@ The proposed navigation change keeps the operator on the rotated successor while
 - A separate browser driver, issue-specific capture script, UI variants, or a redesigned mandate card. Extend the established driver and retain the established card.
 - Changes to the parallel needs-you and role-memory lanes beyond any narrowly necessary shared call sites. This diagnosis identifies no dependency on their features.
 - An ADR. The proposed changes reuse existing reversible mechanisms and introduce no hard-to-reverse architectural decision.
+
+
+## Implementation and verification
+
+The fix retains the existing navigation and delivery mechanisms. The rotation landing in `src/components/mobile/MobileFocusView.tsx` now replaces the chat entry and opens the successor through the dashboard's common opener. That opener registers every provisional seat in `src/components/ProjectDashboard.tsx`; the selected launch retains its latest scanned snapshot across a scan gap, and the child consumes the adopted transcript focus during render. The snapshot preserves the server-composed handoff when the local confirm preview predates it. A deliberate later selection remains authoritative.
+
+`src/lib/runtime/claudeMessageProvenance.ts` enriches the exact UUID answer using the operation's client-message identity, the established first-launch fallback, and the shared `mandateForDelivery` recognizer. Authorship, submission and selected-context fields survive. The seat map and registry snapshot are each read at most once per call. `src/components/LogFeed.tsx` also waits for an unresolved SDK row's first evidence read on a cold opening without a local outbox; the existing bounded revalidation and held-card substitution remain in place.
+
+Regressions copied onto an unchanged export of main at `39f654248666faa6e5deb01d59eeae305e64573f` fail at the intended seams:
+
+- `ProjectDashboard.mobileLaunchFocus.dom.test.tsx`: both the provisional seat scan-gap case and actual conversation-menu rotation fail; the rotation leaves the predecessor in navigation on main.
+- `claudeMessageProvenance.test.ts`: six mandate cases fail because UUID provenance lacks the qualifier. Cases cover version/custom, active/historical seats, pruned launch ownership, reserved adoption identity and an unrelated operator paste.
+- `LogFeed.startingWindow.dom.test.tsx`: live adoption loses the card when the producer answers, and a cold SDK record paints a system row before the first provenance read. Both regressions fail on main.
+
+The rendered case lives in the existing `src/components/mobile/issue1671Evidence.browser.test.tsx` driver and extends its existing fixture. It exercises the real Viewer at phone 390 × 844 and desktop 1440 × 900 in English/Ukrainian and light/dark themes. Its endpoint uses the production Claude UUID and held-occurrence producers. It covers rotation, a newer predecessor write, stale incumbent metadata, independent tail/evidence delays, a phone scan gap, manual reopening, page reload, and a later identical-text operator delivery. A mutation observer records card/identity lapses during adoption. Sanitized readings are committed in `evidence/first-message/rotation.json`; screenshots stay in the driver's `.artifacts/seat-handover/rotation` output. This is Chromium evidence, with no physical-device claim.
+
+Focused verification uses each explicit test path through `bash scripts/gate-slot.sh bun test`, with fresh `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR` below `/tmp` and `LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`. The seven unit/component files total 120 passing tests. The filtered rendered case, TypeScript, whitespace and local privacy checks pass. The repository's changed-file ESLint comparison passes with no introduced errors; unfiltered ESLint reports 35 pre-existing errors in the touched shared components. No production state, deployment or parallel lane implementation is changed.

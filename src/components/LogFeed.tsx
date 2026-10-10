@@ -1473,13 +1473,12 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      record names itself only by the engine's id, which nothing in the
      browser can compute and the broker's ledger may join to its submission
      a beat after the record is visible. Its words used to bind it meanwhile;
-     they no longer may, so while any of the operator's rows is still waiting
-     and the ledger has not finished answering for this id, the record waits
-     too — bounded by the lookup's own revalidation schedule, and never a
-     guess about whose it is. */
+     they no longer may. Every unresolved SDK row waits for its first evidence
+     read, including a cold open with no local outbox. A known held mandate
+     stays visible meanwhile. The lookup's revalidation schedule bounds the
+     wait for rows whose delivery remains unclassified. */
   const withheldNativeRecords = useMemo(() => {
     const withheld = new Set<string>();
-    if (!pendingOutbox.length) return withheld;
     for (const { item } of visibleItems) {
       if (item.kind !== "sysmsg") continue;
       const id = item.deliveredMessage?.engineMessageId;
@@ -1487,7 +1486,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       if (provenanceLookup.messagePending(id)) withheld.add(id);
     }
     return withheld;
-  }, [visibleItems, pendingOutbox, provenanceLookup]);
+  }, [visibleItems, provenanceLookup]);
   const conversationRows = useMemo<ConversationRow[]>(() => {
     /* Which submissions the transcript is already answering for in THIS
        render. The tail below skips them, so one message can never have two

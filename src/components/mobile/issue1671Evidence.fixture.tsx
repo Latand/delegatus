@@ -135,6 +135,7 @@ const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
 /* `?firstmessage=<p|s|f>`: a new conversation's first message from the first paint to the transcript. p is a plain
    spawn's prompt and f a failed launch (the running conversation, opened in the focus view); s is a seat created from
    the sheet's draft with Confirm actually pressed (`&kanban=1&seatless=donly`). */
+const ROTATION = new URLSearchParams(location.search).has("rotation");
 const FIRST_MESSAGE = new URLSearchParams(location.search).get("firstmessage");
 const RUNTIME_PERF = new URLSearchParams(location.search).get("runtime") === "perf";
 const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
@@ -239,14 +240,15 @@ const FM_LAUNCH_ID = "launch-first-message";
 const FM_SEAT = FIRST_MESSAGE === "s";
 const FM_CONVERSATION_ID = FM_SEAT ? "conversation_first_message" : "conversation_running";
 const FM_SEAT_PATH = "/repo/first-message.jsonl";
-const fmText = () => (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
+const ROTATION_MANDATE = "Keep the project moving.\n\n## Handoff from your predecessor\nThe predecessor can finish its revoked turn.";
+const fmText = () => ROTATION ? ROTATION_MANDATE : (FM_SEAT ? SEAT_MANDATE : FM_PROMPT);
 // Include the runtime role prefix; the DOM suite composes its resolved role.
-const fmDeliveredText = () => FM_HANDOVER
+const fmDeliveredText = () => ROTATION ? fmText() : FM_HANDOVER
   ? `${ROLE_DEFAULTS.find((role) => role.id === "orchestrator")!.promptScaffold}\n\n${orchestratorMandateForDelivery(fmText())}`
   : fmText();
 /* `&step=<n>` opens the page on that state: the phone's focus view re-resolves the conversation when its path
    flips, so each state of the plain cases is a first paint of its own. */
-const fm = { step: Number(new URLSearchParams(location.search).get("step") ?? 0), confirmed: false, posts: [] as Array<Record<string, unknown>> };
+const fm = { step: Number(ROTATION ? sessionStorage.getItem("rotation-step") ?? 0 : new URLSearchParams(location.search).get("step") ?? 0), confirmed: ROTATION && sessionStorage.getItem("rotation-confirmed") === "1", posts: [] as Array<Record<string, unknown>> };
 /** The window the first message lives in: the running conversation, or the seat the Confirm created. */
 let fmTarget: FileEntry | null = FIRST_MESSAGE !== null && !FM_SEAT ? files[0]! : null;
 function fmApply() {
@@ -255,7 +257,7 @@ function fmApply() {
     launchId: FM_LAUNCH_ID, clientAttemptId: null, accountId: null, conversationId: FM_CONVERSATION_ID, generation: 1,
     state: "reconciling", initialMessage: "queued", retrySafe: false, error: SEAT_ENVELOPE,
     admittedAt: (now - 90) * 1_000, promptAt: (now - 90) * 1_000, promptImages: 0, prompt: fmText(), promptEcho: fmText(),
-    ...(FM_SEAT ? { mandate: { kind: "version", version: 1 } } : {}), ...over,
+    ...(FM_SEAT ? { mandate: { kind: "version", version: ROTATION ? 44 : 1 } } : {}), ...over,
   });
   const window_ = (facts: Record<string, unknown>) => Object.assign(target, {
     engine: FM_ENGINE, fmt: FM_ENGINE, root: FM_ENGINE === "codex" ? "codex-sessions" : "claude-projects", model: FM_ENGINE === "codex" ? "gpt-6.1" : "opus", effort: "high", conversationId: FM_CONVERSATION_ID,
@@ -289,7 +291,8 @@ function fmTranscript(): string {
   const answer = JSON.stringify({ type: "assistant", timestamp: iso(20), message: { role: "assistant", content: [{ type: "text", text: "Looking at the export test." }] } });
   const codexUser = JSON.stringify({ timestamp: iso(60), type: "response_item", payload: { type: "message", id: FM_SEAT_UUID, role: "user", content: [{ type: "input_text", text: fmDeliveredText() }] } });
   const codexAnswer = JSON.stringify({ timestamp: iso(20), type: "response_item", payload: { type: "message", id: "seat_answer", role: "assistant", content: [{ type: "output_text", text: "Looking at the export test." }] } });
-  return `${[FM_ENGINE === "codex" ? codexUser : user, ...(fm.step >= (FM_HANDOVER ? 2 : 3) ? [FM_ENGINE === "codex" ? codexAnswer : answer] : [])].join("\n")}\n`;
+  const paste = ROTATION && evidence.rotationPaste ? [JSON.stringify({ type: "user", uuid: "engine_operator_paste", timestamp: iso(0), promptSource: "sdk", message: { role: "user", content: fmDeliveredText() } })] : [];
+  return `${[FM_ENGINE === "codex" ? codexUser : user, ...(fm.step >= (FM_HANDOVER ? 2 : 3) ? [FM_ENGINE === "codex" ? codexAnswer : answer] : []), ...paste].join("\n")}\n`;
 }
 if (FIRST_MESSAGE !== null && !FM_SEAT) {
   files[0]!.title = "Builder";
@@ -407,8 +410,17 @@ const evidence = {
   rotateSeat() { seatOn("claude", "opus", "high", "iv-new"); return getRuntimeBus().refresh(); },
   /* The first-message cases: move the same window Pending -> Delivered -> Transcript arrived -> Answered. */
   releaseFirstMessageEvidence,
+  rotationPaste: false,
+  showRotationPaste() { evidence.rotationPaste = true; window.dispatchEvent(new Event("llv:files-changed")); },
+  rotationGap: false,
+  rotationPoll(gap = false) {
+    evidence.rotationGap = gap;
+    if (SEAT_PATH) Object.assign(kanbanFiles.find((file) => file.path === SEAT_PATH)!, { mtime: now + 100, lastAssistantMessageAt: Date.now() });
+    window.dispatchEvent(new Event("llv:files-changed"));
+  },
   advanceFirstMessage() {
     fm.step += 1;
+    if (ROTATION) sessionStorage.setItem("rotation-step", String(fm.step));
     fmApply();
     window.dispatchEvent(new Event("llv:files-changed"));
     return fm.step;
@@ -1061,6 +1073,10 @@ if (SEATLESS) {
   if (SEATLESS === "donly") kanbanTasks.push(kanbanTask("t-done-only", "done", "Add a --version flag", { updatedAt: iso(86_400) }));
 }
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
+if (ROTATION && fm.confirmed) {
+  fmTarget = conversation(FM_SEAT_PATH, "Successor orchestrator", { conversationId: FM_CONVERSATION_ID, activity: "live", proc: "running", pid: 4_402, mtime: now - 5 });
+  kanbanFiles.push(fmTarget); fmApply();
+}
 const WALK_MARKER = new URLSearchParams(location.search).has("walk");
 
 /* The Overview's projects: keys the way a repository resolves (opaque, read by
@@ -1337,7 +1353,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The seat's mandate is Delegatus's own delivery, so the server's provenance names it as such and the transcript's
      record of it renders as the mandate card, never as the operator's bubble. */
   if (url.pathname === "/api/log/provenance" && FM_SEAT) {
-    if (FM_HANDOVER) await fmEvidenceGate;
+    if (FM_HANDOVER && !(ROTATION && fm.step >= 3)) await fmEvidenceGate;
+    if (ROTATION) return json((await serverFetch("/api/rotation-evidence").then((response) => response.json())).provenance);
     return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
   }
   if (url.pathname === "/api/conversation-host" && method === "POST") {
@@ -1449,7 +1466,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
-      files: kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
+      files: ROTATION && evidence.rotationGap ? kanbanFiles.filter((file) => file !== fmTarget) : kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
       workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
@@ -1545,14 +1562,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/conversations") {
     evidence.catalogRequests.push(url.search);
+    if (ROTATION && fm.confirmed) return json({ items: [{ conversationId: FM_CONVERSATION_ID, file: { ...fmTarget, spawn: undefined, launch: undefined } }], total: 1, nextCursor: null });
     const offset = Number(url.searchParams.get("cursor") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 20);
     return json({ items: catalog.slice(offset, offset + limit), total: catalog.length ? 4_595 : 0, nextCursor: offset + limit < catalog.length ? String(offset + limit) : null });
   }
-  if (FM_SEAT && url.pathname === "/api/orchestrator/seat" && method === "POST") {
+  if (FM_SEAT && (url.pathname === "/api/orchestrator/seat" || (ROTATION && url.pathname === "/api/orchestrator/rotate")) && method === "POST") {
     fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     fm.confirmed = true;
-    fmTarget = conversation(FM_SEAT_PATH, "Orchestrator", { activity: "live", proc: "running", pid: 4_402, mtime: now - 5, lastTurn: { startedAt: (now - 90) * 1_000, endedAt: null } });
+    if (ROTATION) sessionStorage.setItem("rotation-confirmed", "1");
+    fmTarget = conversation(FM_SEAT_PATH, ROTATION ? "Successor orchestrator" : "Orchestrator", { activity: "live", proc: "running", pid: 4_402, mtime: now - 5, lastTurn: { startedAt: (now - 90) * 1_000, endedAt: null } });
     kanbanFiles.push(fmTarget);
     fmApply();
     return json({ ok: true, launched: true, transport: "structured", launchId: FM_LAUNCH_ID, conversationId: FM_CONVERSATION_ID, state: "path-pending", initialMessage: "queued", path: null });
@@ -1561,14 +1580,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = (fmTarget as { path: string }).path;
     if (url.searchParams.get("scope") === "all") return json({ all: { conversationIds: [FM_CONVERSATION_ID], paths: [path], previous: { conversationIds: [], paths: [] } } });
     return json({
-      seat: { project: PROJECT, seatEpoch: 1, conversationId: FM_CONVERSATION_ID, path, mandate: "Run the atlas board.", state: "active", designatedAt: iso(30), intent: { clientRequestId: "seat-first-message", mode: "spawn", launchId: null, error: null } },
+      seat: { project: PROJECT, seatEpoch: 1, conversationId: FM_CONVERSATION_ID, path, mandate: fmText(), promptVersion: ROTATION ? 44 : 1, state: "active", designatedAt: iso(30), intent: { clientRequestId: "seat-first-message", mode: "spawn", launchId: ROTATION ? FM_LAUNCH_ID : null, error: null } },
       pending: null, exists: true,
     });
   }
   if (FM_SEAT && fm.confirmed && url.pathname === "/api/orchestrator/seat/status") {
     return json({
-      project: PROJECT, designated: true, conversationId: FM_CONVERSATION_ID, predecessorConversationId: null,
-      engine: "claude", model: "opus", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: (fmTarget as { path: string }).path,
+      project: PROJECT, designated: true, conversationId: ROTATION && fm.step < 2 ? idOf(SEAT_PATH!) : FM_CONVERSATION_ID, predecessorConversationId: null,
+      engine: "claude", model: "opus", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: ROTATION && fm.step < 2 ? SEAT_PATH : (fmTarget as { path: string }).path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
       context: { tokens: 12_000, limit: 1_000_000, percent: 1, estimated: false, basis: "" },
       transcriptFacts: null,
