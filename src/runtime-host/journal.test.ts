@@ -30,6 +30,70 @@ function sandbox(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `llv-runtime-${name}-`));
 }
 
+test("native custody survives receipt and event retention, reopen, and older or foreign terminals", () => {
+  const dir = sandbox("native-custody"), filename = path.join(dir, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const id = "native-custody", key = { engine: "codex" as const, sessionId: "native-thread" };
+  const status = (writerClaim = "fixture:1") => journal.append({ scope: { type: "session", id }, kind: "session-status",
+    payload: { sessionKey: key, writerClaim, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      nativeTurnClaims: [] } });
+  const terminal = (turnId: string, sequence: number) => journal.append(projectEngineHostEvent(id, "codex:native-thread",
+    { kind: "turn-ended", turnId, seq: sequence, status: "completed" } as never)!);
+  try {
+    status();
+    for (const turnId of ["native-a", "native-b"]) {
+      journal.executeOperation({ kind: "send", operationId: turnId, idempotencyKey: turnId, conversationId: id, text: "continue", policy: "queue" });
+      journal.completeOperation(turnId, "turn-started", { turnId });
+    }
+    // Evict both native receipts from the eight displayed entries.
+    for (let i = 0; i < 10; i++) journal.executeOperation({ kind: "kill", operationId: `rejected-${i}`, idempotencyKey: `rejected-${i}`,
+      conversationId: id, sessionKey: key, onlyIfIdle: { revision: 999, writerClaim: "fixture:1" } });
+    journal.compact(1);
+    journal.maintainProducerReceipts();
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.readSession({ conversationId: id })!.recentReceipts.some((receipt) => receipt.status === "turn-started")).toBe(false);
+    terminal("older-turn", 20);
+    journal.append({ scope: { type: "session", id }, kind: "turn-ended", payload: { turnId: "native-a" },
+      producer: { kind: "registry-fallback", eventKey: "engine-host:codex:native-thread:25" } });
+    status(); // A publisher cannot replace the journal's custody.
+    expect(journal.readSession({ conversationId: id })).toMatchObject({ nativeTurnClaims: [
+      { turnId: "native-a", sessionKey: key, writerClaim: "fixture:1" },
+      { turnId: "native-b", sessionKey: key, writerClaim: "fixture:1" },
+    ] });
+    status("fixture:2");
+    terminal("native-a", 30); // A successor cannot settle the prior writer.
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toHaveLength(2);
+    status();
+    terminal("native-a", 40);
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toHaveLength(1);
+    terminal("native-b", 50);
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toEqual([]);
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toEqual([]);
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a legacy native custody gap remains unknown after a later admission and idle publication", () => {
+  const dir = sandbox("legacy-native-custody"), filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const id = "legacy-native", payload = { sessionKey: { engine: "codex", sessionId: "legacy-native-thread" },
+    writerClaim: "fixture:1", hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null };
+  try {
+    journal.append({ scope: { type: "session", id }, kind: "session-status", payload });
+    const db = new Database(filename);
+    try { db.query("UPDATE entities SET state_json = json_remove(state_json, '$.nativeTurnClaims') WHERE kind = 'session' AND id = ?").run(id); }
+    finally { db.close(); }
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toBeUndefined();
+    journal.executeOperation({ kind: "send", operationId: "legacy-send", idempotencyKey: "legacy-send", conversationId: id, text: "continue", policy: "queue" });
+    journal.completeOperation("legacy-send", "turn-started", { turnId: "native-b" });
+    journal.append({ scope: { type: "session", id }, kind: "session-status", payload });
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toBeNull();
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("journal assigns global sequences, consecutive scoped revisions, and idempotent producer keys", () => {
   const dir = sandbox("sequence");
   const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { maxEvents: 100, now: () => 100 });
@@ -393,6 +457,7 @@ test("snapshot exposes the canonical projected runtime model", () => {
       revision: 3,
       attentionIds: ["attention-one"],
       recentReceipts: [],
+      nativeTurnClaims: [],
       accountId: "account-one",
       parentConversationId: null,
       flowId: null,

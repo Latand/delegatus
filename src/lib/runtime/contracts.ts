@@ -610,6 +610,15 @@ export interface RuntimeWriterStatus {
 }
 
 export interface RuntimeSession {
+  /** Unsettled native admissions, retained independently of events and display
+      receipts. Only a matching terminal from the recorded writer clears one.
+      Absence or null means the journal predates this custody checkpoint. */
+  nativeTurnClaims?: Array<{
+    sessionKey: RuntimeSession["sessionKey"];
+    writerClaim: string | null;
+    turnId: string | null;
+    revision: number;
+  }> | null;
   /** Fresh keyed session reads derive this from all open operations and native
       queue entries. Absence is insufficient evidence for automatic retirement. */
   retirementBlocked?: boolean;

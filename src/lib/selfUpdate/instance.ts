@@ -129,7 +129,7 @@ export function journalStatement(
     to an earlier writer stays that writer's. An unfamiliar turn under the
     current key can be current work, so it holds until a later own idle/end.
     Missing history supplies no release proof for an answering process. */
-function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null, replayCursor: number): OwnerReading["journal"] {
+function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null, replayCursor: number, ownConversationIds: Set<string>): OwnerReading["journal"] {
   const statement = journalStatement(rows, owner);
   const turns = new Map<string, number>();
   const turnOwners = new Map<string, { key: string; epoch: number }>();
@@ -229,11 +229,14 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
       }
       const claims = statements.get(event.scope.id);
       const started = claims?.get(turn);
-      if (started !== undefined && started !== null && Number(producer.slice(prefix.length)) > started) claims!.delete(turn);
+      if (started !== undefined && (started === null || Number(producer.slice(prefix.length)) > started)) claims!.delete(turn);
     }
   }
   let unread = false;
   let idle = false;
+  // The display snapshot can omit rows whose own keyed statements replay
+  // used. Fence the same population that supplies the release proof.
+  for (const id of statements.keys()) ownConversationIds.add(id);
   for (const ordered of statements.values()) {
     if (ordered.size) return "claimed";
     idle = true;
@@ -451,15 +454,28 @@ export function ownerCensusReader(
             const kind = owner.engine === "codex" ? "codex-app-server" : owner.engine === "claude" ? "claude-broker" : null;
             const cursor = history.incomplete && kind ? await readProducerCursor(kind, `engine-host:${owner.entryKey}:`) : null;
             const replayCursor = history.engineCursors.get(`${kind}\0engine-host:${owner.entryKey}:`) ?? 0;
-            reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor, replayCursor);
+            const ownConversationIds = new Set(rows.map((row) => row.conversationId));
+            reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor, replayCursor, ownConversationIds);
             if (reading.journal === "idle") {
               // Terminal release also needs coverage of native admissions.
               // Read after the engine cursor and tail: the earlier snapshot
               // and engine high-water mark cannot fence an operation producer.
-              for (const row of rows) {
-                const current = await readSession({ conversationId: row.conversationId });
-                if (!current || history.sessionRevisions.get(row.conversationId) !== current.revision) {
+              for (const conversationId of ownConversationIds) {
+                const current = await readSession({ conversationId });
+                if (!current || history.sessionRevisions.get(conversationId) !== current.revision) {
                   reading.journal = "unattributed";
+                  break;
+                }
+                if (history.incomplete && current.nativeTurnClaims == null) {
+                  reading.journal = "unattributed";
+                  break;
+                }
+                // Engine cursors cannot cover native admission order. The
+                // journal retains these obligations until their own terminal,
+                // even when both their start and display receipt are pruned.
+                if (current.nativeTurnClaims?.some((claim) => rowKeyId(claim.sessionKey) === owner.entryKey
+                  && (claim.writerClaim === null || fenceEpoch(claim.writerClaim) === owner.writerEpoch))) {
+                  reading.journal = "claimed";
                   break;
                 }
               }

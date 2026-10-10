@@ -297,6 +297,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
     revision,
     attentionIds: strings(payload.attentionIds),
     recentReceipts: receipts(payload.recentReceipts),
+    nativeTurnClaims: [],
     accountId: typeof payload.accountId === "string" ? payload.accountId : null,
     ...(typeof payload.writerClaim === "string" || payload.writerClaim === null ? { writerClaim: payload.writerClaim } : {}),
     parentConversationId: typeof payload.parentConversationId === "string" ? payload.parentConversationId : null,
@@ -2666,12 +2667,20 @@ export class RuntimeJournal {
       const merged = baseSession(scope.id, { ...(previous ?? {}), ...payload }, event.revision);
       merged.attentionIds = strings(payload.attentionIds ?? previous?.attentionIds);
       merged.recentReceipts = receipts(previous?.recentReceipts);
+      // Publishers cannot replace durable native custody. Preserve an absent
+      // legacy checkpoint too: an idle sample cannot reconstruct lost starts.
+      merged.nativeTurnClaims = previous ? previous.nativeTurnClaims : [];
       /* The status mark: what a named writer published. Any other write,
          including a payload that carries a mark of its own, keeps the record. */
       const mark = typeof payload.writerClaim === "string" && "host" in payload && "turn" in payload && "activeTurnId" in payload
         ? { sessionKey: merged.sessionKey, writerClaim: payload.writerClaim, host: merged.host, turn: merged.turn, activeTurnId: merged.activeTurnId }
         : previous?.writerStatus;
       if (mark) merged.writerStatus = mark;
+      if (mark?.activeTurnId && merged.nativeTurnClaims) {
+        merged.nativeTurnClaims = merged.nativeTurnClaims.map((claim) => claim.writerClaim === null && claim.turnId === mark.activeTurnId
+          && claim.sessionKey.engine === mark.sessionKey.engine && claim.sessionKey.sessionId === mark.sessionKey.sessionId
+          ? { ...claim, writerClaim: mark.writerClaim } : claim);
+      }
       this.upsertEntity("session", scope.id, event.revision, merged, event.seq);
       return;
     }
@@ -2697,6 +2706,36 @@ export class RuntimeJournal {
           }
           : {}),
       };
+      const producerKey = event.producer_key ?? "";
+      if (event.kind === "turn-started" && producerKey.startsWith("operation:") && producerKey.endsWith(":native-turn-started")
+        && Array.isArray(previous.nativeTurnClaims)) {
+        // A delayed native receipt can name a predecessor's known turn after
+        // a successor published idle. Retain that turn's attribution while
+        // the bounded journal still proves it, before pruning can remove it.
+        const publication = turnId ? this.db.query<{ payload_json: string }, [string, string]>(
+          `SELECT payload_json FROM events WHERE scope = ? AND kind = 'session-status'
+            AND json_extract(payload_json, '$.activeTurnId') = ?
+            AND json_type(payload_json, '$.writerClaim') = 'text'
+            AND json_type(payload_json, '$.sessionKey') = 'object'
+            AND json_type(payload_json, '$.host') = 'text' AND json_type(payload_json, '$.turn') = 'text'
+            ORDER BY revision DESC LIMIT 1`,
+        ).get(event.scope, turnId) : null;
+        const mark = publication ? JSON.parse(publication.payload_json) as NonNullable<RuntimeSession["writerStatus"]> : previous.writerStatus;
+        next.nativeTurnClaims = [...previous.nativeTurnClaims, {
+          sessionKey: mark?.sessionKey ?? previous.sessionKey,
+          writerClaim: mark?.writerClaim ?? previous.writerClaim ?? null,
+          turnId, revision: event.revision,
+        }];
+      } else if (event.kind === "turn-ended" && turnId && previous.nativeTurnClaims) {
+        const mark = previous.writerStatus;
+        next.nativeTurnClaims = previous.nativeTurnClaims.filter((claim) => {
+          const prefix = `engine-host:${claim.sessionKey.engine}:${claim.sessionKey.sessionId}:`;
+          return !(claim.turnId === turnId && event.revision > claim.revision
+            && claim.writerClaim !== null && mark?.writerClaim === claim.writerClaim
+            && mark.sessionKey.engine === claim.sessionKey.engine && mark.sessionKey.sessionId === claim.sessionKey.sessionId
+            && engineProducerCursor(event.producer_kind, producerKey)?.prefix === prefix);
+        });
+      }
       this.upsertEntity("session", scope.id, event.revision, next, event.seq);
       return;
     }

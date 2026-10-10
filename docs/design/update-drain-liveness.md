@@ -623,6 +623,22 @@ settlement. A turn explicitly attributed to another key or writer remains
 foreign; absent that proof, the outcome cannot make an earlier idle release
 newly admitted work.
 
+Native custody also survives retention. The journal's optional
+`nativeTurnClaims` projection retains unresolved admissions by turn id,
+session key, writer claim and session revision. It keeps known predecessor
+attribution before the deciding publications are pruned. Publishers cannot
+replace this projection; a matching engine terminal under that writer clears
+its claim. A later keyed running publication can attribute an initially
+unfenced admission. An older turn's terminal and an idle engine cursor supply
+no settlement for another native turn. An absent or null legacy checkpoint
+keeps custody when replay is incomplete.
+
+Before accepting idle journal evidence, the reader validates fresh revisions
+for every conversation that supplied its own replay statements, together with
+its listed and keyed rows. The snapshot's inactive-row cap does not bound that
+proof population. Missing rows, uncovered revisions and unresolved own native
+claims hold the answering owner; proven process death still releases it.
+
 A retained `writerStatus` is a publication checkpoint. An older own idle mark
 cannot outrank a newer own `turn-started`, even while the registry reference
 and queued running publication lag. `captureStructuredTerminationSurvivors`

@@ -2001,6 +2001,123 @@ test.each(["minimal", "production"])("retention ordering: native admission after
   expect(result).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
 }, 120_000);
 
+test.each(["current", "missing", "uncovered"])("revision coverage: replay's omitted own row holds with %s keyed evidence until its own settlement", async (evidence) => {
+  const { c, worker, claim } = await retainedCompletion("minimal");
+  publish(c.id, c.key, c.path, claim.fence, null, 30);
+  const omitted = "omitted-own-row";
+  f.journal.append(projectEngineHostEvent(omitted, sessionKeyId(c.key), { kind: "turn-ended", turnId: "older", seq: 31, status: "completed" } as never)!);
+  publish(omitted, c.key, c.path, claim.fence, null, 31);
+  const operationId = "send-to-omitted-row";
+  f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+    conversationId: omitted, text: "continue", policy: "queue" });
+  f.journal.append({ scope: { type: "session", id: omitted }, kind: "session-status",
+    producer: { kind: "registry-fallback", eventKey: "omitted-row-unhosted" },
+    payload: { host: "unhosted", turn: "idle", activeTurnId: null, writerClaim: null } });
+  for (let i = 0; i < 129; i++) f.journal.append({ scope: { type: "session", id: `inactive-${i}` }, kind: "session-status",
+    producer: { kind: "registry-fallback", eventKey: `inactive-${i}` }, payload: { host: "unhosted", turn: "idle", activeTurnId: null } });
+  await fallback();
+  expect(f.journal.snapshot().sessions.some((row) => row.conversationId === omitted)).toBe(false);
+  let injected = false;
+  const p = ports({ owners: ownerCensusReader(productionLivenessSources, {
+    readEvents: async (after) => {
+      const page = f.journal.replay(after);
+      if (!page.reset && !page.events.length && !injected) {
+        injected = true;
+        f.journal.completeOperation(operationId, "turn-started", { turnId: "native-next-turn" });
+      }
+      return page;
+    },
+    readProducerCursor: async (kind, prefix) => f.journal.producerCursor(kind, prefix),
+    readSession: async (query) => {
+      const current = await f.client.readSession!(query);
+      if (injected && query.conversationId === omitted) {
+        if (evidence === "missing") return null;
+        if (evidence === "uncovered" && current) return { ...current, revision: current.revision + 1 };
+      }
+      return current;
+    },
+  }) });
+  const result = await probe(p);
+  expect(injected).toBe(true);
+  expect(row(omitted)).toMatchObject({ turn: "running", activeTurnId: "native-next-turn" });
+  expect(result).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+  publish(omitted, c.key, c.path, claim.fence, "native-next-turn", 40);
+  f.journal.append(projectEngineHostEvent(omitted, sessionKeyId(c.key), { kind: "turn-ended", turnId: "native-next-turn", seq: 50, status: "completed" } as never)!);
+  publish(omitted, c.key, c.path, claim.fence, null, 50);
+  expect((await probe()).quiet).toBe(true);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe(p)).quiet).toBe(true);
+});
+
+test.each(["minimal", "production"])("retention custody: an older terminal cannot settle a pruned native admission under %s retention", async (retention) => {
+  const c = conversation(transcript("settled")), worker = spawn();
+  const claim = claimHost(c.key, c.path, worker.identity, "live", null);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "older-turn", seq: 20 } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 10);
+  const operationId = "native-before-retention";
+  f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+    conversationId: c.id, text: "continue", policy: "queue" });
+  f.journal.completeOperation(operationId, "turn-started", { turnId: "native-next-turn" });
+  expect(row(c.id)).toMatchObject({ turn: "running", activeTurnId: "native-next-turn" });
+  for (let i = 0; i < (retention === "production" ? 20_000 : 2); i++) f.journal.append({ scope: { type: "session", id: "noise" }, kind: "delta",
+    producer: { kind: "codex-app-server", eventKey: `noise:${i}` }, payload: { text: "output" } });
+  if (retention === "minimal") f.journal.compact(1);
+  expect(f.journal.replay(0).reset).toBe(true);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "older-turn", seq: 30, status: "completed" } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 30);
+  await fallback();
+  const result = await probe();
+  expect(result).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+  expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+  publish(c.id, c.key, c.path, claim.fence, "native-next-turn", 40);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "native-next-turn", seq: 50, status: "completed" } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 50);
+  expect((await probe()).quiet).toBe(true);
+  f.journal.executeOperation({ kind: "send", operationId: "native-death-control", idempotencyKey: "native-death-control",
+    conversationId: c.id, text: "continue", policy: "queue" });
+  f.journal.completeOperation("native-death-control", "turn-started", { turnId: "native-unsettled" });
+  publish(c.id, c.key, c.path, claim.fence, null, 50);
+  expect((await probe()).quiet).toBe(false);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+}, 120_000);
+
+test("native custody: a later keyed running publication attributes an initially unfenced admission", async () => {
+  const c = conversation(transcript("settled")), worker = spawn();
+  const claim = claimHost(c.key, c.path, worker.identity, "live", null);
+  await fallback();
+  publish(c.id, c.key, c.path, null, null, 30);
+  expect(row(c.id).writerClaim).toBeNull();
+  f.journal.executeOperation({ kind: "send", operationId: "unfenced-native", idempotencyKey: "unfenced-native",
+    conversationId: c.id, text: "continue", policy: "queue" });
+  f.journal.completeOperation("unfenced-native", "turn-started", { turnId: "native-turn" });
+  expect((await probe()).quiet).toBe(false);
+  publish(c.id, c.key, c.path, claim.fence, "native-turn", 40);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "native-turn", seq: 50, status: "completed" } as never)!);
+  publish(c.id, c.key, c.path, claim.fence, null, 50);
+  expect((await probe()).quiet).toBe(true);
+  release(c.key, claim);
+  await exit(worker);
+});
+
+test("native custody: retained foreign admission keeps its original writer after replay loses attribution", async () => {
+  const s = await sameKeySuccessor();
+  publish(s.id, s.key, s.path, s.claimB.fence, null, 10);
+  f.journal.executeOperation({ kind: "send", operationId: "late-predecessor", idempotencyKey: "late-predecessor",
+    conversationId: s.id, text: "continue", policy: "queue" });
+  f.journal.completeOperation("late-predecessor", "turn-started", { turnId: "a-turn" });
+  f.journal.compact(1);
+  f.journal.append(projectEngineHostEvent(s.id, sessionKeyId(s.key), { kind: "turn-ended", turnId: "settled-b", seq: 30, status: "completed" } as never)!);
+  publish(s.id, s.key, s.path, s.claimB.fence, null, 30);
+  expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
+  release(s.key, s.claimB);
+  await exit(s.b);
+});
+
 test.each(["minimal", "production"])("retention ordering: a queued older busy publisher preserves completion under %s retention", async (retention) => {
   const { c, worker, claim } = await retainedCompletion(retention);
   const held = heldHost(worker.child.pid, { status: "active", activeTurnRef: "current-turn", eventCursor: 20 });
