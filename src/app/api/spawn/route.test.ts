@@ -645,16 +645,23 @@ test("one accepted direct spawn produces one input after ledger and transcript i
   }
 });
 
-test("new semantic, empty, and image-only prompts require an explicit semantic title", async () => {
+test("a semantic prompt supplies a launch title; empty and image-only prompts still require one", async () => {
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex").toString("base64");
-  const post = async (body: Record<string, unknown>) => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+  const post = async (body: Record<string, unknown>) => withSandboxRuntimeSocket(() => POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
     method: "POST",
     headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "content-type": "application/json", "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ title: undefined, engine: "claude", cwd: routeSandbox, ...body }),
-  }), structuredRouteDependencies(routeSandbox));
+  }), { ...structuredRouteDependencies(routeSandbox), autonomousStructured: true, defer: () => {} }));
+
+  const named = await post({ prompt: "inspect the release", clientAttemptId: "prompt-derived-title" });
+  const result = await named.json();
+  expect({ status: named.status, error: result.error }).toEqual({ status: 202, error: undefined });
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const card = loadTasks().find(task => task.assignments.some(row => row.launchId === result.launchId));
+  expect(card?.text).toBe("claude · inspect the release\ninspect the release");
+  expect(card?.origin?.refinement).toBe("titled");
 
   for (const body of [
-    { prompt: "inspect the release" },
     { prompt: "" },
     { images: [{ base64: png, mime: "image/png" }] },
   ]) {

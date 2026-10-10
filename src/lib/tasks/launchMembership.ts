@@ -3,6 +3,7 @@ import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { orchestratorSeatForOrUnknown } from "@/lib/orchestrator/seats";
 
 import { firstRunsElsewhere } from "@/lib/links/linked";
+import { cleanTitle, durableSemanticTitle, firstPromptLine } from "@/lib/title";
 
 import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type MembershipAdmission, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
 
@@ -87,12 +88,18 @@ export function launchMembershipInput(
 ): MembershipInput {
   const identity = { launchId: receipt.launchId, conversationId: receipt.conversationId, clientAttemptId: launch.clientAttemptId ?? null, engine: engineOf(launch.engine) };
   const project = launch.explicitProject?.trim() || projectForCwd(launch.cwd ?? "") || "other";
-  const title = launch.launchProfile?.title?.trim() || launch.launchDisplay?.prompt || null;
+  const lines = launch.launchProfile?.title?.trim().split(/\r?\n/) ?? [];
+  const title = durableSemanticTitle(lines[0], 80) || firstPromptLine(launch.launchDisplay?.prompt?.trim(), 80);
+  /* The display prompt is the launcher's brief; echo is the composed role
+     scaffold and is deliberately never used for the card. */
+  const brief = lines.slice(1).join(" ").trim() || launch.launchDisplay?.prompt?.trim().split(/\r?\n/, 1)[0] || "";
+  const description = cleanTitle(brief.split(/(?<=[.!?])\s/, 1)[0] ?? "", 240);
+  const text = { title, ...(description ? { description } : {}), ...(title ? { titled: true } : {}) };
   const launchOrigin = { kind: "launch" as const, key: launch.clientAttemptId ?? receipt.launchId };
   const explicit = (launch.taskIds ?? []).filter((id) => id.trim());
   /* Explicit targets carry their own project: the operator chose the task, and
      the launch directory (a worktree, a scratch checkout) may derive another. */
-  if (explicit.length) return { project: "", origin: launchOrigin, title, identity, explicitTaskIds: explicit };
+  if (explicit.length) return { project: "", origin: launchOrigin, ...text, identity, explicitTaskIds: explicit };
   /* A reviewer belongs to the work it reviews, a child to the work its parent
      does: their recorded membership is the launch's task context. */
   const reviewed: MembershipIdentity[] = [];
@@ -112,13 +119,12 @@ export function launchMembershipInput(
     const containerId = launch.origin.containerId;
     if (launch.origin.container === "pipeline") {
       const taskIds = (pipelineTaskIds(containerId) ?? []).filter((id) => id.trim());
-      if (taskIds.length) return { project, origin: launchOrigin, title, identity, explicitTaskIds: taskIds };
-      return { project, origin: { kind: "pipeline", key: containerId }, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}) };
+      if (taskIds.length) return { project, origin: launchOrigin, ...text, identity, explicitTaskIds: taskIds, fallbackOrigin: { kind: "pipeline", key: containerId } };
+      return { project, origin: { kind: "pipeline", key: containerId }, ...text, identity, ...(reviewed.length ? { inherit: reviewed } : {}) };
     }
-    return { project, origin: { kind: "flow", key: containerId }, title, identity, inherit: reviewed };
+    return { project, origin: { kind: "flow", key: containerId }, ...text, identity, inherit: reviewed };
   }
-  const titled = launch.role === "orchestrator" ? { titled: true } : {};
-  return { project, origin: launchOrigin, title, identity, ...(reviewed.length ? { inherit: reviewed } : {}), ...titled };
+  return { project, origin: launchOrigin, ...text, identity, ...(reviewed.length ? { inherit: reviewed } : {}) };
 }
 
 export interface LaunchMembershipPorts {
@@ -130,13 +136,7 @@ export interface LaunchMembershipPorts {
 
 export const productionLaunchMembershipPorts: LaunchMembershipPorts = {
   commit: (input) => commitTaskMembership(input),
-  pipelineTaskIds: (pipelineId) => {
-    try {
-      return loadPipelinesForProjection().find((pipeline) => pipeline.id === pipelineId)?.taskIds ?? null;
-    } catch {
-      return null;
-    }
-  },
+  pipelineTaskIds: (pipelineId) => loadPipelinesForProjection().find((pipeline) => pipeline.id === pipelineId)?.taskIds ?? null,
   projectForCwd: (cwd) => projectInfoFromCwd(cwd)?.project ?? null,
   seatIdentity: (project) => {
     const seat = orchestratorSeatForOrUnknown(project);
@@ -159,14 +159,8 @@ export function admitReservedLaunch(
 ): MembershipResult {
   let result: MembershipResult;
   try {
-    let input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineTaskIds, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
+    const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineTaskIds, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
     result = ports.commit(input);
-    /* A pipeline whose recorded task no longer exists falls back to its
-       container task rather than refusing the stage. */
-    if (!result.ok && result.status === 404 && input.explicitTaskIds && !launch.taskIds?.length && launch.origin?.containerId) {
-      input = { ...input, origin: { kind: "pipeline", key: launch.origin.containerId }, explicitTaskIds: undefined };
-      result = ports.commit(input);
-    }
   } catch (error) {
     const reason = `task membership could not be recorded: ${error instanceof Error ? error.message : String(error)}`;
     fail(reason);

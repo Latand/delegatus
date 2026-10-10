@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
-import type { MembershipInput, MembershipResult } from "./membership";
-import { admitRecoveredLaunch, admitReservedLaunch, LaunchMembershipError, launchMembershipInput, type LaunchMembershipPorts } from "./launchMembership";
+import { ensureTaskMembership, type MembershipInput, type MembershipResult } from "./membership";
+import { admitRecoveredLaunch, admitReservedLaunch, LaunchMembershipError, launchMembershipInput, productionLaunchMembershipPorts, type LaunchMembershipPorts } from "./launchMembership";
 
 /**
  * The shared launch boundary: every reserved receipt commits its membership
@@ -16,7 +16,7 @@ const projectFor = (cwd: string) => `derived:${cwd}`;
 
 test("an operator or agent launch is keyed by its attempt (or launch id) and titled from its prompt, in its explicit project when it has one", () => {
   const plain = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "attempt-1", launchDisplay: { prompt: "Restore search results\nlong prompt" } }, receipt, noPipelines, projectFor);
-  expect(plain).toEqual({ project: "derived:/repo", origin: { kind: "launch", key: "attempt-1" }, title: "Restore search results\nlong prompt", identity: { launchId: "launch-1", conversationId: "conversation_one", clientAttemptId: "attempt-1", engine: "claude" } });
+  expect(plain).toEqual({ project: "derived:/repo", origin: { kind: "launch", key: "attempt-1" }, title: "Restore search results", description: "Restore search results", titled: true, identity: { launchId: "launch-1", conversationId: "conversation_one", clientAttemptId: "attempt-1", engine: "claude" } });
   const keyless = launchMembershipInput({ engine: "codex", cwd: "/repo", explicitProject: "selected-project", launchProfile: { title: "Helper" } }, receipt, noPipelines, projectFor);
   expect(keyless.origin).toEqual({ kind: "launch", key: "launch-1" });
   expect(keyless.project).toBe("selected-project");
@@ -50,6 +50,31 @@ test("unreadable seat ownership refuses a rotation before it can create a placeh
   expect(failures).toEqual(["task membership could not be recorded: seat store unavailable"]);
 });
 
+test("an unreadable pipeline store refuses admission before it can guess a fallback task", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-launch-unreadable-pipeline-"));
+  process.env.LLV_STATE_DIR = state;
+  fs.writeFileSync(path.join(state, "pipelines.json"), "{");
+  let committed = false;
+  const failures: string[] = [];
+  try {
+    expect(() => admitReservedLaunch({ engine: "codex", cwd: "/repo", launchProfile: { title: "Verify export retries" },
+      origin: { kind: "container", container: "pipeline", containerId: "unreadable-lane" } }, receipt, reason => failures.push(reason), {
+      ...productionLaunchMembershipPorts,
+      commit: () => { committed = true; throw new Error("unexpected commit"); },
+    })).toThrow(LaunchMembershipError);
+    expect(committed).toBe(false);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toStartWith("task membership could not be recorded:");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
 test("a failed commit retires the receipt and aborts with the refusal's status; a deleted pipeline task falls back to the container task", () => {
   const failures: string[] = [];
   expect(() => admitReservedLaunch({ engine: "claude", cwd: "/repo", clientAttemptId: "a" }, receipt, (reason) => failures.push(reason), ports(() => { throw new Error("task state is busy"); }))).toThrow(LaunchMembershipError);
@@ -68,12 +93,12 @@ test("a failed commit retires the receipt and aborts with the refusal's status; 
     () => undefined,
     ports((input) => {
       commits.push(input);
-      if (input.explicitTaskIds) return { ok: false, error: "task gone-task is not available", status: 404 };
-      return { ok: true, tasks: [], taskIds: ["fallback"], created: ["fallback"], changed: true };
+      return ensureTaskMembership([], input, { id: () => "fallback" });
     }),
   );
   expect(result.ok && result.taskIds).toEqual(["fallback"]);
-  expect(commits.map((input) => input.origin)).toEqual([{ kind: "launch", key: "launch-1" }, { kind: "pipeline", key: "p9" }]);
+  expect(commits.map((input) => input.origin)).toEqual([{ kind: "launch", key: "launch-1" }]);
+  expect(result.ok && result.tasks[0]!.origin?.kind).toBe("pipeline");
 });
 
 test("explicit task targets ride on the reservation: the launch joins them in their own project and never falls back", () => {
@@ -91,6 +116,27 @@ test("explicit task targets ride on the reservation: the launch joins them in th
   }
   expect((thrown as LaunchMembershipError).status).toBe(404);
   expect(commits.length).toBe(1);
+});
+
+test("a deleted pipeline target is resolved in one membership transaction and replays onto the same fallback", () => {
+  let snapshot: import("./types").BoardTask[] = [];
+  let transactions = 0;
+  const launch = { engine: "codex", cwd: "/repo", launchProfile: { title: "Audit export ownership" }, origin: { kind: "container", container: "pipeline", containerId: "missing-target-lane" } };
+  const launchPorts = ports(input => {
+    transactions += 1;
+    const result = ensureTaskMembership(snapshot, input);
+    if (result.ok) snapshot = result.tasks;
+    return result;
+  });
+  const first = admitReservedLaunch(launch, receipt, () => undefined, launchPorts);
+  expect(transactions).toBe(1);
+  expect(first.ok && first.created).toHaveLength(1);
+  expect(snapshot[0]!.origin).toEqual({ kind: "pipeline", key: "missing-target-lane", refinement: "titled" });
+  const replay = admitReservedLaunch(launch, receipt, () => undefined, launchPorts);
+  expect(transactions).toBe(2);
+  expect(replay.ok && replay.created).toEqual([]);
+  expect(snapshot).toHaveLength(1);
+  expect(snapshot[0]!.assignments).toHaveLength(1);
 });
 
 test("a reviewer inherits the reviewed conversation's task: flow rounds keep the flow fallback origin, role launches keep the launch key", () => {
@@ -122,7 +168,7 @@ test("a recovered receipt re-establishes membership from its durable fields befo
     ports((input) => { commits.push(input); return { ok: true, tasks: [], taskIds: ["held"], created: [], changed: false }; }),
   );
   expect(result.ok && result.taskIds).toEqual(["held"]);
-  expect(commits).toEqual([{ project: "chosen", origin: { kind: "launch", key: "attempt-q" }, title: "Queued until later", identity: { launchId: "launch-q", conversationId: "conversation_q", clientAttemptId: "attempt-q", engine: "claude" }, admit: expect.any(Function) }]);
+  expect(commits).toEqual([{ project: "chosen", origin: { kind: "launch", key: "attempt-q" }, title: "Queued until later", description: "Continue the queued work", titled: true, identity: { launchId: "launch-q", conversationId: "conversation_q", clientAttemptId: "attempt-q", engine: "claude" }, admit: expect.any(Function) }]);
   expect(() => admitRecoveredLaunch(
     { launchId: "launch-q", conversationId: "conversation_q", engine: "claude", cwd: "/repo", clientAttemptId: null, explicitProject: null, launchProfile: {}, launchDisplay: null },
     ports(() => { throw new Error("EISDIR: illegal operation on a directory"); }),
@@ -150,7 +196,7 @@ test("an agent-initiated child inherits its parent's task; a flow reviewer names
   expect(flow.inherit).toEqual([{ conversationId: "conversation_impl", path: "/sessions/impl.jsonl" }]);
 });
 
-test("an orchestrator seat's launch task is created named, since no seat ever refines its own task", async () => {
+test("seats and workers both have named launch tasks before execution", async () => {
   const { ensureTaskMembership } = await import("./membership");
   const seat = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "seat-1", role: "orchestrator", launchProfile: { title: "Orchestrator for fixture" } }, receipt, noPipelines, projectFor);
   const worker = launchMembershipInput({ engine: "claude", cwd: "/repo", clientAttemptId: "worker-1", role: "builder", launchProfile: { title: "Build the upload fix" } }, { launchId: "launch-2", conversationId: "conversation_two" }, noPipelines, projectFor);
@@ -160,7 +206,7 @@ test("an orchestrator seat's launch task is created named, since no seat ever re
   if (!second.ok) return;
   expect(second.tasks.map((task) => [task.text, task.origin?.refinement])).toEqual([
     ["Orchestrator for fixture", "titled"],
-    ["Build the upload fix", "pending"],
+    ["Build the upload fix", "titled"],
   ]);
 });
 

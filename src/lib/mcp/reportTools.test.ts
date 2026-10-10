@@ -9,7 +9,7 @@ import { resetOperatorSettingsForTests, updateOperatorSettings } from "@/lib/ope
 import { setBridgeReports, setReportTelegram } from "@/lib/projects/settings";
 
 import { viewerMcpBindings, type CallerAttribution } from "./bindings";
-import { operatorLanguageInstruction, viewerMcpInstructions } from "./server";
+import { operatorLanguageInstruction, TOOL_INPUT_SCHEMAS, viewerMcpInstructions } from "./server";
 
 /*
  * The tool answers that carry the report rules (docs/design/orchestrator-reports.md
@@ -81,6 +81,14 @@ test("the session instructions name the interface language once a client reporte
   const uk = viewerMcpInstructions("uk");
   expect(uk).toContain("The operator's interface language is Ukrainian: write board task text (create_task and update_task text, refine) and bridge reports in Ukrainian.");
   expect(uk.startsWith("This server is Delegatus")).toBe(true);
+});
+
+test("MCP accepts prompt-only launches and makes refinement optional for already named launches", () => {
+  expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ clientRequestId: "prompt-only-schema", cwd: "/repo", prompt: "Inspect export retries" }).success).toBe(true);
+  const instructions = viewerMcpInstructions(null);
+  expect(instructions).toContain("Launch admission names new tasks before the agent starts");
+  expect(instructions).toContain("Refinement is optional");
+  expect(instructions).not.toContain("make your first Delegatus action");
 });
 
 test("task text in another language than the interface is stored with a warning; details are never checked; nothing is said while the language is unknown", async () => {

@@ -486,7 +486,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   const registry = registryForCaller ?? dependencies.registry();
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   const existingAttempt = clientAttemptId ? registry.spawnReceiptForClientAttempt(clientAttemptId) : null;
-  if (!explicitTitle && !existingAttempt) {
+  if (!explicitTitle && !derivedTitle && !existingAttempt) {
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
   }
   const launchTitle = explicitTitle

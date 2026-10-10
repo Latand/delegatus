@@ -37,6 +37,30 @@ function registryAt(name: string) {
 }
 const holders = (conversationId: string) => loadTasks().filter((candidate) => candidate.assignments.some((assignment) => assignment.conversationId === conversationId)).map((candidate) => candidate.id);
 
+test("a read-only launch has a named, described task before its first turn, including failure and replay", () => {
+  saveTasks([]);
+  const registry = registryAt("named-read-only");
+  const request = {
+    engine: "codex" as const, cwd: stateDir, explicitProject: project, transport: "structured" as const,
+    clientAttemptId: "named_read_only", origin: { kind: "operator" as const }, role: "verifier",
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Verify export retries" }),
+    launchDisplay: { prompt: "Check that failed exports retry safely.\nReturn the verification evidence.", images: 0, echo: "Private role scaffold" },
+  };
+  const reserved = registry.beginSpawnRequest(request);
+  if (reserved.kind !== "created") throw new Error("expected reservation");
+  expect(loadTasks()).toHaveLength(1);
+  const [named] = loadTasks();
+  expect(named!.text).toBe("Verify export retries\nCheck that failed exports retry safely.");
+  expect(named!.origin).toEqual({ kind: "launch", key: request.clientAttemptId, refinement: "titled" });
+  expect(named!.assignments.map(row => [row.conversationId, row.launchId])).toEqual([[reserved.receipt.conversationId, reserved.receipt.launchId]]);
+  registry.failStructuredSpawn(reserved.receipt.launchId, "host unavailable before first turn");
+  expect(registry.beginSpawnRequest(request).kind).toBe("replay");
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.text).toBe(named!.text);
+  expect(loadTasks()[0]!.origin?.refinement).toBe("titled");
+  expect(loadTasks()[0]!.assignments).toHaveLength(1);
+});
+
 test("a task-less pipeline reviewer joins its source's work at reservation", () => {
   saveTasks([task("reviewed-work", "Keep this task title")]);
   const registry = registryAt("pipeline-inheritance");
@@ -49,6 +73,27 @@ test("a task-less pipeline reviewer joins its source's work at reservation", () 
   expect(holders(reviewer.receipt.conversationId)).toEqual(["reviewed-work"]);
   expect(loadTasks()).toHaveLength(1);
   expect(loadTasks()[0]!.text).toBe("Keep this task title");
+});
+
+test("a prompt-only reservation derives its title and description before recovery can execute it", async () => {
+  saveTasks([]);
+  const registry = registryAt("prompt-only");
+  const request = {
+    engine: "claude" as const, cwd: stateDir, explicitProject: project, transport: "structured" as const,
+    clientAttemptId: "prompt_only", origin: { kind: "operator" as const }, role: "architect",
+    launchDisplay: { prompt: "Inspect export retry ownership.\nReport the unsafe transitions.", images: 0, echo: "Role scaffold" },
+  };
+  const reserved = registry.beginSpawnRequest(request);
+  if (reserved.kind !== "created") throw new Error("expected reservation");
+  expect(loadTasks()[0]!.text).toBe("Inspect export retry ownership.\nInspect export retry ownership.");
+  expect(loadTasks()[0]!.origin?.refinement).toBe("titled");
+  expect(reserved.receipt.launchProfile.title).toBe("Inspect export retry ownership.");
+  const { admitRecoveredLaunch } = await import("./launchMembership");
+  const recovered = admitRecoveredLaunch(reserved.receipt);
+  expect(recovered.ok && recovered.created).toEqual([]);
+  expect(registry.beginSpawnRequest(request).kind).toBe("replay");
+  expect(loadTasks()).toHaveLength(1);
+  expect(loadTasks()[0]!.assignments).toHaveLength(1);
 });
 
 test("reviewers, fixers, merge helpers and maintenance join existing work; an unowned launch gets one placeholder", () => {
@@ -76,7 +121,7 @@ test("reviewers, fixers, merge helpers and maintenance join existing work; an un
   expect(registry.beginSpawnRequest(request).kind).toBe("replay");
   expect(loadTasks()).toHaveLength(2);
   expect(holders(unowned.receipt.conversationId)).toHaveLength(1);
-  expect(loadTasks().find(t => t.id !== "served-work")!.origin?.refinement).toBe("pending");
+  expect(loadTasks().find(t => t.id !== "served-work")!.origin?.refinement).toBe("titled");
 });
 
 test("a dedicated task launch joins exactly its task at the reservation; the replay and the resume successor stay there", () => {
@@ -165,7 +210,7 @@ test("a queued pinned launch recovered for its first execution keeps the members
   expect(loadTasks().length).toBe(2);
   expect(holders(kept.conversationId)).toEqual(["queued-target"]);
   const replacement = loadTasks().find((candidate) => candidate.id !== "queued-target")!;
-  expect(replacement.origin).toEqual({ kind: "launch", key: "queued_orphaned_attempt", refinement: "pending" });
+  expect(replacement.origin).toEqual({ kind: "launch", key: "queued_orphaned_attempt", refinement: "titled" });
   expect(holders(orphaned.conversationId)).toEqual([replacement.id]);
 });
 

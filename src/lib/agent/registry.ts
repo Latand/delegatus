@@ -17,7 +17,7 @@ import {
   sameRecordedProcessIdentity,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
-import { durableSemanticTitle, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
+import { durableSemanticTitle, firstPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -5668,7 +5668,7 @@ export class AgentRegistry {
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
         ...(input.launchProfile ?? {}),
-        title: durableSemanticTitle(requestedTitle),
+        title: durableSemanticTitle(requestedTitle) ?? (requestedTitle == null ? firstPromptLine(input.launchDisplay?.prompt?.trim(), 80) : null),
         ...(explicitProject ? { project: explicitProject } : {}),
         parentConversationId,
       });
