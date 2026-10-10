@@ -21377,7 +21377,9 @@ describe("floating voice companion", () => {
             expect(await page.locator("[data-voice-companion-settings]").isVisible(), `${label}: phone settings stay mounted`).toBe(true);
             expect(await page.locator("[data-voice-companion]").count(), `${label}: the phone has the settings surface`).toBe(0);
             expect(pageErrors, label).toEqual([]);
-            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, dialog, lastCall, phoneSettingsMounted: true, openedThrough: "header menu Settings → Voice Delegatus" });
+            const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+            expect(await section.locator("[data-companion-spend-meter]").count(), `${label}: the published phone fallback retains its two settings rows`).toBe(0);
+            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, dialog, monthSpend, lastCall, phoneSettingsMounted: true, openedThrough: "header menu Settings → Voice Delegatus" });
             continue;
           }
           await page.keyboard.press("Escape");
@@ -21488,11 +21490,22 @@ describe("floating voice companion", () => {
             const box = view.getBoundingClientRect();
             const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
             const lane = document.querySelector<HTMLElement>("[data-companion-lane]");
+            const spend = view.querySelector<HTMLElement>("[data-companion-spend]")!;
+            const spendBox = spend.getBoundingClientRect();
+            const meter = spend.querySelector<HTMLElement>("[data-companion-spend-meter]")!;
+            const meterBox = meter.getBoundingClientRect();
+            const monthFill = meter.querySelector<HTMLElement>("[data-spend-month-fill]")!;
+            const callFill = meter.querySelector<HTMLElement>("[data-spend-call-fill]")!;
             const toggles = [...view.querySelectorAll<HTMLElement>("[data-transcript-toggle]")];
             const messages = [...view.querySelectorAll<HTMLElement>('[data-kind="speech"]')];
             return {
-              spend: view.querySelector<HTMLElement>("[data-companion-spend]")?.innerText ?? "",
+              spend: [...spend.querySelector<HTMLElement>("[data-spend-amounts]")!.children].map(node => (node as HTMLElement).innerText).join(" · "),
               spendHeight: view.querySelector<HTMLElement>("[data-companion-spend]")?.getBoundingClientRect().height ?? 0,
+              spendFooter: { belowBody: spendBox.top >= body.getBoundingClientRect().bottom - 1, atFoot: Math.abs(spendBox.bottom - box.bottom) <= 2,
+                meterHeight: meterBox.height, meterAfterAmounts: meterBox.top >= spend.querySelector("[data-spend-amounts]")!.getBoundingClientRect().bottom,
+                inside: meterBox.left >= spendBox.left && meterBox.right <= spendBox.right && meterBox.bottom <= spendBox.bottom,
+                monthShare: monthFill.getBoundingClientRect().width / meterBox.width, callShare: callFill.getBoundingClientRect().width / meterBox.width,
+                callColor: getComputedStyle(callFill).backgroundColor, monthColor: getComputedStyle(monthFill).backgroundColor },
               box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
               inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
               scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
@@ -21512,7 +21525,12 @@ describe("floating voice companion", () => {
           });
           await page.screenshot({ path: path.join(out, `transcript-${label}-2-collapsed.png`) });
           expect(reading.spend, `${label}: call and month spend`).toBe(lang === "uk" ? "Ця розмова $0.19 · жовтень $0.51 із $20.00" : "This call $0.19 · October $0.51 of $20.00");
-          expect(reading.spendHeight, `${label}: spend fits at most two lines with header padding`).toBeLessThanOrEqual(48);
+          expect(reading.spendHeight, `${label}: sums and thin meter fit the footer`).toBeLessThanOrEqual(48);
+          expect({ belowBody: reading.spendFooter.belowBody, atFoot: reading.spendFooter.atFoot, meterAfterAmounts: reading.spendFooter.meterAfterAmounts, inside: reading.spendFooter.inside }, `${label}: variant 2 geometry`).toEqual({ belowBody: true, atFoot: true, meterAfterAmounts: true, inside: true });
+          expect(reading.spendFooter.meterHeight, `${label}: a thin meter`).toBe(3);
+          expect(reading.spendFooter.monthShare).toBeCloseTo(0.51 / 20, 3);
+          expect(reading.spendFooter.callShare).toBeCloseTo(0.19 / 20, 3);
+          expect(reading.spendFooter.callColor).not.toBe(reading.spendFooter.monthColor);
           expect(reading.standaloneReports, `${label}: saved standalone report stays readable and copyable`).toEqual([{ text: expect.stringContaining("Atlas"), copyable: true }]);
           expect(reading.standaloneReports[0].text).toContain(lang === "uk" ? "Усі перевірки завершено." : "All checks completed.");
           expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
@@ -21560,6 +21578,7 @@ describe("floating voice companion", () => {
       server.stop();
       const processes = await close();
       expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      record("transcript.json", { driver: DRIVER, variant: 2, rule: "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal", processes, readings });
     }
   }, 1_800_000);
 

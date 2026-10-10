@@ -813,6 +813,7 @@ test("phone settings retain the month and last call in both languages, including
       await mount(<><VoiceCompanionHost project="atlas" mobile /><VoiceCompanionSetting /></>);
       expect(document.querySelector("[data-voice-companion]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-setting]")).toBeTruthy();
+      expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-usage]")?.textContent).toContain(locale === "en" ? "October" : "жовтень");
       const last = document.querySelector<HTMLElement>("[data-voice-companion-last-call]")!;
       expect(last.textContent).toContain("$0.40 · 7:51");

@@ -1,0 +1,499 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "variant": 2,
+  "rule": "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal",
+  "processes": {
+    "started": 8,
+    "leftAfterClose": 0
+  },
+  "readings": [
+    {
+      "viewport": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "spend": "This call $0.19 · October $0.51 of $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.0709804 0.420392 0.397333)",
+        "monthColor": "color(srgb 0.333333 0.333333 0.372549 / 0.4)"
+      },
+      "box": {
+        "x": 326,
+        "y": 164,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Reading the export plan. The three presets hold so far; checking the saved exports next.",
+        "Export plan reviewed. The three presets hold. One gap: a saved export from last month needs a migration test before the merge."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Result\n1:30\n\nAll checks completed. This report remains saved after the call ended.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "spend": "This call $0.19 · October $0.51 of $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.425804 0.858039 0.80902)",
+        "monthColor": "color(srgb 0.635294 0.635294 0.682353 / 0.4)"
+      },
+      "box": {
+        "x": 326,
+        "y": 164,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Reading the export plan. The three presets hold so far; checking the saved exports next.",
+        "Export plan reviewed. The three presets hold. One gap: a saved export from last month needs a migration test before the merge."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Result\n1:30\n\nAll checks completed. This report remains saved after the call ended.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.0709804 0.420392 0.397333)",
+        "monthColor": "color(srgb 0.333333 0.333333 0.372549 / 0.4)"
+      },
+      "box": {
+        "x": 326,
+        "y": 164,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Читаю план експорту. Три пресети поки тримаються; далі перевіряю збережені експорти.",
+        "План експорту перевірено. Три пресети тримаються. Одна прогалина: збережений минулого місяця експорт потребує тесту міграції перед злиттям."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Результат\n1:30\n\nУсі перевірки завершено. Звіт збережено після завершення розмови.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.425804 0.858039 0.80902)",
+        "monthColor": "color(srgb 0.635294 0.635294 0.682353 / 0.4)"
+      },
+      "box": {
+        "x": 326,
+        "y": 164,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Читаю план експорту. Три пресети поки тримаються; далі перевіряю збережені експорти.",
+        "План експорту перевірено. Три пресети тримаються. Одна прогалина: збережений минулого місяця експорт потребує тесту міграції перед злиттям."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Результат\n1:30\n\nУсі перевірки завершено. Звіт збережено після завершення розмови.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1000,
+      "lang": "en",
+      "scheme": "light",
+      "spend": "This call $0.19 · October $0.51 of $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.0709804 0.420392 0.397333)",
+        "monthColor": "color(srgb 0.333333 0.333333 0.372549 / 0.4)"
+      },
+      "box": {
+        "x": 262,
+        "y": 64,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Reading the export plan. The three presets hold so far; checking the saved exports next.",
+        "Export plan reviewed. The three presets hold. One gap: a saved export from last month needs a migration test before the merge."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Result\n1:30\n\nAll checks completed. This report remains saved after the call ended.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1000,
+      "lang": "en",
+      "scheme": "dark",
+      "spend": "This call $0.19 · October $0.51 of $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.425804 0.858039 0.80902)",
+        "monthColor": "color(srgb 0.635294 0.635294 0.682353 / 0.4)"
+      },
+      "box": {
+        "x": 262,
+        "y": 64,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Reading the export plan. The three presets hold so far; checking the saved exports next.",
+        "Export plan reviewed. The three presets hold. One gap: a saved export from last month needs a migration test before the merge."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Result\n1:30\n\nAll checks completed. This report remains saved after the call ended.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1000,
+      "lang": "uk",
+      "scheme": "light",
+      "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.0709804 0.420392 0.397333)",
+        "monthColor": "color(srgb 0.333333 0.333333 0.372549 / 0.4)"
+      },
+      "box": {
+        "x": 262,
+        "y": 64,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Читаю план експорту. Три пресети поки тримаються; далі перевіряю збережені експорти.",
+        "План експорту перевірено. Три пресети тримаються. Одна прогалина: збережений минулого місяця експорт потребує тесту міграції перед злиттям."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Результат\n1:30\n\nУсі перевірки завершено. Звіт збережено після завершення розмови.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    },
+    {
+      "viewport": 1000,
+      "lang": "uk",
+      "scheme": "dark",
+      "spend": "Ця розмова $0.19 · жовтень $0.51 із $20.00",
+      "spendHeight": 44,
+      "spendFooter": {
+        "belowBody": true,
+        "atFoot": true,
+        "meterHeight": 3,
+        "meterAfterAmounts": true,
+        "inside": true,
+        "monthShare": 0.025500025893702653,
+        "callShare": 0.00950002959280303,
+        "callColor": "color(srgb 0.425804 0.858039 0.80902)",
+        "monthColor": "color(srgb 0.635294 0.635294 0.682353 / 0.4)"
+      },
+      "box": {
+        "x": 262,
+        "y": 64,
+        "width": 360,
+        "height": 560
+      },
+      "inside": true,
+      "scrolls": true,
+      "atEnd": true,
+      "laneHidden": true,
+      "reports": [
+        "Читаю план експорту. Три пресети поки тримаються; далі перевіряю збережені експорти.",
+        "План експорту перевірено. Три пресети тримаються. Одна прогалина: збережений минулого місяця експорт потребує тесту міграції перед злиттям."
+      ],
+      "standaloneReports": [
+        {
+          "text": "Atlas · Результат\n1:30\n\nУсі перевірки завершено. Звіт збережено після завершення розмови.",
+          "copyable": true
+        }
+      ],
+      "lines": 3,
+      "expanded": 0,
+      "detailsOnPage": 0,
+      "messages": 13,
+      "copyControls": 13,
+      "lineHeights": [
+        36,
+        36,
+        36
+      ],
+      "answerCopyControls": 2,
+      "rowWidths": [
+        334,
+        334,
+        334
+      ],
+      "chevronsInside": true,
+      "answerWidths": [
+        334,
+        334
+      ],
+      "opened": 2,
+      "copied": 1
+    }
+  ]
+}

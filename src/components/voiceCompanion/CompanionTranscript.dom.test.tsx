@@ -295,7 +295,7 @@ test("the request row's human label is set in the UI sans font, not the tool-nam
 });
 
 
-test("the transcript header shows live, settled and incomplete spend in both languages", async () => {
+test("the transcript footer shows live, settled and incomplete spend with the month's meter and the call's share in both languages", async () => {
   const { setLocale } = await import("@/lib/i18n");
   const host = document.createElement("div");
   document.body.append(host);
@@ -308,18 +308,36 @@ test("the transcript header shows live, settled and incomplete spend in both lan
       const render = async (value: typeof usage) => act(async () => root.render(<CompanionTranscript record={{ ...sampleTranscript(locale), usage: value }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
       await render(usage);
       const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
-      expect(line().textContent).toBe(locale === "en" ? "This call $0.19 · October $0.51 of $20.00" : "Ця розмова $0.19 · жовтень $0.51 із $20.00");
+      expect(line().textContent).toBe(locale === "en" ? "This call $0.19 October $0.51 of $20.00" : "Ця розмова $0.19 жовтень $0.51 із $20.00");
+      expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
+      expect(line().parentElement!.lastElementChild).toBe(line());
+      const meter = () => line().querySelector<HTMLElement>('[data-companion-spend-meter][role="meter"]')!;
+      const share = (kind: "call" | "month") => Number(line().querySelector<HTMLElement>(`[data-spend-${kind}-fill]`)!.style.transform.slice(7, -1));
+      expect(Number(meter().getAttribute("aria-valuenow"))).toBeCloseTo(2.55);
+      expect(meter().getAttribute("aria-valuetext")).toContain("$0.51");
+      expect(share("month")).toBeCloseTo(0.51 / 20);
+      expect(share("call")).toBeCloseTo(0.19 / 20);
       expect(line().getAttribute("aria-label")).toContain("$20.00");
       expect(line().hasAttribute("title")).toBe(false);
       await render({ ...usage, callFinal: true, callUsd: 0.4, monthUsd: 16 });
       expect(line().dataset.final).toBe("true");
       expect(line().textContent).toContain("$0.40");
       expect(line().querySelector('[data-tone="warning"]')).toBeTruthy();
+      expect(share("month")).toBe(0.8);
+      expect(share("call")).toBe(0.02);
       await render({ ...usage, callIncomplete: true, callUsd: 0.004, monthUsd: 20 });
       expect(line().textContent).toContain("<$0.01");
       expect(line().textContent).toContain(locale === "en" ? "estimated" : "орієнтовно");
       expect(line().title).toContain("OpenAI");
       expect(line().querySelector('[data-tone="danger"]')).toBeTruthy();
+      expect(share("month")).toBe(1);
+      await render({ ...usage, monthUsd: 24, callUsd: 30 });
+      expect(share("month")).toBe(1);
+      expect(share("call")).toBe(1);
+      expect(meter().getAttribute("aria-valuenow")).toBe("100");
+      await render({ ...usage, monthUsd: 0, callUsd: 0, monthCapUsd: 0 });
+      expect(share("month")).toBe(0);
+      expect(share("call")).toBe(0);
     }
   } finally { await act(async () => setLocale("en")); }
 });

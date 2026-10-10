@@ -241,11 +241,11 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
         <span className="vc-tr-sub">{ended ? L.ended : L.live} · {clock(last)}</span>
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
-      {usage ? <CompanionSpend usage={usage} /> : null}
       <div ref={body} className="vc-tr-body" data-transcript-body onScroll={(event) => { const node = event.currentTarget; following.current = node.scrollTop + node.clientHeight >= node.scrollHeight - 40; }}>
         {record.truncated ? <p className="vc-deleg-note vc-deleg-wait">{L.truncated}</p> : null}
         {rows.length ? <ol className="vc-tr-list">{rows.map(item)}</ol> : <p className="vc-deleg-note vc-deleg-wait">{L.empty}</p>}
       </div>
+      {usage ? <CompanionSpend usage={usage} /> : null}
     </div>
   );
 }
@@ -266,7 +266,12 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-title { font-size: 13px; font-weight: 700; }
 .vc-tr-sub { font-size: 11.5px; color: var(--color-secondary); white-space: nowrap; }
 .vc-tr-close { margin-left: auto; width: 26px; height: 26px; box-shadow: none; }
-.vc-tr-spend { flex: none; padding: 7px 14px 8px; border-bottom: 1px solid var(--color-border); font-size: 11.5px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+.vc-tr-spend { flex: none; padding: 8px 14px 10px; border-top: 1px solid var(--color-border); font-size: 11.5px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+.vc-tr-spend-amounts { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+.vc-tr-spend-meter { position: relative; height: 3px; margin-top: 6px; border-radius: 2px; overflow: hidden; background: var(--color-border); }
+.vc-tr-spend-meter > span { position: absolute; inset: 0; transform-origin: left; }
+.vc-tr-spend-meter [data-spend-month-fill] { background: color-mix(in srgb, var(--color-secondary) 40%, transparent); }
+.vc-tr-spend-meter [data-spend-call-fill] { background: var(--vc-teal-ink); }
 .vc-tr-spend-value { color: var(--color-primary); }
 .vc-tr-spend [data-tone="warning"], .vc-tr-spend [data-tone="warning"] .vc-tr-spend-value { color: var(--color-warning); }
 .vc-tr-spend [data-tone="danger"], .vc-tr-spend [data-tone="danger"] .vc-tr-spend-value { color: var(--color-danger); }

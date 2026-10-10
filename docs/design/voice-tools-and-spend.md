@@ -25,14 +25,14 @@ note changes only what the six items below need.
 | (c) Bubbles | The voice's own bubbles (the operator calls the voice "голосовой оркестратор"): a pause of 250 ms in its audio ends playback (`media.ts:102-105`, `liveAdapter.ts:194`), the line turns `played` and every bubble comes out at once (`VoiceCompanion.tsx:323`); the voice resumes within 1.5 s, the line turns `playing` again and the unspoken bubbles are taken back (`VoiceCompanion.tsx:581`); a bubble that leaves while older ones remain sends everything older away (`VoiceCompanion.tsx:836-840`), and the taken-back bubbles return as new arrivals (`VoiceCompanion.tsx:629-630`). Separately, a second orchestrator answer replaces the first (`reducer.ts:404-411`), and the speech cap of 4 cuts cards along with speech (`VoiceCompanion.tsx:658-661`). | A pause shorter than `CONTINUE_MS` stays inside one playback; a line's shown bubbles never decrease; the speech cap counts and cuts only speech; answers are a list; reports have their own cards; cap raised to 6. Operator bubbles keep their current path. | A companion line with a 300 ms pause: its shown bubble keys never decrease and no older element leaves; on `main` two bubbles are taken back and the lane empties. |
 | (d) `member_required` | The voice delivers through an in-process request with no member session (`deliveryPaths.ts:29-36`); in team mode the host handler reads it as anonymous and refuses it (`handlers.ts:466-468`, `actor.ts:39-41`, `actor.ts:91-95`). Every send of the operator's 2026-10-10 call failed this way. After a rotation, a confirmation is cancelled because its frozen recipient is no longer the seat (`admission.ts:291`), and the successor's answer is dropped (`admission.ts:372`). | The call records who started it (the member, from the start request); the delivery names that member through an in-process actor seam on the host handler. A changed seat re-binds the request to the current seat and sends it; answers are accepted from the project's seat whatever its epoch. | Team-mode fixture: a voice send answers delivered with the member as author; on `main` it answers 401 `member_required`. A confirmation answered after a rotation is delivered to the new seat; on `main` it is cancelled `proposal_changed`. |
 | (e) Pricing | Observed (below): `gpt-live-1` is billed **per second at $0.05 a minute**, and Live reports only `usage.seconds`. It has no token rates and reports no tokens. The code already prices live voice from that reported duration and the backend from its reported tokens, at the observed rates. | No rate changes. Keep each backend response's token counts beside its price; update the verification date. The token clause of acceptance 5 cannot apply to `gpt-live-1` (see "WRONG-PREMISE" under (e)). | Re-pricing a stored response from its stored tokens equals its stored price; `LIVE_USD_PER_SECOND` equals the observed $0.05 / 60. |
-| (f) Spend shown | Spend is only in the settings dialog as the month's figure; nothing per call, nothing in the voice window. | Variant 1 (recommended, published for the operator's pick): a line under the transcript panel's title, «Ця розмова $0.19 · жовтень $0.51 із $20.00». At 390 px the companion is never mounted (`VoiceCompanionHost.tsx:34`), so the settings dialog adds the last call's spend under the month line. | The panel shows both figures from the events answer in en and uk; the existing driver's transcript and settings cases capture 1440, 1000 and 390. |
+| (f) Spend shown | Spend is only in the settings dialog as the month's figure; nothing per call, nothing in the voice window. | Variant 2, selected on 2026-10-10: both sums at the foot of the transcript above a thin monthly-cap meter, the call's share teal. At 390 px the companion is never mounted (`VoiceCompanionHost.tsx:34`), so the settings dialog adds the last call's spend under the month line, as in the published phone frames. | The panel shows both figures from the events answer in en and uk; the existing driver's transcript and settings cases capture 1440, 1000 and 390, including footer geometry and both meter shares. |
 
 **Design verdict: pass.** Step one of (e) was observed on the official pages (URLs,
 date and rates below). The observation answers acceptance 5 by itself: the
 voice is already priced from OpenAI's reported usage, and that usage is a
-duration. The spend placement is published as three numbered variants with
-variant 1 recommended; the build proceeds with variant 1 unless the operator
-picks another first.
+duration. The spend placement was published as three numbered variants with
+variant 1 recommended. The operator selected variant 2 on 2026-10-10; the build
+uses its footer meter and the published phone settings fallback.
 
 ## Was this solved before?
 
@@ -572,9 +572,12 @@ The settings answer gains `lastSession: { usd, seconds, endedAt, incomplete }`.
 ### Where
 
 - **Desktop, the voice window.** The transcript panel is the voice's window:
-  the character opens it (`CompanionTranscript.tsx:114-230`). Variant 1 puts
-  one line under its title row (`CompanionTranscript.tsx:221-225`), full
-  width, 11.5 px, tabular numbers, secondary colour, the amounts in primary.
+  the character opens it (`CompanionTranscript.tsx:114-230`). Selected variant 2
+  puts the two sums at its foot, under the scrolling body, full width,
+  11.5 px, tabular numbers, secondary colour, the amounts in primary. A 3 px
+  meter below them shows month spend against the cap and overlays the call's
+  share in teal. Shares are bounded to the meter; the sums keep their actual
+  values at and above the cap.
   The panel is 360 px wide at every desktop size (`CompanionTranscript.tsx:27`).
 - **390 px.** The phone layout (`(max-width: 639px), (max-height: 599px)`,
   `src/lib/attention/eligibility.ts:37`) never mounts the companion
@@ -608,9 +611,8 @@ numbered, 1440 px and 390 px, en and uk:
 
 1. **Header line (recommended).** One line under the panel's title. No new
    control; read in one glance when the window opens.
-2. **Footer meter.** The two figures at the panel's foot over a thin bar of the
-   month against the cap, the call's share in teal. Adds a moving bar the
-   operator did not ask for.
+2. **Footer meter (selected).** The two figures at the panel's foot over a thin
+   bar of the month against the cap, the call's share in teal.
 3. **State chip + header.** The call's figure in the chip under the character
    («Говорю · $0.19»), the month under the panel's title. Visible without
    opening the window; the 132 px block gets tight in Ukrainian and a figure
