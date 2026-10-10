@@ -1475,18 +1475,21 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      a beat after the record is visible. Its words used to bind it meanwhile;
      they no longer may. Every unresolved SDK row waits for its first evidence
      read, including a cold open with no local outbox. A known held mandate
-     stays visible meanwhile. The lookup's revalidation schedule bounds the
-     wait for rows whose delivery remains unclassified. */
+     stays visible meanwhile. Only a known mandate or pending outbox keeps
+     waiting through bounded revalidation for its delayed ledger join. */
   const withheldNativeRecords = useMemo(() => {
     const withheld = new Set<string>();
     for (const { item } of visibleItems) {
       if (item.kind !== "sysmsg") continue;
       const id = item.deliveredMessage?.engineMessageId;
       if (!id || provenanceLookup.forItem(item)) continue;
-      if (provenanceLookup.messagePending(id)) withheld.add(id);
+      const pending = pendingOutbox.length > 0 || holdsMandate
+        ? provenanceLookup.messagePending(id)
+        : provenanceLookup.messageReadPending(id);
+      if (pending) withheld.add(id);
     }
     return withheld;
-  }, [visibleItems, provenanceLookup]);
+  }, [visibleItems, provenanceLookup, pendingOutbox, holdsMandate]);
   const conversationRows = useMemo<ConversationRow[]>(() => {
     /* Which submissions the transcript is already answering for in THIS
        render. The tail below skips them, so one message can never have two

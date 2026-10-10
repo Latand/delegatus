@@ -112,11 +112,11 @@ mock.module("@/hooks/useToolActivityCues", () => ({
 
 const { LogFeed } = await import("./LogFeed");
 const { CardStatusBadge } = await import("./CardStatusBadge");
-const { resetOutboxForTests, seedLaunchOutbox } = await import("./conversation/outbox");
+const { enqueueOutbox, resetOutboxForTests, seedLaunchOutbox } = await import("./conversation/outbox");
 const { createSpawnAttempt, provisionalSpawnFile } = await import("./draftSpawn");
 const { seatMandateDelivery, seatProvisionalFile } = await import("./orchestrator/useSeatConfirm");
 const { resetHeldMandatesForTests } = await import("./conversation/heldMandate");
-const { resetMessageProvenanceCacheForTests } = await import("./feed/messageProvenance");
+const { resetMessageProvenanceCacheForTests, setMessageProvenanceRetryScheduleForTests } = await import("./feed/messageProvenance");
 const { messageTextDigest } = await import("@/lib/runtime/messageTextDigest");
 const { orchestratorMandateForDelivery } = await import("@/lib/orchestrator/prompt");
 const { resolveRole, roleSpawnPrompt } = await import("@/lib/roles/registry");
@@ -1224,4 +1224,62 @@ test("a cold SDK row waits for its first provenance read without a pending outbo
     expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
     expect(host.querySelectorAll("[data-mandate-card]")).toHaveLength(0);
   } finally { release(); globalThis.fetch = realFetch; }
+});
+
+test("an ordinary cold SDK row renders after the first empty provenance answer", async () => {
+  resetMessageProvenanceCacheForTests();
+  const text = "An ordinary SDK delivery without a saved ledger";
+  tailLines = [JSON.stringify({ type: "user", uuid: "ordinary-sdk-uuid", promptSource: "sdk", timestamp: new Date(RECORD_AT).toISOString(), message: { role: "user", content: text } })];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const realFetch = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/log/provenance?")) reads += 1;
+    await gate;
+    return { ok: true, status: 200, json: async () => ({ messages: {}, occurrences: [] }) } as Response;
+  }) as unknown as typeof fetch;
+  try {
+    const { host } = render({ ...answered("conversation_ordinary_sdk", "ordinary-sdk-launch"), engine: "claude", fmt: "claude", launch: undefined } as FileEntry);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(0);
+    release();
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(reads).toBe(1);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(1);
+    expect(host.textContent).toContain(text);
+    expect(host.querySelectorAll("[data-user-bubble], [data-mandate-card]")).toHaveLength(0);
+  } finally { release(); globalThis.fetch = realFetch; }
+});
+
+test("a pending outbox keeps its SDK record hidden after an empty answer until the ledger joins it", async () => {
+  resetMessageProvenanceCacheForTests();
+  setMessageProvenanceRetryScheduleForTests([10]);
+  const conversationId = "conversation_sdk_outbox_retry";
+  const text = "A pending operator message";
+  enqueueOutbox(conversationId, { id: "sdk-outbox-submission", text, images: 0, at: RECORD_AT });
+  tailLines = [JSON.stringify({ type: "user", uuid: "sdk-outbox-id", promptSource: "sdk", timestamp: new Date(RECORD_AT).toISOString(), message: { role: "user", content: text } })];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const realFetch = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const retry = String(input).startsWith("/api/log/provenance?") && ++reads > 1;
+    if (retry) await gate;
+    return { ok: true, status: 200, json: async () => ({ messages: retry ? { "sdk-outbox-id": { origin: "operator", submissionId: "sdk-outbox-submission" } } : {}, occurrences: [] }) } as Response;
+  }) as unknown as typeof fetch;
+  try {
+    const { host } = render({ ...answered(conversationId, "sdk-outbox-launch"), engine: "claude", fmt: "claude", launch: undefined } as FileEntry);
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    const bubble = host.querySelector("[data-user-bubble]");
+    expect(bubble).not.toBeNull();
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(reads).toBe(2);
+    expect(host.querySelectorAll('[data-feed-kind="sysmsg"]')).toHaveLength(0);
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    release();
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelector("[data-user-bubble]")).toBe(bubble);
+  } finally { release(); globalThis.fetch = realFetch; setMessageProvenanceRetryScheduleForTests(null); }
 });
