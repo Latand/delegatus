@@ -28,6 +28,10 @@ import {
 import { spawnTransport } from "./spawnTransport";
 
 export interface StructuredRecoveryRequest {
+  /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
+  admissionGuard?: () => void;
+  /** Seat authority after reservation, independent of this launch's new identity. */
+  authorityGuard?: () => void;
   path: string;
   conversationId?: string | null;
   origin?: MessageOrigin;
@@ -429,6 +433,7 @@ async function recoverCandidate(
     );
     const assertAccountAuthorized = async (): Promise<void> => {
       await ownership?.authorizeAccount?.(account.accountId ?? null);
+      request.authorityGuard?.();
     };
     let begun: SpawnBeginResult;
     try {
@@ -436,6 +441,7 @@ async function recoverCandidate(
         // Admission may have closed while recovery waited for this lease.
         assertRecoveryAdmission(request, registry);
         await assertAccountAuthorized();
+        request.admissionGuard?.();
         return await registry.beginSpawnRequestAsync({
           engine: current.engine,
           cwd: current.spec.cwd,

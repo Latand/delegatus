@@ -2915,7 +2915,7 @@ test("a terminal resume failure fences its reservation before a competing resend
     recover,
   });
 
-  expect(failed).toMatchObject({ ok: false, outcome: "failed", error: expect.stringContaining("host resume did not publish within 60 s") });
+  expect(failed).toMatchObject({ ok: false, outcome: "failed", code: "structured_revival_impossible", error: expect.stringContaining("host resume did not publish within 60 s") });
   const original = Object.values(registry.snapshot().heldDeliveries)
     .find((delivery) => delivery.clientMessageId === "resume-timeout-original")!;
   expect(original).toMatchObject({ state: "failed", text: "", error: expect.stringContaining("host resume did not publish within 60 s") });

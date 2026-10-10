@@ -15,6 +15,7 @@ import type { RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { structuredResumeSessionId } from "./structuredSpawn";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"));
 /* Publish-readiness now reads the limits cache out of the viewer state dir, so
@@ -22,6 +23,41 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"
    write the state directory the running viewer owns. */
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test.each(["account resolution", "spawn reservation"] as const)("a seat admission revoked during %s spawns no recovery host", async phase => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `seat-admission-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true }); fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  registry.upsert({ key: { engine: "codex", sessionId }, artifactPath, cwd, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "dead", host: null, structuredHost: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null });
+  let admitted = true;
+  let spawns = 0;
+  const reserve = registry.beginSpawnRequestAsync.bind(registry);
+  registry.beginSpawnRequestAsync = async request => {
+    const result = await reserve(request);
+    if (phase === "spawn reservation") admitted = false;
+    return result;
+  };
+  const guard = () => { if (!admitted) throw new DeliveryAdmissionRefusedError("seat-rotated"); };
+  const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
+    admissionGuard: guard, authorityGuard: guard,
+  }, { registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    resolveAccount: () => { if (phase === "account resolution") admitted = false;
+      return { engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }; },
+    spawn: async input => { spawns += 1; return { ok: true, target: null, path: artifactPath,
+      launchId: input.receipt.launchId, conversationId: conversation.id, launched: true, retrySafe: false,
+      initialMessage: "delivered", state: "settled" }; }, requestDeliveryDrain: () => {},
+  });
+  await expect(recovery).rejects.toBeInstanceOf(DeliveryAdmissionRefusedError);
+  expect(spawns).toBe(0);
+  const receipts = Object.values(registry.readOnlySnapshot().receipts);
+  expect(receipts).toHaveLength(phase === "account resolution" ? 0 : 1);
+  if (phase === "spawn reservation") expect(receipts[0]?.state).toBe("failed");
+});
 
 test("dead-host reconciliation preserves a replacement spawn staged after observation", () => {
   const sessionId = crypto.randomUUID();
