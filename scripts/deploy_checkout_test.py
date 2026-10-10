@@ -1,5 +1,6 @@
 """Synthetic switch regressions; no installation, service or live state is used."""
 import importlib.util
+import contextlib
 import pathlib
 import json
 import os
@@ -562,7 +563,7 @@ class CheckoutIntegration(unittest.TestCase):
             return b'<script src="/_next/static/synthetic.js"></script>'
         if route.endswith(".js"):
             return b"synthetic"
-        if route == "/api/tasks":
+        if route == "/api/tasks?project=":
             return b'{"tasks":[]}'
         if route == "/api/self-update":
             return json.dumps({"auto": {"enabled": False}, "serving": {r: {"sha": self.current} for r in ["web", "runtimeHost"]},
@@ -710,6 +711,74 @@ class CheckoutIntegration(unittest.TestCase):
             deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
         self.assertFalse(any("restart" in c for c in self.commands))
+
+    @contextlib.contextmanager
+    def board_http(self, status=200, body=b'{"tasks":[]}'):
+        import http.server
+        import threading
+        fixture = self
+        paths = []
+        # Many valid-sized rows make the unfiltered board exceed the read cap.
+        full_board = json.dumps({"tasks": [{"text": "x" * 3000}] * 1500}).encode()
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                paths.append(self.path)
+                code = 200
+                if self.path == "/api/tasks":
+                    answer = full_board
+                elif self.path == "/api/tasks?project=":
+                    code, answer = status, body
+                elif self.path == "/oversized":
+                    answer = full_board
+                else:
+                    answer = fixture.http(0, self.path, "synthetic-secret")
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(answer)))
+                self.end_headers()
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    self.wfile.write(answer)
+        with http.server.HTTPServer(("127.0.0.1", 0), Handler) as server:
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+            thread.start()
+            try:
+                record = json.loads(self.record_file.read_text())
+                record["port"] = server.server_address[1]
+                deploy.write_json(self.record_file, record)
+                self.adapter.http = deploy.http_read
+                yield record["port"], paths, full_board
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+
+    def test_large_board_passes_serving_and_preflight_without_reading_full_board(self):
+        with self.board_http() as (port, paths, full_board):
+            self.assertGreater(len(full_board), 4 * 1024 * 1024)
+            for route in ["/api/tasks", "/oversized"]:
+                with self.assertRaisesRegex(RuntimeError, "HTTP health oversized"):
+                    deploy.http_read(port, route, "synthetic-secret")
+            paths.clear()
+            self.assertTrue(self.adapter.serving()["checks"]["http"])
+            self.adapter.preflight()
+            self.assertEqual(paths.count("/api/tasks?project="), 2)
+            self.assertNotIn("/api/tasks", paths)
+            self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+            self.assertFalse(any("restart" in c for c in self.commands))
+
+    def test_broken_board_refuses_serving_and_preflight_without_publication_or_restart(self):
+        for status, body in [(503, b'{"tasks":[]}'), (200, b'{broken'), (200, b'{}'),
+                             (200, b'{"tasks":{}}'), (200, b'{"tasks":null}'), (200, b'[]'),
+                             (200, b"x" * (4 * 1024 * 1024 + 1))]:
+            with self.subTest(status=status, bodyBytes=len(body)), self.board_http(status, body) as (_, paths, _):
+                self.adapter.clock = FakeClock()
+                self.assertFalse(self.adapter.serving()["checks"]["http"])
+                with self.assertRaisesRegex(RuntimeError, "baseline serving health unavailable"):
+                    self.adapter.preflight()
+                self.assertIn("/api/tasks?project=", paths)
+                self.assertNotIn("/api/tasks", paths)
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertFalse(any("restart" in c for c in self.commands))
 
     def test_plan_requires_explicit_matching_state(self):
         with patch.dict(os.environ, {"LLV_STATE_DIR": ""}):
