@@ -2987,7 +2987,8 @@ test.each(["unchanged", "active", "claim-cancelled", "unreadable", "post-claim-c
 });
 
 
-test.each(["before-claim", "after-claim", "serialized-control"] as const)("provider continuation dispatch orders cancellation at %s", async timing => {
+test.each(["before-claim", "after-claim", "serialized-control", "after-claim-kill", "after-claim-failed-kill",
+  "after-claim-agent-kill", "after-claim-failed-agent-kill"] as const)("provider continuation dispatch orders cancellation at %s", async timing => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { runtimeIdleKillMatches } = await import("./contracts");
   const { invalidateProviderContinuation } = await import("@/lib/pipelines/engine");
@@ -3023,6 +3024,12 @@ test.each(["before-claim", "after-claim", "serialized-control"] as const)("provi
       if (next === "delivering") {
         if (timing === "after-claim") journal.append({ scope: { type: "session", id: conversationId }, kind: "pipeline.provider-continuation-cancelled", payload: { conversationId } });
         if (timing === "serialized-control") cancellations.push(cancel());
+        if (timing.includes("kill")) {
+          const operationId = `late-stop-${timing}`;
+          journal.executeOperation({ kind: "kill", conversationId, operationId, idempotencyKey: operationId,
+            sessionKey: session.sessionKey, origin: { kind: timing.includes("agent-kill") ? "agent" : "operator" } });
+          if (timing.includes("failed")) journal.transitionOperation(operationId, "failed", { reason: "termination unavailable" });
+        }
       }
     },
   }, () => ({ ...host(async () => {
@@ -3033,9 +3040,9 @@ test.each(["before-claim", "after-claim", "serialized-control"] as const)("provi
   try {
     await queue.drain();
     await Promise.all(cancellations);
-    expect(order).toEqual(timing === "serialized-control" ? ["send", "cancel-acknowledged"]
+    expect(order).toEqual(timing === "serialized-control" ? ["send", "cancel-acknowledged"] : timing.includes("agent-kill") ? ["send"]
       : timing === "before-claim" ? ["cancel-acknowledged"] : []);
-    expect(journal.operationResult(`automatic-${timing}`)!.receipt.status).toBe(timing === "serialized-control" ? "delivered" : "failed");
+    expect(journal.operationResult(`automatic-${timing}`)!.receipt.status).toBe(timing === "serialized-control" || timing.includes("agent-kill") ? "delivered" : "failed");
   } finally { journal.close(); }
 });
 
