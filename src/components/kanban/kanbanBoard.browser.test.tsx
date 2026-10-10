@@ -19512,6 +19512,69 @@ describe("parallel ask idle fallback", () => {
  * are never committed); the measurement records are written to `evidence/voice-companion/`.
  */
 describe("floating voice companion", () => {
+  browserTest("placement leaves skipped card contents unmeasured until they scroll into view", async () => {
+    const out = path.resolve(".artifacts/voice-companion-skipped-layout");
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openVoice(browser, server.base, "", { viewport: VIEWPORT, scheme: "light", lang: "en", surface: "underlay" });
+      try {
+        await page.evaluate(() => {
+          const panel = document.createElement("div");
+          panel.id = "placement-scroll-probe";
+          panel.style.cssText = "position:fixed;right:16px;bottom:16px;width:600px;height:240px;overflow:auto;z-index:2";
+          panel.innerHTML = '<div style="height:6000px"></div><div id="placement-skipped-card" style="content-visibility:auto;contain-intrinsic-size:900px"><div data-log-feed-scroller style="height:800px;overflow:auto">' +
+            Array.from({ length: 100 }, (_, i) => `<div data-placement-descendant style="display:contents"><button data-placement-descendant>Action ${i}</button><span data-placement-descendant>Visible when scrolled ${i}</span><div data-placement-descendant style="cursor:col-resize;width:30px;height:10px"></div><svg data-placement-descendant width="12" height="12"><path d="M0 0L12 12" /></svg></div>`).join("") + '</div></div>';
+          document.body.append(panel);
+          const reads = { boxes: 0, lines: 0, styles: 0 };
+          Object.assign(window, { placementProbeReads: reads });
+          const style = window.getComputedStyle;
+          window.getComputedStyle = function (element, pseudo) {
+            if (element.matches("[data-placement-descendant]")) reads.styles++;
+            return style.call(window, element, pseudo);
+          };
+          const box = Element.prototype.getBoundingClientRect;
+          Element.prototype.getBoundingClientRect = function () {
+            if (this.closest("#placement-skipped-card") && this.id !== "placement-skipped-card") reads.boxes++;
+            return box.call(this);
+          };
+          const lines = Range.prototype.getClientRects;
+          Range.prototype.getClientRects = function () {
+            const parent = this.startContainer.nodeType === Node.ELEMENT_NODE ? this.startContainer as Element : this.startContainer.parentElement;
+            if (parent?.closest("#placement-skipped-card")) reads.lines++;
+            return lines.call(this);
+          };
+        });
+        await page.waitForTimeout(1_000);
+        const hidden = await page.evaluate(() => ({
+          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number; styles: number } }).placementProbeReads,
+          skipped: !document.querySelector("[data-placement-descendant] button")!.checkVisibility({ contentVisibilityAuto: true }),
+        }));
+        expect(hidden.skipped).toBe(true);
+        expect(hidden.boxes).toBe(0);
+        expect(hidden.lines).toBe(0);
+        expect(hidden.styles).toBe(0);
+
+        await page.evaluate(() => { document.getElementById("placement-scroll-probe")!.scrollTop = 6_000; });
+        await page.waitForTimeout(1_000);
+        const visible = await page.evaluate(() => ({
+          ...(window as unknown as { placementProbeReads: { boxes: number; lines: number; styles: number } }).placementProbeReads,
+          shown: document.querySelector("[data-placement-descendant] button")!.checkVisibility({ contentVisibilityAuto: true }),
+        }));
+        expect(visible.shown).toBe(true);
+        expect(visible.boxes).toBeGreaterThan(0);
+        expect(visible.lines).toBeGreaterThan(0);
+        expect(visible.styles).toBeGreaterThan(0);
+        const placement = await readCompanion(page);
+        expect(placement.insideViewport).toBe(true);
+        expect(placement.overlapArea).toBe(0);
+        expect(placement.handleArea).toBe(0);
+        expect(pageErrors).toEqual([]);
+        fs.writeFileSync(path.join(out, "reads.json"), JSON.stringify({ hidden, visible, placement }, null, 2));
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  });
+
   const OUT = path.resolve(".artifacts/voice-companion");
   const HANDOFF = process.env.LLV_VOICE_COMPANION_HANDOFF?.trim() || OUT;
   const EVIDENCE = "evidence/voice-companion";
@@ -26876,6 +26939,141 @@ describe("idle seat interval eligibility", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+/** Registry-enriched rows use the existing read-only remote-agent surface. */
+describe("linked seats and shared-project agent activity", () => {
+  browserTest("a remote deployer stays under its task and the peer seat appears in its machine group", async () => {
+    const out = path.resolve(".artifacts/linked-seats-and-activity");
+    fs.mkdirSync(out, { recursive: true });
+    const project = `repo-${"a".repeat(32)}`, now = Date.now();
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/links/agents": { agents: [
+        { k: `a:${"1".repeat(16)}`, p: project, t: "deployer agent", ro: "deployer", e: "codex", m: "gpt-6-sol", st: "working", task: "t-search", at: now, peer: "Machine B", stale: false, asOf: now,
+          pl: { id: "pipeline-1", state: "running", stage: "release", stageState: "running" } },
+        { k: `a:${"2".repeat(16)}`, p: project, t: "orchestrator", ro: "orchestrator", seat: 1, e: "claude", m: "claude-opus-5", st: "waiting", at: now, peer: "Machine B", stale: false, asOf: now },
+      ] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, { deployer: number; seat: number; overflow: boolean }> = {};
+    try {
+      for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=linked-agents`, { width, height: 844 }, "light", "en", "reduce", width === 390);
+        try {
+          const bound = page.locator(width === 390 ? '[data-phone-kanban-column="assigned"] [data-remote-agents]' : `${card("t-search")} [data-remote-agents]`).first();
+          await bound.waitFor(); await bound.locator("summary").click();
+          expect(await bound.textContent()).toContain("deployer agent");
+          expect(await bound.textContent()).toContain("release");
+          const overflow = await bound.evaluate(node => node.scrollWidth > node.clientWidth + 1);
+          expect(overflow).toBe(false);
+          await bound.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${width}-deployer.png`) });
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const group = page.locator(width === 390 ? '[data-phone-kanban-column="inbox"] [data-remote-agents]' : '[data-status="inbox"] [data-remote-agents]').first();
+          await group.waitFor(); await group.locator("summary").click();
+          expect(await group.textContent()).toContain("Machine B");
+          expect(await group.textContent()).toContain("orchestrator");
+          expect(pageErrors).toEqual([]);
+          readings[String(width)] = { deployer: await bound.locator("[data-remote-agent]").count(), seat: await group.locator("[data-remote-agent]").count(), overflow };
+          await page.screenshot({ path: path.join(out, `${width}-seat.png`) });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/linked-seats-and-activity/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
+describe("operator worktree recovery maintenance", () => {
+  browserTest("preview and apply show reasons and fit desktop and phone in both languages", async () => {
+    const out = path.resolve(".artifacts/worktree-recovery");
+    fs.mkdirSync(out, { recursive: true });
+    const calls: boolean[] = [];
+    const excludedReasons = ["missing-native-evidence", "unproven-branch-hint", "unreadable-transcript",
+      "conflicting-repository-hint", "conflicting-project-identity", "conflicting-recorded-worktree",
+      "ambiguous-repository", "target-outside-project"] as const;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/board/maintenance/worktrees": async (request: Request) => {
+        const { dryRun } = await request.json() as { dryRun: boolean };
+        calls.push(dryRun);
+        return Response.json({ dryRun, rescanned: !dryRun,
+          folded: [{ cwd: "/repo/widgets-review", source: "fixture", sessions: 3, reason: "sibling-name-and-branch-hint" }],
+          leftAlone: excludedReasons.map((reason, index) => ({ cwd: `/repo/widgets-lane-${index}`, source: "other", sessions: 1, reason })),
+        });
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=worktree-recovery`, { width, height: 900 }, "dark", lang, "reduce", width < 640);
+        try {
+          const panel = page.locator("[data-worktree-recovery]");
+          await panel.waitFor();
+          expect(await panel.locator("button").count()).toBe(1);
+          await panel.locator("button").first().click();
+          await panel.locator("details").waitFor();
+          expect(await panel.locator("button").count()).toBe(2);
+          await panel.locator("summary").click();
+          expect(await panel.locator("li").count()).toBe(1 + excludedReasons.length);
+          const reasons = await panel.locator("li").allTextContents();
+          for (const reason of excludedReasons) {
+            expect(reasons.some(text => text.includes(translate(lang, `worktreeRecovery.reason.${reason}`)))).toBe(true);
+          }
+          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+          expect(fits).toBe(true);
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}-preview.png`) });
+          await panel.locator("button").nth(1).click();
+          await page.waitForFunction(() => document.querySelector("[data-worktree-recovery]")?.querySelectorAll("button").length === 1);
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, lang, fits, preview: true, applied: true, excludedReasons });
+        } finally { await context.close(); }
+      }
+      expect(calls).toEqual([true, false, true, false, true, false, true, false]);
+      fs.mkdirSync("evidence/worktree-recovery", { recursive: true });
+      fs.writeFileSync("evidence/worktree-recovery/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 30_000);
+});
+
+describe("worktree recovery from the board maintenance panel", () => {
+  browserTest("the real board opens recovery beside maintenance settings", async () => {
+    const out = path.resolve(".artifacts/worktree-recovery/board");
+    fs.mkdirSync(out, { recursive: true });
+    const tick = {
+      project: "atlas", changed: false, at: "2026-10-01T12:00:00Z",
+      settings: { project: "atlas", enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null },
+      effective: { enabled: true, wakeIntervalMinutes: 60, reason: null, monitorPrompt: null, until: null, isDefault: true, configured: false, lapsed: false, updatedAt: null },
+      defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+      state: null, stateError: null, lastRun: null, lastDelivery: null, journalError: null,
+      maintenance: { enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+        live: null, lastRun: null, nextEligibleAt: null, nextRunAt: null, waitingOn: "disabled", pauseReason: null, runsError: null },
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": tick,
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+      "/api/board/maintenance/worktrees": { dryRun: true, rescanned: false, folded: [], leftAlone: [] },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width: 1440, height: 900 }, "dark", "en", "reduce");
+      try {
+        await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+        await page.locator("[data-kanban-seat]").waitFor();
+        if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+        await page.locator("[data-kanban-seat] [data-seat-tick-thumb]").click();
+        const panel = page.locator("[data-seat-tick-maintenance] [data-worktree-recovery]");
+        await panel.waitFor();
+        await panel.locator("button").click();
+        await panel.locator("details").waitFor();
+        expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.resolve(".artifacts/worktree-recovery/variant-1-1440-en-board.png") });
+        fs.writeFileSync("evidence/worktree-recovery/maintenance.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", reachable: true, preview: true, fits: true }, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 30_000);
 });
 
 describe("fresh context rotation advice", () => {

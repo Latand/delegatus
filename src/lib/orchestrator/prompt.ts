@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 43;
+export const ORCHESTRATOR_PROMPT_VERSION = 44;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -279,7 +279,8 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
  */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}
 When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
-Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context. Never create tasks or pipelines on its board, spawn agents there or message its workers; only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them.`;
+Other projects: send_message_to_orchestrator; tasks, pipelines, spawns and worker messages need an explicit operator request quoted in crossProjectRequest.
+get_orchestrator lists linkedSeats. Coordinate production and shared locks via send_message_to_orchestrator with machine named.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who

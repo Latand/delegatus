@@ -4,7 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { canonicalProject, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+
+import { scheduleSharedForgeRenames } from "@/lib/projects/forgeRename";
 
 export type Scope = "board:sync";
 export type SharedProject = { key: string; name: string };
@@ -72,6 +74,7 @@ export function setShared(next: Shared): Shared {
   const normalized: Shared = { v: 1, all: next.all, projects: [...new Set(next.projects)].sort() };
   const current = readShared();
   if (JSON.stringify(normalized) !== JSON.stringify(current)) atomicWrite(linkFile("shared"), normalized);
+  scheduleSharedForgeRenames(normalized.all ? Object.keys(recordedProjectRemotes()).filter(shareable) : normalized.projects);
   return normalized;
 }
 
@@ -80,7 +83,7 @@ export function patchShared(change: unknown): Shared {
   const current = readShared();
   if (Object.keys(change).length === 1 && typeof change.all === "boolean") return setShared({ ...current, all: change.all });
   if (Object.keys(change).length === 2 && typeof change.project === "string" && typeof change.enabled === "boolean" && shareable(change.project)) {
-    return setShared({ ...current, projects: change.enabled ? [...current.projects, change.project] : current.projects.filter((key) => key !== change.project) });
+    return setShared({ ...current, projects: change.enabled ? [...current.projects.map(canonicalProject), canonicalProject(change.project)] : current.projects.filter((key) => canonicalProject(key) !== canonicalProject(change.project as string)) });
   }
   throw new Error("cannot-share");
 }
@@ -88,14 +91,18 @@ export function patchShared(change: unknown): Shared {
 export function sharedProjects(): SharedProject[] {
   const settings = readShared();
   const keys = settings.all ? Object.keys(recordedProjectRemotes()) : settings.projects;
-  return [...new Set(keys)].filter(shareable).sort().map((key) => {
+  scheduleSharedForgeRenames(keys.filter(shareable));
+  return [...new Set(keys.map(canonicalProject))].filter(shareable).sort().map((key) => {
     const remote = recordedProjectRemote(key)!;
     return { key, name: remote.split("/").at(-1)!.replace(/[\\\x00-\x1f\x7f]/g, "").slice(0, 64) || key };
   });
 }
 
 export function knownProjects(): SharedProject[] {
-  return Object.entries(recordedProjectRemotes()).filter(([key]) => shareable(key)).sort(([a], [b]) => a.localeCompare(b)).map(([key, remote]) => ({ key, name: remote.split("/").at(-1)!.replace(/[\\\x00-\x1f\x7f]/g, "").slice(0, 64) || key }));
+  return [...new Set(Object.keys(recordedProjectRemotes()).map(canonicalProject))].filter(shareable).sort().map((key) => {
+    const remote = recordedProjectRemote(key)!;
+    return { key, name: remote.split("/").at(-1)!.replace(/[\\\x00-\x1f\x7f]/g, "").slice(0, 64) || key };
+  });
 }
 
 export function safeEqual(a: string, b: string): boolean {

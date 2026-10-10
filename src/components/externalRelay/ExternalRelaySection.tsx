@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Pause, Play, RotateCcw, Unplug } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, useRef, type ReactNode } from "react";
 
 import { effortTierLabel } from "@/components/builderCopy";
 import { EngineRadioGroup } from "@/components/draft/AgentLaunchControls";

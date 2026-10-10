@@ -1,3 +1,4 @@
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import crypto from "node:crypto";
 
 import {
@@ -55,6 +56,8 @@ import { isInterruptionObligationId } from "./interruptionObligations";
 import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 export interface StructuredMessageRequest {
+  /** Live authorization at fresh reservation, after runtime and lock waits. */
+  admissionGuard?: () => void;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -359,6 +362,9 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
 }
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409,
+  });
   return {
     ok: false,
     structured: true,
@@ -518,7 +524,7 @@ async function holdDuringRuntimeSynchronization(
   const rejectedHold = supersededRejection(registry, persistedConversation);
   if (rejectedHold) return rejectedHold;
   if (owner?.kind === "legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
-  let conversation = persistedConversation;
+  const conversation = persistedConversation;
   /**
    * #1560: the last way an injection could become a held reservation.
    *
@@ -574,8 +580,8 @@ async function holdDuringRuntimeSynchronization(
     const deliveryText = content?.content.text ?? request.text;
     const contentDigest = content?.contentDigest ?? null;
     const payloadKind = refs.length ? "runtime-images" : "text";
-    /* Conflict and terminal replay outcomes remain side-effect free. Accepted
-       sends establish the durable account fence before reservation placement. */
+    /* Conflict and terminal replay outcomes remain side-effect free. The
+       account fence and fresh reservation commit under the same guard. */
     const replay = registry.preflightDeliveryReservation(
       conversation.id,
       deliveryText,
@@ -597,18 +603,12 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
+    if (!replay && request.admissionGuard
+      && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
     const generation = conversation.generations.at(-1);
     const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
-    if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
-      /* Off the loop; refused before anything is reserved (rule c). */
-      const reseatFor = conversation.id;
-      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" },
-        () => registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId }));
-      if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
-      conversation = reseat.value;
-    }
-    /* The write lock is waited for off the event loop and kept for the write;
-       one another writer keeps past its deadline reserves nothing. */
+    const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
+    /* The registry write lock is waited for off the event loop. */
     const place = async (): Promise<HeldDelivery> => {
       const held = await registry.holdDeliveryOffLoop(
         conversation.id,
@@ -618,7 +618,8 @@ async function holdDuringRuntimeSynchronization(
         refs,
         contentDigest,
         commandInput(request),
-        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
+        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard,
+          ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
       );
       if (!held) throw new Error(REGISTRY_WRITER_BUSY);
       return held;
@@ -1346,8 +1347,9 @@ export async function enqueueStructuredMessage(
      recovery of a retired round would silently fork it (issue #383). */
   const rejected = supersededRejection(registry, registry.conversation(session.conversationId as ViewerConversationId));
   if (rejected) return rejected;
-  let conversation = registry.conversation(session.conversationId as ViewerConversationId);
-  if (!conversation) return ownershipUnavailable();
+  const currentConversation = registry.conversation(session.conversationId as ViewerConversationId);
+  if (!currentConversation) return ownershipUnavailable();
+  let conversation: RegistryConversation = currentConversation;
   const idempotencyKey = request.clientMessageId?.trim() || `queue_${crypto.randomUUID()}`;
   const overlong = refusedIdempotencyKey(idempotencyKey);
   if (overlong) return overlong;
@@ -1368,6 +1370,8 @@ export async function enqueueStructuredMessage(
       content.contentDigest,
       commandInput(request),
     );
+    if (!terminalReplay && request.admissionGuard
+      && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
   } catch (error) {
     return deliveryFailure(error);
   }
@@ -1385,16 +1389,92 @@ export async function enqueueStructuredMessage(
   }
   const generation = conversation.generations.at(-1);
   const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
-  /* Request an active-account reseat before any predecessor host republish or
-     recovery. An accepted migration fence assigns this send to the successor. */
-  if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
+  const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
+  /* Conflict preflight computes candidate refs and digest before writing.
+     A changed payload under an existing client message id rejects with zero
+     blob publication, GC, or registry effects. First admissions publish
+     before the reservation references them. */
+  const admissionKey = request.clientMessageId?.trim()
+    ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
+    : null;
+  /* The attachment bytes are published ONCE per request, however many times
+     the admission is entered. A dead-host send enters it twice — before the
+     resume to make the payload durable, and after it to read the reservation
+     the drain may have assigned — and re-publishing on the second pass is
+     duplicated work against the blob store for bytes that are already there
+     under the same content address. */
+  let publishedImages = false;
+  const admitDurably = () => withAdmissionSection(admissionKey, async () => {
+    const admit = async (): Promise<HeldDelivery> => {
+      const replay = registry.preflightDeliveryReservation(
+        conversation.id,
+        content.content.text,
+        idempotencyKey,
+        refs.length ? "runtime-images" : "text",
+        refs,
+        content.contentDigest,
+        commandInput(request),
+      );
+      if (replay) return replay;
+      if (request.admissionGuard
+        && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
+      if (rawImages.length > 0 && !publishedImages) {
+        (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
+        publishedImages = true;
+      }
+      /* A reservation race can follow publication when another process runs
+         older code or when a structured spawn published the same digest.
+         The grace-period collector owns orphan cleanup. Synchronous removal
+         cannot distinguish this admission's blob from a deduplicated blob
+         whose durable reservation is still pending.
+
+         The write lock is waited for off the event loop and kept for the
+         write (incident 2026-10-06); one another writer keeps past its
+         deadline reserves nothing and refuses the send. */
+      const held = await registry.holdDeliveryOffLoop(
+        conversation.id,
+        content.content.text,
+        idempotencyKey,
+        refs.length ? "runtime-images" : "text",
+        refs,
+        content.contentDigest,
+        commandInput(request),
+        { admissionGuard: request.admissionGuard,
+          ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
+      );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
+    };
+    if (rawImages.length === 0) return withAccountMutationLockAsync(admit, { holder: "send admission", caller: "send admission" });
+    return (dependencies.withImageAdmissionLock
+      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(admit);
+  });
+  let reseatReservation: HeldDelivery | null = null;
+  /* Reserve the send and request its active-account reseat in one mutation
+     before any predecessor republish or recovery can run. */
+  if (needsAccountReseat) {
     try {
-      /* Off the loop; refused before anything is reserved (rule c). */
-      const reseatFor = conversation.id;
-      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" },
-        () => registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId }));
-      if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
-      conversation = reseat.value;
+      if (request.kind === "inject") {
+        // Injection keeps its existing source-thread admission rules.
+        const reseatFor = conversation.id;
+        const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" }, () => {
+          if (!terminalReplay) request.admissionGuard?.();
+          return registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId });
+        });
+        if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
+        conversation = reseat.value;
+      } else {
+        reseatReservation = await admitDurably();
+        if (reseatReservation.state === "delivered") {
+          return deliveredReservationReplay(reseatReservation, idempotencyKey, conversation.id, false);
+        }
+        if (reseatReservation.state === "failed") {
+          return { ok: false, structured: true, outcome: "failed",
+            error: reseatReservation.error || "delivery target is unavailable", status: 409,
+            operationId: reseatReservation.command.operationId };
+        }
+        conversation = registry.conversation(conversation.id)!;
+      }
     } catch (error) {
       return deliveryFailure(error);
     }
@@ -1450,68 +1530,19 @@ export async function enqueueStructuredMessage(
          A deterministic refusal before admission closes the MCP receipt with
          its actual reason instead of leaving it unknown forever. */
       if (!isRuntimeHostTransportFailure(error)) {
+        if (reseatReservation) {
+          const failure = deliveryFailure(error);
+          const settled = await endReservationForRequest(registry, progress, reseatReservation, failure.error);
+          if (!settled.ended) return acceptedHeld(reseatReservation.command.operationId);
+          return { ...failure, operationId: reseatReservation.command.operationId };
+        }
         return refusedBeforeReservation(deliveryFailure(error));
       }
     }
   }
   const recoveryRequired = !migrationOwnsSend
     && requiresDeadConversationRecovery(session, registry, conversation);
-  /* Conflict preflight computes candidate refs and digest before writing.
-     A changed payload under an existing client message id rejects with zero
-     blob publication, GC, or registry effects. First admissions publish
-     before the reservation references them. */
-  const admissionKey = request.clientMessageId?.trim()
-    ? `${conversation.id}\u0000${request.clientMessageId.trim()}`
-    : null;
-  /* The attachment bytes are published ONCE per request, however many times
-     the admission is entered. A dead-host send enters it twice — before the
-     resume to make the payload durable, and after it to read the reservation
-     the drain may have assigned — and re-publishing on the second pass is
-     duplicated work against the blob store for bytes that are already there
-     under the same content address. */
-  let publishedImages = false;
-  const admitDurably = () => withAdmissionSection(admissionKey, async () => {
-    const admit = async (): Promise<HeldDelivery> => {
-      const replay = registry.preflightDeliveryReservation(
-        conversation.id,
-        content.content.text,
-        idempotencyKey,
-        refs.length ? "runtime-images" : "text",
-        refs,
-        content.contentDigest,
-        commandInput(request),
-      );
-      if (replay) return replay;
-      if (rawImages.length > 0 && !publishedImages) {
-        (dependencies.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
-        publishedImages = true;
-      }
-      /* A reservation race can follow publication when another process runs
-         older code or when a structured spawn published the same digest.
-         The grace-period collector owns orphan cleanup. Synchronous removal
-         cannot distinguish this admission's blob from a deduplicated blob
-         whose durable reservation is still pending.
-
-         The write lock is waited for off the event loop and kept for the
-         write (incident 2026-10-06); one another writer keeps past its
-         deadline reserves nothing and refuses the send. */
-      const held = await registry.holdDeliveryOffLoop(
-        conversation.id,
-        content.content.text,
-        idempotencyKey,
-        refs.length ? "runtime-images" : "text",
-        refs,
-        content.contentDigest,
-        commandInput(request),
-      );
-      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
-      return held;
-    };
-    if (rawImages.length === 0) return withAccountMutationLockAsync(admit, { holder: "send admission", caller: "send admission" });
-    return (dependencies.withImageAdmissionLock
-      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(admit);
-  });
-  let recoveryReservation: HeldDelivery | null = null;
+  let recoveryReservation: HeldDelivery | null = reseatReservation;
   if (recoveryRequired) {
     /* The WHOLE message is reserved before the host is raised — the text and
        the attachment bytes, under one key, through the one admission every
