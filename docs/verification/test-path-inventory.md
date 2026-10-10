@@ -2176,3 +2176,13 @@ constraints as the baseline.
 `bunx tsc --noEmit` through the shared gate, `git diff --check`, and the
 fingerprint-aware privacy gate against the merge base with `--check-commits`
 pass.
+
+The separate historical `src/lib/mcp/bindings.test.ts` note is also resolved:
+the unchanged file passes **105/0**. Its three decision fixtures already carry
+the project fields missing from the older inventory result.
+
+The normal publication hook passes privacy, types, changed-file lint and both
+touched/Linux comparisons with zero new failures. Its runtime checks pass the
+Viewer build, all 24 compiled server modules and HTTP 200 from `/`, host
+succession and disconnected-client rehearsal, induced failure controls, both
+native Codex engine versions and their shared contracts.
