@@ -6,31 +6,80 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { bindStructuredDeliveryQueue, structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
+import { bindStructuredDeliveryQueue, structuredDeliveryHeldHosts } from "@/lib/runtime/structuredDeliveryController";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeSession } from "@/lib/runtime/contracts";
-import { turnEvidenceReader } from "./instance";
+import { ownerCensusReader } from "./instance";
 import { describeUpdateWait, launchHoldRefusal } from "./launchHold";
-import { probeQuiet, currentHostTurnIdle, registryAdmissionEvidence, UNRESOLVED_TURN_GRACE_MS, type QuietPorts, type TurnEvidence } from "./quiet";
+import { probeQuiet, registryAdmissionEvidence, sessionClaimsOpenTurn, UNRESOLVED_TURN_GRACE_MS, type OwnerlessReading, type OwnerReading, type QuietPorts, type TailReading } from "./quiet";
 import type { Snapshot } from "./types";
 
 const NOW = Date.parse("2026-01-01T12:00:00Z");
 const snapshot = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
 
-/* The readings `agent_activity` gives, as the drain receives them. */
-const LIVE_HOST = { state: "alive", processAlive: true } as const;
-const GONE_HOST = { state: "gone", processAlive: false } as const;
-const RUNNING: TurnEvidence = { record: { lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy", host: { state: "alive" } }, registryHost: LIVE_HOST };
-const SILENT_LIVE: TurnEvidence = { record: { lifecycle: "stalled", reason: "host_alive_transcript_silent", turnState: "busy", host: { state: "alive" } }, registryHost: LIVE_HOST };
-const SETTLED_LIVE: TurnEvidence = { record: { lifecycle: "waiting", reason: "host_alive_turn_idle", turnState: "idle", host: { state: "alive" } }, registryHost: LIVE_HOST };
-const STARTING: TurnEvidence = { record: { lifecycle: "starting", reason: "launch_unproven", turnState: "unknown", host: { state: "unknown" } }, registryHost: null };
-const DEAD_OPEN: TurnEvidence = { record: { lifecycle: "stalled", reason: "host_gone_turn_open", turnState: "busy", host: { state: "gone" } }, registryHost: GONE_HOST };
-const GONE_IDLE: TurnEvidence = { record: { lifecycle: "gone", reason: "host_gone_turn_settled", turnState: "idle", host: { state: "gone" } }, registryHost: GONE_HOST };
-const UNRESOLVED: TurnEvidence = { record: null, registryHost: null };
+/* What one conversation's own records say, as the drain's reader returns
+   them (docs/design/update-drain-liveness.md, R7). A live host is judged on
+   its handle, its row reference, its own writer's journal statement and its
+   transcript; the fixture reads that statement off the row's labels, as the
+   host's own publication would carry it. */
+type Evidence = {
+  owners?: Partial<OwnerReading>[];
+  /** A row that claims a host and records no process. */
+  ownerless?: true;
+  /** The registry knows nothing the row names. */
+  unresolved?: true;
+  /** The reference's own transcript. */
+  tail?: TailReading | null;
+};
+const busy = (lastRecordAt = NOW): TailReading => ({ turn: "busy", lastRecordAt });
+const idle: TailReading = { turn: "idle", lastRecordAt: NOW };
+const RUNNING: Evidence = { owners: [{ process: "alive", tail: busy() }], tail: busy() };
+const SILENT_LIVE: Evidence = { owners: [{ process: "alive", tail: busy(NOW - 24 * 60 * 60_000) }], tail: busy(NOW - 24 * 60 * 60_000) };
+const SETTLED_LIVE: Evidence = { owners: [{ process: "alive", tail: idle }], tail: idle };
+const STARTING: Evidence = { ownerless: true, tail: null };
+const DEAD_OPEN: Evidence = { owners: [{ process: "gone" }], tail: busy() };
+const GONE_IDLE: Evidence = { owners: [{ process: "gone" }], tail: idle };
+const UNRESOLVED: Evidence = { unresolved: true };
+/** A host this Viewer holds for the conversation, reporting `turn`. */
+const withHandle = (evidence: Evidence, turn: "busy" | "idle"): Evidence => ({ ...evidence,
+  owners: evidence.owners?.some((owner) => owner.process === "alive")
+    ? evidence.owners.map((owner) => owner.process === "alive" ? { ...owner, handle: turn } : owner)
+    : [...evidence.owners ?? [], { process: "alive", handle: turn, tail: evidence.tail ?? null }] });
+
+/** An owner census whose evidence `read` gives per conversation id. */
+function census(read: (conversationId: string) => Evidence | "throws"): NonNullable<QuietPorts["owners"]> {
+  return async (sessions) => {
+    const built = new Map<string, { owners: OwnerReading[]; ownerless: OwnerlessReading[]; evidence: Evidence }>();
+    const of = (conversationId: string) => {
+      let held = built.get(conversationId);
+      if (held) return held;
+      const evidence = read(conversationId);
+      if (evidence === "throws") throw new Error("probe failed");
+      const row = sessions.find((session) => session.conversationId === conversationId);
+      const place = { binding: conversationId, artifactPath: null, entryKey: null, engine: "codex", cwd: null };
+      held = { evidence,
+        owners: (evidence.owners ?? []).map((owner, index) => ({ ...place, id: `${conversationId}:${index}`, role: "host" as const, process: "alive" as const,
+          journal: row && sessionClaimsOpenTurn(row) ? "claimed" as const : null, ...owner })),
+        ownerless: evidence.ownerless ? [{ ...place, id: `${conversationId}:ownerless`, kind: "hosted-row" as const, updatedAt: NOW, tail: evidence.tail ?? null }] : [] };
+      built.set(conversationId, held);
+      return held;
+    };
+    for (const session of sessions) of(session.conversationId);
+    const all = <T,>(pick: (held: { owners: OwnerReading[]; ownerless: OwnerlessReading[] }) => T[]) => [...built.values()].flatMap(pick);
+    return {
+      owners: all((held) => held.owners),
+      ownerless: all((held) => held.ownerless),
+      bound: (reference) => reference.conversationId ? [...of(reference.conversationId).owners, ...of(reference.conversationId).ownerless] : [],
+      names: (reference) => !!reference.conversationId && !of(reference.conversationId).evidence.unresolved,
+      tail: async (reference) => reference.conversationId ? of(reference.conversationId).evidence.tail ?? null : null,
+    };
+  };
+}
 
 function ports(turn = "idle", host = "hosted", cursor = "pending", ageMinutes = 11): QuietPorts {
   return {
-    runtimeSnapshot: async () => ({ sessions: [{ turn, host }] }) as Awaited<ReturnType<QuietPorts["runtimeSnapshot"]>>,
+    runtimeSnapshot: async () => ({ sessions: [{ conversationId: "conversation_fixture", turn, host, activeTurnId: null }] }) as Awaited<ReturnType<QuietPorts["runtimeSnapshot"]>>,
+    owners: census(() => ["running", "interrupt_requested"].includes(turn) ? RUNNING : SETTLED_LIVE),
     pipelines: () => [{ state: "running", cursor: { state: cursor } }] as unknown as ReturnType<QuietPorts["pipelines"]>,
     presence: () => [{ lastInteractionAt: NOW - ageMinutes * 60_000 }] as unknown as ReturnType<QuietPorts["presence"]>,
     registryHealth: () => [],
@@ -94,7 +143,7 @@ test("89 stale journal turns are discounted and the four working turns are named
     host: i < 20 ? "unhosted" : i < 40 ? "dead" : i === 88 ? "registering" : "hosted", turn: "running" }));
   const live = Array.from({ length: 4 }, (_, i) => ({ conversationId: `conversation_work-${i}`, engine: "codex", cwd: null, host: "hosted", turn: "running" }));
   p.runtimeSnapshot = async () => ({ sessions: [...stale, ...live] }) as never;
-  p.turnLiveness = async ({ conversationId: id }) => id.startsWith("conversation_work") ? RUNNING : id.endsWith("87") ? GONE_IDLE : DEAD_OPEN;
+  p.owners = census((id) => id.startsWith("conversation_work") ? RUNNING : id.endsWith("87") ? GONE_IDLE : DEAD_OPEN);
   const result = await probeQuiet(snapshot, p, NOW);
   expect(result.blockers).toMatchObject({ turns: 4, discounted: 89 });
   expect(result.blockers.turnList!.map((turn) => turn.conversationId)).toEqual(live.map((turn) => turn.conversationId));
@@ -111,24 +160,26 @@ test("a pending restart or a launcher still starting blocks; closed stages do no
 test("uncertain liveness keeps turns counted, and only severed stages are discounted", async () => {
   for (const verdict of [STARTING, RUNNING, "throws"] as const) {
     const p = ports("running");
-    p.turnLiveness = async () => { if (verdict === "throws") throw new Error("probe failed"); return verdict; };
-    expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
+    p.owners = census(() => verdict);
+    // A reading that throws is no verdict: it holds admission as unreadable (R7).
+    const { blockers } = await probeQuiet(snapshot, p, NOW);
+    expect(verdict === "throws" ? blockers.unreadable : blockers.turns).toBe(verdict === "throws" ? "probe failed" : 1);
   }
   const p = ports();
-  p.turnLiveness = async () => DEAD_OPEN;
+  p.owners = census(() => DEAD_OPEN);
   p.pipelines = () => ["running", "spawning", "committing"].map((state) => ({ id: state, task: "Finish work\nDetails", state: "running",
     cursor: { stageId: "build", state }, runs: [{ stageId: "build", attempts: [{ conversationId: "conversation_gone" }] }] })) as never;
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 2, stageList: [{ cursor: "spawning" }, { cursor: "committing" }] });
   // A settled turn under a dead host is the engine's to read: the stage has an outcome to collect,
   // for the stated bound. An open or unreadable turn with no process left releases it at once.
-  p.turnLiveness = async () => GONE_IDLE;
+  p.owners = census(() => GONE_IDLE);
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 3, settled: 1 });
   expect((await probeQuiet(snapshot, p, NOW + UNRESOLVED_TURN_GRACE_MS)).blockers).toMatchObject({ stages: 2, settled: 1 });
-  p.turnLiveness = async () => ({ ...DEAD_OPEN, record: { ...DEAD_OPEN.record!, turnState: "unknown" } });
+  p.owners = census(() => ({ ...DEAD_OPEN, tail: { turn: "unknown", lastRecordAt: NOW } }));
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 2, settled: 0 });
   // A headless reviewer its flow records keeps both, whatever the rest of the evidence says.
   p.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_gone", turn: "running", host: "hosted" }] }) as never;
-  p.turnLiveness = async () => ({ record: null, registryHost: GONE_HOST, headlessReviewerProcess: "alive" });
+  p.owners = census(() => ({ owners: [{ process: "gone" }, { role: "reviewer", process: "alive" }], tail: null }));
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 3, turns: 1 });
 });
 
@@ -145,12 +196,12 @@ test("draining uses a two-minute operator window and names the busy process", as
 
 test("a liveness-stalled process that still owns its pid blocks the update", async () => {
   const p = ports("running");
-  p.turnLiveness = async () => SILENT_LIVE;
+  p.owners = census(() => SILENT_LIVE);
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
   // The row's status word says the host is gone while the process it records still answers.
-  p.turnLiveness = async () => ({ ...DEAD_OPEN, registryHost: { state: "gone", processAlive: true } });
+  p.owners = census(() => ({ owners: [{ process: "alive", tail: busy() }], tail: busy() }));
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
-  p.turnLiveness = async () => ({ record: null, registryHost: { state: "gone", processAlive: true } });
+  p.owners = census(() => ({ owners: [{ process: "alive", tail: null }], tail: null }));
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
 });
 
@@ -166,19 +217,21 @@ test("an undispatched held reservation cannot block its own drain", async () => 
 
 test("a previous terminal transcript cannot hide a newly admitted turn", async () => {
   const p = ports("running");
-  p.turnLiveness = async () => ({ ...SETTLED_LIVE, currentTurnIdle: false });
+  p.owners = census(() => withHandle(SETTLED_LIVE, "busy"));
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
   // A settled transcript under a live process proves nothing until the host itself says it is idle.
-  p.turnLiveness = async () => SETTLED_LIVE;
+  p.owners = census(() => SETTLED_LIVE);
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
-  p.turnLiveness = async () => ({ ...SETTLED_LIVE, currentTurnIdle: true });
+  p.owners = census(() => withHandle(SETTLED_LIVE, "idle"));
+  expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
+  p.owners = census(() => ({ owners: [{ process: "alive", handle: "idle", journal: "idle", tail: idle }], tail: idle }));
   expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(0);
 });
 
 test("a replacement host running a turn overrides the old process death", async () => {
-  for (const evidence of [GONE_IDLE, DEAD_OPEN, { record: null, registryHost: GONE_HOST }]) {
+  for (const evidence of [GONE_IDLE, DEAD_OPEN, { owners: [{ process: "gone" as const }], tail: null }]) {
     const p = ports("running");
-    p.turnLiveness = async () => ({ ...evidence, currentTurnIdle: false });
+    p.owners = census(() => withHandle(evidence, "busy"));
     expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
   }
 });
@@ -186,7 +239,8 @@ test("a replacement host running a turn overrides the old process death", async 
 test("dead host health does not veto proof of death; active replacement health does", async () => {
   for (const status of ["dead", "unhosted", "active"] as const) {
     const p = ports("running");
-    p.turnLiveness = async () => ({ ...DEAD_OPEN, currentTurnIdle: currentHostTurnIdle({ status, activeTurnRef: null }) });
+    // A held host reporting `dead` or `unhosted` is no handle; an active one is an owner of its own.
+    p.owners = census(() => status === "active" ? withHandle(DEAD_OPEN, "busy") : DEAD_OPEN);
     expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(status === "active" ? 1 : 0);
   }
 });
@@ -196,16 +250,16 @@ test.each(["unhosted", "dead", "conflict"])("a %s running journal row needs curr
   for (const evidence of [RUNNING, STARTING, SETTLED_LIVE, SILENT_LIVE, UNRESOLVED, "throws"] as const) {
     const p = ports("running", host);
     let reads = 0;
-    p.turnLiveness = async () => {
-      reads++;
-      if (evidence === "throws") throw new Error("unavailable");
-      return evidence;
-    };
-    expect((await probeQuiet(snapshot, p, NOW)).blockers.turns).toBe(1);
+    p.owners = census(() => { reads++; return evidence; });
+    const { blockers } = await probeQuiet(snapshot, p, NOW);
+    // A reading that throws is no verdict: it holds admission as unreadable (R7).
+    expect(evidence === "throws" ? blockers.unreadable : blockers.turns).toBe(evidence === "throws" ? "probe failed" : 1);
     expect(reads).toBe(1);
-    p.turnLiveness = async () => DEAD_OPEN;
+    p.owners = census(() => DEAD_OPEN);
     expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(true);
-    p.turnLiveness = async () => ({ ...SETTLED_LIVE, currentTurnIdle: true });
+    p.owners = census(() => withHandle(SETTLED_LIVE, "idle"));
+    expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(false);
+    p.owners = census(() => ({ owners: [{ process: "alive", handle: "idle", journal: "idle", tail: idle }], tail: idle }));
     expect((await probeQuiet(snapshot, p, NOW)).quiet).toBe(true);
   }
 });
@@ -214,7 +268,7 @@ test("a journal row nothing resolves is counted, blocks for its stated bound and
   const p = ports("idle", "hosted", "pending");
   const rows = (ids: string[]) => async () => ({ sessions: ids.map((conversationId) => ({ conversationId, host: "hosted", turn: "running" })) }) as never;
   p.runtimeSnapshot = rows(["conversation_orphan", "conversation_work"]);
-  p.turnLiveness = async ({ conversationId }) => conversationId === "conversation_work" ? RUNNING : UNRESOLVED;
+  p.owners = census((conversationId) => conversationId === "conversation_work" ? RUNNING : UNRESOLVED);
   const first = await probeQuiet(snapshot, p, NOW);
   expect(first.blockers).toMatchObject({ turns: 2, unresolved: 1, unresolvedBlocking: 1, unresolvedGraceMs: UNRESOLVED_TURN_GRACE_MS, discounted: 0 });
   expect(first.blockers.turnList).toEqual([
@@ -230,37 +284,39 @@ test("a journal row nothing resolves is counted, blocks for its stated bound and
   p.runtimeSnapshot = rows(["conversation_orphan"]);
   expect(await probeQuiet(snapshot, p, NOW + UNRESOLVED_TURN_GRACE_MS)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1 } });
   // A row that resolved and comes back unresolved later is a new observation with a new bound.
-  p.turnLiveness = async () => RUNNING;
+  p.owners = census(() => RUNNING);
   expect((await probeQuiet(snapshot, p, NOW + UNRESOLVED_TURN_GRACE_MS)).blockers).toMatchObject({ turns: 1, unresolved: 0 });
-  p.turnLiveness = async () => UNRESOLVED;
+  p.owners = census(() => UNRESOLVED);
   expect((await probeQuiet(snapshot, p, NOW + 2 * UNRESOLVED_TURN_GRACE_MS)).blockers).toMatchObject({ turns: 1, unresolvedBlocking: 1 });
   expect((await probeQuiet(snapshot, p, NOW + 3 * UNRESOLVED_TURN_GRACE_MS)).quiet).toBe(true);
 });
 
 test("a registry row with no transcript answers at once: gone releases, a young launch holds (#2515)", async () => {
   const p = ports("running");
-  p.turnLiveness = async () => ({ record: null, registryHost: GONE_HOST });
+  p.owners = census(() => ({ owners: [{ process: "gone" }], tail: null }));
   expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: true, blockers: { turns: 0, discounted: 1, unresolved: 0 } });
-  p.turnLiveness = async () => ({ record: null, registryHost: { state: "unknown", processAlive: false } });
-  expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ turns: 1, unresolved: 0 });
+  // A hosted row with no process inside its launch grace is an ownerless
+  // record: it holds, and is counted as what nothing can yet answer for (R8).
+  p.owners = census(() => STARTING);
+  expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ turns: 1, unresolved: 1, unresolvedBlocking: 1 });
 });
 
 test("a refused launch names what the update waits for (#2515)", async () => {
   const p = ports("idle", "hosted", "running");
   p.runtimeSnapshot = async () => ({ sessions: ["a", "b"].map((id) => ({ conversationId: id, host: "hosted", turn: "running" })) }) as never;
-  p.turnLiveness = async () => RUNNING;
-  const busy = (await probeQuiet(snapshot, p, NOW, true)).blockers;
-  expect(describeUpdateWait(busy)).toBe("2 running turns and 1 pipeline stage to finish");
-  expect(launchHoldRefusal({ target: "a".repeat(40), since: "2026-01-01T00:00:00.000Z" }, busy)).toMatchObject({
+  p.owners = census(() => RUNNING);
+  const waiting = (await probeQuiet(snapshot, p, NOW, true)).blockers;
+  expect(describeUpdateWait(waiting)).toBe("2 running turns and 1 pipeline stage to finish");
+  expect(launchHoldRefusal({ target: "a".repeat(40), since: "2026-01-01T00:00:00.000Z" }, waiting)).toMatchObject({
     code: "launch_held_for_update", waitingFor: "2 running turns and 1 pipeline stage to finish", blockers: { turns: 2, stages: 1 },
     error: "new launches are held while the automatic update waits for 2 running turns and 1 pipeline stage to finish",
   });
-  p.turnLiveness = async ({ conversationId }) => conversationId === "a" ? RUNNING : UNRESOLVED;
+  p.owners = census((conversationId) => conversationId === "a" ? RUNNING : UNRESOLVED);
   p.pipelines = () => [];
   expect(describeUpdateWait((await probeQuiet(snapshot, p, NOW, true)).blockers))
     .toBe("2 running turns to finish (1 turn has no liveness record and stops counting within 5 minutes)");
   // Nothing live: the wait says so, and says what else holds the update.
-  p.turnLiveness = async () => DEAD_OPEN;
+  p.owners = census(() => DEAD_OPEN);
   expect(describeUpdateWait((await probeQuiet(snapshot, p, NOW, true)).blockers)).toBe("one quiet minute before it starts; no turn or stage is running");
   p.presence = () => [{ lastInteractionAt: NOW - 30_000 }] as never;
   p.memoryAvailableMb = () => 1_024;
@@ -297,17 +353,19 @@ test("production fallback projection keeps a live registry process without an at
     let reads = 0;
     const p = ports();
     p.runtimeSnapshot = async () => ({ sessions });
-    const production = turnEvidenceReader(() => ({ ...productionLivenessSources(),
-      registrySnapshot: () => registry.readOnlySnapshot(), pipelines: () => [], flows: () => [] }));
-    p.turnLiveness = async (session, probe) => {
+    const production = ownerCensusReader(() => ({ ...productionLivenessSources(),
+      registrySnapshot: () => registry.readOnlySnapshot(), pipelines: () => [], flows: () => [] }), { readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null });
+    p.owners = async (rows, probe) => {
       reads++;
-      expect(structuredDeliveryHostForConversation(session.conversationId)).toBeNull();
-      const evidence = await production(session, probe);
-      // No transcript the scanner can describe, so the registry row alone answers: its process is alive.
-      expect(evidence).toMatchObject({ record: null, registryHost: { state: "alive", processAlive: true }, currentTurnIdle: undefined });
-      return evidence;
+      expect(structuredDeliveryHeldHosts().size).toBe(0);
+      const read = await production(rows, probe);
+      // The copy names no writer. The durable pid/start record confirms this
+      // host, so missing turn evidence cannot age its protection away (R8).
+      expect(read.owners).toMatchObject([{ role: "host", process: "alive", handle: null, rowReference: false, journal: null, tail: { turn: "unknown" } }]);
+      return read;
     };
-    expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0, unresolved: 0 } });
+    expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0, unresolved: 0,
+      turnList: [{ conversationId: conversation.id, reason: "turn-unread" }] } });
     expect(reads).toBe(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });

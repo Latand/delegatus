@@ -14,6 +14,7 @@ import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drai
 import { launchHoldRefusal } from "./launchHold";
 import { updateOperatorSettings } from "@/lib/operator/settings";
 import { UNRESOLVED_TURN_GRACE_MS } from "./quiet";
+import { owners } from "./quietTestFixtures";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -56,6 +57,7 @@ function scenario(enabled = true) {
     web: { pid: 101, port: 3000, startedAt: new Date(now).toISOString() },
     green: { read: async () => { greenReads += 1; return { state: green }; } },
     quiet: { runtimeSnapshot: async () => ({ sessions: Array.from({ length: turns }, () => ({ turn: "running", host: "hosted" })) }),
+      owners: owners(),
       pipelines: () => Array.from({ length: stages }, () => ({ state: "running", cursor: { state: "running" } })) as never,
       presence: () => [], memoryAvailableMb: () => 8_192 },
     requestDeployment: async (body: ViewerDeploymentRequest) => {
@@ -616,9 +618,7 @@ test("a drain whose journal holds only dead-host and unresolved turns deploys an
      with a host behind it, and one the registry no longer knows. */
   const rows = Array.from({ length: 93 }, (_, index) => ({ conversationId: `conversation_stale-${index}`, sessionKey: { engine: "codex" }, cwd: null, host: "hosted", turn: "running" }));
   h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: rows }) as never;
-  h.deps.quiet!.turnLiveness = async ({ conversationId }) => conversationId.endsWith("-92")
-    ? { record: null, registryHost: null }
-    : { record: { lifecycle: "stalled", reason: "host_gone_turn_open", turnState: "busy", host: { state: "gone" } }, registryHost: { state: "gone", processAlive: false } };
+  h.deps.quiet!.owners = owners((conversationId) => conversationId?.endsWith("-92") ? "unresolved" : "gone");
   const service = h.service();
   await service.autoTick();
   /* The update holds launches at once, and names the one row it cannot resolve. */
@@ -648,7 +648,7 @@ test("a drain whose journal holds only dead-host and unresolved turns deploys an
 test("a turn that is really running holds the drain for as long as it runs (#2515)", async () => {
   const h = scenario();
   h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_work", sessionKey: { engine: "codex" }, cwd: null, host: "hosted", turn: "running" }] }) as never;
-  h.deps.quiet!.turnLiveness = async () => ({ record: { lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy", host: { state: "alive" } }, registryHost: { state: "alive", processAlive: true } });
+  h.deps.quiet!.owners = owners();
   const service = h.service();
   for (const wait of [0, UNRESOLVED_TURN_GRACE_MS, 60_000, 3 * 60 * 60_000]) {
     h.advance(wait);

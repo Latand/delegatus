@@ -10,7 +10,7 @@ import { mergeRuntimeReceipts } from "@/components/TmuxComposer";
 import { applyEvent, installSnapshot } from "@/components/runtime/runtimeModel";
 import type { Flow } from "@/lib/flows/types";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
-import { runtimePresentationReceipt, runtimeScope, terminalRetryOperationId } from "@/lib/runtime/contracts";
+import { runtimePresentationReceipt, runtimeScope, terminalRetryOperationId, type RuntimeWriterStatus } from "@/lib/runtime/contracts";
 import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
 import { LIVE_TURN_TEXT_LIMIT } from "@/lib/runtime/liveTurn";
 import { structuredContentDigest, type StructuredImageRef } from "@/lib/runtime/structuredContent";
@@ -29,6 +29,70 @@ import { probeRuntimeHostSuccessor, RUNTIME_HOST_STARTUP_PHASES, RuntimeHostStar
 function sandbox(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `llv-runtime-${name}-`));
 }
+
+test("native custody survives receipt and event retention, reopen, and older or foreign terminals", () => {
+  const dir = sandbox("native-custody"), filename = path.join(dir, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const id = "native-custody", key = { engine: "codex" as const, sessionId: "native-thread" };
+  const status = (writerClaim = "fixture:1") => journal.append({ scope: { type: "session", id }, kind: "session-status",
+    payload: { sessionKey: key, writerClaim, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      nativeTurnClaims: [] } });
+  const terminal = (turnId: string, sequence: number) => journal.append(projectEngineHostEvent(id, "codex:native-thread",
+    { kind: "turn-ended", turnId, seq: sequence, status: "completed" } as never)!);
+  try {
+    status();
+    for (const turnId of ["native-a", "native-b"]) {
+      journal.executeOperation({ kind: "send", operationId: turnId, idempotencyKey: turnId, conversationId: id, text: "continue", policy: "queue" });
+      journal.completeOperation(turnId, "turn-started", { turnId });
+    }
+    // Evict both native receipts from the eight displayed entries.
+    for (let i = 0; i < 10; i++) journal.executeOperation({ kind: "kill", operationId: `rejected-${i}`, idempotencyKey: `rejected-${i}`,
+      conversationId: id, sessionKey: key, onlyIfIdle: { revision: 999, writerClaim: "fixture:1" } });
+    journal.compact(1);
+    journal.maintainProducerReceipts();
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.readSession({ conversationId: id })!.recentReceipts.some((receipt) => receipt.status === "turn-started")).toBe(false);
+    terminal("older-turn", 20);
+    journal.append({ scope: { type: "session", id }, kind: "turn-ended", payload: { turnId: "native-a" },
+      producer: { kind: "registry-fallback", eventKey: "engine-host:codex:native-thread:25" } });
+    status(); // A publisher cannot replace the journal's custody.
+    expect(journal.readSession({ conversationId: id })).toMatchObject({ nativeTurnClaims: [
+      { turnId: "native-a", sessionKey: key, writerClaim: "fixture:1" },
+      { turnId: "native-b", sessionKey: key, writerClaim: "fixture:1" },
+    ] });
+    status("fixture:2");
+    terminal("native-a", 30); // A successor cannot settle the prior writer.
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toHaveLength(2);
+    status();
+    terminal("native-a", 40);
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toHaveLength(1);
+    terminal("native-b", 50);
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toEqual([]);
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toEqual([]);
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a legacy native custody gap remains unknown after a later admission and idle publication", () => {
+  const dir = sandbox("legacy-native-custody"), filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const id = "legacy-native", payload = { sessionKey: { engine: "codex", sessionId: "legacy-native-thread" },
+    writerClaim: "fixture:1", hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null };
+  try {
+    journal.append({ scope: { type: "session", id }, kind: "session-status", payload });
+    const db = new Database(filename);
+    try { db.query("UPDATE entities SET state_json = json_remove(state_json, '$.nativeTurnClaims') WHERE kind = 'session' AND id = ?").run(id); }
+    finally { db.close(); }
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toBeUndefined();
+    journal.executeOperation({ kind: "send", operationId: "legacy-send", idempotencyKey: "legacy-send", conversationId: id, text: "continue", policy: "queue" });
+    journal.completeOperation("legacy-send", "turn-started", { turnId: "native-b" });
+    journal.append({ scope: { type: "session", id }, kind: "session-status", payload });
+    expect(journal.readSession({ conversationId: id })!.nativeTurnClaims).toBeNull();
+  } finally { journal.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("journal assigns global sequences, consecutive scoped revisions, and idempotent producer keys", () => {
   const dir = sandbox("sequence");
@@ -393,6 +457,7 @@ test("snapshot exposes the canonical projected runtime model", () => {
       revision: 3,
       attentionIds: ["attention-one"],
       recentReceipts: [],
+      nativeTurnClaims: [],
       accountId: "account-one",
       parentConversationId: null,
       flowId: null,
@@ -4145,6 +4210,42 @@ test.each(["live", "unverified", "dead"])("automatic retirement claim protects t
     await child.exited;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/* The status mark (docs/design/update-drain-liveness.md, R5): what a named
+   writer published, kept through every write that names no writer. */
+test("a session row records what its named writer published and keeps it through every other write", () => {
+  const journal = new RuntimeJournal(path.join(sandbox("writer-status"), "events.sqlite"), { structuredHosts: true, now: () => 100 });
+  const key = { engine: "codex" as const, sessionId: "session-b" };
+  const publish = (payload: Record<string, unknown>) => journal.append({ scope: runtimeScope("session", "conv-mark"), kind: "session-status",
+    producer: { kind: "codex-app-server", eventKey: `publish-${Math.random()}` },
+    payload: { conversationId: "conv-mark", sessionKey: key, hostKind: "codex-app-server", provenance: "structured", ...payload } });
+  const mark = () => journal.readSession({ conversationId: "conv-mark" })?.writerStatus;
+  const fence = "structured-host:{\"pid\":1}:2";
+  publish({ host: "hosted", turn: "running", activeTurnId: "b-turn", writerClaim: fence });
+  const recorded: RuntimeWriterStatus = { sessionKey: key, writerClaim: fence, host: "hosted", turn: "running", activeTurnId: "b-turn" };
+  expect(mark()).toEqual(recorded);
+  // A publication that omits a status field leaves the previous record.
+  publish({ host: "hosted", turn: "idle", writerClaim: fence });
+  expect(mark()).toEqual(recorded);
+  // A turn event, an interrupt request and a publication with no fence change the row and keep the record.
+  const ended = projectEngineHostEvent("conv-mark", "codex:session-a", { kind: "turn-ended", turnId: "a-turn", seq: 1, status: "completed" } as never)!;
+  journal.append(ended);
+  journal.executeOperation({ kind: "interrupt", conversationId: "conv-mark", operationId: "op-interrupt", idempotencyKey: "interrupt", turnId: null });
+  publish({ host: "unhosted", turn: "unknown", activeTurnId: null });
+  expect(journal.readSession({ conversationId: "conv-mark" })).toMatchObject({ host: "unhosted", turn: "unknown", writerClaim: fence });
+  expect(mark()).toEqual(recorded);
+  // A mark sent in a payload is discarded.
+  publish({ host: "hosted", turn: "idle", activeTurnId: null, writerStatus: { ...recorded, turn: "idle" } });
+  expect(mark()).toEqual(recorded);
+  // A `null` publication names no writer: the record stays, and the row no longer carries its fence.
+  publish({ host: "hosted", turn: "idle", activeTurnId: null, writerClaim: null });
+  expect(journal.readSession({ conversationId: "conv-mark" })).toMatchObject({ writerClaim: null, writerStatus: recorded });
+  // The next named publication records its own statement, and the snapshot returns it too.
+  publish({ host: "hosted", turn: "idle", activeTurnId: null, writerClaim: fence });
+  expect(mark()).toEqual({ ...recorded, turn: "idle", activeTurnId: null });
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === "conv-mark")?.writerStatus).toEqual({ ...recorded, turn: "idle", activeTurnId: null });
+  journal.close();
 });
 
 
