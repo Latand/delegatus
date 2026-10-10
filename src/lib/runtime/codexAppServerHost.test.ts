@@ -5923,3 +5923,17 @@ for (const transport of ["send", "steer"] as const) {
     } finally { await host.release(); }
   });
 }
+
+for (const firstDispatch of [false, true]) test(`owner dispatch cutoff survives Codex's internal confirmation await (first dispatch: ${firstDispatch})`, async () => {
+  const server = new FakeAppServer(`owner-native-cutoff-${firstDispatch}`);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  let allowed = true;
+  const entry = { id: "owner-native-cutoff", text: "Owner instruction" };
+  try {
+    const pending = host.send(entry, firstDispatch ? { operationId: entry.id, writerClaim: "fixture", firstDispatch: true } : undefined,
+      () => { if (!allowed) throw Error("owner first prompt revoked"); });
+    allowed = false;
+    await expect(pending).rejects.toThrow("owner first prompt revoked");
+    expect(server.requests.some(request => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
+  } finally { await host.release(); }
+});

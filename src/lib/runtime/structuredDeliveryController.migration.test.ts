@@ -27,7 +27,8 @@ function fixture() {
   return f;
 }
 
-test("production journal queue refuses a revoked owner's first prompt without a cancellation registry write", async () => {
+for (const phase of ["before dispatch", "during delivering journal write"] as const)
+test(`production journal queue refuses a revoked owner's first prompt without a cancellation registry write (${phase})`, async () => {
   const f = fixture();
   const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.root, clientAttemptId: "relay-owner-revoked-journal", transport: "structured" });
   if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
@@ -36,22 +37,114 @@ test("production journal queue refuses a revoked owner's first prompt without a 
   const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
   const profile = emptyLaunchProfile({ cwd: f.root, title: "Owner cutoff fixture" });
   const staged = f.registry.stageStructuredSpawn(begun.receipt.launchId, {
-    key, artifactPath: path.join(f.root, "owner.jsonl"), cwd: f.root, accountId: "account-a", launchProfile: profile,
+    key, artifactPath: path.join(f.root, `${key.sessionId}.jsonl`), cwd: f.root, accountId: "account-a", launchProfile: profile,
     status: "idle", host: null, structuredHost: { kind: "codex-app-server", endpoint: "fake:owner", process: null,
       eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
     claimEpoch: 1, claimOwner: "fixture", pendingAction: "spawn", structuredHostOperationId: begun.receipt.launchId,
   });
   if (staged.kind !== "settled") throw Error("owner host fixture unavailable");
   const delivery = f.registry.holdDelivery(conversationId, "Revoked owner instruction", `spawn_${begun.receipt.launchId}`, "text", [], null, { operationId });
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "relay-state");
+  const { reserveRun, updateRelayStore } = await import("@/lib/externalRelay/store");
+  const { procBackend } = await import("@/lib/proc");
+  const transition = f.client.transitionOperation.bind(f.client);
+  const writer = spyOn(f.client, "transitionOperation").mockImplementation(async (...args) => {
+    const result = await transition(...args);
+    if (phase === "during delivering journal write" && args[1] === "delivering") {
+      updateRelayStore(s => ({ ...s, relays: s.relays.map(relay => ({ ...relay,
+        targets: relay.targets.map(target => ({ ...target, ownerTier: false })) })) }));
+    }
+    return result;
+  });
+  if (phase === "during delivering journal write") {
+    updateRelayStore(s => ({ ...s, relays: [{ id: "relay_fixture", paused: false,
+      credential: crypto.randomUUID(), targets: [{ id: "target_fixture", enabled: true, ownerTier: true }] } as typeof s.relays[number]] }));
+    reserveRun({ requestId: "revoked-journal", leaseId: "lease_fixture", relayId: "relay_fixture", targetId: "target_fixture",
+      conversationId, ownerTurn: { clientAttemptId: begun.receipt.clientAttemptId! }, ownerPid: process.pid,
+      ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+  }
   const send = spyOn(f.host, "send");
+  fs.writeFileSync(staged.entry.artifactPath, "{}\n");
+  f.registry.completeSpawn(begun.receipt.launchId, { ...staged.entry, pendingAction: null });
   try {
     await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: f.client });
     const admitted = f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId, conversationId, text: delivery.text, policy: "queue" });
     expect(admitted.receipt.status).toBe("queued");
     await kickStructuredDeliveryQueue();
     expect(send).not.toHaveBeenCalled();
-    expect(f.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
-  } finally { send.mockRestore(); await f.cleanup(); }
+    if (phase === "during delivering journal write") expect(writer.mock.calls.some(call => call[1] === "delivering")).toBe(true);
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe(phase === "before dispatch" ? "uncertain" : "failed");
+  } finally {
+    writer.mockRestore(); send.mockRestore(); await f.cleanup();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+test("background owner first-prompt journal failures scrub logs outside the original spawn scope", async () => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR, previousToken = process.env.LLV_TOKEN;
+  process.env.LLV_STATE_DIR = path.join(f.root, "relay-state");
+  const { reserveRun, updateRelayStore } = await import("@/lib/externalRelay/store");
+  const { procBackend } = await import("@/lib/proc");
+  const { rotateOperatorSpawnCapability } = await import("@/lib/agent/operatorCapability");
+  const relayCredential = crypto.randomUUID(), installCredential = crypto.randomUUID();
+  process.env.LLV_TOKEN = installCredential;
+  const spawnCredential = rotateOperatorSpawnCapability();
+  const keyMaterial = "-----BEGIN PRIVATE KEY-----\nfixture-private-material\n-----END PRIVATE KEY-----";
+  const leak = `${relayCredential} ${installCredential} ${spawnCredential} ${f.root} ${keyMaterial}`;
+  const failure = Object.assign(new Error(leak), { details: { credential: relayCredential, transcript: f.root }, cause: new Error(leak) });
+  failure.stack = `Error: ${leak}\n at ${f.root}/transcript.jsonl:12:1`;
+  const emitted: unknown[][] = [];
+  const logger = spyOn(console, "error").mockImplementation((...args) => { emitted.push(args); });
+  let writer: ReturnType<typeof spyOn> | null = null;
+  const send = spyOn(f.host, "send");
+  try {
+    // Recover a durable owner receipt in startup context, with no spawn async scope.
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.root, clientAttemptId: "relay-owner-background-diagnostic", transport: "structured" });
+    if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+    const conversationId = begun.receipt.conversationId, operationId = `spawn_message_${begun.receipt.launchId}`;
+    const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+    const staged = f.registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key, artifactPath: path.join(f.root, `${key.sessionId}.jsonl`), cwd: f.root, accountId: "account-a", launchProfile: emptyLaunchProfile({ cwd: f.root }),
+      status: "idle", host: null, structuredHost: { kind: "codex-app-server", endpoint: "fake:owner", process: null,
+        eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "fixture", pendingAction: "spawn", structuredHostOperationId: begun.receipt.launchId,
+    });
+    if (staged.kind !== "settled") throw Error("owner host fixture unavailable");
+    fs.writeFileSync(staged.entry.artifactPath, "{}\n");
+    f.registry.completeSpawn(begun.receipt.launchId, { ...staged.entry, pendingAction: null });
+    await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: f.client });
+    updateRelayStore(store => ({ ...store, relays: [{ id: "relay_fixture", paused: false,
+      credential: relayCredential, targets: [{ id: "target_fixture", enabled: true, ownerTier: true }] } as typeof store.relays[number]] }));
+    reserveRun({ requestId: "background-diagnostic", leaseId: "lease_fixture", relayId: "relay_fixture", targetId: "target_fixture",
+      conversationId, ownerTurn: { clientAttemptId: begun.receipt.clientAttemptId! }, ownerPid: process.pid,
+      ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+    const delivery = f.registry.holdDelivery(conversationId, "Owner instruction", `spawn_${begun.receipt.launchId}`, "text", [], null, { operationId });
+    const transition = f.client.transitionOperation.bind(f.client);
+    writer = spyOn(f.client, "transitionOperation").mockImplementation(async (...args) => {
+      if (args[1] === "delivering") throw failure;
+      return transition(...args);
+    });
+    expect(f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId, conversationId, text: delivery.text, policy: "queue" }).receipt.status).toBe("queued");
+    const { ownerRelaySpawnAuthorized } = await import("@/lib/externalRelay/ownerAuthority");
+    expect(ownerRelaySpawnAuthorized(begun.receipt.clientAttemptId)).toBe(true);
+    await kickStructuredDeliveryQueue();
+    expect(f.journal.operationResult(operationId)?.receipt).toMatchObject({ status: "queued" });
+    expect(writer).toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    const logs = JSON.stringify(emitted, (_key, value) => value instanceof Error
+      ? Object.fromEntries(Object.getOwnPropertyNames(value).map(key => [key, (value as unknown as Record<string, unknown>)[key]])) : value);
+    expect(logs).toContain("conversation drain failed");
+    expect(logs).toContain("queue drain failed");
+    expect(logs).toContain(conversationId);
+    for (const secret of [relayCredential, installCredential, spawnCredential, f.root, "fixture-private-material", "BEGIN PRIVATE KEY"])
+      expect(logs).not.toContain(secret);
+  } finally {
+    writer?.mockRestore(); send.mockRestore(); await f.cleanup(); logger.mockRestore();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    if (previousToken === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previousToken;
+  }
 });
 
 test("production controller applies a pick after usage_limit_exceeded without another message or turn end", async () => {

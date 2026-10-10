@@ -160,6 +160,8 @@ export interface SpawnCommandDependencies {
   autonomousAdmissionHeld?(): boolean;
   /** Trusted caller authorization, including replays and first-prompt delivery. */
   authorizeAutonomousLaunch?(): void;
+  /** Trusted autonomous custody requires the interruptible structured host. */
+  autonomousStructured?: boolean;
   /** Trusted automatic target restriction, checked under the account lock
       immediately before a fresh launch receipt is reserved. */
   assertAccountAdmission?(accountId: string): void;
@@ -459,7 +461,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     : null;
   let transport;
   try {
-    transport = spawnTransport();
+    transport = dependencies.autonomousStructured ? "structured" : spawnTransport();
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

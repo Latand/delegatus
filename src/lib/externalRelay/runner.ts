@@ -137,7 +137,12 @@ export async function completeRelayRequest(
         "POST",
         body,
         relay.credential,
-        { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
+        { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes,
+          ...(allowOwnerReply ? { prepareBody: () => {
+            if (body.outcome === "answered" && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
+            return body;
+          } } : {}),
+        },
       );
       return { body, delivery: "accepted" };
     } catch (error) {

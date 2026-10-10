@@ -5,7 +5,7 @@ import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import { reportSpawnHeaders, startDeferredSpawnWork, type ReportSpawnResult } from "@/lib/telegram/reportSpawn";
 
 /** The normal spawn lane, outside Next's request-scoped after(). */
-export async function launchAutonomousConversation(body: Record<string, unknown>, authorize?: () => void): Promise<ReportSpawnResult> {
+export async function launchAutonomousConversation(body: Record<string, unknown>, authorize?: () => void, options: { structured?: boolean } = {}): Promise<ReportSpawnResult> {
   const [{ executeSpawnRequest, productionSpawnCommandDependencies }, { ensureOperatorSpawnCapability }, { VIEWER_SPAWN_CAPABILITY_HEADER }] = await Promise.all([
     import("@/lib/agent/spawnCommand"), import("@/lib/agent/operatorCapability"), import("@/lib/agent/spawnPolicy"),
   ]);
@@ -16,7 +16,7 @@ export async function launchAutonomousConversation(body: Record<string, unknown>
     return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } };
   }
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
-    autonomousAdmissionHeld: () => !!activeDrain(), authorizeAutonomousLaunch: authorize, defer: startDeferredSpawnWork });
+    autonomousAdmissionHeld: () => !!activeDrain(), authorizeAutonomousLaunch: authorize, autonomousStructured: options.structured, defer: startDeferredSpawnWork });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 export type SpawnedTurn = { clientAttemptId: string; conversationId?: string | null; claimedAt: string; launchedAt?: string | null };

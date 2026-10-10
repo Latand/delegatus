@@ -1,10 +1,11 @@
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
+import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
 import { x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,7 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -2167,4 +2168,30 @@ test("owner credentials, host paths and key material never reach completion, ans
     for (const secret of [paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
     const { dropRun } = await import("./store"); dropRun("owner_safe_diagnostic");
   } finally { console.error = oldError; await service.close(); }
+});
+
+for (const retry of [false, true]) test(`owner completion rechecks cutoff after DNS resolution${retry ? " on retry" : ""}`, async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    completions.push(body);
+    return retry && completions.length === 1 ? { drop: true } : { body: { status: "ok" } };
+  });
+  let reached!: () => void, release!: () => void;
+  const resolving = new Promise<void>(r => { reached = r; });
+  const held = new Promise<void>(r => { release = r; });
+  let attempts = 0, allowed = true;
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => {
+    if (++attempts === (retry ? 2 : 1)) { reached(); await held; }
+    return [{ address: "127.0.0.1", family: 4 }];
+  }) as unknown as typeof dns.lookup);
+  try {
+    const paired = relay(`${server.origin.replace("127.0.0.1", "relay-fixture.test")}/v1`);
+    const done = completeRelayRequest(paired, "owner_dns_fixture", {
+      lease_id: "lease_fixture", outcome: "answered", duration_ms: 0, answer: { action: "reply", text: "Late owner reply", reply_to: null },
+    }, Date.now, 45000, () => allowed);
+    await resolving; allowed = false; release();
+    expect(await done).toMatchObject({ body: { outcome: "failed", reason: "cancelled" }, delivery: "accepted" });
+    expect(completions.at(-1)).toMatchObject({ outcome: "failed", reason: "cancelled" });
+    expect(completions).toHaveLength(retry ? 2 : 1);
+  } finally { release(); lookup.mockRestore(); await server.close(); }
 });

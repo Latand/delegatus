@@ -1,3 +1,4 @@
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
@@ -806,6 +807,8 @@ async function actuateQueuedPinnedSpawn(
   const queued = queuedPinnedSpawnForReceipt(receipt);
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
+  if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+    return failQueuedPinnedSpawn(registry, receipt, "owner relay queued launch authorization revoked");
   const admissionClaim = receipt.transport === "tmux"
     ? registry.claimTmuxSpawnActuation(receipt.launchId)
     : registry.claimStartingStructuredSpawn(receipt.launchId);
@@ -860,6 +863,8 @@ async function actuateQueuedPinnedSpawn(
       `pinned account is unavailable: ${admission.reason}`,
     );
   }
+  if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+    return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "owner relay queued launch authorization revoked");
   let response: SpawnResponse | null = null;
   let tmuxImagePaths: string[] = [];
   try {
@@ -897,6 +902,10 @@ async function actuateQueuedPinnedSpawn(
         imageRefs: claimedQueue.imageRefs,
         registry,
         client,
+        authorize: () => {
+          if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+            throw new Error("owner relay queued launch authorization revoked");
+        },
       });
     }
   } catch (error) {

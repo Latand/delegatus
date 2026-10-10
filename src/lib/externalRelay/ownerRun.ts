@@ -47,7 +47,7 @@ export interface OwnerRunPorts {
   stopRetryMs?: number;
 }
 const productionPorts: OwnerRunPorts = {
-  launch: launchAutonomousConversation,
+  launch: (body, authorize) => launchAutonomousConversation(body, authorize, { structured: true }),
   async observe(run) {
     const { defaultSeatTickSources } = await import("@/lib/monitor/seatTickSources");
     return observeOwnerTurn(run, defaultSeatTickSources());
@@ -55,9 +55,14 @@ const productionPorts: OwnerRunPorts = {
   async stop(conversationId, action, clientAttemptId) {
     const { applyConversationAction } = await import("@/lib/conversation/actions");
     const { agentRegistry } = await import("@/lib/agent/registry");
+    const registry = agentRegistry();
     let prompt = { confirmed: false, pending: true };
-    try { prompt = await settleOwnerFirstPrompt(clientAttemptId!, conversationId, agentRegistry()); }
+    try { prompt = await settleOwnerFirstPrompt(clientAttemptId!, conversationId, registry); }
     catch { /* Still stop the host; custody keeps the owed prompt cleanup. */ }
+    const receipt = registry.spawnReceiptForClientAttempt(clientAttemptId!);
+    // A retired queue with no actuation owner or host binding never started work.
+    if (prompt.confirmed && receipt?.state === "failed" && !receipt.queuedPinnedSpawn
+      && !receipt.admissionOwner && !receipt.key && !receipt.pane) return;
     const stopAction = prompt.pending ? "kill" : action;
     try {
       const result = await applyConversationAction({ conversationId, transcriptPath: "", action: stopAction, operationId: `relay_owner_${stopAction}_${conversationId}` });
@@ -89,6 +94,10 @@ export async function settleOwnerFirstPrompt(clientAttemptId: string, conversati
   const receipt = registry.spawnReceiptForClientAttempt(clientAttemptId);
   if (!receipt) return { confirmed: true, pending: false };
   if (receipt.conversationId !== conversationId) throw new Error("owner prompt binding mismatch");
+  if (receipt.queuedPinnedSpawn) {
+    const retired = await registry.retireQueuedSpawnOffLoop(receipt.launchId, "owner relay turn revoked");
+    if (!retired) return { confirmed: false, pending: true };
+  }
   const delivery = Object.values(registry.readOnlySnapshot().heldDeliveries)
     .find(row => row.conversationId === conversationId && row.command.operationId === `spawn_message_${receipt.launchId}`);
   if (!delivery || delivery.state === "delivered") return { confirmed: true, pending: false };

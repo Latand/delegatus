@@ -4700,3 +4700,30 @@ for (const seam of ["launch", "host", "publication", "delivery"] as const) test(
     }
   });
 });
+
+
+test("trusted owner launch uses the ordinary structured lane when the global transport is tmux", async () => {
+  await withSandboxRuntimeSocket(async () => {
+    const cwd = fs.mkdtempSync(path.join(routeSandbox, "owner-transport-"));
+    const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const previous = process.env.LLV_SPAWN_TRANSPORT;
+    process.env.LLV_SPAWN_TRANSPORT = "tmux";
+    let structured = 0, tmux = 0;
+    const deps = structuredRouteDependencies(cwd);
+    let deferred: (() => Promise<void>) | null = null;
+    try {
+      const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+        method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+        body: JSON.stringify({ engine: "claude", cwd, title: "Owner fixture", prompt: "Owner request", clientAttemptId: "relay-owner-transport-fixture" }),
+      }), { ...deps, registry: () => store, autonomousStructured: true, defer: work => { deferred = work; },
+        spawnStructuredConversation: async (...args) => { structured++; return deps.spawnStructuredConversation!(...args); },
+        spawnTmuxAgent: async () => { tmux++; throw Error("unexpected tmux launch"); },
+      });
+      expect(response.status).toBe(202);
+      expect(deferred).not.toBeNull();
+      await (deferred as unknown as () => Promise<void>)();
+      expect(structured).toBe(1); expect(tmux).toBe(0);
+      expect(store.spawnReceiptForClientAttempt("relay-owner-transport-fixture")?.transport).toBe("structured");
+    } finally { store.close(); if (previous === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previous; }
+  });
+});

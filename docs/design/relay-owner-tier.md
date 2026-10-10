@@ -186,6 +186,13 @@ stopped with the conversation action `kill` (`conversation/actions.ts:18`)
 and resolves `failed` the same way, so no turn runs later with nobody to
 answer.
 
+Owner turns select the ordinary structured transport even when the operator's
+other launches use tmux. The runtime host is required; its durable first-message
+queue and conversation control retain interrupt custody. A revoked owner queue
+is retired before recovery, and recovery rechecks authorization after account
+admission and at each structured launch boundary. The owner still has the
+ordinary full host permissions and every Delegatus tool.
+
 ### 2.3 Sandbox and host access
 
 An owner run is an operator-launched root session, so it gets what an
@@ -335,6 +342,13 @@ and contents of this computer. Heartbeats still go out on their timer.
   prompts use `kill`, so recovering a reservation cannot start a later turn.
   Both reservation recovery and the journal queue recheck the original owner
   launch against live custody and the current switch before dispatch.
+  Background queue and controller diagnostics recover owner attribution from
+  durable spawn receipts. A failure without one operation's attribution is
+  scrubbed when the registry contains an owner receipt; an unreadable registry
+  also uses protected diagnostics. Normal caller identities remain in the logs.
+  First-prompt dispatch rechecks authorization synchronously at each engine
+  call, including a thread-read resend, after journal and host-health waits.
+  Completion emission rechecks after DNS resolution on every attempt.
   It settles after bounded stop attempts; an unresolved stop keeps the run
   ledger and its directory for recovery. Pending admissions remain attributed
   and fenced against a late first prompt, with kill used for queued hosts.
@@ -677,8 +691,10 @@ the board needs no new evidence.
 | `docs/design/relay.md` §B.6.5 | point "Who gets which profile" here |
 | tests and the driver fixture | §9, §10 |
 
-Untouched: `protocol.ts`, `poller.ts`, `toolLoop.ts`, `ephemeral.ts`,
-`progress.ts`, the spawn lane itself.
+The wire and tool loop remain unchanged (`protocol.ts`, `toolLoop.ts`), along
+with `ephemeral.ts` and `progress.ts`. The poller gains owner cancellation
+recovery. The shared spawn lane receives trusted owner transport and diagnostic
+scoping; its ordinary callers retain their behavior.
 
 ## Options considered
 

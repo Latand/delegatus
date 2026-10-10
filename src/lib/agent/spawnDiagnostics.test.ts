@@ -1,7 +1,10 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { AgentRegistry } from "./registry";
 import { externalRelayFile } from "@/lib/externalRelay/store";
-import { bindSpawnDiagnostics, spawnDiagnosticError, withSpawnDiagnostics } from "./spawnDiagnostics";
+import { bindSpawnDiagnostics, spawnDiagnosticError, spawnDiagnosticErrorForRegistry, withSpawnDiagnostics } from "./spawnDiagnostics";
 
 test("ordinary spawn diagnostics keep their caller attribution and object fields", () => {
   const fields = { launchId: "launch_fixture", conversationId: "conversation_fixture", error: new Error("fixture error") };
@@ -36,4 +39,27 @@ test("a failed credential resolver cannot expose an owner diagnostic", () => {
     withSpawnDiagnostics("relay-owner-fixture", () => spawnDiagnosticError(new Error("sensitive payload")));
     expect(emitted).toEqual([["Owner relay diagnostic unavailable; sensitive details withheld"]]);
   } finally { reader.mockRestore(); logger.mockRestore(); }
+});
+
+
+test("background diagnostics with unreadable attribution fail closed", () => {
+  const logger = spyOn(console, "error").mockImplementation(() => {});
+  const transcript = path.join(os.tmpdir(), "private-transcript.jsonl");
+  try {
+    spawnDiagnosticErrorForRegistry({ readOnlySnapshot: () => { throw Error("registry unavailable"); } }, new Error(transcript));
+    const logs = JSON.stringify(logger.mock.calls);
+    expect(logs).not.toContain(transcript);
+  } finally { logger.mockRestore(); }
+});
+
+
+test("background diagnostics for an ordinary receipt preserve normal attribution", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ordinary-diagnostic-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const logger = spyOn(console, "error").mockImplementation(() => {});
+  const fields = { conversationId: "conversation_fixture", error: new Error("fixture error") };
+  try {
+    spawnDiagnosticErrorForRegistry(registry, "Delivery failed", fields);
+    expect(logger).toHaveBeenCalledWith("Delivery failed", fields);
+  } finally { logger.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
