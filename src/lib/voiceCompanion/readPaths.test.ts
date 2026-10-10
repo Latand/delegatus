@@ -260,3 +260,24 @@ test("activity pages retain every observed agent and disclose pending evidence w
   expect(degraded.speech).toContain("counts are partial");
   for (const page of [first, second, degraded]) expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4000);
 });
+
+
+test("pipeline titles are masked before the shared compact cutoff and newline split without changing selection", async () => {
+  const key = ["Zr9QvB","pipeline","private","0123456789abcdef"].join("-");
+  const at = "2026-10-10T12:00:00.000Z";
+  const pipelines = ["clip","newline"].map((boundary,index) => ({...buildPipeline({id:`lane-boundary-${index}`,task:"x".repeat(114)+(boundary === "clip" ? key : key.slice(0,6)+"\n"+key.slice(6))+" tail",project:"mask-pipeline",repoDir:root,srcPath:null,srcConversationId:null,now:at,
+    stages:[{id:"build",kind:"run" as const,prompt:"Build",next:null,effectiveRole:{roleId:null,engine:"claude" as const,model:null,effort:null,access:"read-only" as const,promptScaffold:null}}]}),state:"running" as const}));
+  savePipelines(pipelines);
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const args = reads.normalize("mask-pipeline","list_pipelines",{state:["open"],query:"tail",ids:pipelines.map(row=>row.id),limit:1});
+  const first = await reads.read("mask-pipeline","list_pipelines",args,[key]);
+  const cursor = first.nextCursor;
+  expect(typeof cursor).toBe("string");
+  expect(first).toMatchObject({total:2,shown:1,more:1});
+  const next = await reads.read("mask-pipeline","list_pipelines",{...args,cursor},[key]);
+  expect(next).toMatchObject({total:2,shown:1,more:0});
+  for (const result of [first,next,...await Promise.all(pipelines.map(row=>reads.read("mask-pipeline","get_pipeline",{project:"mask-pipeline",pipelineId:row.id},[key])))]) {
+    expect(JSON.stringify(result)).not.toContain(key.slice(0,6));
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(4000);
+  }
+});

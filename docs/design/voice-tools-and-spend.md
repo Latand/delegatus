@@ -788,6 +788,23 @@ Opening a closed transcript reconciles fresh reports once without speaking.
 Compact pipeline detail reads retain each stage's kind and role without prompts
 or attempt history; list rows retain the cursor stage's latest verdict.
 
+Active credentials and local paths are scrubbed from selected source records
+before shared task and pipeline projections split lines or clip fields, and
+before conversation pages apply `maxChars`. Search projects the complete
+highlighted body and catalog title before choosing a bounded excerpt. Original
+records still decide filters and cursors. Activity continuations are scoped to
+the call's projection, so a later call cannot reuse another credential
+snapshot's clipped rows. Private prototype image bytes retain their separate
+vision attachment path.
+
+Backend context scrubs the current project's display label at call start and
+after a view switch. Later rounds replay scrubbed tool arguments, with parsed
+string values cleaned before JSON encoding; credential-bearing call references
+become opaque matching references on the call and its output. Tool execution
+keeps the original selector. Regressions exercise clipping, newlines, paging,
+search titles and excerpts, cached follow-ups, and echoed backend context across
+provider requests, speech commands, browser events and stored transcripts.
+
 ## Notes
 
 - The data-residency uplift on the pricing page (10 % on regional endpoints)

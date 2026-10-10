@@ -8,7 +8,7 @@ export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
 export const VOICE_IMAGES = Symbol("voice prototype frames");
 export interface BoardReadPaths {
-  call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  call(name: string, args: Record<string, unknown>, redactText?: (text: string) => string): Promise<Record<string, unknown>>;
   projectFor(kind: "task" | "pipeline" | "conversation", id: string): Promise<string | null>;
   recipient(project: string): string | null;
   resolveProject(current: string | null, requested?: string): string;
@@ -24,6 +24,7 @@ export interface SpeechReadResult {
 }
 const clean = (value: string) => withoutLocalPaths(hardenedRedact(value).replace(/<!--[^]*?-->/g, ""));
 const encoder = new TextEncoder();
+const NO_SECRETS: readonly string[] = Object.freeze([]);
 /** Byte limits preserve complete Unicode scalars. */
 const short = (value: unknown, limit = 160) => {
   const text = clean(typeof value === "string" ? value : "").replace(/\b(?:conversation_|task_|pipeline_)[A-Za-z0-9_-]+\b/g, "[reference]")
@@ -52,6 +53,7 @@ function page(source: Record<string, unknown>, items: Record<string, unknown>[],
 /** Only this read allowlist reaches the backend. Project identities are
  * resolved by the server and every targeted record is fenced before reading. */
 export class CompanionBoardReads {
+  private readonly redactors = new WeakMap<readonly string[], (text: string) => string>();
   constructor(private readonly paths: BoardReadPaths) {}
   resolveProject(current: string | null, requested?: string) { return this.paths.resolveProject(current, requested); }
   normalize(project: string, name: string, args: Record<string, unknown>): Record<string, unknown> {
@@ -68,7 +70,7 @@ export class CompanionBoardReads {
     const normalized = this.normalize(project,name,args);
     return this.read(project,name,normalized);
   }
-  async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = []): Promise<SpeechReadResult> {
+  async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = NO_SECRETS): Promise<SpeechReadResult> {
     project = canonicalProject(project);
     const kind = name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (name === "agent_activity" && args.conversationId) ? "conversation" : null;
     const id = String(args[kind === "pipeline" ? "pipelineId" : kind === "task" ? "taskId" : "conversationId"] ?? "");
@@ -90,10 +92,13 @@ export class CompanionBoardReads {
       const conversationId = this.paths.recipient(project); if (!conversationId) throw new Error("NO_ORCHESTRATOR");
       args = {...args,conversationId}; tool = "conversation_messages";
     }
+    let redactText = this.redactors.get(secrets);
+    if (!redactText) { redactText = text=>clean(withoutCredentials(text,secrets)); this.redactors.set(secrets,redactText); }
     // Mask active credentials before projection cuts fields into speech-sized
     // pieces. Otherwise a cut can leave a fragment that no longer matches.
     const source = cleanStrings(await this.paths.call(tool,{...args,project,compact:true,includeHints:false,
-      ...(tool === "conversation_messages" ? {kinds:["message"],maxChars:320} : {}),...(tool === "get_task" ? {compact:false} : {})}),text=>withoutCredentials(text,secrets));
+      ...(tool === "conversation_messages" ? {kinds:["message"],maxChars:320} : {}),...(tool === "get_task" ? {compact:false} : {})},
+      redactText),text=>withoutCredentials(text,secrets));
     if (name === "list_tasks") return page(source,rows(source.tasks).map(taskRow),"tasks");
     if (name === "list_pipelines") return page(source,rows(source.pipelines).map(pipelineRow),"pipelines");
     if (name === "get_task") {

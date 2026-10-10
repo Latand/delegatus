@@ -25,7 +25,7 @@ export function fixtureBoardReads(input: {
     recipient:()=>"conversation_a",
     review:id=>({taskId:id,rounds:[],waitingReviewId:null}),
     frame:async()=>({mime:"image/png",data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}),
-    call:async(name,args)=>name==="search_transcripts" ? {items:[],total:0,nextCursor:null,projectScope:{resolved:args.project}} : name==="agent_activity" ? {conversations:(await input.activity(String(args.project))).filter(row=>row.project===args.project),count:(await input.activity(String(args.project))).filter(row=>row.project===args.project).length}
-      : name==="conversation_messages" ? {records:(await input.messages(String(args.conversationId))).map(row=>({role:row.role,text:row.text}))} : paths.call(name,args),
+    call:async(name,args,redactText)=>name==="search_transcripts" ? {items:[],total:0,nextCursor:null,projectScope:{resolved:args.project}} : name==="agent_activity" ? {conversations:(await input.activity(String(args.project))).filter(row=>row.project===args.project),count:(await input.activity(String(args.project))).filter(row=>row.project===args.project).length}
+      : name==="conversation_messages" ? {records:(await input.messages(String(args.conversationId))).map(row=>({role:row.role,text:row.text}))} : paths.call(name,args,redactText),
   });
 }

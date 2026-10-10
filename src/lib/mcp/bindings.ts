@@ -3196,7 +3196,7 @@ async function conversationMessages(
         descriptor: pinned.descriptor,
         size: pinned.stat.size,
         engine,
-      }, { kinds, roles, since, limit, maxChars, cursor });
+      }, { kinds, roles, since, limit, maxChars, cursor, redactText: context.redactText });
     } catch (error) {
       if (error instanceof StaleMessagesCursorError) {
         throw new McpToolRefusal(error.message, { code: "conversation_messages_cursor_stale" });
@@ -5128,7 +5128,7 @@ function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReport
   };
 }
 
-async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies = productionDomainDependencies): Promise<McpToolPayload> {
+async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies = productionDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
   const pipeline = dependencies.readPipelineRecord ? dependencies.readPipelineRecord(pipelineId) : dependencies.getPipelines().pipelines.find(row => row.id === pipelineId);
   if (!pipeline) {
@@ -5147,10 +5147,10 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   const stageId = text(args.stageId);
   if (stageId) {
     const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
-    return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), task: pipeline.task, revision: recordRevision(pipeline) });
+    return redactPayload({ ...pipelineStageRead(projectReadText(pipeline, context), stageId, attempt), task: pipeline.task, revision: recordRevision(pipeline) });
   }
   if (!fullAnswer(args)) {
-    const compact = pipelineCompactRow(pipeline);
+    const compact = pipelineCompactRow(projectReadText(pipeline, context));
     const definitions = new Map(pipeline.stages.map(stage => [stage.id, stage]));
     return redactPayload({
       pipelineId,
@@ -5168,6 +5168,16 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   }
   /* The digests a guarded graph edit names as expectedStageDigest. */
   return { ...redactPayload({ pipelineId, pipeline }), revision: recordRevision(pipeline), stageDigests: stageDigests(pipeline.stages), graphDigest: graphDigest(pipeline.stages), workLinks: pipelineWorkLinks(pipeline) };
+}
+
+/** Filter and page original records, then scrub only the selected source before
+ * shared projections split lines or clip text. Stored records stay untouched. */
+function projectReadText<T>(value: T, context: McpToolCallContext): T {
+  if (!context.redactText) return value;
+  if (typeof value === "string") return context.redactText(value) as T;
+  if (Array.isArray(value)) return value.map(row => projectReadText(row, context)) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, row]) => [key, projectReadText(row, context)])) as T;
 }
 
 const SENSITIVE_PAYLOAD_KEY = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|password|passwd|secret)/i;
@@ -5321,7 +5331,8 @@ async function listPipelines(
   const source = dependencies.pipelineSelectionSource?.();
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
-  const project = (pipeline: Pipeline) => {
+  const project = (source: Pipeline) => {
+    const pipeline = projectReadText(source, context);
     if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
     if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
     const { stages, ...status } = pipelineCompactRow(pipeline);
@@ -5389,13 +5400,16 @@ function listTaskRow(task: TaskPipelineReadModel) {
     ? { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true } : task;
 }
 
-function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
+function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): McpToolPayload {
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
   const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(),
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
   const source = dependencies.taskSelectionSource?.();
-  const project = (task: TaskPipelineReadModel) => args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
+  const project = (source: TaskPipelineReadModel) => {
+    const task = projectReadText(source, context);
+    return args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
+  };
   const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies)))
     : listPage(taskReadModel(dependencies), {
@@ -5440,7 +5454,7 @@ async function readRemoteAgentRows(project: string): Promise<{ rows: RemoteAgent
   return { rows: [], unavailable: true };
 }
 
-async function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
   const taskId = required(args, "taskId");
   const source = dependencies.taskSelectionSource?.();
   const stored = source?.read(taskId);
@@ -5449,7 +5463,7 @@ async function getTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependenc
   if (!task) throw new Error("task not found");
   const workLinks = args.compact === true ? null : taskWorkLinks(task, carriedPipelines(task.pipelineIds, dependencies));
   const remote = await readRemoteAgentRows(task.project);
-  return redactPayload({ taskId, task: args.compact === true ? compactTask(task) : withOwnership(task), remoteAgents: remote.rows.filter((row) => row.task === task.id),
+  return redactPayload({ taskId, task: args.compact === true ? compactTask(projectReadText(task, context)) : withOwnership(projectReadText(task, context)), remoteAgents: remote.rows.filter((row) => row.task === task.id),
     ...(remote.unavailable ? { remoteAgentsUnavailable: true } : {}), ...(workLinks ? { workLinks } : {}),
     ...(args.compact === true ? { omittedRecordCount: 1, readMore: "get_task without compact reads the full task." } : {}) });
 }
@@ -6167,7 +6181,7 @@ async function agentActivity(
     const undescribed = snapshot.selection.recoveryPending > 0
       ? { [snapshot.selection.scope === "targeted" ? "undescribedTargetCount" : "undescribedHostCount"]: snapshot.selection.recoveryPending }
       : {};
-    return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
+    return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(projectReadText(filtered, context))), journaled: journal.appended,
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
       /* Every projection says what it could not confirm. `pending`: no
@@ -7267,10 +7281,10 @@ export function viewerReadTools(
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
 ) {
   return {
-    list_tasks: (args: McpToolArgs) => Promise.resolve(listTasks(args, domainDependencies)),
-    get_task: (args: McpToolArgs) => getTask(args, domainDependencies),
+    list_tasks: (args: McpToolArgs, context?: McpToolCallContext) => Promise.resolve(listTasks(args, domainDependencies, context)),
+    get_task: (args: McpToolArgs, context?: McpToolCallContext) => getTask(args, domainDependencies, context),
     list_pipelines: (args: McpToolArgs, context?: McpToolCallContext) => listPipelines(args, domainDependencies, context),
-    get_pipeline: (args: McpToolArgs) => getPipeline(args, domainDependencies),
+    get_pipeline: (args: McpToolArgs, context?: McpToolCallContext) => getPipeline(args, domainDependencies, context),
     agent_activity: (args: McpToolArgs, context?: McpToolCallContext) => agentActivity(args, domainDependencies, context),
     conversation_messages: (args: McpToolArgs, context?: McpToolCallContext) => conversationMessages(args, domainDependencies, context),
     search_transcripts: (args: McpToolArgs, context?: McpToolCallContext) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),

@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { GET as searchTranscriptPage } from "@/app/api/search/transcripts/route";
+import { transcriptSearchPage } from "@/lib/search/transcriptSearchPage";
 import { viewerReadTools, productionDomainDependencies, type ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 import { budgetPage } from "@/lib/mcp/budgetPage";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
@@ -24,9 +24,10 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
     refreshLifecycleJournal: () => ({ appended: 0 }) as ReturnType<ViewerMcpDomainDependencies["refreshLifecycleJournal"]>,
   };
   const searchHandles = new Map<string,{path:string;project:string}>();
-  const activityPages = {};
-  const reads = viewerReadTools(domain, { get: async pathname => {
-    const answer = await searchTranscriptPage(new Request(`http://127.0.0.1${pathname}`));
+  const activityPages = new WeakMap<(text: string) => string, object>();
+  const defaultRedactor = (text: string) => text;
+  const readsFor = (redactText?: (text: string) => string) => viewerReadTools(domain, { get: async pathname => {
+    const answer = await transcriptSearchPage(new Request(`http://127.0.0.1${pathname}`), redactText);
     if (!answer.ok) throw new Error("SEARCH_UNAVAILABLE");
     const page = await answer.json();
     for (const row of page.items ?? []) if (typeof row.transcriptPath === "string" && typeof row.project === "string") {
@@ -41,15 +42,21 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
     return selection ? selection.read(id) : (domain.listTaskRecords?.() ?? domain.loadTasks()).find(row => row.id === id);
   };
   return {
-    call: (name, args) => {
+    call: (name, args, redactText = defaultRedactor) => {
+      const reads = readsFor(redactText);
+      const context = { redactText };
       const target = name === "conversation_messages" || name === "agent_activity" ? searchHandles.get(String(args.conversationId)) : null;
       const selected = target ? {...args,conversationId:undefined,transcriptPath:target.path} : args;
-      if (name === "agent_activity") return budgetPage(activityPages, name, args, 4000, async () => {
-        const source = await reads.agent_activity({ ...selected, cursor: undefined, limit: 200 });
-        const { conversations, ...meta } = source;
-        return { rows: conversations as Record<string, unknown>[], meta: { ...meta, total: source.count }, upstream: null };
-      }, false, typeof args.limit === "number" ? args.limit : 10);
-      return reads[name as keyof typeof reads](selected);
+      if (name === "agent_activity") {
+        let pageOwner = activityPages.get(redactText);
+        if (!pageOwner) { pageOwner = {}; activityPages.set(redactText,pageOwner); }
+        return budgetPage(pageOwner, name, args, 4000, async () => {
+          const source = await reads.agent_activity({ ...selected, cursor: undefined, limit: 200 }, context);
+          const { conversations, ...meta } = source;
+          return { rows: conversations as Record<string, unknown>[], meta: { ...meta, total: source.count }, upstream: null };
+        }, false, typeof args.limit === "number" ? args.limit : 10);
+      }
+      return reads[name as keyof typeof reads](selected, context);
     },
     async projectFor(kind, id) {
       if (kind === "task") return task(id)?.project ?? null;

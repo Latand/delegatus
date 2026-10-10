@@ -384,7 +384,7 @@ test("the active credential reflected in a transcript, a tool, a proposal, a rep
   await service.close(s.sessionId);
   expect(answered).toContain("orchestrator.answer");
   expect(answered).toContain("tool.called");
-  for (const surface of [answered, stateFile(), transcriptFiles(), JSON.stringify(service.transcriptRecord(s.sessionId)), JSON.stringify(await service.events(s.sessionId, 0)), JSON.stringify(provider.commands.filter(row => row.type === "session.commentary.append"))])
+  for (const surface of [JSON.stringify(provider.requests), answered, stateFile(), transcriptFiles(), JSON.stringify(service.transcriptRecord(s.sessionId)), JSON.stringify(await service.events(s.sessionId, 0)), JSON.stringify(provider.commands.filter(row => row.type === "session.commentary.append"))])
     expect(surface).not.toContain(KEY);
 });
 
@@ -1192,12 +1192,12 @@ test("prototype frame bytes reach backend vision while tool output and transcrip
   expect(f.sends()).toBe(0); await f.service.close(s.sessionId);
 });
 
-async function credentialReadFixture() {
+async function credentialReadFixture(options: { taskText?: (key: string) => string; messages?: (key: string) => string[] } = {}) {
   const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
   const { CompanionBoardReads } = await import("./boardReads");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
-  const key = ["fixture", "private", "credential", "Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5"].join("-");
+  const key = ["Zr9QvB", "private", "credential", "Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5"].join("-");
   const pieces = key.match(/.{1,6}/g)!.join(" ");
   const at = "2026-10-10T00:00:00.000Z";
   const taskFile = path.join(root, "credential-reads.json");
@@ -1208,22 +1208,37 @@ async function credentialReadFixture() {
     questions: [{ id: "choice", text: "Which variant?", options: [{ label: "Safe variant", recommended: true }] }],
     decision: { chosen: [1], comment: `Keep this safe decision. ${pieces} Keep the final sentence.`, at,
       delivery: { state: "sent" as const, clientMessageId: "fixture-choice", conversationId: null, text: "Private delivery context" } } };
-  saveTasks([{ id: round.taskId, project: "fixture", text: `Safe task ${pieces} ready`, status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, prototypeReviews: [round] },
+  saveTasks([{ id: round.taskId, project: "fixture", text: options.taskText?.(key) ?? `Safe task ${pieces} ready`, status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, prototypeReviews: [round] },
     { id: "task-closed", project: "fixture", text: "Closed task", status: "done", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], taskFile);
+  const transcriptPath = path.join(root, "clipping-reads.jsonl");
+  const texts = options.messages?.(key) ?? [];
+  fs.writeFileSync(transcriptPath, texts.map((text,index) => JSON.stringify({ type: "assistant", uuid: `clipping-${index}`, timestamp: at,
+    message: { role: "assistant", content: [{ type: "text", text }] } })).join("\n") + "\n");
   const f = fixture(key);
   const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
     loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
-    pipelineSelectionSource: undefined, listPipelineRecords: () => [] } });
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] }, transcript: {
+      selectedContext: { selectedConversation: () => ({ resolve: id => id === "conversation_clipping" ? { conversationId: id, engine: "claude", path: transcriptPath, project: "fixture" } : null,
+        readTail: () => null }), pathAllowed: candidate => candidate === transcriptPath },
+      pinnedTranscript: candidate => {
+        if (candidate !== transcriptPath) return undefined;
+        const descriptor = fs.openSync(candidate,"r");
+        return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true };
+      },
+    } });
   const reads = new CompanionBoardReads({ ...paths, resolveProject: () => "fixture" });
   const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => key, timers: false, closeTimeoutMs: 20 });
-  return { ...f, service, reads, key, description, round };
+  return { ...f, service, reads, key, description, round, transcriptPath, taskFile, paths };
 }
 
 async function expectCredentialReadSurfacesSafe(f: Awaited<ReturnType<typeof credentialReadFixture>>, sessionId: string) {
   const { withoutSeparators } = await import("./redaction");
   const surfaces = [JSON.stringify(f.provider.requests), JSON.stringify(f.provider.commands),
     JSON.stringify(await f.service.events(sessionId, 0)), JSON.stringify(f.service.transcriptRecord(sessionId)), stateFile(), transcriptFiles()];
-  for (const surface of surfaces) expect(withoutSeparators(surface)).not.toContain(f.key);
+  for (const surface of surfaces) {
+    expect(withoutSeparators(surface)).not.toContain(f.key);
+    expect(withoutSeparators(surface)).not.toContain(f.key.slice(0,6));
+  }
 }
 
 test("whole prototype review masks active credential fragments before backend input and keeps the complete safe review", async () => {
@@ -1280,6 +1295,120 @@ test("cached follow-up context and repeated reads retain safe speech without rec
     expect(JSON.parse(f.provider.requests[3].input.find(item => item.type === "function_call_output")!.output as string)).toMatchObject({ repeated: true });
     await expectCredentialReadSurfacesSafe(f, s.sessionId);
   } finally { await f.service.close(s.sessionId); actual.mockRestore(); }
+});
+
+for (const boundary of ["clip", "newline"] as const) test(`task ${boundary} boundaries mask complete source before shared compact projections and cached follow-ups`, async () => {
+  const f = await credentialReadFixture({ taskText: key => "x".repeat(154) + (boundary === "clip" ? key : key.slice(0,6) + "\n" + key.slice(6)) + " tail" });
+  const actual = spyOn(f.reads,"read");
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_boundary_${index}`, output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`boundary-${index}`,"list_tasks",{openOnly:true,statuses:["inbox"],query:"tail",ids:[f.round.taskId],limit:1})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    for (const id of ["boundary-first","boundary-cached"]) {
+      f.provider.replay(s.providerId,delegationCreated(id,1)); await f.service.drain(s.sessionId);
+    }
+    expect(actual).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({total:1,shown:1,more:0,rows:[{state:"inbox"}]});
+    expect(f.provider.requests[2].input[0].content).toContain("Reads earlier in this call");
+    expect(JSON.parse(f.provider.requests[3].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({repeated:true});
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+    const { loadTasks } = await import("@/lib/tasks/store");
+    expect(loadTasks(f.taskFile)[0].text).toContain(boundary === "clip" ? f.key : f.key.slice(0,6)+"\n"+f.key.slice(6));
+  } finally { await f.service.close(s.sessionId); actual.mockRestore(); }
+});
+
+test("paged real conversation reads mask keys across maxChars and newline boundaries on every voice surface", async () => {
+  const f = await credentialReadFixture({messages:key=>["Earlier safe reply", "x".repeat(314)+key+" tail", key.slice(0,6)+"\n"+key.slice(6)+" safe reply"]});
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_messages_${index}`,output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`messages-${index}`,"conversation_messages",{conversationId:"conversation_clipping",roles:["assistant"],since:"2026-10-10T00:00:00Z",limit:2})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"uk",sdp:"v=0"});
+  try {
+    for (const id of ["messages-first","messages-cached"]) {
+      f.provider.replay(s.providerId,delegationCreated(id,1)); await f.service.drain(s.sessionId);
+    }
+    const output = JSON.parse(f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string);
+    const nextCursor = output.nextCursor;
+    expect(typeof nextCursor).toBe("string");
+    expect(nextCursor.length).toBeLessThanOrEqual(3000);
+    expect(output).toMatchObject({shown:2,truncated:true,rows:[{excerpt:"[redacted] safe reply"},{}]});
+    const next = await f.reads.read("fixture","conversation_messages",f.reads.normalize("fixture","conversation_messages",{conversationId:"conversation_clipping",roles:["assistant"],since:"2026-10-10T00:00:00Z",limit:2,cursor:nextCursor}),[f.key]);
+    expect(next).toMatchObject({shown:1,truncated:false,rows:[{excerpt:"Earlier safe reply"}]});
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+for (const order of ["newest","relevance"] as const) test(`real ${order} search masks full source before match windows, titles and voice excerpts`, async () => {
+  const f = await credentialReadFixture({messages:key=>["cobalt "+"z".repeat(481)+key.slice(0,6)+"\n"+key.slice(6)+" tail", "cobalt "+key.slice(0,6)+"\n"+key.slice(6)+" end"]});
+  const { indexTranscriptSources } = await import("@/lib/search/transcriptSearch");
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const stat = fs.statSync(f.transcriptPath);
+  await indexTranscriptSources([{path:f.transcriptPath,project:"fixture",engine:"claude",size:stat.size,mtimeMs:stat.mtimeMs}],{complete:true});
+  replaceConversationCatalog([{path:f.transcriptPath,root:"claude-projects",name:"fixture",project:"fixture",projectName:"Fixture",title:"x".repeat(93)+f.key,firstPrompt:"",engine:"claude",kind:"session",fmt:"claude",mtime:0,size:stat.size}]);
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_search_${index}`,output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`search-${index}`,"search_transcripts",{query:"cobalt",order})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    for (const id of ["search-first","search-cached"]) {
+      f.provider.replay(s.providerId,delegationCreated(id,1)); await f.service.drain(s.sessionId);
+    }
+    const { withoutCredentials, withoutLocalPaths } = await import("./redaction");
+    const projected = await f.paths.call("search_transcripts",{project:"fixture",query:"cobalt",order,limit:6},text=>withoutLocalPaths(withoutCredentials(text,[f.key])));
+    expect(JSON.stringify(projected)).not.toContain(f.key.slice(0,6));
+    expect(JSON.stringify(projected)).toContain("[redacted]");
+    const output = JSON.parse(f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string);
+    expect(output.shown).toBeGreaterThan(0); expect(output.total).toBeGreaterThan(0);
+    expect(JSON.stringify(output)).toContain("cobalt");
+    expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(4000);
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); replaceConversationCatalog([]); }
+});
+
+test("tool replay masks parsed newline fragments and pairs opaque call references while the original filter still selects", async () => {
+  const f = await credentialReadFixture({taskText:key=>`Safe task ${key.slice(0,6)}\n${key.slice(6)} ready`});
+  f.provider.responder = (request,index) => {
+    const output = request.input.find(item=>item.type === "function_call_output");
+    return backendResponse(`resp_replay_${index}`,output ? [message(JSON.parse(output.output as string).speech)]
+      : [functionCall(`call-${f.key}`,"list_tasks",{query:f.key.slice(0,6)+"\n"+f.key.slice(6),openOnly:true})]);
+  };
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  try {
+    f.provider.replay(s.providerId,delegationCreated("replay-mask",1)); await f.service.drain(s.sessionId);
+    const call = f.provider.requests[1].input.find(item=>item.type === "function_call")!;
+    const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!;
+    expect(call.call_id).toMatch(/^voice_call_[a-f0-9]{32}$/);
+    expect(output.call_id).toBe(call.call_id);
+    expect(JSON.parse(call.arguments as string)).toEqual({query:"[redacted]",openOnly:true});
+    expect(JSON.parse(output.output as string)).toMatchObject({total:1,shown:1,rows:[{title:"Safe task [redacted] ready"}]});
+    await expectCredentialReadSurfacesSafe(f,s.sessionId);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+for (const locale of ["en","uk"] as const) test(`${locale} starting and switched project labels are scrubbed before backend context and echoed speech`, async () => {
+  const key = ["Zr9QvB","label","private","0123456789abcdef"].join("-");
+  const privatePath = ["","home","fixture-private","label.txt"].join("/");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  for (const project of ["fixture","project-label"]) expect(persistProjectAliases([{source:project,target:project,displayName:`Project ${key} ${key.slice(0,6)}\n${key.slice(6)} ${privatePath}`}])).toBe(true);
+  const f = fixture(key);
+  f.provider.responder = (request,index) => backendResponse(`resp_label_${index}`,[message(String(request.input[0].content))]);
+  const s = await f.service.start({project:"fixture",locale,sdp:"v=0"});
+  try {
+    f.provider.replay(s.providerId,delegationCreated("starting-label",1)); await f.service.drain(s.sessionId);
+    await f.service.context(s.sessionId,"project-label");
+    f.provider.replay(s.providerId,delegationCreated("switched-label",2)); await f.service.drain(s.sessionId);
+    expect(f.admission.session(s.sessionId)).toMatchObject({project:"fixture",currentProject:"project-label"});
+    for (const request of f.provider.requests) expect(request.input[0].content).toContain("Project currently in view: Project [redacted] [redacted] [path].");
+    const surfaces = [JSON.stringify(f.provider.requests),JSON.stringify(f.provider.commands),JSON.stringify(await f.service.events(s.sessionId,0)),JSON.stringify(f.service.transcriptRecord(s.sessionId)),stateFile(),transcriptFiles()];
+    for (const surface of surfaces) { expect(surface).not.toContain(key);expect(surface).not.toContain(key.slice(0,6));expect(surface).not.toContain("fixture-private"); }
+  } finally { await f.service.close(s.sessionId); }
 });
 
 test("current-view context updates the same provider call and a named project targets its own orchestrator", async () => {
