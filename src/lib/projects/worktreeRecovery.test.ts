@@ -21,15 +21,17 @@ import { checkpointWorktreeRecoveryForDemotion, readWorktreeRecoveries } from ".
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "automatic-worktree-recovery-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 let serial = 0;
-function fixture(defaultState = false) {
+const longRepositoryName = "automatic-worktree-project-recovery-for-legacy-transcripts-and-preserved-board-preference-regression";
+function fixture(defaultState = false, repositoryName = "widgets") {
   const disk = path.join(root, String(++serial));
   const state = defaultState ? path.join(disk, "config", "delegatus", "state") : path.join(disk, "state");
   const sessions = path.join(disk, "sessions");
-  const repo = path.join(disk, "widgets");
+  const repo = path.join(disk, repositoryName);
+  const remote = `https://example.invalid/team/${repositoryName}.git`;
   fs.mkdirSync(path.join(repo, ".git", "refs", "heads"), { recursive: true });
   fs.mkdirSync(state, { recursive: true }); fs.mkdirSync(sessions);
   fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
-  fs.writeFileSync(path.join(repo, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/widgets.git\n');
+  fs.writeFileSync(path.join(repo, ".git", "config"), `[remote "origin"]\nurl = ${remote}\n`);
   fs.writeFileSync(path.join(repo, ".git", "refs", "heads", "confirmed"), "a".repeat(40));
   process.env.LLV_STATE_DIR = state;
   resetProjectAliasesForTests();
@@ -45,7 +47,7 @@ function fixture(defaultState = false) {
   const write = () => fs.writeFileSync(path.join(state, "project-catalog.json"), JSON.stringify({ version: 2, files }));
   const raw = () => Object.keys(files).map(filename => ({ rootName: "codex-sessions" as const, root: sessions, path: filename, st: fs.statSync(filename) }));
   const scan = () => discoverFilesWithProjectCatalog([["codex-sessions", sessions]]);
-  return { state, repo, identity, transcript, write, files, raw, scan };
+  return { state, repo, remote, identity, transcript, write, files, raw, scan };
 }
 
 function bytes(directory: string) {
@@ -53,10 +55,10 @@ function bytes(directory: string) {
     .map(name => [name, fs.readFileSync(path.join(directory, name))]));
 }
 
-test("Viewer activation recovers after hot-state activation and before controllers, once without replay writes", async () => {
-  const f = fixture();
+test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after hot-state activation and before controllers, once without replay writes", async repositoryName => {
+  const f = fixture(false, repositoryName);
   const cwd = f.repo + "-review";
-  f.transcript(cwd, { repository_url: "https://example.invalid/team/widgets.git" }); f.write();
+  f.transcript(cwd, { repository_url: f.remote }); f.write();
   const source = directoryProjectId(cwd);
   const board = path.join(f.state, "board.json");
   expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
@@ -79,6 +81,9 @@ test("Viewer activation recovers after hot-state activation and before controlle
   expect(journal.events).toHaveLength(1);
   expect(journal.events[0]?.summary).toContain("sibling-name-and-repository-hint");
   expect(journal.events[0]?.summary).toContain("startup");
+  expect(journal.events[0]?.summary).toContain(source);
+  expect(journal.events[0]?.summary).toContain(f.identity.project);
+  expect(journal.events[0]!.summary.length).toBeLessThanOrEqual(200);
   const before = bytes(f.state);
   await startup();
   expect(scans).toBe(1);
@@ -98,11 +103,11 @@ test("Viewer activation recovers after hot-state activation and before controlle
   expect(JSON.parse(child.stdout.toString())).toEqual({ project: f.identity.project, events: 2 });
 });
 
-test("a full rescan recovers new evidence and returns the folded catalog in that same scan", async () => {
-  const f = fixture();
+test.each(["widgets", longRepositoryName])("a full rescan recovers %s with new evidence and returns the folded catalog in that same scan", async repositoryName => {
+  const f = fixture(false, repositoryName);
   const hinted = f.repo + "-review";
   const branch = f.repo + "-lane-7";
-  f.transcript(hinted, { repository_url: "https://example.invalid/team/widgets.git" });
+  f.transcript(hinted, { repository_url: f.remote });
   f.transcript(branch, { branch: "confirmed" });
   const first = await f.scan();
   expect(first.complete).toBe(true);
@@ -111,6 +116,12 @@ test("a full rescan recovers new evidence and returns the folded catalog in that
   expect(readWorktreeRecoveries().map(row => row.event.summary).join("\n")).toContain("sibling-name-and-branch-hint");
   expect(readLifecycleJournal().events).toHaveLength(2);
   expect(readLifecycleJournal().events.every(event => event.summary.includes("rescan"))).toBe(true);
+  expect(readLifecycleJournal().events[0]?.summary).toContain("sibling-name-and-repository-hint");
+  for (const cwd of [hinted, branch]) {
+    const summary = readLifecycleJournal().events.find(event => event.summary.includes(directoryProjectId(cwd)))!.summary;
+    expect(summary).toContain(f.identity.project);
+    expect(summary.length).toBeLessThanOrEqual(200);
+  }
   const later = f.repo + "-pipeline-new";
   f.transcript(later, { branch: "confirmed" });
   await f.scan();
@@ -312,20 +323,25 @@ test("a complete request index refresh recovers projects and returns their canon
   expect(readLifecycleJournal().events[0]?.summary).toContain("rescan");
 });
 
-test("demotion preserves recovery through a preceding-release catalog scan and journal append", async () => {
-  const f = fixture(); const cwd = f.repo + "-review";
-  f.transcript(cwd, { branch: "confirmed" }); f.write();
+test("demotion preserves long-name recovery through a preceding-release catalog scan and journal append", async () => {
+  const f = fixture(false, longRepositoryName); const cwd = f.repo + "-review";
+  f.transcript(cwd, { repository_url: f.remote }); f.write();
   const source = directoryProjectId(cwd);
   const boardFile = path.join(f.state, "board.json");
   expect(patchBoard(source, 0, { manual: ["conversation_old"] }, boardFile).ok).toBe(true);
   await runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); }, async () => { await f.scan(); });
   const recovery = readLifecycleJournal().events[0]!;
+  expect(f.identity.displayName).toHaveLength(100);
+  expect(recovery.summary).toContain("sibling-name-and-repository-hint");
+  expect(recovery.summary).toContain(source);
+  expect(recovery.summary).toContain(f.identity.project);
+  expect(recovery.summary.length).toBeLessThanOrEqual(200);
   // Preserve unrelated legacy entries as well as the newly committed rows.
   const mapFile = path.join(f.state, "worktree-map.json");
   fs.writeFileSync(mapFile, JSON.stringify({ unrelated: { repo: f.repo, worktree: "unrelated" } }));
   await checkpointLegacyCollectionMirrorsForDemotion();
   expect(JSON.parse(fs.readFileSync(mapFile, "utf8"))).toEqual({
-    unrelated: { repo: f.repo, worktree: "unrelated" }, [cwd]: { repo: f.repo, worktree: "widgets-review" },
+    unrelated: { repo: f.repo, worktree: "unrelated" }, [cwd]: { repo: f.repo, worktree: `${longRepositoryName}-review` },
   });
   const projected = bytes(f.state);
   await checkpointWorktreeRecoveryForDemotion();

@@ -267,7 +267,9 @@ export function recoverWorktreeProjects(trigger: "startup" | "rescan", files?: R
               id: lifecycleEventId(`worktree-recovery:${item.source}:${item.target}`), seq: ++seq,
               at: new Date().toISOString(), type: "project_moved", state: "completed", project: item.target!,
               pipelineId: null, stageId: null, attempt: null, conversationId: null, role: null,
-              summary: operatorSafeSummary(`${displayName}: worktree project ${item.source} folded into ${item.target}; ${item.reason}; ${item.sessions} sessions; ${trigger}`),
+              // Keep both identities and the evidence before the unbounded
+              // display name so the journal's summary budget preserves why.
+              summary: operatorSafeSummary(`Worktree project ${item.source} folded into ${item.target}; ${item.reason}; ${item.sessions} sessions; ${trigger}; ${displayName}`),
             },
           };
         });
