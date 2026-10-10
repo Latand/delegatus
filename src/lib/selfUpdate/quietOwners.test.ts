@@ -264,6 +264,42 @@ test("a registered busy answering handle with null start identity survives an ol
   expect((await probe()).quiet).toBe(true);
 });
 
+test("a compacted native admission holds even when an older idle is ahead of the engine cursor", async () => {
+  const path = transcript("settled"), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "idle");
+  publish(c.id, c.key, path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-ended", turnId: "previous-turn", seq: 20, status: "completed" } as never)!);
+  f.journal.executeOperation({ kind: "send", operationId: "native-admission", idempotencyKey: "native-admission", conversationId: c.id,
+    text: "continue", policy: "queue" });
+  f.journal.completeOperation("native-admission", "turn-started", { turnId: "accepted-native-turn" });
+  // This sample precedes the native admission in the host's history. Its
+  // engine cursor cannot order the independently accepted native turn.
+  publish(c.id, c.key, path, claim.fence, null, 30);
+  await fallback();
+  expect((await probe()).quiet).toBe(false);
+  f.journal.compact(2);
+  expect(f.journal.replay(0).reset).toBe(true);
+  expect(row(c.id).recentReceipts).toContainEqual(expect.objectContaining({ status: "turn-started", turnId: "accepted-native-turn" }));
+  expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+});
+
+test("a retained predecessor mark keeps its native receipt foreign after replay retention", async () => {
+  const s = await sameKeySuccessor(), prior = conversation(transcript("settled"));
+  publish(prior.id, s.key, prior.path, s.claimA.fence, "a-turn", 10);
+  f.journal.executeOperation({ kind: "send", operationId: "prior-native", idempotencyKey: "prior-native", conversationId: prior.id,
+    text: "continue", policy: "queue" });
+  f.journal.completeOperation("prior-native", "turn-started", { turnId: "a-turn" });
+  f.journal.append(projectEngineHostEvent(s.id, sessionKeyId(s.key), { kind: "turn-ended", turnId: "a-turn", seq: 20, status: "completed" } as never)!);
+  publish(s.id, s.key, s.path, s.claimB.fence, null, 30);
+  f.journal.compact(2);
+  expect(f.journal.replay(0).reset).toBe(true);
+  expect(row(prior.id).writerStatus).toMatchObject({ writerClaim: s.claimA.fence, activeTurnId: "a-turn" });
+  expect((await probe()).quiet).toBe(true);
+});
+
 function spawn(): { child: ReturnType<typeof Bun.spawn>; identity: ProcessIdentity } {
   const child = Bun.spawn(["sleep", "60"]);
   children.push(child);

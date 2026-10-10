@@ -149,6 +149,16 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
   }
   const turnKey = (key: string, turn: string) => `${key}\0${turn}`;
   const prefix = `engine-host:${owner.entryKey}:`;
+  // Retention can remove the publication event while preserving its mark.
+  // Its key, epoch and active turn still prove attribution, including a
+  // predecessor's native receipt under a row this owner also names.
+  for (const row of rows) {
+    const mark = row.writerStatus, epoch = fenceEpoch(mark?.writerClaim);
+    if (!mark?.activeTurnId || epoch === null) continue;
+    const key = rowKeyId(mark.sessionKey);
+    turns.set(turnKey(key, mark.activeTurnId), epoch);
+    turnOwners.set(turnKey(row.conversationId, mark.activeTurnId), { key, epoch });
+  }
   for (const event of history.events) {
     if (event.scope.type !== "session") continue;
     const payload = event.payload;
@@ -215,6 +225,18 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
       const claims = statements.get(event.scope.id);
       const started = claims?.get(turn);
       if (started !== undefined && started !== null && Number(producer.slice(prefix.length)) > started) claims!.delete(turn);
+    }
+  }
+  if (!history.complete) for (const row of rows) {
+    if (rowKeyId(row.sessionKey) !== owner.entryKey) continue;
+    for (const receipt of row.recentReceipts) {
+      if (receipt.status !== "turn-started" || !receipt.turnId) continue;
+      const recorded = turnOwners.get(turnKey(row.conversationId, receipt.turnId));
+      // A native admission has no engine cursor. An older sampled idle can
+      // be ahead of every engine event while still preceding this admission.
+      // Keep that own evidence unless retained keyed events attribute and
+      // order it. Known foreign ownership continues to speak only for itself.
+      if (!recorded) return "unattributed";
     }
   }
   let unread = false;

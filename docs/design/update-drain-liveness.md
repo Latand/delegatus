@@ -641,6 +641,13 @@ retained replay nor an older retained idle mark proves completion. The drain
 reads this checkpoint through the existing runtime client, without changing
 the registry or journal writer paths.
 
+Native admissions have no engine cursor. Their retained own delivery receipts
+remain evidence alongside replay: a receipt that says `turn-started` keeps
+custody when missing history cannot attribute and order its turn. An idle
+sample ahead of the engine cursor supplies no ordering for such an admission.
+Retained keyed evidence can prove a receipt foreign or supply its own start
+and settlement; the numeric engine bound alone cannot clear it.
+
 An unordered positive handle, registry reference or transcript tail keeps its
 hold until its own evidence settles. A standalone host without a journal
 writer treats its own `live`, `starting` or `handoff` entry as an admission
