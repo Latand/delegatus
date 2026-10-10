@@ -1349,6 +1349,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private acceptMessage(line: string): void {
+    const receivedAt = new Date().toISOString();
     let message: JsonObject | null = null;
     try { message = record(JSON.parse(line)); } catch { /* handled below */ }
     if (!message) return this.fail(new Error("Claude emitted malformed stream JSON"));
@@ -1386,6 +1387,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.providerRetry = null;
     }
     if (type === "user") {
+      let echoOperationId: string | null = null;
       const content = messageContent(message);
       const directUserEcho = stringField(message.message, "role") === "user" && content !== null;
       const directMatches = directUserEcho
@@ -1403,6 +1405,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
             this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed" });
             return;
           }
+          echoOperationId = delivery.entry.id;
           if (this.memoryQueuePath) { try { fs.appendFileSync(this.memoryQueuePath + ".consumed", delivery.entry.id + "\n", { mode: 0o600 }); } catch { /* optional hook receipt */ } }
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
@@ -1417,7 +1420,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           return this.failWithoutLedger(new Error(`Claude delivery ledger failed: ${safeError(error)}`));
         }
       }
-      this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed" });
+      this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed",
+        ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt } } : {}) });
       return;
     }
     if (type === "stream_event") {

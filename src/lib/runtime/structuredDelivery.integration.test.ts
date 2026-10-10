@@ -333,12 +333,21 @@ test("an engine event burst preserves every projection without polling the deliv
     transitionOperation: async () => { throw new Error("unexpected operation transition"); },
   } as unknown as RuntimeHostClient;
   const burst = burstyObservableHost();
+  const progress = new DeliveryProgressStore(null);
+  const burstConversation = registry.conversationForPath(artifactPath)!.id;
+  progress.note("burst-send", burstConversation, { waitReason: "dispatching" });
+  let observedBeforeAppend = false;
+  const append = client.append.bind(client);
+  client.append = async (event) => {
+    if (event.kind === "item") observedBeforeAppend = progress.get("burst-send")?.engineEchoAt === "2026-10-11T00:00:00.000Z";
+    return append(event);
+  };
 
   try {
     await bindStructuredDeliveryQueue([{
       key: { engine: "codex", sessionId: "burst-session" },
       host: burst.host,
-    }], { registry, client });
+    }], { registry, client, progress });
     await Bun.sleep(50);
     expect(burst.attachedAfter()).toBe(17);
     const baselineEffects = effectBatchCalls;
@@ -360,8 +369,14 @@ test("an engine event burst preserves every projection without polling the deliv
     expect(sessionStatusProjections - baselineStatuses).toBeLessThanOrEqual(1);
     expect(effectBatchCalls - baselineEffects).toBeLessThanOrEqual(1);
     expect(snapshotCalls - baselineSnapshots).toBeLessThanOrEqual(1);
+    burst.emit({ kind: "item", turnId: "turn:burst", item: { type: "userMessage", clientId: "burst-send" },
+      phase: "completed", seq: 58, deliveryEcho: { operationId: "burst-send", at: "2026-10-11T00:00:00.000Z" } } as RuntimeEvent);
+    await waitForCondition(() => observedBeforeAppend);
+    expect(progress.get("burst-send")).toMatchObject({ waitReason: "dispatching", terminal: null,
+      engineEchoAt: "2026-10-11T00:00:00.000Z" });
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
+    progress.close();
   }
 });
 

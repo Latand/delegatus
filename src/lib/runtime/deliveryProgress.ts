@@ -31,6 +31,12 @@ import { isDeliveryWaitReason, type DeliveryWaitReason } from "./deliveryWaitRea
 
 export type DeliveryProgressTerminalState = "delivered" | "failed" | "uncertain";
 
+export interface DeliveryPhase {
+  phase: DeliveryWaitReason | DeliveryProgressTerminalState | "ingress" | "engine-echo";
+  reason: string | null;
+  at: string;
+}
+
 export interface DeliveryProgressRecord {
   operationId: string;
   conversationId: string;
@@ -62,6 +68,14 @@ export interface DeliveryProgressRecord {
   executorId: string | null;
   terminal: { state: DeliveryProgressTerminalState; at: string; reason: string | null } | null;
   updatedAt: string;
+  /** Absent on records written before phase history was introduced. */
+  phaseHistory?: DeliveryPhase[];
+  /** Leading entries dropped by the per-send bound. */
+  phaseHistoryDropped?: number;
+  /** First server handler entry, before validation and the request ledger. */
+  ingressAt?: string | null;
+  /** First live engine user echo; replayed history supplies no arrival time. */
+  engineEchoAt?: string | null;
 }
 
 export interface DeliveryProgressNote {
@@ -84,6 +98,7 @@ export interface DeliveryProgressNote {
 
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
+  timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
   stalled(operationId: string): void;
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void;
@@ -93,6 +108,8 @@ export interface DeliveryProgressSink {
 }
 
 export const DELIVERY_PROGRESS_TERMINAL_RETENTION_MS = 14 * 24 * 60 * 60_000;
+export const DELIVERY_PROGRESS_MIN_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const DELIVERY_PHASE_HISTORY_LIMIT = 128;
 const TERMINAL_ROW_LIMIT = 5_000;
 const OPEN_ROW_LIMIT = 5_000;
 const FLUSH_DELAY_MS = 20;
@@ -116,6 +133,12 @@ function boundedDetail(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, DETAIL_LIMIT) : null;
+}
+
+function withPhase(current: Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> | null, phase: DeliveryPhase): Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> {
+  const history = [...current?.phaseHistory ?? [], phase].sort((left, right) => left.at.localeCompare(right.at));
+  const dropped = Math.max(0, history.length - DELIVERY_PHASE_HISTORY_LIMIT);
+  return { phaseHistory: history.slice(dropped), phaseHistoryDropped: (current?.phaseHistoryDropped ?? 0) + dropped };
 }
 
 function parseRecord(json: string): DeliveryProgressRecord | null {
@@ -185,6 +208,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       : note.nextWakeMs === null ? null : new Date(this.now() + Math.max(0, note.nextWakeMs)).toISOString();
     if (!current) {
       this.put({
+        ...withPhase(null, { phase: note.waitReason, reason: detail, at: since }),
         operationId,
         conversationId,
         originalKey: note.originalKey ?? null,
@@ -220,6 +244,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const advanced = reasonChanged || note.attempted === true || note.progressed === true;
     this.put({
       ...current,
+      ...(advanced || detail !== current.detail ? withPhase(current, { phase: note.waitReason, reason: detail, at: reasonChanged ? since : at }) : {}),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,
@@ -254,6 +279,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const at = new Date(this.now()).toISOString();
     this.put({
       ...current,
+      ...withPhase(current, { phase: note.waitReason, reason: boundedDetail(note.detail), at }),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,
@@ -300,8 +326,25 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       stalledSince: null,
       lastProgressAt: at,
       terminal: { state, at, reason: boundedDetail(reason) },
+      ...withPhase(current, { phase: state, reason: boundedDetail(reason), at }),
       updatedAt: at,
     });
+  }
+
+  /** Add observation times without advancing delivery, rearming it or changing
+      the executor's current phase. Retries and event replay write each once. */
+  timing(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void {
+    this.load();
+    let current = this.records.get(operationId);
+    if (!current) return;
+    for (const field of ["ingressAt", "engineEchoAt"] as const) {
+      const value = times[field];
+      if (current[field] || !value || !Number.isFinite(Date.parse(value))) continue;
+      const at = new Date(value).toISOString();
+      current = { ...current, [field]: at,
+        ...withPhase(current, { phase: field === "ingressAt" ? "ingress" : "engine-echo", reason: null, at }) };
+      this.put(current);
+    }
   }
 
   get(operationId: string): DeliveryProgressRecord | null {
@@ -523,11 +566,11 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const cutoff = this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS;
     db.query("DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ?").run(cutoff);
     db.query(`
-      DELETE FROM delivery_progress WHERE terminal = 1 AND operation_id IN (
+      DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ? AND operation_id IN (
         SELECT operation_id FROM delivery_progress WHERE terminal = 1
         ORDER BY updated_at DESC LIMIT -1 OFFSET ?
       )
-    `).run(TERMINAL_ROW_LIMIT);
+    `).run(this.now() - DELIVERY_PROGRESS_MIN_RETENTION_MS, TERMINAL_ROW_LIMIT);
     /* An open record nobody has touched past the retention belongs to an
        operation that left through a path that never said so. */
     db.query("DELETE FROM delivery_progress WHERE terminal = 0 AND updated_at < ?").run(cutoff);
@@ -595,6 +638,14 @@ export function deliveryProgressStore(): DeliveryProgressStore {
 export function ownedDeliveryProgressStore(): DeliveryProgressStore | null {
   const owned = processStore.__llvDeliveryProgressStore;
   return owned && processStore.__llvDeliveryProgressPath === deliveryProgressPath() ? owned : null;
+}
+
+/** Observations are optional for ports that do not own the progress store. */
+export function recordDeliveryIngress(operationId: string | undefined, ingressAt: string,
+  progress?: Pick<DeliveryProgressSink, "timing"> | null): void {
+  if (!operationId) return;
+  try { (progress === undefined ? ownedDeliveryProgressStore() : progress)?.timing?.(operationId, { ingressAt }); }
+  catch { /* Observation never changes a delivery's outcome. */ }
 }
 
 /** Tests only. */

@@ -195,6 +195,40 @@ function post(body: unknown, headers: Record<string, string> = {}): NextRequest 
   });
 }
 
+test("send ingress predates body validation and the request ledger, and retries retain the first timestamp", async () => {
+  const { DeliveryProgressStore, setDeliveryProgressStoreForTests } = await import("@/lib/runtime/deliveryProgress");
+  const store = new DeliveryProgressStore(null);
+  setDeliveryProgressStoreForTests(store);
+  const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
+  const previousResult = structuredMessageResult;
+  const operationId = "ingress-operation";
+  store.note(operationId, "conversation", { waitReason: "queued" });
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  structuredMessageResult = { ok: true, structured: true, target: "conversation", outcome: "queued", operationId,
+    receipt: { operationId, status: "queued" } };
+  try {
+    const before = Date.now();
+    let validatedAt = 0;
+    const request = post({ path: PATHNAME, text: "timed send", clientMessageId: "ingress-key" });
+    const readBody = request.json.bind(request);
+    request.json = async () => { await Bun.sleep(25); validatedAt = Date.now(); return readBody(); };
+    expect((await POST(request)).status).toBe(200);
+    const record = store.get(operationId) as { ingressAt?: string } | null;
+    expect(record?.ingressAt).toBeString();
+    const ingress = Date.parse(record!.ingressAt!);
+    expect(ingress).toBeGreaterThanOrEqual(before);
+    expect(ingress).toBeLessThan(validatedAt);
+    expect((await POST(post({ path: PATHNAME, text: "timed send", clientMessageId: "ingress-key" }))).status).toBe(200);
+    expect(store.get(operationId)).toMatchObject({ ingressAt: record!.ingressAt });
+  } finally {
+    if (previousHosts === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = previousHosts;
+    structuredMessageResult = previousResult;
+    setDeliveryProgressStoreForTests(null);
+    store.close();
+  }
+});
+
 test("/api/tmux records a validated direct browser message and refuses an agent claim", async () => {
   const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
   const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");

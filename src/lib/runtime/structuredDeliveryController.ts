@@ -1736,6 +1736,14 @@ export async function bindStructuredDeliveryQueue(
       while (!eventsStopped) {
         const next = await events.next();
         if (next.done) return;
+        if (next.value.kind === "item" && next.value.deliveryEcho) {
+          const echo = next.value.deliveryEcho;
+          try {
+            if (progressStore.get(echo.operationId)?.conversationId === conversationId) {
+              progressStore.timing(echo.operationId, { engineEchoAt: echo.at });
+            }
+          } catch { /* An observation never delays the journal or delivery. */ }
+        }
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */
         permissionGuard.observe(key, item.host, conversationId, next.value);
