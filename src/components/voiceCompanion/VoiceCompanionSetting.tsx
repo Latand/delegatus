@@ -8,6 +8,7 @@ import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { useLocale } from "@/lib/i18n";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 
+import { spendTone, voiceMoney, voiceMonth } from "./CompanionSpend";
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
 export const OPEN_VOICE_COMPANION_SETTINGS_EVENT = "delegatus:open-voice-companion-settings";
@@ -81,7 +82,10 @@ export function VoiceCompanionSetting() {
     if (capDraft.trim() === "" || !Number.isFinite(value) || value < 0 || value === settings.monthlyCapUsd) return;
     await change({ monthlyCapUsd: Math.round(value * 100) / 100 });
   };
-  const money = (value: number) => `$${value.toFixed(2)}`;
+  const money = voiceMoney;
+  const lastCall = settings?.lastSession;
+  const lastCallDuration = lastCall ? `${Math.floor(lastCall.seconds / 60)}:${String(Math.floor(lastCall.seconds % 60)).padStart(2, "0")}` : "";
+  const lastCallDate = lastCall ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short", timeZone: "UTC" }).format(new Date(lastCall.endedAt)) : "";
   const fromEnvironment = settings?.keySource === "env";
   /* The masked field holds what is being typed and nothing else: no saved key is ever put into it. */
   const typed = { type: "password", value: key, onChange: (event: ChangeEvent<HTMLInputElement>) => { setKey(event.target.value); setKeySaved(false); } } as const;
@@ -116,10 +120,13 @@ export function VoiceCompanionSetting() {
                 onChange={(event) => setCapDraft(event.target.value)} onBlur={() => void commitCap()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commitCap(); } }}
                 className={`${field} max-w-28 tabular-nums`} />
             </div>
-            <p id={ids.capHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-usage>
-              {t("voiceCompanion.settings.usage", { month: settings.month, spent: money(settings.usageUsd), cap: money(settings.monthlyCapUsd) })}
+            <p id={ids.capHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-usage style={{ color: spendTone(settings.usageUsd, settings.monthlyCapUsd) ? `var(--color-${spendTone(settings.usageUsd, settings.monthlyCapUsd)})` : undefined }}>
+              {t("voiceCompanion.settings.usage", { month: voiceMonth(locale, settings.month), spent: money(settings.usageUsd), cap: money(settings.monthlyCapUsd) })}
               {settings.reservedUsd > 0 ? ` ${t("voiceCompanion.settings.reserved", { held: money(settings.reservedUsd) })}` : ""}
             </p>
+            {lastCall ? <p className="mt-1 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-last-call title={lastCall.incomplete ? t("voiceCompanion.spend.incomplete") : undefined}>
+              {t(lastCall.incomplete ? "voiceCompanion.settings.lastCallIncomplete" : "voiceCompanion.settings.lastCall", { usd: money(lastCall.usd), duration: lastCallDuration, date: lastCallDate })}
+            </p> : null}
             {settings.incomplete ? <p className="mt-1 text-[12px] leading-snug text-muted">{companionErrorMessage("FINALIZATION_INCOMPLETE", speech)}</p> : null}
             {settings.uncertainSession ? (
               <div className="mt-2 flex flex-col items-start gap-1.5" data-voice-companion-uncertain>

@@ -17,6 +17,9 @@ import type { ScriptStep } from "./simulator";
  * at once; the model asks first only where it judges that it should.
  */
 
+/** A false output stop inside the long answer, replayed by the existing browser fixture. */
+export const SCENARIO_PLAYBACK_PAUSE = { long: { afterMs: 3_500, silenceMs: 300 } } as const;
+
 export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt", "read", "reads", "readLong"] as const;
 export const DRIVER_SCENARIOS = ["proposal", "voiceConfirm", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "readThenAskLong", "unconfirmed"] as const;
 export type ScenarioName = (typeof SCENARIOS)[number] | (typeof DRIVER_SCENARIOS)[number];

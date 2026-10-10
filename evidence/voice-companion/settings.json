@@ -197,6 +197,34 @@
       }
     },
     {
+      "viewport": "390x844",
+      "lang": "en",
+      "scheme": "light",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 316,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "lastCall": "Last call: $0.40 · 7:51 · Oct 10.",
+      "phoneSettingsMounted": true,
+      "openedThrough": "header menu Settings → Voice Delegatus"
+    },
+    {
+      "viewport": "390x844",
+      "lang": "uk",
+      "scheme": "dark",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 316,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "lastCall": "Остання розмова: $0.40 · 7:51 · 10 жовтня.",
+      "phoneSettingsMounted": true,
+      "openedThrough": "header menu Settings → Voice Delegatus"
+    },
+    {
       "lang": "en",
       "realBackendWithoutKey": "refused in the lane with the way to the settings; no start attempted"
     },

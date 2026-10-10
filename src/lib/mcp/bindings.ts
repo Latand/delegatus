@@ -5128,9 +5128,9 @@ function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReport
   };
 }
 
-async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
+async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies = productionDomainDependencies): Promise<McpToolPayload> {
   const pipelineId = required(args, "pipelineId");
-  const pipeline = getPipelineRecord(pipelineId);
+  const pipeline = dependencies.readPipelineRecord ? dependencies.readPipelineRecord(pipelineId) : dependencies.getPipelines().pipelines.find(row => row.id === pipelineId);
   if (!pipeline) {
     /* #1835: a create queued during a handover was answered with this id. */
     const queued = queuedPipelineCreationStatus(pipelineId);
@@ -5147,7 +5147,7 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
   const stageId = text(args.stageId);
   if (stageId) {
     const attempt = typeof args.attempt === "number" ? args.attempt : undefined;
-    return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), revision: recordRevision(pipeline) });
+    return redactPayload({ ...pipelineStageRead(pipeline, stageId, attempt), task: pipeline.task, revision: recordRevision(pipeline) });
   }
   if (!fullAnswer(args)) {
     return redactPayload({
@@ -7256,11 +7256,28 @@ export function viewerMcpRecoverableTools(
   };
 }
 
+/** Receipt-free read implementations shared by MCP and the voice companion. */
+export function viewerReadTools(
+  domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
+  controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
+) {
+  return {
+    list_tasks: (args: McpToolArgs) => Promise.resolve(listTasks(args, domainDependencies)),
+    get_task: (args: McpToolArgs) => getTask(args, domainDependencies),
+    list_pipelines: (args: McpToolArgs, context?: McpToolCallContext) => listPipelines(args, domainDependencies, context),
+    get_pipeline: (args: McpToolArgs) => getPipeline(args, domainDependencies),
+    agent_activity: (args: McpToolArgs, context?: McpToolCallContext) => agentActivity(args, domainDependencies, context),
+    conversation_messages: (args: McpToolArgs, context?: McpToolCallContext) => conversationMessages(args, domainDependencies, context),
+    search_transcripts: (args: McpToolArgs, context?: McpToolCallContext) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+  };
+}
+
 export function viewerMcpBindings(
   linkTaskDependencies: LinkTaskToPipelineDependencies = productionLinkTaskDependencies,
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): McpToolBindings {
+  const reads = viewerReadTools(domainDependencies, controlDependencies);
   const pageOwner = {};
   const budgeted = (tool: string, args: McpToolArgs, budget: number, load: (cursor: string | null) => Promise<McpToolPayload>) =>
     budgetPage(pageOwner, tool, args, budget, async cursor => {
@@ -7295,29 +7312,29 @@ export function viewerMcpBindings(
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
-    search_transcripts: (args, context) => searchTranscripts(args, viewerControlForCall(controlDependencies, context)),
+    search_transcripts: reads.search_transcripts,
     backfill_worktree_projects: (args, context) => viewerControlForCall(controlDependencies, context).post("/api/board/maintenance/worktrees", {
       dryRun: args.dryRun !== false, ...(args.project ? { project: args.project } : {}),
     }, {}, context),
     search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
-    conversation_messages: (args, context) => conversationMessages(args, domainDependencies, context),
+    conversation_messages: reads.conversation_messages,
     deploy_exact_sha: (args, context) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies),
-    get_pipeline: getPipeline,
+    get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
     get_flow: (args) => Promise.resolve(getFlow(args, domainDependencies)),
     flow_action: (args) => flowAction(args, domainDependencies),
-    list_pipelines: (args, context) => listPipelines(args, domainDependencies, context),
-    list_tasks: (args) => Promise.resolve(listTasks(args, domainDependencies)),
-    get_task: (args) => getTask(args, domainDependencies),
+    list_pipelines: reads.list_pipelines,
+    list_tasks: reads.list_tasks,
+    get_task: reads.get_task,
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     resources: (args) => resources(args, domainDependencies),
     conversation_action: (args, context) => conversationAction(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     conversation_migration: (args, context) => conversationMigration(args, viewerControlForCall(controlDependencies, context)),
-    agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => agentActivity(args, domainDependencies, context)),
+    agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context)),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),

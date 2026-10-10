@@ -1,9 +1,9 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { fixtureBoardReads } from "./boardReads.fixture";
+import { afterAll, beforeEach, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } from "./fakeProvider";
-import { CompanionBoardReads } from "./boardReads";
 import type { BackendRequest } from "./sessionConfig";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-live-"));
@@ -17,18 +17,18 @@ const { SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD, BACKEND_RESPONSE_RESE
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 
-const noReads = () => new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+const noReads = () => fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
 function fixture(key = "synthetic-credential") {
   const storage = new CompanionStorage();
   storage.updateSettings({ enabled: true });
   let sends = 0;
   const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
     send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => [] });
-  const reads = new CompanionBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "open" }],
+  const reads = fixtureBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }],
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const provider = new FakeLiveProvider();
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false });
-  return { storage, admission, provider, service, sends: () => sends };
+  return { storage, admission, provider, reads, service, sends: () => sends };
 }
 /** Answers a first round with the given calls and every later round with speech. */
 const calling = (...calls: Array<ReturnType<typeof functionCall>>) => (request: BackendRequest, index: number) =>
@@ -268,7 +268,7 @@ test("a backend request with no answer keeps its whole reservation as incomplete
   expect(f.storage.settings().usageUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD + BACKEND_RESPONSE_RESERVE_USD, 6);
 });
 
-test("a correlated orchestrator report is replayed to its own card and sent for speech; concurrent unrelated reports are ignored", async () => {
+test("a correlated orchestrator report is replayed to its own card and sent for speech; concurrent unrelated reports are spoken once", async () => {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   let reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const recipient = { project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "codex" as const };
@@ -282,14 +282,40 @@ test("a correlated orchestrator report is replayed to its own card and sent for 
   const delivery = admission.session(s.sessionId).proposals[proposal.proposalId].delivery!;
   const report = { id: "report-a", seq: 1, project: "fixture", at: "2026-10-06T00:00:00Z", class: "completed" as const, body: "The plan has been reviewed",
     correlatesDirective: delivery.clientMessageId, origin: { kind: "manager" as const, conversationId: recipient.conversationId, role: "orchestrator" as const } };
-  reports = [{ ...report, id: "unrelated", correlatesDirective: "other-message" }, report];
+  reports = [{ ...report, id: "unrelated", seq:2, correlatesDirective: "other-message" }, report];
   expect((await service.events(s.sessionId, 0)).filter(row => row.type === "orchestrator.answer")).toMatchObject([{ reportId: "report-a" }]);
   await service.events(s.sessionId, 0);
   const commentary = provider.commands.filter(row => row.type === "session.commentary.append");
-  expect(commentary).toHaveLength(1);
+  expect(commentary).toHaveLength(2);
   expect(commentary[0]).toMatchObject({ delegation_id: null });
   expect(commentary[0].content).toContain("The plan has been reviewed");
   await service.close(s.sessionId);
+});
+
+test("reports name their own project's orchestrator after the view switches", async () => {
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+  let reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const recipient = (project: string) => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" as const });
+  const admission = new CompanionAdmission(storage, { recipient, reports: project => reports.filter(report => report.project === project),
+    send: async () => ({ status: "queued", operationId: "operation-project-report" }) });
+  const provider = new FakeLiveProvider();
+  const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { key: () => "synthetic-credential", timers: false });
+  const session = await service.start({ project: "Alpha", locale: "en", sdp: "v=0" });
+  const proposal = admission.propose(session.sessionId, "project-report", "source", "Review the plan")!;
+  await service.command(session.sessionId, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
+  const delivery = admission.session(session.sessionId).proposals[proposal.proposalId].delivery!;
+  await service.context(session.sessionId, "Beta");
+  const report = (project: string, seq: number, directive?: string) => ({ id: `report-${project}`, project, seq, class: "completed" as const,
+    at: "2026-10-10T00:00:00Z", body: "The plan has been reviewed.", ...(directive ? { correlatesDirective: directive } : {}),
+    origin: { kind: "manager" as const, conversationId: recipient(project).conversationId, role: "orchestrator" as const } });
+  reports = [report("Alpha", 1, delivery.clientMessageId), report("Beta", 2)];
+  await service.events(session.sessionId, 0);
+  await service.events(session.sessionId, 0);
+  const commentary = provider.commands.filter(command => command.type === "session.commentary.append");
+  expect(commentary).toHaveLength(2);
+  expect(commentary[0]!.content).toContain('project "Alpha"');
+  expect(commentary[1]!.content).toContain('project "Beta"');
+  await service.close(session.sessionId);
 });
 
 test("a spoken answer stays within the 500 tokens one commentary append takes, keeps its delegation and ends on a whole sentence", async () => {
@@ -1090,3 +1116,151 @@ test("the session record survives 800 fragments, keeps each segment once, and st
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   expect(stateFile()).not.toContain('"arguments"');
 }, 20_000);
+
+
+test("open work takes two reads and repeated reads across backend delegations use the call ledger", async () => {
+  const f = fixture();
+  const actual = spyOn(f.reads,"read");
+  f.provider.responder = (request,index) => request.input.some(item=>item.type === "function_call_output")
+    ? backendResponse(`resp_${index}`,[message("One open task.")])
+    : backendResponse(`resp_${index}`, index === 0 ? [functionCall("open-tasks","list_tasks",{openOnly:true}),functionCall("open-pipelines","list_pipelines",{state:["open"]})] : [functionCall("tasks-again","list_tasks",{openOnly:true})]);
+  const s = await f.service.start({project:"fixture",locale:"uk",sdp:"v=0"});
+  f.provider.replay(s.providerId,said("Що зараз відкрито?",0),delegationCreated("board-open",600));
+  await f.service.drain(s.sessionId);
+  expect(actual).toHaveBeenCalledTimes(2);
+  const first = f.provider.requests[1].input.filter(item=>item.type === "function_call_output").map(item=>JSON.parse(item.output as string));
+  expect(first[0]).toMatchObject({total:1,shown:1,rows:[{title:"Review the plan",state:"inbox"}]});
+  f.provider.replay(s.providerId,said("А які задачі відкриті?",1000),delegationCreated("board-followup",1600));
+  await f.service.drain(s.sessionId);
+  expect(actual).toHaveBeenCalledTimes(2);
+  expect(f.provider.requests[2].input[0].content).toContain("Reads earlier in this call");
+  expect(f.provider.requests[2].input[0].content).toContain("Review the plan: inbox");
+  expect(JSON.parse(f.provider.requests[3].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({repeated:true});
+  await f.service.close(s.sessionId); actual.mockRestore();
+});
+
+
+test("an explicit refresh reads changed persisted tasks immediately and repeated refreshes reuse that observation", async () => {
+  const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const at = "2026-10-10T00:00:00.000Z";
+  const taskFile = path.join(root, "refresh-tasks.json");
+  saveTasks([{ id: "task-refresh", project: "fixture", text: "Review the plan", status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], taskFile);
+  const f = fixture();
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] } });
+  const reads = new CompanionBoardReads({ ...paths, resolveProject: () => "fixture" });
+  const actual = spyOn(reads, "read");
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  let refresh = false;
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+    ? backendResponse(`resp_refresh_${index}`, [message("Here is the current board.")])
+    : backendResponse(`resp_refresh_${index}`, [functionCall(`tasks-${index}`, "list_tasks", { openOnly: true, refresh }),
+      functionCall(`tasks-repeat-${index}`, "list_tasks", { openOnly: true, refresh })]);
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const read = async (id: string) => {
+    f.provider.replay(s.providerId, delegationCreated(id, 1));
+    await service.drain(s.sessionId);
+    return f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").map(item => JSON.parse(item.output as string));
+  };
+  try {
+    expect((await read("initial"))[0]).toMatchObject({ total: 1 });
+    saveTasks(loadTasks(taskFile).map(task => ({ ...task, status: "done" })), taskFile);
+    expect((await read("ordinary-repeat"))[0]).toMatchObject({ total: 1, repeated: true });
+    refresh = true;
+    const fresh = await read("operator-refresh");
+    expect(fresh[0]).toMatchObject({ total: 0, rows: [] });
+    expect(fresh[1]).toMatchObject({ total: 0, repeated: true });
+    expect(actual).toHaveBeenCalledTimes(2);
+  } finally { await service.close(s.sessionId); actual.mockRestore(); }
+});
+
+test("prototype frame bytes reach backend vision while tool output and transcript carry only references", async () => {
+  const f = fixture();
+  f.provider.responder = calling(functionCall("frame-call","view_prototype_frame",{taskId:"task_fixture",reviewId:"review-a",mediaId:"frame-a"}));
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  f.provider.replay(s.providerId,delegationCreated("frame-request",1));
+  await f.service.drain(s.sessionId);
+  const vision = f.provider.requests[1].input.find(item=>Array.isArray(item.content))!;
+  expect((vision.content as Array<Record<string,unknown>>)[1]).toMatchObject({type:"input_image",image_url:expect.stringContaining("data:image/png;base64,"),detail:"high"});
+  const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string;
+  expect(output).toContain("frame-a"); expect(output).not.toContain("base64");
+  expect(JSON.stringify(f.service.transcriptRecord(s.sessionId))).not.toContain("iVBORw");
+  expect(f.sends()).toBe(0); await f.service.close(s.sessionId);
+});
+
+test("current-view context updates the same provider call and a named project targets its own orchestrator", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const at = "2026-10-10T12:00:00.000Z";
+  const taskFile = path.join(root, "context-store", "tasks.json");
+  replaceConversationCatalog(["Alpha","Beta"].map((projectName,index)=>({path:path.join(root,`${index}.jsonl`),root:"claude-projects" as const,name:"fixture",project:`project-${index}`,projectName,title:"Fixture",firstPrompt:"",engine:"claude" as const,kind:"session",fmt:"claude" as const,mtime:0,size:0})));
+  saveTasks([0,1].map(index=>({id:`task-${index}`,project:`project-${index}`,text:`Project ${index} task`,status:"inbox" as const,placement:"unplaced" as const,assignments:[],createdAt:at,updatedAt:at})), taskFile);
+  const storage = new CompanionStorage(); storage.updateSettings({enabled:true});
+  const sent:string[]=[];
+  const admission = new CompanionAdmission(storage,{recipient:project=>({project,conversationId:`conversation_${project}`,seatEpoch:1,engine:"claude"}),send:async binding=>{sent.push(binding.delivery.recipient.project);return {status:"delivered",operationId:"operation-a"};},reports:()=>[]});
+  const provider = new FakeLiveProvider();
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
+    pipelineSelectionSource: undefined, listPipelineRecords: () => [] } }));
+  const service = new CompanionLiveSessions(storage,admission,reads,provider,{key:()=>"synthetic-credential",timers:false});
+  provider.responder = (request,index)=>request.input.some(item=>item.type === "function_call_output") ? backendResponse(`resp_${index}`,[message("Done.")]) : backendResponse(`resp_${index}`,[functionCall(`tasks-${index}`,"list_tasks",{openOnly:true})]);
+  const s = await service.start({project:"project-0",locale:"en",sdp:"v=0"});
+  await service.context(s.sessionId,"project-1");
+  provider.replay(s.providerId,delegationCreated("read-beta",1));await service.drain(s.sessionId);
+  expect(JSON.parse(provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string)).toMatchObject({rows:[{title:"Project 1 task"}]});
+  await service.context(s.sessionId,null);
+  provider.responder = calling(functionCall("send-alpha","request_orchestrator_delegation",{project:"Alpha",instruction:"Review the Alpha plan"}));
+  provider.replay(s.providerId,said("Ask Alpha's orchestrator to review the plan.",1000),delegationCreated("send-named",1600));await service.drain(s.sessionId);
+  expect(sent).toEqual(["project-0"]);
+  expect(provider.sessions).toHaveLength(1);expect(provider.attached).toBe(1);
+  expect(admission.session(s.sessionId)).toMatchObject({project:"project-0",currentProject:null});
+  expect(provider.commands.filter(row=>row.type === "session.instructions.append")).toHaveLength(2);
+  expect(provider.refused).toEqual([]);
+  await service.close(s.sessionId);replaceConversationCatalog([]);
+});
+
+test("backend response ids are counted once and retained token receipts reprice exactly", async () => {
+  const { backendUsageUsd } = await import("./usage");
+  const f = fixture();
+  f.provider.responder = ()=>backendResponse("resp_same",[message("Done.")]);
+  const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  f.provider.replay(s.providerId,delegationCreated("first",1));await f.service.drain(s.sessionId);
+  f.provider.replay(s.providerId,delegationCreated("second",2));await f.service.drain(s.sessionId);
+  const receipts = Object.values(f.admission.session(s.sessionId).usage!.responses);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({responseId:"resp_same",tokens:{input:100,cached:50,cacheWrite:0,output:20}});
+  const tokens = receipts[0].tokens!;
+  expect(receipts[0].usd).toBe(backendUsageUsd({input_tokens:tokens.input,input_tokens_details:{cached_tokens:tokens.cached,cache_write_tokens:tokens.cacheWrite},output_tokens:tokens.output}));
+  await f.service.close(s.sessionId);
+});
+
+
+test("an older read refreshes after the reuse window and missing usage for a known response is upgraded once", async () => {
+  let now = 0;
+  const storage = new CompanionStorage(()=>now);storage.updateSettings({enabled:true});
+  const admission = new CompanionAdmission(storage,{recipient:()=>null,reports:()=>[],send:async()=>{throw new Error("unexpected send");}},()=>now);
+  const provider = new FakeLiveProvider();
+  const reads = fixtureBoardReads({tasks:()=>[],pipelines:()=>[],activity:async()=>[],messages:async()=>[]});
+  const actual = spyOn(reads,"read");
+  const service = new CompanionLiveSessions(storage,admission,reads,provider,{key:()=>"synthetic-credential",now:()=>now,timers:false});
+  provider.responder = calling(functionCall("tasks","list_tasks",{openOnly:true}));
+  const s = await service.start({project:"fixture",locale:"en",sdp:"v=0"});
+  provider.replay(s.providerId,delegationCreated("first-read",1));await service.drain(s.sessionId);
+  now = 120001;
+  provider.replay(s.providerId,delegationCreated("later-read",120002));await service.drain(s.sessionId);
+  expect(actual).toHaveBeenCalledTimes(2);
+  provider.responder = (_request,index)=>backendResponse("resp_recovered",[message("Done.")],index === 4 ? {} : {input_tokens:100,output_tokens:20});
+  provider.replay(s.providerId,delegationCreated("incomplete-receipt",120003));await service.drain(s.sessionId);
+  provider.replay(s.providerId,delegationCreated("recovered-receipt",120004));await service.drain(s.sessionId);
+  const receipts=Object.values(admission.session(s.sessionId).usage!.responses).filter(row=>row.responseId === "resp_recovered");
+  expect(receipts).toHaveLength(1);expect(receipts[0]).toMatchObject({complete:true,tokens:{input:100,cached:0,cacheWrite:0,output:20}});
+  await service.close(s.sessionId);actual.mockRestore();
+  expect(storage.settings().incomplete).toBe(false);
+});

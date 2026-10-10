@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { FakeLiveProvider } from "@/lib/voiceCompanion/fakeProvider";
-import { CompanionBoardReads } from "@/lib/voiceCompanion/boardReads";
+import { fixtureBoardReads } from "@/lib/voiceCompanion/boardReads.fixture";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-session-route-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -21,7 +21,7 @@ function fixture() {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
   const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => [] });
-  const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
+  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
     provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(service);
   return { service, admission, provider };
@@ -55,7 +55,7 @@ test("a new server instance closes an orphaned minted session and preserves inco
   const minted = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "restart-attempt" });
   const storage = new CompanionStorage();
   const next = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }),
-    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider,
+    fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider,
     { key: () => "synthetic-credential", timers: false });
   await expect(next.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "restart-attempt" })).rejects.toThrow("SESSION_CLOSED");
   expect((await next.events(minted.sessionId, 0)).at(-1)).toMatchObject({ type: "session.closed", incomplete: true });
@@ -87,7 +87,7 @@ test("after a restart a new Talk with a new request closes the orphan first; its
   const old = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "old-tab" });
   const storage = new CompanionStorage();
   const restarted = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }),
-    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+    fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(restarted);
   const started = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "new-tab" }));
   expect(started.status).toBe(201);
@@ -142,7 +142,7 @@ test("a mint whose SDP answer or session id echoes the credential is refused, hu
 function restartedService(provider: FakeLiveProvider, now: () => number = Date.now) {
   const storage = new CompanionStorage(now);
   const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }, now),
-    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20, now });
+    fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20, now });
   setCompanionSessionsForTests(service);
   return { storage, service };
 }
@@ -240,4 +240,60 @@ test("the operator can read the complete transcript after close, while foreign a
   expect(record.entries.map((entry: { kind: string }) => entry.kind)).toEqual(["session_start", "utterance", "reply", "session_end"]);
   expect(record.entries[1].data).toMatchObject({ text: "Hello", final: true, startMs: 0, endMs: 400 });
   expect(record.truncated).toBe(false);
+});
+
+test("session events and transcript return the same usage contract; context changes keep the initial transcript project", async () => {
+  const f = fixture();
+  const input = { action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "context-contract" };
+  const minted = await (await POST(request(input))).json();
+  expect(f.service.storage.read().sessions[minted.sessionId].startedBy).toEqual({ operator: true });
+  for (const project of ["another-project", null]) {
+    const answer = await POST(request({ action: "context", sessionId: minted.sessionId, project }));
+    expect(answer.status).toBe(200);
+    expect(f.service.storage.read().sessions[minted.sessionId]).toMatchObject({ project: "fixture", currentProject: project });
+  }
+  const events = await (await get(minted.sessionId)).json();
+  expect(events.usage).toEqual(f.service.storage.usageFor(minted.sessionId));
+  const transcript = await GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&view=transcript`,
+    { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+  expect((await transcript.json()).usage).toEqual(events.usage);
+  for (const project of [undefined, 42, ""]) expect((await POST(request({ action: "context", sessionId: minted.sessionId, project }))).status).toBe(400);
+  await f.service.close(minted.sessionId);
+});
+
+test("a team call is private to its starting human across events, transcripts, commands, context, start retry and closeRequest", async () => {
+  const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
+  resetTeamStoreForTests();
+  const store = teamStore();
+  const device = { surface: "desktop" as const, browser: "chrome" as const };
+  const owner = claimInstall(store, "Owner", device);
+  const starter = redeemJoin(store, createInvite(store, owner.member, null).code, "Starter", device);
+  const cookie = (value: string) => ({ cookie: `${MEMBER_COOKIE}=${value}` });
+  const f = fixture();
+  const input = { action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "team-private" };
+  expect(await (await POST(request(input))).json()).toEqual({ code: "MEMBER_REQUIRED" });
+  expect(f.provider.sessions).toHaveLength(0);
+  const created = await POST(request(input, cookie(starter.cookie)));
+  expect(created.status).toBe(201);
+  const minted = await created.json();
+  expect(f.service.storage.read().sessions[minted.sessionId].startedBy).toEqual({ memberId: starter.member.id });
+  const read = (view: string, value: string) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&view=${view}`,
+    { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...cookie(value) } }));
+  for (const view of ["events", "transcript"]) {
+    expect((await read(view, owner.cookie)).status).toBe(401);
+    expect((await read(view, starter.cookie)).status).toBe(200);
+  }
+  for (const body of [input, { action: "close", requestId: input.requestId }, { action: "close", sessionId: minted.sessionId },
+    { action: "context", sessionId: minted.sessionId, project: null }, { action: "command", sessionId: minted.sessionId, command: { type: "mute", muted: true } }]) {
+    expect(await (await POST(request(body, cookie(owner.cookie)))).json()).toEqual({ code: "MEMBER_REQUIRED" });
+  }
+  expect(f.provider.attached).toBe(1);
+  expect(JSON.stringify(f.service.storage.read())).not.toContain(starter.cookie);
+  store.updateMember({ ...starter.member, status: "revoked", revokedAt: new Date().toISOString() });
+  expect((await read("events", starter.cookie)).status).toBe(401);
+  expect((await POST(request({ action: "close", requestId: input.requestId }, cookie(starter.cookie)))).status).toBe(401);
+  await f.service.close(minted.sessionId);
+  resetTeamStoreForTests();
 });

@@ -27,7 +27,7 @@ note changes only what the six items below need.
 | (e) Pricing | Observed (below): `gpt-live-1` is billed **per second at $0.05 a minute**, and Live reports only `usage.seconds`. It has no token rates and reports no tokens. The code already prices live voice from that reported duration and the backend from its reported tokens, at the observed rates. | No rate changes. Keep each backend response's token counts beside its price; update the verification date. The token clause of acceptance 5 cannot apply to `gpt-live-1` (see "WRONG-PREMISE" under (e)). | Re-pricing a stored response from its stored tokens equals its stored price; `LIVE_USD_PER_SECOND` equals the observed $0.05 / 60. |
 | (f) Spend shown | Spend is only in the settings dialog as the month's figure; nothing per call, nothing in the voice window. | Variant 1 (recommended, published for the operator's pick): a line under the transcript panel's title, «Ця розмова $0.19 · жовтень $0.51 із $20.00». At 390 px the companion is never mounted (`VoiceCompanionHost.tsx:34`), so the settings dialog adds the last call's spend under the month line. | The panel shows both figures from the events answer in en and uk; the existing driver's transcript and settings cases capture 1440, 1000 and 390. |
 
-**Verdict: pass.** Step one of (e) was observed on the official pages (URLs,
+**Design verdict: pass.** Step one of (e) was observed on the official pages (URLs,
 date and rates below). The observation answers acceptance 5 by itself: the
 voice is already priced from OpenAI's reported usage, and that usage is a
 duration. The spend placement is published as three numbered variants with
@@ -156,22 +156,23 @@ are in `src/lib/mcp/server.ts:3870-4120` and their descriptions at
 
 ### The surface
 
-Eight reads, the two delegation tools unchanged (acceptance 2), and
+Ten reads, the two delegation actions retained (acceptance 2), and
 `end_conversation`. Names match the MCP tools so a transcript row, a test and
 the operator read the same word. The server always sets `project` to the
-call's project, `compact: true`, and the limits below; the model cannot widen
-the scope. Strict schemas: every property required, an optional one nullable
+selected project (the default from the current view, or the explicit name in
+(h)), `compact: true`, and the limits below. Targeted reads verify that project
+before opening a record. Strict schemas: every property required, an optional one nullable
 (`tools.ts:20`). `ToolProperty` and `runCompanionTool` grow `boolean`,
 `integer` and `array` of enum strings, each nullable, with the bounds checked
 on the server.
 
 | Voice tool | Arguments the backend may pass | Real call | Speech projection, per row |
 | --- | --- | --- | --- |
-| `list_tasks` | `statuses` (array of `inbox`, `assigned`, `blocked`, `done`), `openOnly` (boolean), `query` (≤ 120 chars), `ids` (≤ 20 handles), `cursor`, `limit` (1–20, default 10) | `listTasks` | handle, first line of the text, status, priority if not normal |
-| `get_task` | `taskId` | `getTask {compact:true}`; refused unless its project is the call's | title, status, note, hold, step count |
-| `list_pipelines` | `state` (array of `open`, `draft`, `provisioning`, `running`, `paused`, `needs_decision`, `needs_review`, `completed`, `closed`), `ids`, `query`, `cursor`, `limit` | `listPipelines {statusOnly:false}` | handle, title, state, `stateDetail` cut to 120, the cursor stage and its latest verdict |
-| `get_pipeline` | `pipelineId`, `stageId` (nullable) | `getPipeline`; with `stageId` one stage's conclusion | title, state, each stage's role and latest verdict; with a stage, its verdict, finding count and the summary cut to 600 |
-| `agent_activity` | `liveOnly` (default true), `cursor` | `agentActivity` with a dependency set whose `refreshLifecycleJournal` writes nothing | handle, title, lifecycle, turn state, silent for, pipeline |
+| `list_tasks` | `statuses` (array of `inbox`, `assigned`, `blocked`, `done`), `openOnly` (boolean), `query` (≤ 120 chars), `ids` (≤ 20 handles), `cursor`, `limit` (1–10, default 10) | `listTasks` | handle, first line of the text, status, priority if not normal |
+| `get_task` | `taskId` | `getTask {compact:false}`; refused unless its project is the call's | title, status, note, hold, step count |
+| `list_pipelines` | `state` (array of `open`, `draft`, `provisioning`, `running`, `paused`, `needs_decision`, `needs_review`, `completed`, `closed`), `includeClosed`, `ids`, `query`, `cursor`, `limit` | `listPipelines {statusOnly:false}` | handle, title, state, `stateDetail` cut to 120, the cursor stage and its latest verdict |
+| `get_pipeline` | `pipelineId`, `stageId` (nullable) | `getPipeline`; with `stageId` one stage's conclusion | title, state, each stage's role and latest verdict; with a stage, its verdict, up to five severity-bearing findings and the summary cut to 600 |
+| `agent_activity` | `liveOnly` (default true), `conversationId`, `cursor`, `limit` (1–10) | `agentActivity` with a dependency set whose `refreshLifecycleJournal` writes nothing | handle, title, lifecycle, turn state, coverage and continuation |
 | `conversation_messages` | `conversationId` (a handle from a read), `roles` (`user`, `assistant`), `since`, `cursor`, `limit` (1–10) | `conversationMessages {kinds:["message"], maxChars:320}`; refused unless the conversation's catalog project is the call's | speaker, time, excerpt ≤ 320 |
 | `orchestrator_messages` | `roles` (default `assistant`), `since`, `cursor`, `limit` (1–10) | `conversationMessages` on `orchestratorSeatFor(project).active.conversationId`, bound by the server | speaker, time, excerpt ≤ 320 |
 | `search_transcripts` | `query` (1–200 chars), `order` (`relevance`, `newest`), `cursor` | `searchTranscripts {project, limit: 6}` | handle (the conversation id when the catalog knows it), title, time, fragment ≤ 200 |
@@ -223,7 +224,7 @@ The fix:
    `reads: Map<key, { atMs, result }>`, key = tool name plus the stable JSON of
    the arguments after the project is pinned and the defaults filled. An
    identical read within one delegation, or within 120 s in the call
-   (`READ_REUSE_MS`), is answered from the ledger with `repeated: true` and
+   (120,000 ms), is answered from the ledger with `repeated: true` and
    `readSecondsAgo`, without reading the store; its transcript row says
    "repeated". An older identical read runs again, since the board moves
    during a long call.
@@ -239,7 +240,7 @@ The fix:
 
 ### Tests (fail on `main`, pass here)
 
-- `src/lib/voiceCompanion/boardReads.test.ts`: a fixture board of 300 done and
+- `src/lib/voiceCompanion/readPaths.test.ts`: a fixture board of 300 done and
   3 open tasks (assigned, blocked, inbox) and 120 completed plus 3 open
   pipelines (running, needs_review, needs_decision), served through injected
   domain dependencies. `list_pipelines {state:["open"]}` answers 3 of 3 and
@@ -506,6 +507,11 @@ The client's seat hint (`VoiceCompanionHost.tsx:41-44`) belongs to lane
 - `src/lib/voiceCompanion/liveSession.test.ts`: a correlated answer from the
   successor seat binds to the card and is spoken.
 
+Implementation re-observed the same three official pricing and usage pages on
+2026-10-10. The rates and reported duration unit remain the same. Backend
+responses retain their actual token counts and response IDs; duplicate response
+IDs are counted once.
+
 ## (e) Pricing and the usage to price from
 
 ### What is priced, and from what
@@ -515,9 +521,11 @@ The client's seat hint (`VoiceCompanionHost.tsx:41-44`) belongs to lane
 | Live voice, `gpt-live-1` | `usage.seconds` in `session.usage.updated` (a snapshot, never summed) and once more in `session.closed` | $0.05 per minute, per second; the 15 s WebRTC initialization is credited, a floor | read at `liveSession.ts:250-254` (keeps the larger snapshot); priced at `LIVE_USD_PER_SECOND = 0.05 / 60` (`usage.ts:5`); floor `max(15, seconds)` at `liveSession.ts:159`, `:528-531` and `:551` |
 | Backend, `gpt-6-luna` | the Responses answer's `usage`: `input_tokens`, `input_tokens_details.cached_tokens`, `input_tokens_details.cache_write_tokens`, `output_tokens` | short context $0.10 / $0.01 cached / $0.125 cache write / $0.50 output per 1M; above 272,000 input tokens $0.20 / $0.02 / $0.25 / $0.75 | `backendUsageUsd` (`usage.ts:23-37`), per response id (`liveSession.ts:281-290`) |
 
-Both match the observation. A session with no final usage is charged the time
-since its mint, marked incomplete (`liveSession.ts:413-417`); that is an
-upper bound, labelled as one.
+Both match the observation. Without final usage, settlement retains a
+conservative charge at least as large as observed usage. It is marked incomplete
+and shown as an estimate in the window, accessible name and settings. A short
+call can retain a larger reservation than its observed spend; that amount
+does not establish a minimum actual bill.
 
 **WRONG-PREMISE (acceptance 5, the token clause).** "Priced from OpenAI's
 reported usage (audio/text input, cached input, output)" describes the
@@ -572,7 +580,7 @@ The settings answer gains `lastSession: { usd, seconds, endedAt, incomplete }`.
   `src/lib/attention/eligibility.ts:37`) never mounts the companion
   (`VoiceCompanionHost.tsx:34`), so no call and no voice window exists there.
   The voice's one surface on a phone is its settings dialog, reached from the
-  header menu: it keeps the month line (`VoiceCompanionSetting.tsx:119-122`)
+  header menu’s Settings → Voice Delegatus row: it keeps the month line (`VoiceCompanionSetting.tsx:119-122`)
   and adds the last call's line beneath it.
 
 ### Copy
@@ -580,7 +588,7 @@ The settings answer gains `lastSession: { usd, seconds, endedAt, incomplete }`.
 | State | en | uk |
 | --- | --- | --- |
 | Window, live or ended | This call $0.19 · October $0.51 of $20.00 | Ця розмова $0.19 · жовтень $0.51 із $20.00 |
-| Window, usage not final | This call at least $0.40 · October $0.91 of $20.00 | Ця розмова щонайменше $0.40 · жовтень $0.91 із $20.00 |
+| Window, usage not final | This call estimated $0.40 · October $0.91 of $20.00 | Ця розмова орієнтовно $0.40 · жовтень $0.91 із $20.00 |
 | Its title when the usage is not final | OpenAI did not confirm the final usage of this call. | OpenAI не підтвердив остаточного використання цієї розмови. |
 | Its accessible name | Spent on this call: $0.19. Spent in October: $0.51 of the $20.00 monthly cap. | Витрачено на цю розмову: $0.19. Витрачено за жовтень: $0.51 із місячного ліміту $20.00. |
 | Settings, last call | Last call: $0.40 · 7:51 · Oct 10. | Остання розмова: $0.40 · 7:51 · 10 жовтня. |
@@ -618,16 +626,95 @@ the transcript view case (`LLV_VOICE_COMPANION_ONLY=transcript`, 1440 and
 not wrap past two lines; the settings case adds a 390 × 844 viewport and
 asserts the last call's line. No new driver, no full block.
 
+## (g) Whole prototype reviews and visual frames — operator addition, 2026-10-10
+
+The voice reads a task's complete prototype review in one
+`read_prototype_review {taskId, project}` call. The answer retains every round,
+every variant's number, name and description, every question with all options
+and its recommended option, and the saved decision, answers and exact comment.
+It reuses `readPrototypeReviews`, which already strips internal delivery text
+and reports unavailable media. Nothing in this read records a choice or sends a
+message. Local paths and credentials are redacted; there is no text clipping of
+questions, options or decisions. The complete review is an explicit exception
+to the 4 KB list-page budget; the store's existing round and metadata limits
+bound it. Ordinary task reads still exclude prototype details.
+
+`view_prototype_frame {taskId, reviewId, mediaId, project}` lets the backend
+visually inspect an image, including an original named by the review. It opens
+only a stored copy named by that task's manifest, with a pinned descriptor,
+regular-file and size checks, no symlink traversal below the resolved store
+root, MIME verification and the manifest's SHA-256. Missing, removed, linked or
+foreign images are refused. The backend receives an `input_image` with the
+stored bytes; the public tool result and transcript contain frame references,
+never image bytes or machine paths. Image text is untrusted report data and
+grants no authority. Writes remain delegated to the orchestrator.
+
+Focused tests cover the complete review and exact saved comment, foreign-task
+refusal, missing and symlinked frames, unchanged task state, and visual input
+reaching the backend after the frame tool call.
+
+## (h) One call across projects — operator addition, 2026-10-10
+
+Turning on the companion enables its Talk control. Once a call starts, its
+adapter, microphone, provider connection, transcript and read ledger keep their
+identity across project switches, including a view with no selected project.
+A true unmount or explicit hangup still releases the call. The client updates
+context through `POST /api/voice-companion/session` with `action:"context"`;
+this changes the default project without minting another session. While the
+desired project differs from the acknowledged server context, or any update
+is pending or uncertain, microphone input is paused. Returning to the last
+acknowledged project also requires reconciliation when another update may have
+reached the server. Failed context updates retry on event polls, preserving the
+operator’s own mute setting; input resumes only after acknowledgement.
+
+The session retains its starting project for transcript history and records
+`currentProject` separately. Each backend turn snapshots the project in view,
+and Live receives a bounded context instruction naming that project. New reads
+and delegation default to its orchestrator. Every read and
+`request_orchestrator_delegation` accepts a nullable `project` selector: a
+known project handle or an unambiguous displayed name chooses another project's
+orchestrator. Names resolve against the existing catalog, aliases, manual
+projects and seats. Unknown and ambiguous names refuse; a null current project
+requires an explicit selector. A selector never falls through to a global read.
+
+A confirmation retains the project it proposed to, even if the browser switches
+while the operator answers. Rotation rebinds within that project's seat. The
+stored proposal's recipient project fences relay admission and replies. Report
+watermarks are per project: first visiting a project establishes its watermark;
+returning retains it, so old reports never replay. Replies to cross-project
+requests already sent by the call continue to arrive with their own project.
+Spoken report context names that report’s project, including a reply from the
+project the operator just left.
+
+Focused tests check the same adapter/call through project and null-context
+switches, server context and backend defaults, reads and delegation by another
+project's name, ambiguous names, confirmation target stability and report
+watermarks across returns.
+
+Activity pages retain coverage metadata: omitted candidates and pending or stale
+evidence remain visible. Counts describe observed agents, with a cursor for
+remaining verified rows and a conversation selector for targeted inspection.
+Closed pipeline history requires the shared read’s explicit `includeClosed`
+flag; targeted stage reads retain the real string findings and severity prefixes.
+
+Reports keep the server event sequence across card kinds and requests. A single
+poll that mixes standalone reports and correlated replies retains that order
+when React renders the batch.
+
+A report whose delivery receipt is unavailable remains a standalone report
+card and is spoken once. It gains no invented operation receipt.
+
 ## Files the build touches
 
 | File | Change |
 | --- | --- |
-| `src/lib/mcp/bindings.ts` | export `viewerReadTools(deps)`; `viewerMcpBindings` uses it for its read entries |
+| `src/lib/mcp/bindings.ts`, `budgetPage.ts` | bounded activity pages; export `viewerReadTools(deps)`; `viewerMcpBindings` uses it for its read entries |
 | `src/lib/voiceCompanion/boardReads.ts`, `readPaths.ts`, `tools.ts`, `sessionConfig.ts` | real reads, strict schemas with filters, ledger, speech projection, two new reads, instructions |
 | `src/lib/voiceCompanion/liveSession.ts`, `admission.ts`, `storage.ts`, `contract.ts`, `reducer.ts` | reports once, `spokenReports`, watermark, retarget, `startedBy`, usage payload, answers list |
 | `src/lib/voiceCompanion/deliveryPaths.ts`, `src/app/api/conversation-host/handlers.ts` | the actor seam, one hop |
 | `src/lib/voiceCompanion/liveAdapter.ts`, `src/components/voiceCompanion/VoiceCompanion.tsx`, `CompanionTranscript.tsx`, `VoiceCompanionSetting.tsx`, `src/lib/i18n/en.ts`, `uk.ts` | pause hold, monotonic bubbles, caps, report cards, spend line, last call |
 | `src/app/api/voice-companion/session/route.ts`, `settings/route.ts` | `startedBy`, `usage`, `lastSession` |
+| `src/components/headerMenu/HeaderMenu.tsx`, `headerMenuModel.ts` | reachable voice settings on the phone |
 | `src/lib/voiceCompanion/scenarios.ts`, the driver's transcript and settings cases | a pause in `long`, the spend assertions, 390 px |
 
 Fences: no file of lane 1a9164da (the conversation view and the client's seat
@@ -645,12 +732,14 @@ privacy gate. Never a directory sweep against the live state.
 | --- | --- |
 | «читать сообщения оркестратора» | `orchestrator_messages` on demand, and (b) speaks every new report |
 | «300 задач… говорит, что всё сделано… не может делать фильтр по статусам» | `list_tasks` with statuses, `openOnly`, query, newest first, paged |
-| «читать разговор… искать активные разговоры» | `conversation_messages` on any project conversation, `agent_activity {liveOnly}`, `search_transcripts` |
-| «статусы задач, статусы пайплайнов» | `list_tasks`, `list_pipelines {state}`, `get_pipeline {stageId}` |
-| «он их по 10 раз вызывает, одно и то же» | read ledger, earlier reads in the backend input, instructions |
+| «читать разговор… искать активные разговоры» | `conversation_messages` on any project conversation, paged `agent_activity {liveOnly, cursor, conversationId}`, `search_transcripts` |
+| «статусы задач, статусы пайплайнов» | `list_tasks`, `list_pipelines {state, includeClosed}`, `get_pipeline {stageId}` with verdict, summary and severity-bearing findings |
+| «он их по 10 раз вызывает, одно и то же» | read ledger, earlier reads in the backend input, instructions; explicit `refresh:true` gets a fresh observation |
 | «то убирает все, то показывает… очередь чуть-чуть побольше» | (c): no take-back, stable keys, caps by kind, speech cap 6 |
 | «member required… Не вышло» | (d): delivery as the member who started the call |
 | «насколько он потратил. Денег» | (f): this call and the month against the cap in the window; (e) the figures are OpenAI's reported usage at observed rates |
+| Whole prototype review and visual frames (2026-10-10 addition) | (g): complete review in one read; stored frame input for the backend |
+| One call across projects (2026-10-10 addition) | (h): stable client identity, current-view context and named project selectors |
 | actions through the orchestrator (answer 2) | writes stay `request_orchestrator_delegation` and `resolve_orchestrator_confirmation` |
 
 ## Deferred — not currently justified
@@ -674,10 +763,23 @@ privacy gate. Never a directory sweep against the live state.
 - **Server-pushed reports without the browser's poll.** The page polls every
   500 ms while a call is open, and the heartbeat already closes a call whose
   page stopped polling.
-- **Prototype reviews for the voice** (the operator raised it at 279 s of the
-  call: «доступ к прототипам… все вопросы и ответы рекомендуемые»). A separate
-  request that never reached the orchestrator because of (d); it belongs to its
-  own lane.
+
+
+## Implementation verification
+
+The implementation retains the shared MCP reads and their filters. Ordinary
+identical reads reuse the call ledger; an explicit operator refresh passes
+`refresh:true`, obtains a new observation and deduplicates repeats within
+that delegation. Audio stopping does not finalize a streaming transcript: its
+bubbles retain the words already shown until the transcript finishes or is cut.
+
+Project reconciliation runs independently of event heartbeats. The microphone
+stays paused while a context acknowledgement is pending, and a healthy events
+connection keeps the same provider call alive beyond the watchdog window.
+Receipt publication is retained on the stored proposal, with matching request
+and operation references; older sessions recover it from their transcript.
+Standalone reports remain in the transcript in record order, with the project,
+status, time, retained text and a copy control, including reports after hangup.
 
 ## Notes
 

@@ -742,6 +742,43 @@ describe("a delivery and its answer bind the whole frozen identity", () => {
     expect(state.delegation).toMatchObject({ stage: "answered", answer: { reportId: "r1", text: "The plan holds." } });
   });
 
+  test("successive answers and standalone reports remain in report order, once each", () => {
+    let state = queued();
+    for (const reportId of ["r1", "r2", "r1"]) state = reduceCompanion(state, at({ type: "orchestrator.answer", delivery, reportId, status: "progress", text: reportId }));
+    expect(state.delegation?.answers.map(answer => answer.reportId)).toEqual(["r1", "r2"]);
+    for (const reportId of ["r3", "r4", "r3"]) state = reduceCompanion(state, at({ type: "orchestrator.report", reportId, status: "result", text: reportId, at: 10, project: RECIPIENT.project }));
+    expect(state.orchestratorReports.map(report => report.reportId)).toEqual(["r3", "r4"]);
+  });
+
+  test("retargeted confirmations and refused seats accept the successor while proven deliveries keep their binding", () => {
+    const recipient = { ...RECIPIENT, seatEpoch: 2, conversationId: "conversation_successor" };
+    const nextDelivery = { ...delivery, recipient, clientMessageId: "m-new", operationId: "op-new" };
+    const waiting = run([
+      at({ type: "session.ready", mode: "official-realtime" }),
+      at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "input", instruction: "Review the plan" }),
+      at({ type: "delegation.confirmation.required", proposal: { proposalId: "p1", callId: "c1", sourceItemId: "input", instruction: "Review the plan", authority: "live-model", recipient: RECIPIENT } }),
+    ]);
+    const retargeted = run([
+      at({ type: "delegation.retargeted", proposalId: "p1", recipient }),
+      at({ type: "delegation.confirmed", proposalId: "p1", via: "tap" }),
+      at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery: nextDelivery } }),
+    ], waiting);
+    expect(retargeted.delegation).toMatchObject({ stage: "queued", delivery: nextDelivery });
+    const unknown = run([at({ type: "delegation.tool.result", callId: "c1", result: { status: "unknown", delivery: { ...delivery, operationId: null } } })], confirmed());
+    const retried = run([
+      at({ type: "delegation.retargeted", proposalId: "p1", recipient }),
+      at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery: nextDelivery } }),
+    ], unknown);
+    expect(retried.delegation).toMatchObject({ stage: "queued", delivery: nextDelivery });
+    const retained = reduceCompanion(retried, at({ type: "delegation.tool.called", callId: "next-call", sourceItemId: "input", instruction: "A newer request" }));
+    expect(retained.deliveryCards.filter(card => card.callId === "c1")).toHaveLength(1);
+    expect(retained.deliveryCards.find(card => card.callId === "c1")?.delivery).toEqual(nextDelivery);
+    const proven = reduceCompanion(queued(), at({ type: "delegation.retargeted", proposalId: "p1", recipient }));
+    expect(proven.delegation?.delivery).toEqual(delivery);
+    const refusal = run([at({ type: "delegation.tool.result", callId: "c1", result: { status: "refused", code: "voice_seat_changed" } })], confirmed());
+    expect(reduceCompanion(refusal, at({ type: "delegation.retargeted", proposalId: "p1", recipient })).delegation).toMatchObject({ stage: "sending", proposal: { recipient } });
+  });
+
   for (const [name, other] of variants) {
     test(`a different ${name} neither settles nor answers`, () => {
       const base = queued();

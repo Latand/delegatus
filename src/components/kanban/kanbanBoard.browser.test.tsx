@@ -19648,7 +19648,7 @@ describe("floating voice companion", () => {
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${base}?scenario=voice-companion${query}${options.surface ? `&surface=${options.surface}` : ""}`);
     if (!options.product) await page.waitForSelector("[data-voice-companion][data-placed]", { timeout: 20_000 });
-    if (!options.surface) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
+    if (!options.surface && !(options.product && options.viewport.width === 390)) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
     /* The board arrives after the first placement; the companion re-reads the page 250 ms after it changes. */
     await page.waitForTimeout(1_400);
     return { context, page, pageErrors };
@@ -21301,13 +21301,19 @@ describe("floating voice companion", () => {
     const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites }; });
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
-      await page.locator("[data-rail-menu]").click();
-      await page.locator("[data-rail-menu-settings]").click();
-      await page.locator("[data-rail-menu-voice-companion]").click();
+      if (page.viewportSize()?.width === 390) {
+        await page.locator('[data-mobile2-open="menu"]').click();
+        await page.locator('[data-mobile2-menu-row="settings"]').click();
+        await page.locator('[data-mobile2-menu-row="voice-companion"]').click();
+      } else {
+        await page.locator("[data-rail-menu]").click();
+        await page.locator("[data-rail-menu-settings]").click();
+        await page.locator("[data-rail-menu-voice-companion]").click();
+      }
       await page.waitForSelector("[data-voice-companion-settings] [data-voice-companion-setting]", { timeout: 10_000 });
     };
     try {
-      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "light"], [NARROW, "en", "dark"]] as const) {
+      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "light"], [NARROW, "en", "dark"], [{ width: 390, height: 844 }, "en", "light"], [{ width: 390, height: 844 }, "uk", "dark"]] as const) {
         const label = `${viewport.width}-${lang}-${scheme}`;
         const { context, page, pageErrors } = await openVoice(browser, server.base, "&mount=product&usage=3.4", { viewport, scheme, lang, motion: "reduce", product: true });
         try {
@@ -21319,7 +21325,7 @@ describe("floating voice companion", () => {
           await page.screenshot({ path: path.join(HANDOFF, `settings-off-${label}.png`) });
           await section.locator("[data-voice-companion-enable]").click();
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
-          await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
+          if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
           /* The key: typed once, sent once, cleared, and nowhere on the page afterwards. */
           expect((await section.locator("[data-voice-companion-key-status]").innerText()).startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
@@ -21341,13 +21347,16 @@ describe("floating voice companion", () => {
           /* The cap and the month's usage. */
           const cap = section.locator("[data-voice-companion-cap] input");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: "2026-10", spent: "$3.40", cap: "$20.00" }));
+          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$20.00" }));
           await cap.fill("35");
           await cap.press("Enter");
           await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.settingsWrites.length === 2, null, { timeout: 10_000 });
           expect((await writes(page)).settings[1], `${label}: the cap was written`).toEqual({ monthlyCapUsd: 35 });
           await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: "2026-10", spent: "$3.40", cap: "$35.00" }));
+          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$35.00" }));
+          const lastCall = await section.locator("[data-voice-companion-last-call]").innerText();
+          expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
+          expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
           /* On is the real voice: the dialog offers no backend, no demo, and no word of one. */
           const choices = await section.evaluate((node) => ({
@@ -21364,6 +21373,13 @@ describe("floating voice companion", () => {
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
+          if (viewport.width === 390) {
+            expect(await page.locator("[data-voice-companion-settings]").isVisible(), `${label}: phone settings stay mounted`).toBe(true);
+            expect(await page.locator("[data-voice-companion]").count(), `${label}: the phone has the settings surface`).toBe(0);
+            expect(pageErrors, label).toEqual([]);
+            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, dialog, lastCall, phoneSettingsMounted: true, openedThrough: "header menu Settings → Voice Delegatus" });
+            continue;
+          }
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
           await page.waitForTimeout(900);
@@ -21475,11 +21491,14 @@ describe("floating voice companion", () => {
             const toggles = [...view.querySelectorAll<HTMLElement>("[data-transcript-toggle]")];
             const messages = [...view.querySelectorAll<HTMLElement>('[data-kind="speech"]')];
             return {
+              spend: view.querySelector<HTMLElement>("[data-companion-spend]")?.innerText ?? "",
+              spendHeight: view.querySelector<HTMLElement>("[data-companion-spend]")?.getBoundingClientRect().height ?? 0,
               box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
               inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
               scrolls: body.scrollHeight > body.clientHeight, atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 2,
               laneHidden: !lane || getComputedStyle(lane).visibility === "hidden",
               reports: [...view.querySelectorAll<HTMLElement>("[data-transcript-answer] .vc-answer")].map((node) => node.textContent ?? ""),
+              standaloneReports: [...view.querySelectorAll<HTMLElement>("[data-transcript-report]")].map(node => ({ text: node.innerText, copyable: !!node.querySelector("button") })),
               lines: toggles.length, expanded: toggles.filter((toggle) => toggle.getAttribute("aria-expanded") === "true").length,
               detailsOnPage: view.querySelectorAll("[data-transcript-detail], pre").length,
               messages: messages.length, copyControls: messages.filter((message) => message.querySelector("button")).length,
@@ -21492,6 +21511,10 @@ describe("floating voice companion", () => {
             };
           });
           await page.screenshot({ path: path.join(out, `transcript-${label}-2-collapsed.png`) });
+          expect(reading.spend, `${label}: call and month spend`).toBe(lang === "uk" ? "Ця розмова $0.19 · жовтень $0.51 із $20.00" : "This call $0.19 · October $0.51 of $20.00");
+          expect(reading.spendHeight, `${label}: spend fits at most two lines with header padding`).toBeLessThanOrEqual(48);
+          expect(reading.standaloneReports, `${label}: saved standalone report stays readable and copyable`).toEqual([{ text: expect.stringContaining("Atlas"), copyable: true }]);
+          expect(reading.standaloneReports[0].text).toContain(lang === "uk" ? "Усі перевірки завершено." : "All checks completed.");
           expect(reading.inside, `${label}: the view stays in the viewport`).toBe(true);
           expect(reading.laneHidden, `${label}: the lane gives way`).toBe(true);
           expect(reading.atEnd, `${label}: opens at the newest line`).toBe(true);
@@ -21572,6 +21595,20 @@ describe("floating voice companion", () => {
             const meter = { stamps: [] as number[], hidden: 0 };
             (window as unknown as { __voiceMeter: typeof meter }).__voiceMeter = meter;
             const tick = (now: number) => { meter.stamps.push(now); if (document.visibilityState !== "visible") meter.hidden += 1; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+          });
+          if (name === "long") await page.evaluate(() => {
+            const probe = { paused: [] as Array<{ key: string; arrival: string | undefined }>, resumed: [] as Array<{ key: string; arrival: string | undefined }>, resumeFrames: 0, done: false };
+            (window as unknown as { __voicePause: typeof probe }).__voicePause = probe;
+            const snapshot = () => [...document.querySelectorAll<HTMLElement>('.vc-stack > [data-floater^="companion:item_co_1#"]')].map(node => ({ key: node.dataset.floater!, arrival: node.dataset.arrival }));
+            const tick = () => {
+              const events = (window as unknown as { voiceCompanion: { events: Array<{ eventId: string }> } }).voiceCompanion.events;
+              const paused = events.some(event => event.eventId.endsWith(":pause"));
+              const resumed = events.some(event => event.eventId.endsWith(":resume"));
+              if (paused && !resumed) probe.paused = snapshot();
+              if (resumed && ++probe.resumeFrames >= 2) { probe.resumed = snapshot(); probe.done = true; }
+              if (!probe.done) requestAnimationFrame(tick);
+            };
             requestAnimationFrame(tick);
           });
           const idleFrom = await page.evaluate(() => performance.now());
@@ -21698,6 +21735,13 @@ describe("floating voice companion", () => {
           const scriptEnded = await page.evaluate(() => performance.now());
           const after = await voiceOf(page);
           expect(after.finished, `${label}: the script played out`).toBe(true);
+          if (name === "long") {
+            const pause = await page.evaluate(() => (window as unknown as { __voicePause: { paused: Array<{ key: string; arrival: string | undefined }>; resumed: Array<{ key: string; arrival: string | undefined }>; done: boolean } }).__voicePause);
+            expect(pause.done, `${label}: the scripted 300 ms pause and restart were sampled`).toBe(true);
+            expect(pause.paused.length, `${label}: bubbles were present during the pause`).toBeGreaterThan(0);
+            for (const bubble of pause.paused) expect(pause.resumed, `${label}: a shown bubble retains its key and arrival after restart`).toContainEqual(bubble);
+          }
+
           await page.waitForTimeout(700);
           await shot("end");
           if (recorded && name === "delegation") {

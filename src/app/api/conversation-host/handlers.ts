@@ -34,6 +34,9 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
 import { API_CLIENT_ORIGIN, parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type MessageAuthorClaim } from "@/lib/team";
+import { teamMode } from "@/lib/team/sessions";
+import { existingTeamStore } from "@/lib/team/store";
+import type { TeamActor } from "@/lib/team/contract";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { agentRegistry } from "@/lib/agent/registry";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
@@ -213,10 +216,27 @@ export async function conversationHostGET(req: NextRequest): Promise<NextRespons
   }
 }
 
-export async function conversationHostPOST(req: NextRequest): Promise<NextResponse<SendResponse | ApiError>> {
+export function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<SendResponse | ApiError>>;
+// HTTP mounts expose the one-argument signature; their framework context is
+// never an actor option. The explicit overload is for trusted in-process sends.
+export function conversationHostPOST(req: NextRequest): Promise<NextResponse<SendResponse | ApiError>>;
+export async function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<SendResponse | ApiError>> {
   const dependencies = conversationHostDependencies();
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+  // Only an in-process caller can supply an actor. Next's route context and
+  // JSON/header claims carry no actor authority. Recheck before dispatch too.
+  const trustedActor = options?.actor;
+  const actorRejection = () => {
+    if (!trustedActor) return null;
+    try {
+      if (trustedActor.kind === "member" && existingTeamStore()?.member(trustedActor.memberId)?.status === "active") return null;
+      if (trustedActor.kind === "operator" && teamMode() === "solo") return null;
+    } catch { /* Unreadable membership cannot authorize a send. */ }
+    return NextResponse.json({ code: "member_required", error: "The person who started this call is no longer a member, so nothing was sent." }, { status: 401 });
+  };
+  const deniedActor = actorRejection();
+  if (deniedActor) return deniedActor;
 
   let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
@@ -463,7 +483,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
      delivered. The member is stamped against the client message id the feed
      already joins every delivered record to, and only once the delivery
      below admitted this submission (`claimMessageAuthor`). */
-  const sender = teamActor(req);
+  const sender = trustedActor ?? teamActor(req);
   const anonymousSend = refuseAnonymous(sender);
   if (anonymousSend) return anonymousSend;
   const service = internalServiceClaim(req);
@@ -511,6 +531,8 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     retireReplySuggestionsOnOperatorMessage(operatorAction.conversationId, acceptedAt, clientMessageId);
   }
   const authoredConversation = operatorAction.conversationId || conversationId || null;
+  const revokedActor = actorRejection();
+  if (revokedActor) return revokedActor;
   const authorClaim: MessageAuthorClaim | null = operatorAction.byOperator
     ? claimMessageAuthor({
       actor: sender,
@@ -554,6 +576,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
   const attachmentField = () => (filePaths.length ? { filePaths } : {});
 
   if (structuredHostsEnabled()) {
+    const revoked = actorRejection(); if (revoked) return revoked;
     const structured = await dependencies.enqueueStructuredMessage({
       path: filePath,
       ...(conversationId ? { conversationId } : {}),
@@ -574,6 +597,7 @@ export async function conversationHostPOST(req: NextRequest): Promise<NextRespon
     }
   }
 
+  const revoked = actorRejection(); if (revoked) return revoked;
   const outcome = await dependencies.deliverConversationMessage({
     pid: hasPid ? pid : null,
     path: filePath,
