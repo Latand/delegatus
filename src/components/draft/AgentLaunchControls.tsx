@@ -100,6 +100,11 @@ export function launchAccountCatalogOf(body: unknown): LaunchAccountCatalog {
  * The account a launch will actually run on (issue #40): a stored id from the
  * other engine's catalog — or from an account that has been removed — falls back
  * to the engine's active account, so the value shown is always the value sent.
+ * Until `/api/accounts` has answered there is nothing to check the pick against,
+ * and the launch carries it as the operator made it: the server refuses an
+ * account it does not know, where a launch that names none starts on the
+ * engine's own choice without a word (a draft remounted while the catalog read
+ * was still waiting used to launch that way).
  */
 export function resolveLaunchAccountId(
   catalog: LaunchAccountCatalog | null,
@@ -107,7 +112,7 @@ export function resolveLaunchAccountId(
   accountId: string,
 ): string {
   const section = catalog?.[engine] ?? null;
-  if (!section) return "";
+  if (!section) return accountId;
   return section.accounts.some((account) => account.id === accountId) ? accountId : section.active;
 }
 
