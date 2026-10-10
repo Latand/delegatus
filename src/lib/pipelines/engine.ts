@@ -4596,7 +4596,6 @@ function secondInterruptionParkDetail(replacedCause: PipelineStageInterruptionCa
     : `the automatic replacement attempt ${ownCause === "host-lost" ? "lost its host" : "went silent"}${same ? " too" : ""}`;
   return `${what}; retry-stage to start another attempt`;
 }
-const RESTART_REPLACEMENT_CUT_AGAIN = "the automatic restart attempt was interrupted by another Delegatus restart; retry-stage to start another attempt";
 const recoveryHost = globalThis as typeof globalThis & {
   __llvPipelineRecoveryBootId?: string;
   __llvPipelineRecoveryBootStartedAt?: number;
@@ -4640,16 +4639,10 @@ async function replaceInterruptedStageAttempt(
   // (or one was recorded while the host-stop operation was awaiting).
   if (attempt.report) return false;
   const previous = attempt.restartRecovery;
-  /* A restart replacement that a restart cuts again parks, in this boot or a
-     later one: one automatic attempt per cut stage. */
-  if (interruption.restarted && attempt.restartContext?.cause === "restart"
-    && (interruption.cut || previous?.replacedAttempt !== undefined && previous.bootId !== bootId)) {
-    park(pipeline, RESTART_REPLACEMENT_CUT_AGAIN, attempt);
-    persist();
-    return true;
-  }
+  /* A second interruption in the same boot keeps the bounded recovery policy.
+     Each new service boot or recorded deploy cut owes its own replacement. */
   if (previous?.bootId === bootId) {
-    if (previous.replacedAttempt !== undefined) {
+    if (previous.replacedAttempt !== undefined && !interruption.cut) {
       park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
       persist();
       return true;
@@ -4705,7 +4698,7 @@ async function replaceInterruptedStageAttempt(
   /* A newer record under a live host is progress. Under a host this recovery
      ended it is what the exit wrote, and the replacement goes ahead. A turn a
      restart cut goes ahead in any shape until the agent's own work moves. */
-  if (attempt.report || providerRecoveryOwnsTurn(attempt, latest) || attempt.state !== "running") return false;
+  if (attempt.report || (!interruption.cut && providerRecoveryOwnsTurn(attempt, latest)) || attempt.state !== "running") return false;
   if (interruption.cut
     ? !restartCutOf(attempt, latest, ports)
     : latest?.turn !== "busy" || latest.launchOnly || (!ended && (latest.lastRecordAt ?? null) !== lastRecordAt)) {
@@ -4798,10 +4791,6 @@ function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence 
   return (worked ?? 0) <= unixMs(cut.recordedAt);
 }
 
-function pendingHostDeathWait(attempt: PipelineStageAttempt): boolean {
-  return attempt.providerWait?.condition.kind === "host_death";
-}
-
 /**
  * A stage whose host a service restart took down is retried once.
  *
@@ -4810,17 +4799,16 @@ function pendingHostDeathWait(attempt: PipelineStageAttempt): boolean {
  * verdict", parking the lane for a person to press retry: a deploy on
  * 2026-10-06 did that to two builders minutes from the end of their work. The
  * restart is the cause and the work is in the worktree, so one fresh attempt
- * picks it up there. A replacement the next restart cuts parks instead, in
- * whichever boot sees it, before any other recovery could start a third.
+ * picks it up there. A later recorded restart owes another replacement; an
+ * unchanged cut cannot replace the attempt it already created.
  */
 async function recoverRestartCutStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   durable: StageTurnEvidence | null | undefined, ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
-  /* A host-death wait is the timer before a relaunch that has not happened.
-     The recorded restart names what ended the host, so its attempt takes
-     that relaunch's place. */
-  if (pendingHostDeathWait(attempt)) delete attempt.providerWait;
+  /* The restart's recorded cut takes precedence over a saved provider wait.
+     Keep that wait until termination is confirmed and the replacement is
+     reserved, so a withdrawn stop loses no provider recovery obligation. */
   const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
   const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, durable?.lastRecordAt ?? null,
@@ -4879,11 +4867,13 @@ async function recoverInterruptedStageTurn(
      ends it later is a lost host or a stop, and is named as such. An undated
      transcript proves no work after the boot. */
   const newestRecordAt = recoveryEvidence.lastRecordAt ?? recoveryEvidence.message?.ts ?? null;
+  const recordedCut = !attempt.providerWait?.retryCancelled && !newerExternalProviderPrompt(attempt, recoveryEvidence)
+    && restartCutOf(attempt, recoveryEvidence, ports);
   const restarted = (bootStartedAt > unixMs(attemptEvidenceFloor(attempt)) && (newestRecordAt === null || newestRecordAt <= bootStartedAt))
     || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch)
-    || restartCutOf(attempt, recoveryEvidence, ports);
+    || recordedCut;
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null,
-    { kind: latestInterrupted, restarted });
+    { kind: latestInterrupted, restarted, ...(recordedCut ? { cut: true } : {}) });
 }
 /** Silence after a legacy continuation before the attempt parks for the operator. */
 const SEVERED_TURN_PARK_SILENCE_MS = 10 * 60_000;
@@ -6051,8 +6041,7 @@ async function tickRunStage(
   if (!attempt.agentPath) {
     if ((structuredActive === false || paneActive === false) && !attempt.report) {
       /* A restart that cut the attempt before its transcript was found owns
-         it like any other cut: the one fresh attempt, or the park when this
-         attempt is that one. */
+         its fresh attempt, retaining the worktree like any other cut. */
       if (restartCutOf(attempt, null, ports)
         && await recoverRestartCutStage(pipeline, stage, attempt, null, ports, persist)) return;
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
@@ -6138,14 +6127,13 @@ async function tickRunStage(
   if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return;
   // Native transcript publication can lag a live turn that already filed its report.
   if (attempt.report && !reportTurnFinished(attempt, durable) && structuredActive !== false && !hostUnavailablePastGrace) return;
-  /* A turn a service restart cut is the restart's: its one fresh attempt, or
-     the park when it is that attempt, comes before every other recovery here.
-     A provider wait already under way keeps its own, except the timer before
-     a host-death relaunch while the host is still gone: the restart is what
-     ended that host. */
+  /* A recorded service cut owns its fresh attempt even if provider recovery
+     observed the abort first. Real operator cancellation retains its fence.
+     restartCutOf excludes turns the provider ended before the restart. */
   const hostGone = hostUnavailablePastGrace || structuredActive === false || paneActive === false || Boolean(unregisteredHostDeath);
   const restartCut = !oomDeath && !heldForDeployCut && !attempt.report
-    && ((hostGone && pendingHostDeathWait(attempt)) || !providerRecoveryOwnsTurn(attempt, durable)) && restartCutOf(attempt, durable, ports);
+    && !attempt.providerWait?.retryCancelled && !newerExternalProviderPrompt(attempt, durable)
+    && restartCutOf(attempt, durable, ports);
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))

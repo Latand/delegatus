@@ -18176,9 +18176,7 @@ test("a stage a restart cut is retried once in its worktree, told it was cut and
   expect(h.spawnInputs[1]!.prompt).toContain(attempt.agentPath!);
 });
 
-const RESTART_CUT_AGAIN = "the automatic restart attempt was interrupted by another Delegatus restart; retry-stage to start another attempt";
-
-test("a restart replacement cut by a second restart parks with its two attempts", async () => {
+test("a restart replacement cut by a second recorded restart gets one more fresh attempt", async () => {
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
   cutByRestart(h, h.ports, attempt, h.ports.now(), "first cut");
@@ -18197,10 +18195,10 @@ test("a restart replacement cut by a second restart parks with its two attempts"
   await tickPipelines([], h.ports);
 
   const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(RESTART_CUT_AGAIN);
-  expect(parked.runs[0]!.attempts).toHaveLength(2);
-  expect(parked.runs[0]!.attempts[1]).toMatchObject({ state: "needs_decision", error: RESTART_CUT_AGAIN });
+  expect(parked.state).toBe("running");
+  expect(parked.runs[0]!.attempts).toHaveLength(3);
+  expect(parked.runs[0]!.attempts[1]).toMatchObject({ state: "failed", error: "interrupted by a Delegatus restart; replaced by a fresh stage attempt" });
+  expect(parked.runs[0]!.attempts[2]!.restartContext).toMatchObject({ previousAttempt: 2, cause: "restart" });
 });
 
 /* The replacement is cut again before it wrote a word, so the provider's
@@ -18208,7 +18206,7 @@ test("a restart replacement cut by a second restart parks with its two attempts"
 test.each([
   { case: "no output", turn: "terminal", launchOnly: false },
   { case: "launch only", turn: "busy", launchOnly: true },
-] as const)("a restart replacement cut again with $case parks before any other recovery, in a later boot", async ({ turn, launchOnly }) => {
+] as const)("a restart replacement cut again with $case continues before any other recovery, in a later boot", async ({ turn, launchOnly }) => {
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
   cutByRestart(h, h.ports, attempt, h.ports.now(), "first cut");
@@ -18229,10 +18227,9 @@ test.each([
   }
 
   const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(RESTART_CUT_AGAIN);
-  expect(parked.runs[0]!.attempts).toHaveLength(2);
-  expect(h.spawnInputs).toHaveLength(2);
+  expect(parked.state).toBe("running");
+  expect(parked.runs[0]!.attempts).toHaveLength(3);
+  expect(h.spawnInputs).toHaveLength(3);
 });
 
 test("a verdict written while the restart-cut host is being stopped settles the attempt and starts no replacement", async () => {
@@ -18413,7 +18410,7 @@ test.each([
   expect(current.cursor).toMatchObject({ stageId: "recover", state: "pending" });
 });
 
-test("an open turn a restart cut is named a restart and its replacement, cut again in a later boot, parks", async () => {
+test("an open turn a restart cut is named a restart and its replacement continues after a later recorded cut", async () => {
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }]);
   const recordedAt = h.ports.now();
@@ -18443,9 +18440,9 @@ test("an open turn a restart cut is named a restart and its replacement, cut aga
   await tickPipelines([entry(replacement.agentPath!)], { ...boot("second-boot"), conversationRestartCut: () => ({ recordedAt: replacementCut }) });
 
   const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe("the automatic restart attempt was interrupted by another Delegatus restart; retry-stage to start another attempt");
-  expect(parked.runs[0]!.attempts).toHaveLength(2);
+  expect(parked.state).toBe("running");
+  expect(parked.runs[0]!.attempts).toHaveLength(3);
+  expect(parked.runs[0]!.attempts[2]!.restartContext).toMatchObject({ previousAttempt: 2, cause: "restart" });
 });
 
 /* The restart came before the first attempt's transcript was discovered: the
@@ -18499,10 +18496,9 @@ test.each([
   }
 
   const parked = loadPipelines()[0]!;
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(RESTART_CUT_AGAIN);
-  expect(parked.runs[0]!.attempts).toHaveLength(2);
-  expect(h.spawnInputs).toHaveLength(2);
+  expect(parked.state).toBe("running");
+  expect(parked.runs[0]!.attempts).toHaveLength(3);
+  expect(h.spawnInputs).toHaveLength(3);
 });
 
 test("a restart cut recorded after a host-death wait began replaces that relaunch with the one restart attempt", async () => {
@@ -19985,6 +19981,81 @@ async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: s
   cut();
   return { h, sends, cut, now: () => now, advance: (ms: number) => { now += ms; }, resetsAt };
 }
+
+test("a deploy cut followed by restored Codex settings takes restart recovery before opening a provider wait", async () => {
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  const cut = f.now();
+  const file = stageTranscript("deploy-settings-cut", [
+    { type: "event_msg", timestamp: new Date(cut - 1000).toISOString(), payload: { type: "agent_message", message: "Checking the stage" } },
+    { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "turn_aborted", reason: "interrupted" } },
+    { type: "event_msg", timestamp: new Date(cut + 16_000).toISOString(), payload: { type: "thread_settings_applied" } },
+  ]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+  f.h.ports.conversationRestartCut = () => ({ recordedAt: new Date(cut + 5000).toISOString() });
+  f.advance(18_000);
+  await tickPipelines([], f.h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("running");
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.sends).toHaveLength(0);
+});
+
+test("a reviewer completion notice after a deploy abort keeps provider recovery automatic", async () => {
+  const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  const cut = f.now();
+  const file = stageTranscript("deploy-reviewer-notice", [
+    { type: "event_msg", timestamp: new Date(cut - 1000).toISOString(), payload: { type: "agent_message", message: "Checking the stage" } },
+    { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "turn_aborted", reason: "interrupted" } },
+  ]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.condition.kind).toBe("turn_cut");
+  f.advance(52_000);
+  const text = encodeCodexStructuredUserText("Agent finished: review interrupted", undefined, null, { kind: "agent", role: "reviewer" });
+  fs.appendFileSync(file, [
+    { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } },
+    { type: "response_item", timestamp: f.h.ports.now(), payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+  f.h.setConversationActive(true);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.retryCancelled).not.toBe(true);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  // The notice resumed the turn; its eventual stage report still settles it.
+  f.advance(1000);
+  fs.appendFileSync(file, [
+    { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "agent_message", message: "```json\n{\"status\":\"pass\"}\n```" } },
+    { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_complete" } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+});
+
+test.each(["turn_cut", "host_death", "transient", "usage_limit", "auth_required"] as const)("a recorded restart owns its replacement over a persisted %s wait", async kind => {
+  const f = await providerRecoveryHarness("codex", "turn_aborted", "stage turn aborted before completion");
+  await tickPipelines([], f.h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.providerWait!.condition.kind = kind;
+  savePipelines([lane]);
+  const recordedAt = f.h.ports.now();
+  const beforeCut = f.now() - 1;
+  f.h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: null, lastRecordAt: beforeCut,
+    lastAgentEventAt: beforeCut, terminalProviderMessage: { text: "stage turn aborted before completion", errorClass: "turn_aborted", ts: beforeCut } });
+  f.h.ports.conversationRestartCut = () => ({ recordedAt });
+  await tickPipelines([], f.h.ports);
+  const recovered = loadPipelines()[0]!;
+  expect(recovered.state).toBe("running");
+  expect(recovered.runs[0]!.attempts).toHaveLength(2);
+  expect(recovered.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart", previousAttempt: 1 });
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.sends).toHaveLength(0);
+});
 
 for (const engine of ["claude", "codex"] as const) {
   test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut retains the source reset retry`, async cause => {

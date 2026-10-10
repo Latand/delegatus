@@ -717,6 +717,7 @@ test("the agent's last event ignores Codex token counts and a shutdown abort, an
     { timestamp: "2026-10-06T10:02:00.000Z", type: "event_msg", payload: { type: "token_count" } },
     { timestamp: "2026-10-06T10:03:00.000Z", type: "event_msg", payload: { type: "turn_aborted" } },
     { timestamp: "2026-10-06T10:04:00.000Z", type: "turn_context", payload: { cwd: "/repo" } },
+    { timestamp: "2026-10-06T10:04:01.000Z", type: "event_msg", payload: { type: "thread_settings_applied" } },
   ]);
   expect((await durableStageTurnEvidence("codex", cut))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:01:00.000Z"));
   const worked = writeTranscript("codex-worked-after.jsonl", [
@@ -726,6 +727,39 @@ test("the agent's last event ignores Codex token counts and a shutdown abort, an
   ]);
   expect((await durableStageTurnEvidence("codex", worked))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:05:00.000Z"));
 });
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["reviewer", "orchestrator", "builder"])(`${engine} delivered %s authorship retains automatic recovery while identical operator words cancel`, async role => {
+    const cut = Date.parse("2026-10-10T06:51:07Z");
+    const text = "Agent finished: review interrupted";
+    const timestamp = new Date(cut + 52_000).toISOString();
+    const file = writeTranscript(`${engine}-agent-origin-${role}.jsonl`, [
+      ...(engine === "codex" ? [
+        { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
+      ] : [
+        { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit", message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } },
+      ]),
+    ]);
+    if (engine === "codex") {
+      const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+      fs.appendFileSync(file, JSON.stringify({ type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role }) }] } }) + "\n");
+    } else {
+      const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+      const ledger = new FileClaudeDeliveryLedger();
+      const session = path.basename(file, ".jsonl");
+      ledger.recordQueued(session, { id: "notice", text, origin: { kind: "agent", role } }, "turn-started");
+      ledger.confirmDelivered(session, "notice", "notice-message");
+      fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp, uuid: "notice-message", message: { content: text } }) + "\n");
+    }
+    expect((await durableStageTurnEvidence(engine, file, undefined, undefined, undefined, cut))?.prompts)
+      .toEqual([{ ts: cut + 52_000, origin: "pipeline" }]);
+    // Authorship is authoritative; copied notification prose has no privilege.
+    fs.appendFileSync(file, JSON.stringify(engine === "codex"
+      ? { type: "event_msg", timestamp: new Date(cut + 53_000).toISOString(), payload: { type: "user_message", message: text } }
+      : { type: "user", timestamp: new Date(cut + 53_000).toISOString(), uuid: "operator-message", message: { content: text } }) + "\n");
+    expect((await durableStageTurnEvidence(engine, file, undefined, undefined, undefined, cut))?.externalPromptAfterCut).toBe(true);
+  });
+}
 
 test("quota prompt provenance keeps human overrides and excludes tool results", async () => {
   const file = writeTranscript("quota-prompt-provenance.jsonl", [
@@ -743,6 +777,21 @@ test("quota prompt provenance keeps human overrides and excludes tool results", 
     { ts: Date.parse("2026-10-05T16:56:04Z"), origin: "harness" },
     { ts: Date.parse("2026-10-05T16:56:05Z"), origin: "external" },
   ]);
+});
+
+test("Codex native abort prose cannot cancel a prior provider wait, while identical operator prose can", async () => {
+  const cut = Date.parse("2026-10-10T06:51:00Z");
+  const text = "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>";
+  const file = writeTranscript("codex-native-abort-prose.jsonl", [
+    { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
+    { type: "response_item", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "message", role: "user", content: [{ type: "input_text", text }], internal_chat_message_metadata_passthrough: { content_item_kinds: ["generic.turn_aborted"] } } },
+    { type: "event_msg", timestamp: new Date(cut + 1100).toISOString(), payload: { type: "turn_aborted" } },
+  ]);
+  expect(await durableStageTurnEvidence("codex", file, undefined, undefined, undefined, cut)).toMatchObject({
+    prompts: [], externalPromptAfterCut: false, lastAgentEventAt: cut,
+  });
+  fs.appendFileSync(file, JSON.stringify({ type: "response_item", timestamp: new Date(cut + 2000).toISOString(), payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) + "\n");
+  expect((await durableStageTurnEvidence("codex", file, undefined, undefined, undefined, cut))?.externalPromptAfterCut).toBe(true);
 });
 
 for (const engine of ["claude", "codex"] as const) {

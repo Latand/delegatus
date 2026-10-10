@@ -2,7 +2,6 @@ import fs from "node:fs";
 
 import { claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
-import { RECOVERY_NOTICE_ORIGIN } from "@/lib/runtime/recoveryNotices";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
@@ -31,8 +30,8 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
-  /** Delivered prompts in this verified tail. Harness wakes and controller
-      continuations retain quota recovery; external prompts withdraw it. */
+  /** Delivered prompts in this verified tail. Harness wakes and authenticated
+      agent sends retain recovery; operator or unknown prompts withdraw it. */
   prompts?: Array<{ ts: number; origin: "external" | "harness" | "pipeline" }>;
   /** First cut of the open chain: the provider cuts after this attempt's last
       agent output. Null when agent output follows every cut. */
@@ -421,7 +420,16 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
-const CODEX_BOOKKEEPING_TYPES = new Set(["token_count", "turn_aborted"]);
+const CODEX_BOOKKEEPING_TYPES = new Set(["token_count", "turn_aborted", "thread_settings_applied"]);
+
+/** Native abort prose is emitted by Codex even when a service cut the turn.
+    Its native content kind distinguishes it from identical operator words. */
+function codexShutdownPrompt(record: RecordLike): boolean {
+  const payload = recordValue(record.payload);
+  const metadata = recordValue(payload?.internal_chat_message_metadata_passthrough);
+  return payload?.type === "message" && payload.role === "user"
+    && Array.isArray(metadata?.content_item_kinds) && metadata.content_item_kinds.includes("generic.turn_aborted");
+}
 
 /** Index of the newest dated record the agent's own work wrote, or -1. The
     bookkeeping a CLI writes as it exits or resumes is passed over. */
@@ -432,7 +440,7 @@ export function lastAgentWorkIndex(records: RecordLike[], codex: boolean): numbe
     if (!Number.isFinite(at)) continue;
     if (codex) {
       const type = stringValue(recordValue(record.payload)?.type);
-      if (type && !CODEX_BOOKKEEPING_TYPES.has(type)) return index;
+      if (type && !CODEX_BOOKKEEPING_TYPES.has(type) && !codexShutdownPrompt(record)) return index;
       continue;
     }
     if (record.type !== "user" && record.type !== "assistant") continue;
@@ -452,7 +460,7 @@ function claudeInterruptMarker(record: RecordLike): boolean {
 }
 
 /** The records left once the bookkeeping a CLI writes as it exits or resumes
-    is removed, record by record: Codex token counts and turn aborts, and for
+    is removed, record by record: Codex settings replay, token counts and aborts, and for
     Claude meta prompts, shutdown and interrupt markers and the synthetic
     no-response no-op. A provider failure record stays: it is how a turn the
     provider closed is told from one a restart cut. */
@@ -460,7 +468,7 @@ export function withoutExitBookkeeping(records: RecordLike[], codex: boolean): R
   return records.filter((record) => {
     if (codex) {
       const type = stringValue(recordValue(record.payload)?.type);
-      return !type || !CODEX_BOOKKEEPING_TYPES.has(type);
+      return (!type || !CODEX_BOOKKEEPING_TYPES.has(type)) && !codexShutdownPrompt(record);
     }
     if (record.type === "user") return record.isMeta !== true && !claudeInterruptMarker(record);
     if (record.type !== "assistant" || record.isApiErrorMessage === true) return true;
@@ -489,6 +497,7 @@ function claudeApiErrorClosedAttempt(records: RecordLike[]): boolean {
 }
 
 function codexNativeUserPrompt(record: RecordLike) {
+  if (codexShutdownPrompt(record)) return null;
   const payload = recordValue(record.payload);
   if (!payload) return null;
   const item = recordValue(payload.item);
@@ -517,7 +526,7 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
       let automatic = false;
       try {
         const origin = decodeCodexStructuredUserText(prompt.text).origin;
-        automatic = origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role);
+        automatic = origin?.kind === "agent";
       } catch { /* Unavailable metadata leaves this prompt external. */ }
       return [{ ts, recordIndex, origin: automatic ? "pipeline" as const : "external" as const }];
     }
@@ -535,7 +544,7 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
       || record.promptSource === "command" || record.promptSource === "system"
       || record.interruptedByShutdown === true && isClaudeInterruptSentinelText(text);
     if (!human && metadata && isClaudeTurnWindowMeta(record)) return [];
-    return [{ ts, recordIndex, origin: !human && author?.origin === "agent" && (author.senderRole === "pipeline" || author.senderRole === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
+    return [{ ts, recordIndex, origin: !human && author?.origin === "agent" ? "pipeline" as const : "external" as const }];
   });
 }
 
