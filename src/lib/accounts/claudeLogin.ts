@@ -319,15 +319,22 @@ export class ClaudeLoginSupervisor {
   private persistDirty = false;
   private deferredPersist: Promise<void> | null = null;
 
-  private readonly recovery: Promise<void>;
+  private recovery: Promise<void> | null = null;
 
-  constructor(private readonly ports: ClaudeLoginPorts = realClaudeLoginPorts, private readonly store: ClaudeLoginStore = fileClaudeLoginStore) {
-    this.recovery = this.reconcilePersisted();
+  /* Construction touches nothing durable. Every process that loads this module
+     builds a supervisor (each agent's MCP server, the scanner and files
+     workers, sidecars), and recovering here let each of them terminate the
+     Viewer's live sign-in as soon as it started. */
+  constructor(private readonly ports: ClaudeLoginPorts = realClaudeLoginPorts, private readonly store: ClaudeLoginStore = fileClaudeLoginStore) {}
+
+  /** Settles the operations a previous Viewer process left in the store: each
+      live child is terminated and the row ends authenticated or interrupted.
+      Only the Viewer's release activation calls this; it runs once per
+      supervisor and later calls share the first run. */
+  recoverAfterRestart(): Promise<void> {
+    this.recovery ??= this.reconcilePersisted();
+    return this.recovery;
   }
-
-  /** Waits for persisted login recovery. Tests and startup callers can use this
-      before reading a terminal recovery result. */
-  whenRecovered(): Promise<void> { return this.recovery; }
 
   private persistedOperations(): PersistedOperation[] {
     return [...this.operations.values()]
@@ -716,8 +723,21 @@ export class ClaudeLoginSupervisor {
 
 function osHome(): string { return process.env.HOME || "/"; }
 
-const defaultClaudeLoginSupervisor = new ClaudeLoginSupervisor();
+const SUPERVISOR_KEY = Symbol.for("llv.claudeLogin.supervisor");
+type SupervisorHolder = { [SUPERVISOR_KEY]?: ClaudeLoginSupervisor };
+
+/* One supervisor per process, shared across the route bundles (each route is
+   its own module graph in a production build), so the operation a sign-in
+   route started is the one the code route, the panel and recovery see. */
+const supervisorHolder = globalThis as SupervisorHolder;
+const defaultClaudeLoginSupervisor = supervisorHolder[SUPERVISOR_KEY] ??= new ClaudeLoginSupervisor();
 export let claudeLoginSupervisor = defaultClaudeLoginSupervisor;
+
+/** The Viewer's release activation step: recover the sign-ins a previous
+    Viewer process left behind before this one serves traffic. */
+export async function recoverClaudeLoginsAtStartup(): Promise<void> {
+  await claudeLoginSupervisor.recoverAfterRestart();
+}
 
 export function setClaudeLoginSupervisorForTests(supervisor: ClaudeLoginSupervisor | null): void {
   claudeLoginSupervisor = supervisor ?? defaultClaudeLoginSupervisor;

@@ -208,9 +208,59 @@ test("input is admitted only after the browser prompt and persists verification 
 test("restart reconciliation rejects PID reuse and preserves only an interrupted safe DTO", async () => {
   seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-restart-one", accountId: "work", phase: "awaiting_browser", pid: 4242, startToken: "old-start", generation: 3, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
   const supervisor = new ClaudeLoginSupervisor({ ...ports(), pidStartToken: () => "new-process" });
-  await supervisor.whenRecovered();
+  await supervisor.recoverAfterRestart();
   expect(signals).toEqual([]);
   expect(supervisor.get("operation-restart-one")).toEqual(expect.objectContaining({ phase: "interrupted", loginUrl: null, acceptsCode: false }));
+});
+
+test("a supervisor another process builds leaves a live sign-in waiting for its code", async () => {
+  const account = createManagedClaudeAccount("Second process");
+  const viewer = new ClaudeLoginSupervisor({
+    ...ports(),
+    kill: (_pid, signal) => { signals.push(signal); child.emit("close", null, signal); },
+    status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
+  });
+  const operation = viewer.start(account.id);
+  child.stdout.emit("data", "Open https://claude.ai/authorize?state=second-process");
+  expect(viewer.get(operation.operationId)).toEqual(expect.objectContaining({ phase: "awaiting_code", acceptsCode: true }));
+
+  /* An agent's MCP server or a scanner worker loads this module, and with it
+     a supervisor over the same state.sqlite, while the operator is on
+     Claude.ai. Building it must not touch the operation the Viewer owns. */
+  const other = new ClaudeLoginSupervisor(ports());
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  expect(signals).toEqual([]);
+  expect(other.forAccount(account.id)).toEqual(expect.objectContaining({ operationId: operation.operationId, phase: "awaiting_code" }));
+  expect(viewer.get(operation.operationId)).toEqual(expect.objectContaining({ phase: "awaiting_code", acceptsCode: true }));
+  expect(await viewer.input(operation.operationId, "authorizationCode#state")).toEqual(expect.objectContaining({ phase: "verifying" }));
+  expect(child.writes).toEqual(["authorizationCode#state\n"]);
+});
+
+test("Viewer activation recovers a sign-in the previous Viewer left, once, before controllers start", async () => {
+  const { completeViewerRuntimeActivation } = await import("@/lib/viewerInstrumentation");
+  const { recoverClaudeLoginsAtStartup, setClaudeLoginSupervisorForTests } = await import("./claudeLogin");
+  seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-activation", accountId: "work", phase: "awaiting_code", pid: 4242, startToken: "start-1", generation: 4, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
+  const supervisor = new ClaudeLoginSupervisor(ports());
+  setClaudeLoginSupervisorForTests(supervisor);
+  const order: string[] = [];
+  try {
+    await completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => { order.push("capability"); },
+      publishHotStateActivation: () => { order.push("fence"); },
+      runClaudeLoginRecovery: async () => { order.push("login-recovery"); await recoverClaudeLoginsAtStartup(); },
+      startStructuredHosts: null,
+      startControllers: async () => {
+        expect(supervisor.get("operation-activation")).toEqual(expect.objectContaining({ phase: "interrupted" }));
+        order.push("controllers");
+      },
+      publishViewerReleaseReady: () => { order.push("ready"); },
+    });
+    expect(order).toEqual(["capability", "fence", "login-recovery", "controllers", "ready"]);
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    await recoverClaudeLoginsAtStartup();
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  } finally { setClaudeLoginSupervisorForTests(null); }
 });
 
 test("malformed persisted operations are discarded so recovery cannot block a fresh login", () => {
@@ -228,8 +278,6 @@ test("batched Claude login projection loads durable state once", async () => {
     load: () => { loads += 1; return []; },
     save: () => undefined,
   });
-  await supervisor.whenRecovered();
-  loads = 0;
 
   expect(supervisor.forAccounts(["one", "two"])).toEqual(new Map([["one", null], ["two", null]]));
   expect(loads).toBe(1);
@@ -422,7 +470,7 @@ test("restart sends TERM and KILL, awaits the resistant child exit, then verifie
       return { loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" };
     },
   });
-  await supervisor.whenRecovered();
+  await supervisor.recoverAfterRestart();
   expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   expect(calls).toEqual(["kill:SIGTERM", "wait", "kill:SIGKILL", "wait", "status"]);
   expect(supervisor.get("operation-restart-two")).toEqual(expect.objectContaining({ phase: "authenticated" }));
@@ -441,7 +489,7 @@ test("a restart with a safe credential file remains interrupted when Claude stat
     },
   });
 
-  await restarted.whenRecovered();
+  await restarted.recoverAfterRestart();
 
   expect(statusHomes).toEqual([account.home]);
   expect(restarted.get("operation-restart-twelve")).toEqual(expect.objectContaining({ phase: "interrupted", result: expect.objectContaining({ code: "interrupted" }) }));
@@ -451,7 +499,7 @@ test("a retry after recovery supersedes the recovered operation", async () => {
   const account = createManagedClaudeAccount("Recovered retry");
   seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-restart-nine", accountId: account.id, phase: "awaiting_browser", pid: 4242, startToken: "old-start", generation: 9, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
   const restarted = new ClaudeLoginSupervisor(ports());
-  await restarted.whenRecovered();
+  await restarted.recoverAfterRestart();
 
   const retry = restarted.start(account.id);
 
@@ -471,7 +519,7 @@ test("a successful login requires a safe credential file and survives restart as
   fs.writeFileSync(credentials, "{}", { mode: 0o600 });
   seedAccountSource(CLAUDE_LOGIN_SOURCE, [{ operationId: "operation-restart-three", accountId: account.id, phase: "verifying", pid: 4242, startToken: "start-1", generation: 9, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }]);
   const restarted = new ClaudeLoginSupervisor(ports());
-  await restarted.whenRecovered();
+  await restarted.recoverAfterRestart();
   expect(restarted.get("operation-restart-three")).toEqual(expect.objectContaining({ phase: "authenticated" }));
 });
 
@@ -581,7 +629,7 @@ test("restart recovery rechecks Keychain evidence after provider status", async 
         load: () => [{ operationId: "fixture-recovery", accountId: candidate.id, phase: "verifying", pid: 4242, startToken: "old-start", generation: 1, startedAt: new Date(0).toISOString(), deadlineAt: new Date(1).toISOString() }],
         save: () => undefined,
       });
-      await supervisor.whenRecovered();
+      await supervisor.recoverAfterRestart();
       expect(supervisor.get("fixture-recovery")?.phase).toBe(becomesUnknown ? "interrupted" : "authenticated");
       expect(signals).toEqual([]);
     } finally { read.mockRestore(); }
