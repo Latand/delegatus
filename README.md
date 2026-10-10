@@ -27,6 +27,8 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
   and the other way round.
 - **Shared memory.** Claude and Codex agents can look up what either engine
   learned, and a message you send can carry the memories that fit it.
+- **Agents learn from their stages.** A pipeline stage can leave short rules
+  that the next agents of its role, its project or the machine start with.
 - **Telegram built in.** Agents post to chats you allow through a bot, and
   read your own Telegram account through a read-only MCP server.
 - **Made for a team.** People sign in as themselves, and two machines can
@@ -158,8 +160,15 @@ open issues ranked by their recorded priority.
 In the seat tick panel, **Board maintenance** can also start one maintainer
 agent per project on a timer, every 3 hours by default and off until you
 switch it on. The panel's text reaches the orchestrator on every wake as
-your standing instructions. [docs/orchestrator.md](docs/orchestrator.md)
-covers the rest.
+your standing instructions. The tick chip in the orchestrator's header is a
+switch with four stops, off, every 4 hours, every hour and every 10
+minutes: drag it to change how often Delegatus wakes the orchestrator, or
+click it for the panel. With **Auto-rotation** on in that panel, the
+orchestrator hands over to a fresh one with a handoff once its context
+reaches the percentage you set, at its next idle moment. When its turns fail
+because its login expired, Delegatus tells you once and moves it to another
+allowed account with room, or pauses its wakes.
+[docs/orchestrator.md](docs/orchestrator.md) covers the rest.
 
 When a Delegatus tool fails, the orchestrator offers in its chat to prepare a
 bug report. If you agree, a reporter agent gathers the evidence, writes the
@@ -203,6 +212,8 @@ arrive, or a stage waiting on your decision. ✓ clears it until something new
 comes up. **Needs you** at the top of the board counts what waits across all
 projects. Its panel lists each item by project, with the waiting agent's
 role, and lets you dismiss an item or answer a permission prompt in place.
+It holds only what waits on you: what a rule or the orchestrator settled
+goes to the Reports log as a completed line.
 While something waits, the funnel (or the F key) dims every card
 that does not wait on you.
 
@@ -229,24 +240,38 @@ shows one picture at a time with a strip of thumbnails, puts an original
 beside its change, and plays a video in place. Choose one variant or several
 by number, add a comment, typed or dictated, and save. Your choice goes to the
 project's orchestrator once, as your own message, and the card shows the
-numbers you chose.
+numbers you chose. **Hide** takes a round off the waiting lists without a
+choice, and can be undone. Before work on a request with important choices
+open, the review can instead hold three to seven questions; answer them in
+one message or skip to the recommended answers. On a phone the review fills
+the screen, and a tap opens a frame full screen with zoom and swipe.
 
 When the orchestrator starts a pipeline, launches a stage, creates a task or
 moves one, a wire runs from the orchestrator to that card for about a minute
-and then fades. At rest the board draws nothing.
+and then fades. Point at a wire to see its task's title, and click it to go
+to the card. At rest the board draws nothing.
 
-The Overview board shows what is running across all projects. A rail beside
-the columns lists the agents you have open in cards; click one to jump to
-it, or press Alt+J and Alt+K to step between them. You can also add tasks
-and start agents on them yourself.
+An agent you open, from a stage, a conversation row or a link, opens in one
+window over the board, and the board keeps its layout. The window lists
+every open agent on its left: click a row to read it, or press Alt+J and
+Alt+K to step between them. Esc closes the window and a pill in the header
+brings it back. The orchestrator's expand button opens it in the same
+window.
+
+The Overview board shows what is running across all projects. You can also
+add tasks and start agents on them yourself.
 
 The left sidebar is one panel. Pinned projects come first, then the rest,
 then an Archive fold, each section with its count. A project takes one row:
 its name, how many items wait on you, how many agents are working and how
-long ago something last happened. Below the list, a compact system block
-gives one line each to free memory and swap, every account with what is left
-of its tightest usage window, Copilot and Telegram. **All windows** in the
-block's header adds each account's plan and every window with its reset time.
+long ago something last happened; "working" counts agents whose turn is
+running right now, the same rule the board uses. Below the list, a compact
+system block gives one line each to free memory and swap, every account with
+what is left of its tightest usage window, Copilot and Telegram. **All
+windows** in the block's header adds each account's plan and every window
+with its reset time. When a disk runs low, a "Disk" line shows its free
+space and names what takes the most room, and new lanes wait while it is
+critically low.
 
 ![A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages and a card that says why it needs you; on the left, the projects and the system block](docs/media/readme/board.svg)
 
@@ -291,13 +316,22 @@ request with one commit per original;
 
 Mark a pipeline **Finishes the task** and its task moves to Done when the
 pipeline finishes, or, with merging on, when its pull request is merged. An
-hourly sweep removes the worktrees of merged pipelines. It skips any
-worktree that is still in use or holds unmerged work.
+hourly sweep removes the worktrees of merged pipelines, and those of other
+finished lanes four days after they settle when every commit is on the
+remote. It skips any worktree that is still in use or holds unpublished
+work.
+
+When a stage reports, its agent can leave one to three short rules for the
+next agent of its role, for every role in the project or for every project
+on the machine, and those agents start with them. Review and verification
+stages get none and leave none. **Learned rules** on the board's ⋯ menu
+shows the three groups and removes a rule with ×.
 
 On the task's card a pipeline takes one row: its stages as a chain, its
 state, its pull request and the issues that pull request closes. When it
-waits on you, the buttons are on that row: skip or retry the stage, or, once
-the review budget is spent, close the pipeline or allow **One more round**.
+waits on you, the buttons are on that row: skip or retry the stage, or
+close the pipeline. A review budget is fixed when the pipeline is created:
+N rounds are N reviews and a fix of the last review's findings.
 Open the row to see the stage graph beside each stage's conversation, as in
 the picture above. [docs/pipelines.md](docs/pipelines.md) covers stage
 definitions, roles and the HTTP API. [docs/review-loop.md](docs/review-loop.md)
@@ -307,9 +341,12 @@ covers review rounds.
 
 You can start agents yourself and choose which account each one uses.
 
-Start a Claude Code, Codex or GitHub Copilot agent from a task or the Create
-button. Pick the model and reasoning effort, then send messages, images and
-files from the composer. The agent's window has buttons to interrupt,
+Start a Claude Code, Codex or GitHub Copilot agent from a task or the
+**Agent** button. The form is the composer itself: pick the engine, model
+and reasoning in its runtime pill, type or dictate, and send; the pane then
+becomes the conversation. Send messages, images and files from the same
+composer. In the conversation of a running pipeline stage, the runtime pill
+switches the stage itself to another model, effort, speed or account. The agent's window has buttons to interrupt,
 resume or stop it. In a Codex conversation, the composer's **Context** toggle
 sends the draft into the running turn as context: Auto follows the turn, and a
 press overrides it for that card. A Codex agent can also run on a service tier
@@ -342,9 +379,9 @@ its tightest usage window; **All windows** lists every window: five-hour and
 weekly for Claude and Codex, the monthly allowance for Copilot, each with the
 share left and when it resets. Switch to another account before
 one runs out, or move a single agent to a different account. Agents you
-start after a switch use the new active account. When a Claude pipeline
-stage hits a usage limit, Delegatus moves it to another of the project's
-accounts and it carries on. A Claude account can also point at any service
+start after a switch use the new active account. When a pipeline stage hits
+a usage limit, Delegatus moves it to another allowed account of the same
+engine; when none has room, the stage waits for the reset and carries on. A Claude account can also point at any service
 that speaks the Anthropic Messages API: **Add compatible provider** takes its
 address, token and models.
 
@@ -470,6 +507,12 @@ Delegatus can take your messages by voice and read answers aloud.
   the conversation header, and the first sentence plays as soon as it arrives.
 - **Voice conversation.** A Codex agent that Delegatus hosts offers a
   continuous voice conversation from its composer.
+- **Voice Delegatus.** Switched on in Settings, a floating character on the
+  desktop answers questions about the board by voice and sends work to the
+  project's orchestrator when you ask. It speaks the orchestrator's new
+  reports once and keeps them in the call's transcript. It uses your OpenAI
+  API key, has a monthly spend cap, and shows what the call and the month
+  cost.
 
 ## Telegram
 
@@ -569,6 +612,9 @@ in the sidebar's ⋯ menu (the board's ⋯ menu on a phone).
   on their task's card or in the Inbox. Only a title and a state cross over.
   A linked task's card also shows its pipeline (stages, states and the
   current stage) and a "Managed on" chip with the machine's name.
+- **Orchestrators talk across machines.** A project's orchestrator can send
+  a message to the orchestrator of a shared project on the other machine,
+  and each message arrives once. Both machines need 1.11.0 or later.
 - **Revoke** or **Remove** a link at any time from the same dialog.
 
 The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md).
@@ -585,9 +631,14 @@ answered by a one-shot agent on your signed-in Claude or Codex account, with
 no shell, no tools and none of your instruction files. A question can come
 with who asked it and their rights in the chat, a short memory of the chat
 and an index of the service's own tools; when one of those tools fits
-better, the agent hands the question back to the service. The page shows
-each relay's state, lets you choose the engine, model and effort it answers
-with, and lists **Recent answers** from the last 30 days. The protocol is in [docs/design/relay.md](docs/design/relay.md).
+better, the agent hands the question back to the service. When the service
+offers its tools with a question, the agent can read with them and, for a
+requester who is allowed to, perform one action at a time. **Full agent for
+the owner**, off by default on each target, runs the relay owner's requests
+as ordinary Delegatus agents with full access to this computer. The card
+shows each relay's state and, for each target, the engine, model and effort
+it answers with; answers are kept for 30 days. The protocol is in
+[docs/design/relay.md](docs/design/relay.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>
 
@@ -631,8 +682,9 @@ The tools, by area:
   `read_prototype_review`, which post numbered variants to a task for you to
   choose from and read back your choice;
 - **pipelines:** `create_pipeline`, `list_pipelines`, `get_pipeline`,
-  `pipeline_action`, `link_task_to_pipeline`, and `stage_report`, which a
-  stage agent calls to report its verdict;
+  `pipeline_action`, `link_task_to_pipeline`, `stage_report`, which a
+  stage agent calls to report its verdict, and `leave_lesson`, which stores
+  the rules it leaves for the next agents;
 - **review flows:** `list_flows`, `get_flow`, `flow_action`;
 - **the orchestrator seat:** `create_orchestrator`, `get_orchestrator`,
   `rotate_orchestrator`, `send_message_to_orchestrator`,
@@ -673,13 +725,16 @@ The tools, by area:
   captions, from the same folders), `telegram_bot_messages` (what the bot received, newest first);
 - **you and the machine:** `operator_snapshot`, `request_attention`,
   `dismiss_attention`, `agent_activity`, `lifecycle_events`, `resources`,
-  `deployment_status`, `deploy_exact_sha`.
+  `deployment_status`, `deploy_exact_sha`, and `backfill_worktree_projects`,
+  a read-only preview of how deleted worktrees regroup under their
+  repository.
 
 `request_attention` moves your open Delegatus view to a conversation, task
 or other target and returns once the browser gets there. It does not wait
 for your reply, and a Return button takes you back. On a phone it shows a
 notice and moves nothing. `dismiss_attention` clears a card's "needs you"
-flag until something new comes up, the same as the card's Dismiss.
+flag until something new comes up, the same as the card's Dismiss; called
+without a target, it reads the project's **Needs you** list.
 
 Every call takes a `clientRequestId`. Repeat a call with the same id and
 arguments and you get the first result back, with no second action. Calls to
