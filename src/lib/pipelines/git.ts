@@ -32,6 +32,9 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
     its files or reports why it cannot. `paths` are the files the refused commit
     held, for the message to name. */
 export type StageCommitRefusal = { paths: string[] };
+/** A spent commit retry may recover existing work, but cannot write another
+    commit. The intent is flushed immediately before the hook can run. */
+export type StageCommitControl = { recoverOnly: boolean; beforeCommit: () => void | Promise<void> };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
@@ -617,6 +620,7 @@ export async function commitPipelineStage(
   declaredOutputs: readonly string[] = [],
   protectedHead: string | null = allowCommit ? null : pipeline.lastPassedCommit,
   receiptFile?: string,
+  control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
   const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
@@ -651,6 +655,9 @@ export async function commitPipelineStage(
   } else if (!status.stdout.trim()) {
     return settleWithoutCommit();
   }
+  if (control?.recoverOnly) {
+    return { ok: false, error: "the stage's one commit retry was already started and no completed commit could be recovered; preserve the worktree for the operator" };
+  }
   const add = (await exec(
     "git",
     ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
@@ -677,6 +684,7 @@ export async function commitPipelineStage(
     receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: tree.stdout.trim(), paths: changedOutputPaths };
     writeJsonDurably(receiptFile, receipt);
   }
+  await control?.beforeCommit();
   const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
   if (commit.code !== 0) {
