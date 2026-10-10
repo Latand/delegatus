@@ -632,11 +632,29 @@ holds across handle retirement and reconnect during that interval. The same
 ordering applies to the completion path. If replay or its deciding checkpoint
 is missing, the drain holds rather than inventing a newer settlement.
 
+A replay reset explicitly marks history incomplete. The existing durable
+`producerCursor` for the owner's `engine-host:<key>:` prefix survives event
+retention and producer-receipt maintenance. An own idle publication must be
+strictly newer than that cursor before it can settle the missing history.
+Absent, zero or unreadable bounds keep the owner held; neither an empty
+retained replay nor an older retained idle mark proves completion. The drain
+reads this checkpoint through the existing runtime client, without changing
+the registry or journal writer paths.
+
 An unordered positive handle, registry reference or transcript tail keeps its
 hold until its own evidence settles. A standalone host without a journal
-writer releases on its own completed transcript when no own positive source
-remains. Setup and reviewer custody continue to hold while their processes
+writer treats its own `live`, `starting` or `handoff` entry as an admission
+claim. Its completed transcript releases that claim only when the completion
+record itself is strictly newer than the entry's timestamp. A newer unrelated
+record cannot advance an older completion. This covers a prompt acknowledged
+before the next transcript start is written and works with a fresh reader.
+Setup and reviewer custody continue to hold while their processes
 answer.
+
+A handle supplies its own process identity. A gone registry identity at its
+pid suppresses the handle only when both saved start identities are present
+and equal. A busy answering handle whose start identity is null retains its
+own custody; reuse proven for an older registry process cannot release it.
 
 **Bounded grace covers a launch that never proved work.** An ownerless hosted
 row, an open receipt with no admission process or an unregistered claim may

@@ -100,6 +100,8 @@ export interface OwnerReading extends OwnerPlace {
   process: "alive" | "gone";
   handle?: "busy" | "idle" | null;
   rowReference?: boolean;
+  /** Standalone admission newer than its own recorded completion. */
+  registryClaim?: boolean;
   journal?: "claimed" | "idle" | "unattributed" | null;
   tail?: TailReading | null;
 }
@@ -165,7 +167,7 @@ export function sessionClaimsOpenTurn(session: Pick<RuntimeSession, "host" | "tu
  * An unordered positive source always holds. Missing evidence never expires
  * a recorded process, including one whose saved start identity is null.
  */
-export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "handle" | "rowReference" | "journal" | "tail">):
+export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "handle" | "rowReference" | "registryClaim" | "journal" | "tail">):
   { verdict: "released"; reason: "process-gone" | "turn-settled" } | { verdict: "holds"; reason: OwnerReason } {
   if (owner.process === "gone") return { verdict: "released", reason: "process-gone" };
   if (owner.role === "setup") return { verdict: "holds", reason: "setup" };
@@ -173,6 +175,7 @@ export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "han
   if (owner.handle === "busy") return { verdict: "holds", reason: "host-turn" };
   if (owner.rowReference || owner.journal === "claimed") return { verdict: "holds", reason: "turn-claimed" };
   if (owner.tail?.turn === "busy") return { verdict: "holds", reason: "turn-open" };
+  if (owner.registryClaim) return { verdict: "holds", reason: owner.tail?.turn === "idle" ? "turn-claimed" : "turn-unread" };
   if (owner.journal === "unattributed") return { verdict: "holds", reason: "turn-unattributed" };
   if (owner.handle === "idle" || owner.journal === "idle") return { verdict: "released", reason: "turn-settled" };
   if (owner.tail?.turn === "idle") return { verdict: "released", reason: "turn-settled" };

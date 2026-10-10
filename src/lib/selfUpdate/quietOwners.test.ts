@@ -57,7 +57,7 @@ function fixture() {
       }
       return journal.append(event);
     },
-    producerCursor: async () => 0,
+    producerCursor: async (kind: string, prefix: string) => journal.producerCursor(kind, prefix),
     operationStatus: async () => null,
     effectBatch: async () => [],
   } as unknown as RuntimeHostClient;
@@ -81,7 +81,8 @@ afterEach(async () => {
 
 function ports(overrides: Partial<QuietPorts> = {}): QuietPorts {
   return { ...productionDeps().quiet!, runtimeSnapshot: async () => f.journal.snapshot(),
-    owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query) }),
+    owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after),
+      readProducerCursor: (kind, prefix) => f.client.producerCursor(kind, prefix), readSession: (query) => f.client.readSession!(query) }),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
     registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192, ...overrides };
 }
@@ -198,6 +199,68 @@ test("a newly admitted native turn holds before its engine event and running pub
   expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
   publish(c.id, c.key, path, claim.fence, "own-native-turn");
   event(c.id, c.key, "turn-ended", "own-native-turn");
+  expect((await probe()).quiet).toBe(true);
+});
+
+test("an answering standalone owner accepts work over an older completed transcript", async () => {
+  const now = Date.now(), path = transcript("settled", new Date(now - 60_000).toISOString()), c = conversation(path);
+  const child = Bun.spawn([process.execPath, "-e", "process.stdin.once('data', () => { process.stdout.write('WORK_ACCEPTED\\n'); setInterval(() => {}, 1000); });"],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.push(child);
+  const identity = captureProcessIdentity(child.pid)!;
+  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(identity),
+    claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+  child.stdin.write("new prompt\n");
+  child.stdin.flush();
+  const reader = child.stdout.getReader();
+  expect(new TextDecoder().decode((await reader.read()).value)).toContain("WORK_ACCEPTED");
+  reader.releaseLock();
+  await fallback();
+  expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running", writerClaim: null });
+  for (const at of [now, now + TWELVE_HOURS]) expect((await probe(ports(), at)).quiet).toBe(false);
+  // A newer bookkeeping record cannot advance the older completion.
+  appendFileSync(path, JSON.stringify({ timestamp: new Date(now + 1_000).toISOString(), type: "session_meta", payload: { id: c.key.sessionId } }) + "\n");
+  expect((await probe()).quiet).toBe(false);
+  writeFileSync(path, transcriptText("settled", new Date(now + 2_000).toISOString()));
+  expect((await probe()).quiet).toBe(true);
+  rmSync(path);
+  expect((await probe(ports())).quiet).toBe(false);
+  await exit({ child });
+  expect((await probe()).quiet).toBe(true);
+});
+
+test.each(["minimal", "production"])("a compacted deciding start cannot turn queued older idle into release proof: %s", async (retention) => {
+  const path = transcript("settled", new Date(Date.now() - 60_000).toISOString()), c = conversation(path), worker = spawn();
+  const claim = claimHost(c.key, path, worker.identity, "live");
+  publish(c.id, c.key, path, claim.fence, null, 10);
+  f.journal.append(projectEngineHostEvent(c.id, sessionKeyId(c.key), { kind: "turn-started", turnId: "new-active-turn", seq: 20 } as never)!);
+  publish(c.id, c.key, path, claim.fence, null, 10);
+  await fallback();
+  expect((await probe()).quiet).toBe(false);
+  if (retention === "production") {
+    for (let i = 0; i < 19_998; i++) f.journal.append({ scope: { type: "session", id: "noise" }, kind: "delta",
+      producer: { kind: "codex-app-server", eventKey: `noise:${i}` }, payload: { text: "output" } });
+  } else f.journal.compact(2);
+  expect(f.journal.replay(0).reset).toBe(true);
+  // Producer receipts remain the durable cursor even after their deciding events disappear.
+  f.journal.maintainProducerReceipts(30_000);
+  expect(f.journal.producerCursor("codex-app-server", `engine-host:${sessionKeyId(c.key)}:`)).toBe(20);
+  expect((await probe(ports())).quiet).toBe(false);
+  publish(c.id, c.key, path, claim.fence, null, 30);
+  expect((await probe(ports())).quiet).toBe(true);
+  release(c.key, claim);
+  await exit(worker);
+  expect((await probe()).quiet).toBe(true);
+}, 30_000);
+
+test("a registered busy answering handle with null start identity survives an older registry identity at its pid", async () => {
+  const c = conversation(transcript("settled")), worker = spawn();
+  claimHost(c.key, c.path, { ...worker.identity, startIdentity: "earlier-process" }, "live", "earlier-turn");
+  const held = heldHost(worker.child.pid, { status: "active", activeTurnRef: "current-live-turn", processStartIdentity: null });
+  await bindStructuredDeliveryQueue([{ key: c.key, host: held.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+  expect(await held.host.health()).toMatchObject({ pid: worker.child.pid, status: "active", processStartIdentity: null });
+  for (const at of [Date.now(), Date.now() + TWELVE_HOURS]) expect((await probe(ports(), at)).quiet).toBe(false);
+  await exit(worker);
   expect((await probe()).quiet).toBe(true);
 });
 
@@ -517,6 +580,8 @@ describe("the tmux successor", () => {
       const b = spawn();
       writeFileSync(s.pathB, transcriptText(bTail, at, s.keyB.sessionId));
       f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.keyB)]!, status, host: tmuxHost(b.identity), claimEpoch: 0 });
+      if (bTail === "settled") writeFileSync(s.pathB, transcriptText("settled",
+        new Date(Date.parse(f.registry.readOnlySnapshot().entries[sessionKeyId(s.keyB)]!.updatedAt) + 1).toISOString(), s.keyB.sessionId));
       return { id: s.id, key: s.key, claimA: s.claimA, b, bKey: s.keyB };
     }
     const path = transcript(bTail, at);
@@ -529,6 +594,8 @@ describe("the tmux successor", () => {
     const b = spawn();
     const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
     f.registry.upsert({ ...entry, status, host: tmuxHost(b.identity), structuredHost: entry.structuredHost });
+    if (bTail === "settled") writeFileSync(path, transcriptText("settled",
+      new Date(Date.parse(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!.updatedAt) + 1).toISOString(), c.key.sessionId));
     expect(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]).toMatchObject({ structuredHost: { writerClaimEpoch: 1 }, host: { kind: "tmux" } });
     return { id: c.id, key: c.key, claimA, b, bKey: c.key };
   }
@@ -557,12 +624,13 @@ describe("the tmux successor", () => {
     });
   }
 
-  test("a live tmux pane over a settled transcript with only the copy of its own entry is released", async () => {
+  test("a live tmux pane over a newer completed transcript with only the copy of its own entry is released", async () => {
     const path = transcript("settled");
     const c = conversation(path);
     const b = spawn();
     f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(b.identity),
       claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+    writeFileSync(path, transcriptText("settled", new Date(Date.parse(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!.updatedAt) + 1).toISOString()));
     await fallback();
     expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running", writerClaim: null });
     for (const at of [Date.now(), Date.now() + TWELVE_HOURS]) expect(await probe(ports(), at)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
@@ -762,7 +830,7 @@ describe("the delayed predecessor write", () => {
   });
 });
 
-function transcriptText(state: "settled" | "open" | "unmarked", at = new Date().toISOString(), id = randomUUID()): string {
+function transcriptText(state: "settled" | "open" | "unmarked", at = new Date().toISOString(), id: string = randomUUID()): string {
   const event = (type: string) => ({ timestamp: at, type: "event_msg", payload: { type } });
   return [{ timestamp: at, type: "session_meta", payload: { id, cwd: f.dir } },
     ...(state === "unmarked" ? [] : [event("task_started"), event("user_message")]),
@@ -1664,13 +1732,16 @@ describe("each owner's evidence beside another record", () => {
       expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
     });
 
-    test.each(["the recorded start identity", "no start identity"])("stale health naming a reused pid with %s releases at once", async (shape) => {
+    test.each(["the recorded start identity", "no start identity"])("health at a reused registry pid is judged by its own %s", async (shape) => {
       const c = conversation(transcript("settled"));
       const reuser = spawn();
       const recorded = { ...reuser.identity, startIdentity: "an-earlier-process" };
       claimHost(c.key, c.path, recorded, "live", "w-turn");
       const p = withHandle(c.key, { pid: reuser.child.pid, status: "active", activeTurnRef: "w-turn",
         processStartIdentity: shape === "no start identity" ? null : recorded.startIdentity });
+      expect(await probe(p)).toMatchObject(shape === "no start identity"
+        ? { quiet: false, blockers: { turns: 1 } } : { quiet: true, blockers: { turns: 0 } });
+      await exit(reuser);
       expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
     });
 
