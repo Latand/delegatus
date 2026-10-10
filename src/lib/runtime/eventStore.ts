@@ -290,6 +290,8 @@ export interface HostTurnFrame {
   type: "user" | "assistant";
   /** The turn the host had open when it recorded the frame, or null. */
   turnId: string | null;
+  /** Native frame clock, retained when a large frame falls outside the tail. */
+  timestamp?: string;
 }
 
 /**
@@ -309,9 +311,15 @@ export type HostTurnRecord =
     state: "read";
     identity: string;
     mtimeMs: number;
+    /** Sequence/status evidence for current-writer liveness; older injected readings omit it. */
+    lastSeq?: number;
+    /** Newest activity other than status, limits or attention cleanup. */
+    lastActivitySeq?: number;
+    complete?: boolean;
+    latestStatus?: { status: string; seq: number } | null;
     turn: {
       turnId: string;
-      closed: { by: "turn-ended" | "session-status"; status: "completed" | "interrupted" | "error" | null } | null;
+      closed: { by: "turn-ended" | "session-status"; status: "completed" | "interrupted" | "error" | null; seq?: number } | null;
     } | null;
     framesBefore: HostTurnFrame[];
     framesAfter: HostTurnFrame[];
@@ -388,8 +396,8 @@ export function readHostTurnRecord(
   }
   try {
     const before = ledgerIdentity(fs.fstatSync(handle));
-    type Boundary = { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error" }
-      | { kind: "session-status" };
+    type Boundary = { seq: number; kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error" }
+      | { seq: number; kind: "session-status" };
     /* Newest first: what follows the newest turn's start, then the frames
        recorded before it. */
     const newer: Array<Boundary | { kind: "frame"; frame: HostTurnFrame }> = [];
@@ -400,6 +408,10 @@ export function readHostTurnRecord(
        below the record after it. A gap or a repeat means a record is missing
        or doubled, and the missing one could be the turn's end. */
     let expectedSeq: number | null = null;
+    let lastSeq = 0;
+    let lastActivitySeq = 0;
+    let latestStatus: { status: string; seq: number } | null = null;
+    let complete = true;
     const sequenced = (seq: unknown): boolean => {
       if (!Number.isSafeInteger(seq) || (seq as number) <= 0 || (expectedSeq !== null && seq !== expectedSeq)) {
         malformed = expectedSeq === null
@@ -407,6 +419,7 @@ export function readHostTurnRecord(
           : `the host ledger's sequence breaks before ${expectedSeq + 1}`;
         return false;
       }
+      if (lastSeq === 0) lastSeq = seq as number;
       expectedSeq = (seq as number) - 1;
       return true;
     };
@@ -424,13 +437,21 @@ export function readHostTurnRecord(
         malformed = "the host ledger holds an invalid event";
         return;
       }
-      if (!sequenced(event.seq) || event.kind === "delta") return;
+      if (!sequenced(event.seq)) return;
+      if (lastActivitySeq === 0 && event.kind !== "session-status" && event.kind !== "limits" && event.kind !== "attention-resolved") {
+        lastActivitySeq = event.seq as number;
+      }
+      if (event.kind === "delta") return;
+      if (event.kind === "session-status" && latestStatus === null) {
+        latestStatus = { status: event.status as string, seq: event.seq as number };
+      }
       if (event.kind === "item") {
         const item = event.item as Record<string, unknown> | null;
         if (!item || typeof item !== "object" || typeof item.uuid !== "string") return;
         if (item.type !== "user" && item.type !== "assistant") return;
         const frame: HostTurnFrame = {
           uuid: item.uuid, type: item.type, turnId: typeof event.turnId === "string" ? event.turnId : null,
+          ...(typeof item.timestamp === "string" ? { timestamp: item.timestamp } : {}),
         };
         if (started === null) newer.push({ kind: "frame", frame });
         else olderFrames.push(frame);
@@ -443,9 +464,9 @@ export function readHostTurnRecord(
       } else if (event.kind === "turn-ended") {
         if (typeof event.turnId !== "string" || (event.status !== "completed" && event.status !== "interrupted" && event.status !== "error")) {
           malformed = "the host ledger holds a turn end it cannot name";
-        } else newer.push({ kind: "turn-ended", turnId: event.turnId, status: event.status });
+        } else newer.push({ kind: "turn-ended", turnId: event.turnId, status: event.status, seq: event.seq as number });
       } else if (event.kind === "session-status" && (event.status === "dead" || event.status === "unhosted")) {
-        newer.push({ kind: "session-status" });
+        newer.push({ kind: "session-status", seq: event.seq as number });
       }
     };
     let position = before.size;
@@ -472,6 +493,7 @@ export function readHostTurnRecord(
       carry = start === 0 ? Buffer.alloc(0) : data.subarray(0, firstNewline + 1);
       /* The text after the last newline of the file is a torn append. */
       const torn = lines.pop();
+      if (newest && torn) complete = false;
       if (!newest && torn) malformed = "the host ledger could not be split into records";
       newest = false;
       for (let index = lines.length - 1; index >= 0 && malformed === null; index -= 1) {
@@ -497,7 +519,7 @@ export function readHostTurnRecord(
     olderFrames.reverse();
     const framesOf = (items: typeof newer) => items.flatMap((item) => item.kind === "frame" ? [item.frame] : []);
     if (started === null) {
-      return { state: "read", identity, mtimeMs: before.mtimeMs, turn: null, framesBefore: framesOf(newer), framesAfter: [] };
+      return { state: "read", identity, mtimeMs: before.mtimeMs, lastSeq, lastActivitySeq, latestStatus, complete, turn: null, framesBefore: framesOf(newer), framesAfter: [] };
     }
     const turnId: string = started;
     const closedAt = newer.findIndex((item) =>
@@ -507,9 +529,10 @@ export function readHostTurnRecord(
       state: "read",
       identity,
       mtimeMs: before.mtimeMs,
+      lastSeq, lastActivitySeq, latestStatus, complete,
       turn: {
         turnId,
-        closed: closing ? { by: closing.kind, status: closing.kind === "turn-ended" ? closing.status : null } : null,
+        closed: closing ? { by: closing.kind, status: closing.kind === "turn-ended" ? closing.status : null, seq: closing.seq } : null,
       },
       framesBefore: closedAt < 0 ? olderFrames : [...olderFrames, ...framesOf(newer.slice(0, closedAt))],
       framesAfter: closedAt < 0 ? framesOf(newer) : framesOf(newer.slice(closedAt + 1)),
