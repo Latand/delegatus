@@ -445,6 +445,11 @@ function rulesSummary(host: HTMLElement): string {
 }
 
 /** The create draft keeps its pickers behind the Runs on row's Change (#2166). */
+/** The account chip the launch is on, in the engine's account radio group. */
+function chosenAccount(host: HTMLElement, engine: string): string | null {
+  return host.querySelector(`[role="radiogroup"][aria-label*="${engine}"] [role="radio"][aria-checked="true"]`)?.getAttribute("data-launch-account") ?? null;
+}
+
 function openRunsOn(host: HTMLElement): void {
   const change = host.querySelector("[data-orchestrator-runs-on-change]") as HTMLButtonElement;
   if (change.getAttribute("aria-expanded") !== "true") flushSync(() => change.click());
@@ -828,9 +833,9 @@ test("switching to Codex offers the codex account catalog and launches on it", a
   flushSync(() => codex.click());
   await settle();
 
-  const accountSelect = host.querySelector('select[aria-label*="Codex"]') as HTMLSelectElement;
-  expect(accountSelect).not.toBeNull();
-  expect([...accountSelect.options].map((option) => option.value)).toEqual(["codex-primary"]);
+  const accountChips = host.querySelector('[role="radiogroup"][aria-label*="Codex"]') as HTMLElement;
+  expect(accountChips).not.toBeNull();
+  expect([...accountChips.querySelectorAll('[role="radio"]')].map((chip) => chip.getAttribute("data-launch-account"))).toEqual(["codex-primary"]);
 
   flushSync(() => confirmButton(host).click());
   await settle();
@@ -1403,8 +1408,7 @@ test("Rotate over a STALE seat opens the SAME draft on the CURRENT default manda
   expect(host.querySelector("[data-orchestrator-intro]")).toBeNull();
   expect(host.textContent).not.toContain("Handoff from your predecessor");
   /* The account picker opens on the account the incumbent is running under. */
-  const account = host.querySelector('select[aria-label*="Claude"]') as HTMLSelectElement;
-  expect(account.value).toBe("spare");
+  expect(chosenAccount(host, "Claude")).toBe("spare");
   /* The successor continues in the predecessor's checkout. */
   expect(host.textContent).toContain("/repos/atlas/worktrees/board");
   /* The incumbent is still on the seat, and the panel still says so. */
@@ -1622,8 +1626,7 @@ test("Rotate reads the incumbent BEFORE it opens, so the first press is prefille
   await settle();
 
   expect(host.querySelector('[data-orchestrator-draft="rotate"]')).not.toBeNull();
-  const account = host.querySelector('select[aria-label*="Claude"]') as HTMLSelectElement;
-  expect(account.value).toBe("spare");
+  expect(chosenAccount(host, "Claude")).toBe("spare");
   expect(host.textContent).toContain("/repos/atlas/worktrees/board");
 });
 
