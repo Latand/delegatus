@@ -7,6 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 const runSide = process.argv.includes('--run-side');
 const coldFixtures = process.argv.includes('--cold-fixtures');
 const coldSample = process.argv.includes('--cold-sample');
+const memoryServer = process.argv.includes('--memory-server');
 const COLD_SAMPLES = 5;
 const COLD_CORPUS = { projects: 40, claudePerProject: 45, codex: 700 };
 const COLD_LONG = { codexBytes: 100 * 1024 * 1024, claudeBytes: 30 * 1024 * 1024 };
@@ -269,7 +270,26 @@ async function runPair() {
  }
 }
 
-if (coldFixtures) {
+if (memoryServer) {
+ // A real per-agent stdio process. The controller asks for a sample only once
+ // its preceding answer has left the transport; no tool result is held here.
+ assertPrivateProc();
+ const output = process.env.MCP_MEMORY_OUTPUT!;
+ if (!output) throw new Error('MCP_MEMORY_OUTPUT must name an isolated sample directory');
+ const { heapStats } = await import('bun:jsc');
+ const { startViewerMcpServer } = await import('@/lib/mcp/server');
+ await startViewerMcpServer();
+ setInterval(() => {
+  const command = path.join(output, 'sample');
+  if (!fs.existsSync(command)) return;
+  const label = fs.readFileSync(command, 'utf8');
+  fs.unlinkSync(command);
+  if (!['before', 'after'].includes(label)) throw new Error('Unknown memory sample');
+  Bun.gc(true);
+  fs.writeFileSync(path.join(output, `${label}.stats.json`), JSON.stringify({ rss: process.memoryUsage().rss, ...heapStats() }));
+  if (label === 'after') fs.writeFileSync(path.join(output, 'heap.json'), JSON.stringify(Bun.generateHeapSnapshot()));
+ }, 25);
+} else if (coldFixtures) {
  await writeColdFixtures();
 } else if (coldSample) {
  await runColdSample();
