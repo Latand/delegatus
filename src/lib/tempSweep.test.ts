@@ -25,9 +25,13 @@ const DAY = 24 * HOUR;
 const made: string[] = [];
 const children: ChildProcess[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   /* Only the children this file started, by the handle it kept. */
-  for (const child of children.splice(0)) child.kill("SIGKILL");
+  await Promise.all(children.splice(0).map(child => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    child.once("exit", () => resolve());
+    child.kill("SIGKILL");
+  })));
   for (const directory of made.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
   stopTempSweep();
 });
@@ -273,9 +277,9 @@ test("a temp root mounted read-only is left out, while the host's is still read 
   }
 });
 
-test("the process scan sees this process's namespace, working directory and TMPDIR", async () => {
+test("the process scan sees this process's namespace, working directory, TMPDIR and HOME", async () => {
   const held = tempRoot();
-  const child = await started(spawn("sleep", ["30"], { cwd: held, env: { NODE_ENV: "test", PATH: process.env.PATH, TMPDIR: path.join(held, "tmp"), LLV_STRUCTURED_HOST: "stamp" }, stdio: "ignore" }));
+  const child = await started(spawn("sleep", ["30"], { cwd: held, env: { NODE_ENV: "test", PATH: process.env.PATH, HOME: path.join(held, "home"), TMPDIR: path.join(held, "tmp"), LLV_STRUCTURED_HOST: "stamp" }, stdio: "ignore" }));
   const scan = scanProcesses();
   if (!fs.existsSync("/proc/self/ns/mnt")) return;
   expect(scan.ownNamespace).toStartWith("mnt:");
@@ -283,6 +287,42 @@ test("the process scan sees this process's namespace, working directory and TMPD
   expect(seen?.stamped).toBeTrue();
   expect(seen?.paths).toContain(held);
   expect(seen?.paths).toContain(path.join(held, "tmp"));
+  expect(seen?.paths).toContain(path.join(held, "home"));
+});
+
+test.each(["claimed", "nested"])("a %s temp root set after process startup stays held beyond the age threshold", async kind => {
+  if (process.platform !== "linux") return;
+  const root = tempRoot();
+  const marker = path.join(root, "ready.json");
+  const modulePath = path.join(import.meta.dir, "tempDirs.ts");
+  const owner = await started(spawn(process.execPath, ["-e", `
+    const fs = require("node:fs");
+    const { claimProcessTempRoot, nestProcessTempUnder } = await import(${JSON.stringify(modulePath)});
+    process.env.TMPDIR = ${JSON.stringify(root)};
+    const held = ${JSON.stringify(kind)} === "claimed" ? claimProcessTempRoot("llv-late-temp-").root : (() => {
+      const directory = fs.mkdtempSync(${JSON.stringify(path.join(root, "llv-late-temp-"))});
+      nestProcessTempUnder(directory);
+      return directory;
+    })();
+    fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify(held));
+    setInterval(() => {}, 1000);
+  `], { env: { ...process.env }, stdio: "ignore" }));
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(marker) && Date.now() < deadline) await Bun.sleep(20);
+  expect(fs.existsSync(marker)).toBeTrue();
+  const directory = JSON.parse(fs.readFileSync(marker, "utf8")) as string;
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [...fs.readdirSync(directory).map(name => path.join(directory, name)), directory]) fs.utimesSync(entry, old, old);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.kept.inUse).toBe(1);
+  expect(fs.existsSync(directory)).toBeTrue();
+  await new Promise<void>(resolve => {
+    owner.once("exit", () => resolve());
+    owner.kill("SIGKILL");
+  });
+  const settled = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: DAY });
+  expect(settled.removed.map(entry => entry.path)).toEqual([directory]);
 });
 
 test("a sweep is recorded as its report and one journal line per removed directory", () => {
