@@ -4450,7 +4450,9 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
+    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      allowArchiveMigration: mayRunStartupMaintenance,
       /* Lazy: an initialised store never reads the JSON (#1870). */
       initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
@@ -4474,7 +4476,6 @@ export class AgentRegistry {
        dual-write synchronization, or retirement of a JSON mirror. A reader
        such as MCP stands down against the operator's state until the serving
        Viewer or runtime host takes the release fence. */
-    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
@@ -5498,16 +5499,50 @@ export class AgentRegistry {
   }
 
   spawnReceiptForClientAttempt(clientAttemptId: string): SpawnReceipt | null {
-    const receipt = Object.values(this.readOnlySnapshot().receipts)
-      .find((candidate) => candidate.clientAttemptId === clientAttemptId);
-    return receipt ? clone(receipt) : null;
+    return this.readKeyed(file => {
+      const receipt = registryRowsMatching(file,"receipts","clientAttemptId",clientAttemptId)[0];
+      return receipt ? clone(receipt) : null;
+    });
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
     if (!/^[0-9a-f]{64}$/.test(digest)) return null;
-    const file = this.readOnlySnapshot();
-    const receipt = Object.values(file.receipts).find((candidate) => candidate.spawnCapabilityDigest === digest);
-    return receipt ? resolveConversationAlias(file, receipt.conversationId) : null;
+    return this.readKeyed(file => {
+      const receipt = registryRowsMatching(file,"receipts","spawnCapabilityDigest",digest)[0];
+      return receipt ? resolveConversationAlias(file,receipt.conversationId) : null;
+    });
+  }
+
+  /** Existing reaper hygiene owns these bounded storage-only moves. */
+  archiveInactiveRows(limit = 1_000): number {
+    assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
+    return this.sqliteMode === "sqlite" ? this.sqliteStore!.archiveInactive(limit) : 0;
+  }
+
+  openSpawnReceipts(): SpawnReceipt[] {
+    return this.readKeyed(file => clone(registryRowsMatching(file,"receipts","state",
+      ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
+  }
+
+  terminalizeAbandonedSpawnEntries(options: { now: number; timeoutMs: number; limit: number }): string[] {
+    return this.mutate(file => {
+      const terminalized: string[] = [];
+      for (const entry of registryRowsMatching(file,"entries","status","starting")) {
+        if (terminalized.length >= options.limit) break;
+        const updatedAt = Date.parse(entry.updatedAt);
+        if (!Number.isFinite(updatedAt) || options.now-updatedAt < options.timeoutMs
+          || entry.pendingAction !== "spawn" || entry.host || entry.structuredHost || entry.claimOwner
+          || entry.structuredTerminationSurvivors?.length) continue;
+        const receipts = [...registryRowsMatching(file,"receipts","artifactPath",entry.artifactPath),
+          ...registryRowsMatching(file,"receipts","key.sessionId",entry.key.sessionId).filter(receipt => receipt.key?.engine === entry.key.engine)];
+        if (receipts.length) continue;
+        entry.status = "dead";
+        entry.pendingAction = null;
+        entry.updatedAt = new Date(options.now).toISOString();
+        terminalized.push(sessionKeyId(entry.key));
+      }
+      return terminalized;
+    });
   }
 
   rotateSpawnCapabilityForReceipt(launchId: string): string {
@@ -5694,7 +5729,7 @@ export class AgentRegistry {
         throw new Error("conversation migration prevents resume succession");
       }
       if (input.clientAttemptId) {
-        const existing = Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId);
+        const existing = registryRowsMatching(file,"receipts","clientAttemptId",input.clientAttemptId)[0];
         if (existing) {
           const existingTitle = durableSemanticTitle(existing.launchProfile.title);
           const requestedTitle = durableSemanticTitle(profile.title);

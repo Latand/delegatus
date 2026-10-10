@@ -1018,6 +1018,11 @@ export async function runReaperCycle(options: {
   } catch (error) {
     console.error("[reaper] stale structured spawn convergence failed", error);
   }
+  try {
+    await registry.deliveryWrite({ label: "registry.archive" }, () => registry.archiveInactiveRows());
+  } catch (error) {
+    console.error("[reaper] registry archive convergence failed",error);
+  }
   const state = updateObservationState(options.hosts, now);
   const report = evaluateReaper(await makeInput(registry, options.hosts, options.files, state, now, options.actuation));
   const completed = await runEvaluatedReaper(report, {
