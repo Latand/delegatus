@@ -160,6 +160,7 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
       && (candidate.nativeForkSourceThreadId === undefined || candidate.nativeForkSourceThreadId === null || typeof candidate.nativeForkSourceThreadId === "string")
       && (candidate.activity === "live" || candidate.activity === "recent" || candidate.activity === "stalled" || candidate.activity === "idle")
       && (candidate.authoritativeTurn === undefined || isTurnState(candidate.authoritativeTurn))
+      && (candidate.recoveryReleased === undefined || typeof candidate.recoveryReleased === "boolean")
       && (candidate.proc === null || candidate.proc === "running" || candidate.proc === "done" || candidate.proc === "killed")
       && (candidate.pid === null || typeof candidate.pid === "number")
       && (candidate.model === null || typeof candidate.model === "string")
@@ -239,7 +240,10 @@ function primePersistedFileDerivations(snapshot: FileScanSnapshot): void {
           mtimeMs,
           engine,
           entry.authoritativeTurn,
-          { composerReleased: entry.activityReason === "pane_at_composer" },
+          {
+            composerReleased: entry.activityReason === "pane_at_composer",
+            recoveryReleased: entry.recoveryReleased,
+          },
         );
       } else if (engine !== "claude" || turnState.state !== "terminal") {
         primeTranscriptTurnEvidence(
