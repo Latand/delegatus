@@ -1905,35 +1905,42 @@ test("a cancelled caller still stops the pass when a read throws (#860)", async 
   )).rejects.toMatchObject({ name: "AbortError" });
 });
 
+const RECOVERED_WRITER_IDENTITY = `4242:${(NOW - 4 * 60_000) / 1_000}:0`;
+
 /** A current writer has closed the turn whose native tool result stayed open. */
-function recoveredIdleWriter() {
+function recoveredIdleWriter(oversizedResult = false) {
   const dir = sandbox();
   const transcript = path.join(dir, "recovered-seat.jsonl");
   const sessionId = path.basename(dir);
   const at = new Date(NOW - 5 * 60_000).toISOString();
   fs.writeFileSync(transcript, [
     { type: "assistant", uuid: "tool-call", timestamp: at, message: { role: "assistant", content: [{ type: "tool_use", id: "tool-one", name: "create_pipeline", input: {} }] } },
-    { type: "user", uuid: "tool-result", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-one", content: "created" }] } },
+    { type: "user", uuid: "tool-result", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-one", content: oversizedResult ? "x".repeat(150 * 1024) : "created" }] } },
+    // The predecessor stopped journaling; native frames continued before recovery.
+    { type: "attachment", uuid: "gap-attachment", parentUuid: "tool-result", timestamp: new Date(Date.parse(at) + 1).toISOString(), attachment: { type: "total_tokens_reminder" } },
+    { type: "assistant", uuid: "gap-thinking", parentUuid: "gap-attachment", timestamp: new Date(Date.parse(at) + 2_000).toISOString(), message: { role: "assistant", content: [{ type: "thinking", thinking: "continue" }] } },
+    { type: "assistant", uuid: "gap-call", parentUuid: "gap-thinking", timestamp: new Date(Date.parse(at) + 19_000).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "tool-two", name: "create_pipeline", input: {} }] } },
+    { type: "user", uuid: "gap-result", parentUuid: "gap-call", timestamp: new Date(Date.parse(at) + 20_000).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-two", content: "created" }] } },
   ].map(record => JSON.stringify(record)).join("\n") + "\n");
   const entry: AgentRegistryEntry = {
     ...structuredEntry(transcript, 4242), status: "idle",
     key: { engine: "claude", sessionId },
     claimEpoch: 3,
-    claimOwner: `structured-host:${JSON.stringify({ pid: 4242, startIdentity: "current-writer" })}`,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 4242, startIdentity: RECOVERED_WRITER_IDENTITY })}`,
     structuredHost: { ...structuredEntry(transcript, 4242).structuredHost!, kind: "claude-broker",
-      process: { pid: 4242, startIdentity: "current-writer" }, writerClaimEpoch: 3, eventCursor: 5 },
+      process: { pid: 4242, startIdentity: RECOVERED_WRITER_IDENTITY }, writerClaimEpoch: 3, eventCursor: 5 },
   };
   const registry = { entries: { seat: entry }, conversations: {
     conversation_seat: { id: "conversation_seat", engine: "claude", generations: [{ id: sessionId, path: transcript }], turn: { state: "busy" } },
   } } as unknown as RegistryFile;
   const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
   ledger.append(sessionId, { kind: "turn-started", turnId: "old-turn", seq: 1 });
-  ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "assistant", uuid: "tool-call" }, seq: 2 });
-  ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "user", uuid: "tool-result" }, seq: 3 });
+  ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "assistant", uuid: "tool-call", timestamp: at }, seq: 2 });
+  ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "user", uuid: "tool-result", timestamp: at }, seq: 3 });
   ledger.append(sessionId, { kind: "turn-ended", turnId: "old-turn", status: "error", seq: 4 });
   ledger.append(sessionId, { kind: "session-status", status: "idle", seq: 5 });
   const injected = sources({
-    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "current-writer" },
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => RECOVERED_WRITER_IDENTITY },
     listFiles: async () => [], registrySnapshot: () => registry, pipelines: () => [],
     describeTranscript: async () => ({ path: transcript, engine: "claude", project: "viewer", title: "seat", mtimeMs: NOW - 5 * 60_000,
       conversationId: "conversation_seat", activity: "live", activityReason: null }),
@@ -1943,9 +1950,14 @@ function recoveredIdleWriter() {
     read: () => agentLivenessSnapshot({ reconcileStructuredIdle: true, conversationId: "conversation_seat", stallAfterMs: 40 * 60_000 }, injected) };
 }
 
-test("current structured writer closure settles an open native tool result before the seat timeout", async () => {
-  const f = recoveredIdleWriter();
-  expect((await readLivenessTranscriptEvidence("claude", f.transcript))!.turn).toBe("busy");
+test.each([{ label: "retained anchor", oversized: false }, { label: "clipped anchor", oversized: true }])("current structured writer closure settles an open native tool result before the seat timeout: $label", async ({ oversized }) => {
+  const f = recoveredIdleWriter(oversized);
+  const native = (await readLivenessTranscriptEvidence("claude", f.transcript))!;
+  expect(native.turn).toBe("busy");
+  if (oversized) {
+    expect(native.nativeTail?.integrity === "complete" && native.nativeTail.prefixTruncated).toBe(true);
+    expect(native.nativeTail!.integrity === "complete" && native.nativeTail!.records.some(row => row.uuid === "tool-result")).toBe(false);
+  }
   expect((await f.read()).conversations[0]).toMatchObject({
     turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle", host: { state: "alive" }, evidenceSource: "transcript",
   });
@@ -1953,6 +1965,7 @@ test("current structured writer closure settles an open native tool result befor
 
 
 test.each([
+  "gap-prompt", "gap-notification", "gap-queued-notification", "gap-native-queue", "gap-meta-prompt", "gap-unknown-parent", "gap-duplicate-frame", "gap-sidechain", "gap-missing-time", "gap-reversed-time", "gap-writer-boundary", "gap-unknown-birth", "gap-missing-anchor",
   "newer-turn", "newer-ledger-delta", "newer-native-queue", "newer-provider-work", "newer-native-prompt", "newer-unrecorded-frame", "owner-mismatch", "owner-unknown", "process-unknown", "owner-probe-unknown", "process-probe-unknown", "process-mismatch", "epoch-mismatch",
   "claim-unknown", "cursor-ahead", "cursor-behind", "sequence-gap", "idle-before-close", "missing-ledger", "torn-ledger", "unreadable-ledger",
   "session-mismatch", "pending-resume", "active-turn", "unknown-transcript", "unreadable-transcript",
@@ -1960,6 +1973,31 @@ test.each([
   const f = recoveredIdleWriter();
   const host = f.entry.structuredHost!;
   const filename = statePath("structured-host-events", `${encodeURIComponent(f.sessionId)}.jsonl`);
+  if (control.startsWith("gap-")) {
+    const rows = fs.readFileSync(f.transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const call = rows.find(row => row.uuid === "gap-call")!;
+    const result = rows.find(row => row.uuid === "gap-result")!;
+    if (control === "gap-prompt" || control === "gap-meta-prompt") {
+      result.message.content = [{ type: "text", text: "new prompt before recovery" }];
+      if (control === "gap-meta-prompt") result.isMeta = true;
+    }
+    if (control === "gap-notification") result.message.content = [{ type: "text", text: "<task-notification>finished</task-notification>" }];
+    if (control === "gap-queued-notification") rows.push({ type: "attachment", uuid: "notification", parentUuid: "gap-result", attachment: { type: "queued_command", prompt: "<task-notification>finished</task-notification>" } });
+    if (control === "gap-native-queue") rows.push({ type: "queue-operation", operation: "enqueue", timestamp: result.timestamp });
+    if (control === "gap-unknown-parent") call.parentUuid = "unrelated-turn";
+    if (control === "gap-duplicate-frame") { call.uuid = "gap-thinking"; result.parentUuid = "gap-thinking"; }
+    if (control === "gap-sidechain") call.isSidechain = true;
+    if (control === "gap-missing-time") delete call.timestamp;
+    if (control === "gap-reversed-time") result.timestamp = new Date(NOW - 6 * 60_000).toISOString();
+    if (control === "gap-writer-boundary") result.timestamp = new Date(NOW - 4 * 60_000).toISOString();
+    if (control === "gap-unknown-birth") {
+      host.process!.startIdentity = "opaque-writer";
+      f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4242, startIdentity: "opaque-writer" })}`;
+      f.injected.probe.processIdentity = () => "opaque-writer";
+    }
+    if (control === "gap-missing-anchor") rows.splice(0, 2);
+    fs.writeFileSync(f.transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  }
   if (control === "newer-turn") {
     f.ledger.append(f.sessionId, { kind: "turn-started", turnId: "new-turn", seq: 6 });
     host.eventCursor = 6;
@@ -1978,8 +2016,8 @@ test.each([
     host.eventCursor = 6;
   }
   if (control === "owner-probe-unknown" || control === "process-probe-unknown") {
-    f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4243, startIdentity: "current-writer" })}`;
-    f.injected.probe.processIdentity = pid => pid === (control === "owner-probe-unknown" ? 4243 : 4242) ? null : "current-writer";
+    f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4243, startIdentity: RECOVERED_WRITER_IDENTITY })}`;
+    f.injected.probe.processIdentity = pid => pid === (control === "owner-probe-unknown" ? 4243 : 4242) ? null : RECOVERED_WRITER_IDENTITY;
   }
   if (control === "process-mismatch") host.process!.startIdentity = "old-process";
   if (control === "owner-mismatch") f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4242, startIdentity: "previous-writer" })}`;
@@ -2026,6 +2064,31 @@ test.each(["registry-owner", "registry-epoch", "registry-session", "ledger-appen
   },
 );
 
+
+test.each(["missing-clock", "missing-link", "unknown-link"] as const)("a clipped recovery anchor retains busy when its %s cannot be proven", async control => {
+  const f = recoveredIdleWriter(true);
+  if (control === "missing-clock") {
+    const filename = statePath("structured-host-events", `${encodeURIComponent(f.sessionId)}.jsonl`);
+    const rows = fs.readFileSync(filename, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    delete rows[2].item.timestamp;
+    fs.writeFileSync(filename, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  } else {
+    const rows = fs.readFileSync(f.transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const attachment = rows.find(row => row.uuid === "gap-attachment")!;
+    if (control === "missing-link") rows.splice(rows.indexOf(attachment), 1);
+    else attachment.parentUuid = "other-turn";
+    fs.writeFileSync(f.transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  }
+  expect((await f.read()).conversations[0]!.turnState).toBe("busy");
+});
+
+test("recovery ignores the native synthetic no-response written after the recording gap", async () => {
+  const f = recoveredIdleWriter();
+  fs.appendFileSync(f.transcript, JSON.stringify({ type: "assistant", uuid: "recovery-no-response", parentUuid: "gap-result",
+    timestamp: new Date(NOW - 3 * 60_000).toISOString(), isApiErrorMessage: false,
+    message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } }) + "\n");
+  expect((await f.read()).conversations[0]).toMatchObject({ turnState: "idle", reason: "host_alive_turn_idle" });
+});
 
 test("general liveness keeps the orphan native turn for drain readers without seat reconciliation", async () => {
   const f = recoveredIdleWriter();

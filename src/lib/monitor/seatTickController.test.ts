@@ -9328,7 +9328,7 @@ test("rule outcomes reach the report during a seat check without needing an oper
 });
 
 
-test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cursor-ahead", "sequence-gap", "unreadable-ledger", "unknown-owner"] as const)(
+test.each(["closed-idle", "newer-turn", "newer-provider", "newer-prompt", "unowned-gap", "owner-mismatch", "epoch-mismatch", "cursor-ahead", "sequence-gap", "unreadable-ledger", "unknown-owner"] as const)(
   "a recovered idle writer wakes its settled deploy before timeout and once across controller restart: %s", async control => {
     const f = childFixture("recovered-deploy-seat");
     const { claudeProjectRoots } = await import("@/lib/accounts/claude");
@@ -9348,7 +9348,12 @@ test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cur
     const at = ago(f, 5);
     fs.writeFileSync(f.seat.path!, [
       { type: "assistant", uuid: "deploy-call", timestamp: at, message: { role: "assistant", content: [{ type: "tool_use", id: "deploy-tool", name: "create_pipeline", input: {} }] } },
-      { type: "user", uuid: "deploy-result", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "deploy-tool", content: "created" }] } },
+      { type: "user", uuid: "deploy-result", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "deploy-tool", content: "x".repeat(150 * 1024) }] } },
+      // The predecessor stopped journaling; native frames continued before recovery.
+      { type: "attachment", uuid: "deploy-gap-attachment", parentUuid: "deploy-result", timestamp: new Date(Date.parse(at) + 1).toISOString(), attachment: { type: "total_tokens_reminder" } },
+      { type: "assistant", uuid: "deploy-gap-thinking", parentUuid: "deploy-gap-attachment", timestamp: new Date(Date.parse(at) + 2_000).toISOString(), message: { role: "assistant", content: [{ type: "thinking", thinking: "continue" }] } },
+      { type: "assistant", uuid: "deploy-gap-call", parentUuid: "deploy-gap-thinking", timestamp: new Date(Date.parse(at) + 19_000).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "deploy-tool-two", name: "create_pipeline", input: {} }] } },
+      { type: "user", uuid: "deploy-gap-result", parentUuid: "deploy-gap-call", timestamp: new Date(Date.parse(at) + 20_000).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "deploy-tool-two", content: "created" }] } },
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
     f.registry.reconcileConversations([{ engine: "claude", path: f.seat.path!, accountId: null, launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "seat" }),
       turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: at }]);
@@ -9361,13 +9366,18 @@ test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cur
     });
     const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
     ledger.append(sessionId, { kind: "turn-started", turnId: "old-turn", seq: 1 });
-    ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "assistant", uuid: "deploy-call" }, seq: 2 });
-    ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "user", uuid: "deploy-result" }, seq: 3 });
+    ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "assistant", uuid: "deploy-call", timestamp: at }, seq: 2 });
+    ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "user", uuid: "deploy-result", timestamp: at }, seq: 3 });
     ledger.append(sessionId, { kind: "turn-ended", turnId: "old-turn", status: "error", seq: 4 });
     ledger.append(sessionId, { kind: "session-status", status: "idle", seq: 5 });
     const entry = structuredClone(Object.values(f.registry.readOnlySnapshot().entries).find(row => row.artifactPath === f.seat.path)!);
     // Mutate through the actual registry so source gathering observes the fence.
     if (control === "newer-turn") { ledger.append(sessionId, { kind: "turn-started", turnId: "new-turn", seq: 6 }); entry!.structuredHost!.eventCursor = 6; }
+    if (control === "newer-provider" || control === "newer-prompt") fs.appendFileSync(f.seat.path!, JSON.stringify({
+      type: control === "newer-provider" ? "assistant" : "user", uuid: "later-work", parentUuid: "deploy-gap-result", timestamp: ago(f, 1),
+      message: { role: control === "newer-provider" ? "assistant" : "user", content: [{ type: "text", text: "continue" }] },
+    }) + "\n");
+    if (control === "unowned-gap") fs.writeFileSync(f.seat.path!, fs.readFileSync(f.seat.path!, "utf8").replace('"parentUuid":"deploy-gap-thinking"', '"parentUuid":"other-turn"'));
     if (control === "owner-mismatch") entry!.claimOwner = `structured-host:${JSON.stringify({ pid: process.pid, startIdentity: "old-writer" })}`;
     if (control === "epoch-mismatch") entry!.structuredHost!.writerClaimEpoch = 2;
     if (control === "cursor-ahead") entry!.structuredHost!.eventCursor = 6;
@@ -9388,7 +9398,8 @@ test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cur
       const r = childRig(f, deploys);
       r.deps.sources!.seatDeployments = () => [{ ...deploys.seatDeployments[0]!, project: f.project, revision: "abcdef1234", requestedAt: ago(f, 10) }];
       r.deps.sources!.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-recovered", error: null, updatedAt: ago(f, 2), ...deploys.deployments["deploy-recovered"] } }) as never;
-      r.deps.sources!.liveness = production.liveness;
+      // A fresh source/controller reads the persisted gap and wake accounting.
+      r.deps.sources!.liveness = defaultSeatTickSources().liveness;
       return r;
     };
     const first = rig();

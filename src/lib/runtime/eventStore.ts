@@ -290,6 +290,8 @@ export interface HostTurnFrame {
   type: "user" | "assistant";
   /** The turn the host had open when it recorded the frame, or null. */
   turnId: string | null;
+  /** Native frame clock, retained when a large frame falls outside the tail. */
+  timestamp?: string;
 }
 
 /**
@@ -449,6 +451,7 @@ export function readHostTurnRecord(
         if (item.type !== "user" && item.type !== "assistant") return;
         const frame: HostTurnFrame = {
           uuid: item.uuid, type: item.type, turnId: typeof event.turnId === "string" ? event.turnId : null,
+          ...(typeof item.timestamp === "string" ? { timestamp: item.timestamp } : {}),
         };
         if (started === null) newer.push({ kind: "frame", frame });
         else olderFrames.push(frame);

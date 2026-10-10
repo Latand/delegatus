@@ -413,7 +413,7 @@ test("the host turn record reads the newest turn open, with the frames recorded 
     state: "read",
     turn: { turnId: "T2", closed: null },
     framesBefore: [
-      { uuid: "u1", type: "user", turnId: "T1" },
+      { uuid: "u1", type: "user", turnId: "T1", timestamp: "2026-10-07T00:00:00.000Z" },
       { uuid: "a1", type: "assistant", turnId: "T1" },
       { uuid: "a2", type: "assistant", turnId: null },
     ],

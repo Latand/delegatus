@@ -1,5 +1,8 @@
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
-import { engineRecordSince } from "@/lib/runtime/liveness";
+import { engineRecordSince, processLaunchedAt } from "@/lib/runtime/liveness";
+import { withoutExitBookkeeping } from "@/lib/pipelines/durableEvidence";
+import { isTaskNotificationRecord } from "@/lib/pipelines/backgroundTasks";
+import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { identityAlive, livenessProbe, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
@@ -350,9 +353,11 @@ export function productionLivenessSources(
 }
 
 /** A native Claude tool result can remain open after the writer closed its turn.
- * Require the live writer's idle checkpoint, then reuse the restart boundary
- * reader to exclude native work after that close. This changes progression only;
- * orphan work and release/drain custody keep their existing readers.
+ * The old host can stop recording before the CLI writes its final tool frames.
+ * A linked continuation predating the recovered writer belongs to that cut;
+ * prompts, notifications and work after the writer started retain custody.
+ * Only seat progression opts in; orphan work and release/drain custody keep
+ * their existing readers.
  */
 async function reconcileWriterIdle(
   evidence: LivenessTranscriptEvidence | null, path: string,
@@ -388,14 +393,46 @@ async function reconcileWriterIdle(
     || !ledger.turn.closed.seq || ledger.latestStatus?.status !== "idle"
     || ledger.latestStatus.seq <= ledger.turn.closed.seq
     || ledger.lastActivitySeq === undefined || ledger.lastActivitySeq > ledger.turn.closed.seq
-    || ledger.lastSeq !== entry.structuredHost!.eventCursor
-    || engineRecordSince("claude", ledger, evidence.nativeTail) !== "empty") return evidence;
+    || ledger.lastSeq !== entry.structuredHost!.eventCursor) return evidence;
   // A prompt admitted by the native CLI can precede its first provider frame.
-  // Require its newest work frame to belong to the turn this writer closed.
+  // Require ledger attribution or a proven continuation of the closed turn.
   if (evidence.nativeTail.integrity !== "complete") return evidence;
   const newestWork = evidence.nativeTail.records.findLast(record => record.type === "user" || record.type === "assistant");
-  if (!newestWork || typeof newestWork.uuid !== "string"
-    || !ledger.framesBefore.some(frame => frame.uuid === newestWork.uuid && frame.turnId === ledger.turn!.turnId)) return evidence;
+  if (!newestWork || typeof newestWork.uuid !== "string") return evidence;
+  const mirrored = ledger.framesBefore.some(frame => frame.uuid === newestWork.uuid && frame.turnId === ledger.turn!.turnId);
+  if (mirrored) {
+    if (engineRecordSince("claude", ledger, evidence.nativeTail) !== "empty") return evidence;
+  } else {
+    // File mtime can advance on status/cleanup writes long after the close.
+    // The verified current process's birth is the recovery boundary instead.
+    const startedAt = processLaunchedAt(entry.structuredHost!.process!.startIdentity);
+    const anchor = ledger.framesBefore.at(-1);
+    const records = evidence.nativeTail.records;
+    const anchorIndex = anchor ? records.findLastIndex(record => record.uuid === anchor.uuid) : -1;
+    if (startedAt === null || !anchor || anchor.turnId !== ledger.turn.turnId
+      || (anchorIndex < 0 && !evidence.nativeTail.prefixTruncated) || ledger.framesAfter.length > 0) return evidence;
+    let previousAt = Date.parse(String(anchorIndex < 0 ? anchor.timestamp ?? "" : records[anchorIndex]!.timestamp ?? ""));
+    if (!Number.isFinite(previousAt) || previousAt >= startedAt) return evidence;
+    const linked = new Set([anchor.uuid]);
+    const work = new Set(withoutExitBookkeeping(records.slice(anchorIndex + 1), false)
+      .filter(record => record.type === "user" || record.type === "assistant"));
+    if (work.size === 0) return evidence;
+    for (const record of records.slice(anchorIndex + 1)) {
+      if (isTaskNotificationRecord(record) || record.type === "queue-operation"
+        || record.type === "user" && !work.has(record)) return evidence;
+      const connected = typeof record.parentUuid === "string" && linked.has(record.parentUuid);
+      if (work.has(record)) {
+        const at = Date.parse(String(record.timestamp ?? ""));
+        const content = recordsValue(recordValue(record.message)?.content);
+        if (!connected || record.isSidechain === true || typeof record.uuid !== "string" || !record.uuid || linked.has(record.uuid)
+          || !Number.isFinite(at) || at < previousAt || at >= startedAt
+          || record.type === "user" && (content.length === 0 || content.some(part => part.type !== "tool_result"))) return evidence;
+        previousAt = at;
+      }
+      // Attachments can sit between a tool result and its next assistant frame.
+      if (connected && typeof record.uuid === "string") linked.add(record.uuid);
+    }
+  }
   if (evidence.identity !== await transcriptFileIdentity(path)
     || stamp !== writerStamp(sources.registrySnapshot())
     || ledger.identity !== hostTurnRecordIdentity(sessionId)) return evidence;
