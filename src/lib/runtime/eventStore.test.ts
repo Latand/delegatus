@@ -528,3 +528,23 @@ test("a host turn record whose file was appended to or replaced between the read
     },
   }).state).toBe("unreadable");
 });
+
+
+test("the host turn record exposes an idle checkpoint and its closing sequence without accepting a torn suffix", () => {
+  const { directory, filename } = turnLedger([
+    { kind: "turn-started", turnId: "closed-turn" },
+    frame("last-tool-result", "user", "closed-turn"),
+    { kind: "turn-ended", turnId: "closed-turn", status: "error" },
+    { kind: "session-status", status: "idle" },
+  ]);
+  expect(readHostTurnRecord("session", { directory })).toMatchObject({
+    state: "read", complete: true, lastSeq: 4, lastActivitySeq: 3, latestStatus: { status: "idle", seq: 4 },
+    turn: { turnId: "closed-turn", closed: { by: "turn-ended", status: "error", seq: 3 } },
+  });
+  fs.appendFileSync(filename, '{"kind":"turn-started"');
+  // Existing restart/drain callers still read the stable prefix; progression
+  // can now distinguish it from a complete current-writer checkpoint.
+  expect(readHostTurnRecord("session", { directory })).toMatchObject({
+    state: "read", complete: false, lastSeq: 4, turn: { closed: { status: "error", seq: 3 } },
+  });
+});

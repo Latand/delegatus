@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
+import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
+import { statePath } from "@/lib/configDir";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
 import { PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -1901,4 +1903,132 @@ test("a cancelled caller still stops the pass when a read throws (#860)", async 
       },
     }),
   )).rejects.toMatchObject({ name: "AbortError" });
+});
+
+/** A current writer has closed the turn whose native tool result stayed open. */
+function recoveredIdleWriter() {
+  const dir = sandbox();
+  const transcript = path.join(dir, "recovered-seat.jsonl");
+  const sessionId = path.basename(dir);
+  const at = new Date(NOW - 5 * 60_000).toISOString();
+  fs.writeFileSync(transcript, [
+    { type: "assistant", uuid: "tool-call", timestamp: at, message: { role: "assistant", content: [{ type: "tool_use", id: "tool-one", name: "create_pipeline", input: {} }] } },
+    { type: "user", uuid: "tool-result", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-one", content: "created" }] } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+  const entry: AgentRegistryEntry = {
+    ...structuredEntry(transcript, 4242), status: "idle",
+    key: { engine: "claude", sessionId },
+    claimEpoch: 3,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 4242, startIdentity: "current-writer" })}`,
+    structuredHost: { ...structuredEntry(transcript, 4242).structuredHost!, kind: "claude-broker",
+      process: { pid: 4242, startIdentity: "current-writer" }, writerClaimEpoch: 3, eventCursor: 5 },
+  };
+  const registry = { entries: { seat: entry }, conversations: {
+    conversation_seat: { id: "conversation_seat", engine: "claude", generations: [{ id: sessionId, path: transcript }], turn: { state: "busy" } },
+  } } as unknown as RegistryFile;
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(sessionId, { kind: "turn-started", turnId: "old-turn", seq: 1 });
+  ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "assistant", uuid: "tool-call" }, seq: 2 });
+  ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "user", uuid: "tool-result" }, seq: 3 });
+  ledger.append(sessionId, { kind: "turn-ended", turnId: "old-turn", status: "error", seq: 4 });
+  ledger.append(sessionId, { kind: "session-status", status: "idle", seq: 5 });
+  const injected = sources({
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "current-writer" },
+    listFiles: async () => [], registrySnapshot: () => registry, pipelines: () => [],
+    describeTranscript: async () => ({ path: transcript, engine: "claude", project: "viewer", title: "seat", mtimeMs: NOW - 5 * 60_000,
+      conversationId: "conversation_seat", activity: "live", activityReason: null }),
+    transcriptEvidence: readLivenessTranscriptEvidence,
+  });
+  return { entry, registry, ledger, sessionId, transcript, injected,
+    read: () => agentLivenessSnapshot({ reconcileStructuredIdle: true, conversationId: "conversation_seat", stallAfterMs: 40 * 60_000 }, injected) };
+}
+
+test("current structured writer closure settles an open native tool result before the seat timeout", async () => {
+  const f = recoveredIdleWriter();
+  expect((await readLivenessTranscriptEvidence("claude", f.transcript))!.turn).toBe("busy");
+  expect((await f.read()).conversations[0]).toMatchObject({
+    turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle", host: { state: "alive" }, evidenceSource: "transcript",
+  });
+});
+
+
+test.each([
+  "newer-turn", "newer-ledger-delta", "newer-native-queue", "newer-provider-work", "newer-native-prompt", "newer-unrecorded-frame", "owner-mismatch", "owner-unknown", "process-unknown", "owner-probe-unknown", "process-probe-unknown", "process-mismatch", "epoch-mismatch",
+  "claim-unknown", "cursor-ahead", "cursor-behind", "sequence-gap", "idle-before-close", "missing-ledger", "torn-ledger", "unreadable-ledger",
+  "session-mismatch", "pending-resume", "active-turn", "unknown-transcript", "unreadable-transcript",
+] as const)("current writer idle evidence preserves conservative progression for %s", async control => {
+  const f = recoveredIdleWriter();
+  const host = f.entry.structuredHost!;
+  const filename = statePath("structured-host-events", `${encodeURIComponent(f.sessionId)}.jsonl`);
+  if (control === "newer-turn") {
+    f.ledger.append(f.sessionId, { kind: "turn-started", turnId: "new-turn", seq: 6 });
+    host.eventCursor = 6;
+  }
+  if (control === "newer-ledger-delta" || control === "newer-native-queue") {
+    f.ledger.append(f.sessionId, control === "newer-ledger-delta"
+      ? { kind: "delta", turnId: "old-turn", text: "new work", seq: 6 }
+      : { kind: "native-queue-changed", threadId: f.sessionId, seq: 6 });
+    host.eventCursor = 6;
+  }
+  if (control === "newer-provider-work" || control === "newer-native-prompt") fs.appendFileSync(f.transcript,
+    JSON.stringify({ type: control === "newer-provider-work" ? "assistant" : "user", uuid: "new-native-work", timestamp: new Date(NOW - 1000).toISOString(),
+      message: { role: control === "newer-provider-work" ? "assistant" : "user", content: [{ type: "text", text: "continue" }] } }) + "\n");
+  if (control === "newer-unrecorded-frame") {
+    f.ledger.append(f.sessionId, { kind: "item", turnId: null, phase: "completed", item: { type: "assistant", uuid: "not-yet-in-transcript" }, seq: 6 });
+    host.eventCursor = 6;
+  }
+  if (control === "owner-probe-unknown" || control === "process-probe-unknown") {
+    f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4243, startIdentity: "current-writer" })}`;
+    f.injected.probe.processIdentity = pid => pid === (control === "owner-probe-unknown" ? 4243 : 4242) ? null : "current-writer";
+  }
+  if (control === "process-mismatch") host.process!.startIdentity = "old-process";
+  if (control === "owner-mismatch") f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4242, startIdentity: "previous-writer" })}`;
+  if (control === "owner-unknown") f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4242, startIdentity: null })}`;
+  if (control === "process-unknown") host.process!.startIdentity = null;
+  if (control === "epoch-mismatch") host.writerClaimEpoch = 2;
+  if (control === "claim-unknown") f.entry.claimEpoch = host.writerClaimEpoch = 0;
+  if (control === "cursor-ahead") host.eventCursor = 6;
+  if (control === "cursor-behind") host.eventCursor = 4;
+  if (control === "sequence-gap") fs.writeFileSync(filename, fs.readFileSync(filename, "utf8").replace('"seq":3', '"seq":9'));
+  if (control === "idle-before-close") {
+    const rows = fs.readFileSync(filename, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    [rows[3], rows[4]] = [rows[4], rows[3]];
+    rows.forEach((row, i) => row.seq = i + 1);
+    fs.writeFileSync(filename, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  }
+  if (control === "missing-ledger") fs.unlinkSync(filename);
+  if (control === "torn-ledger") fs.appendFileSync(filename, '{"kind":"turn-started"');
+  if (control === "unreadable-ledger") fs.appendFileSync(filename, "not-json\n");
+  if (control === "session-mismatch") f.registry.conversations.conversation_seat!.generations.at(-1)!.id = "other-session";
+  if (control === "pending-resume") f.entry.pendingAction = "resume";
+  if (control === "active-turn") host.activeTurnRef = "new-turn";
+  if (control === "unknown-transcript") f.injected.transcriptEvidence = async () => ({ turn: "unknown", lastRecordTs: NOW - 1000 });
+  if (control === "unreadable-transcript") f.injected.transcriptEvidence = async () => null;
+  const row = (await f.read()).conversations[0]!;
+  expect(row.turnState).not.toBe("idle");
+  expect(row.reason).not.toBe("host_alive_turn_idle");
+});
+
+test.each(["registry-owner", "registry-epoch", "registry-session", "ledger-append", "transcript-append"] as const)(
+  "current writer reconciliation refuses %s changing during the source read", async change => {
+    const f = recoveredIdleWriter();
+    const { readHostTurnRecord } = await import("@/lib/runtime/eventStore");
+    f.injected.readHostTurnRecord = sessionId => {
+      const record = readHostTurnRecord(sessionId);
+      if (change === "registry-owner") f.entry.claimOwner = `structured-host:${JSON.stringify({ pid: 4242, startIdentity: "replacement" })}`;
+      if (change === "registry-epoch") { f.entry.claimEpoch += 1; f.entry.structuredHost!.writerClaimEpoch += 1; }
+      if (change === "registry-session") f.registry.conversations.conversation_seat!.generations.at(-1)!.id = "replacement-session";
+      if (change === "ledger-append") f.ledger.append(sessionId, { kind: "turn-started", turnId: "replacement-turn", seq: 6 });
+      if (change === "transcript-append") fs.appendFileSync(f.transcript, JSON.stringify({ type: "assistant", uuid: "new", message: { content: "working" } }) + "\n");
+      return record;
+    };
+    expect((await f.read()).conversations[0]!.turnState).toBe("busy");
+  },
+);
+
+
+test("general liveness keeps the orphan native turn for drain readers without seat reconciliation", async () => {
+  const f = recoveredIdleWriter();
+  const general = await agentLivenessSnapshot({ conversationId: "conversation_seat", stallAfterMs: 40 * 60_000 }, f.injected);
+  expect(general.conversations[0]).toMatchObject({ turnState: "busy", lifecycle: "running", reason: "host_alive_turn_active" });
 });

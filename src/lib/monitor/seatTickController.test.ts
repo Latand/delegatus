@@ -9326,3 +9326,78 @@ test("rule outcomes reach the report during a seat check without needing an oper
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(reported).toEqual([{ project: PROJECT, at: new Date(NOW).toISOString() }]);
 });
+
+
+test.each(["closed-idle", "newer-turn", "owner-mismatch", "epoch-mismatch", "cursor-ahead", "sequence-gap", "unreadable-ledger", "unknown-owner"] as const)(
+  "a recovered idle writer wakes its settled deploy before timeout and once across controller restart: %s", async control => {
+    const f = childFixture("recovered-deploy-seat");
+    const { ROOTS } = await import("@/lib/scanner/roots");
+    const seatPath = path.join(ROOTS["claude-projects"], path.basename(f.dir), `${crypto.randomUUID()}.jsonl`);
+    expect([SANDBOX, RESTORE.HOME].some(root => root && seatPath.startsWith(root + path.sep))).toBe(true);
+    fs.mkdirSync(path.dirname(seatPath), { recursive: true });
+    const rooted = f.registry.ensureConversation("claude", seatPath, null);
+    f.seat = { conversationId: rooted.id, seatEpoch: 7, path: seatPath };
+    f.seed({ lastWakeAt: ago(f, 6) });
+    setAgentRegistryForTests(f.registry);
+    const { livenessProbe } = await import("@/lib/agent/accountLiveness");
+    const startIdentity = livenessProbe().processIdentity(process.pid);
+    expect(startIdentity).not.toBeNull();
+    const sessionId = f.registry.conversation(f.seat.conversationId as never)!.generations.at(-1)!.id;
+    const at = ago(f, 5);
+    fs.writeFileSync(f.seat.path!, [
+      { type: "assistant", uuid: "deploy-call", timestamp: at, message: { role: "assistant", content: [{ type: "tool_use", id: "deploy-tool", name: "create_pipeline", input: {} }] } },
+      { type: "user", uuid: "deploy-result", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "deploy-tool", content: "created" }] } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    f.registry.reconcileConversations([{ engine: "claude", path: f.seat.path!, accountId: null, launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "seat" }),
+      turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: at }]);
+    f.registry.upsert({
+      key: { engine: "claude", sessionId }, artifactPath: f.seat.path!, cwd: f.cwd, accountId: null,
+      status: "idle", host: null, claimEpoch: 3,
+      claimOwner: `structured-host:${JSON.stringify({ pid: process.pid, startIdentity })}`, pendingAction: null,
+      structuredHost: { kind: "claude-broker", endpoint: "fixture:seat", process: { pid: process.pid, startIdentity },
+        writerClaimEpoch: 3, eventCursor: 5, protocolVersion: null, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    });
+    const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+    ledger.append(sessionId, { kind: "turn-started", turnId: "old-turn", seq: 1 });
+    ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "assistant", uuid: "deploy-call" }, seq: 2 });
+    ledger.append(sessionId, { kind: "item", turnId: "old-turn", phase: "completed", item: { type: "user", uuid: "deploy-result" }, seq: 3 });
+    ledger.append(sessionId, { kind: "turn-ended", turnId: "old-turn", status: "error", seq: 4 });
+    ledger.append(sessionId, { kind: "session-status", status: "idle", seq: 5 });
+    const entry = structuredClone(Object.values(f.registry.readOnlySnapshot().entries).find(row => row.artifactPath === f.seat.path)!);
+    // Mutate through the actual registry so source gathering observes the fence.
+    if (control === "newer-turn") { ledger.append(sessionId, { kind: "turn-started", turnId: "new-turn", seq: 6 }); entry!.structuredHost!.eventCursor = 6; }
+    if (control === "owner-mismatch") entry!.claimOwner = `structured-host:${JSON.stringify({ pid: process.pid, startIdentity: "old-writer" })}`;
+    if (control === "epoch-mismatch") entry!.structuredHost!.writerClaimEpoch = 2;
+    if (control === "cursor-ahead") entry!.structuredHost!.eventCursor = 6;
+    if (control === "unknown-owner") entry!.claimOwner = `structured-host:${JSON.stringify({ pid: process.pid, startIdentity: null })}`;
+    const ledgerPath = statePath("structured-host-events", `${encodeURIComponent(sessionId)}.jsonl`);
+    if (control === "sequence-gap") fs.writeFileSync(ledgerPath, fs.readFileSync(ledgerPath, "utf8").replace('"seq":3', '"seq":9'));
+    if (control === "unreadable-ledger") fs.appendFileSync(ledgerPath, "invalid-record\n");
+    if (control !== "closed-idle") f.registry.upsert(entry!);
+    const { defaultSeatTickSources } = await import("./seatTickSources");
+    const production = defaultSeatTickSources();
+    const deploys = { seatDeployments: [{ deploymentId: "deploy-recovered", conversationId: f.seat.conversationId }],
+      deployments: { "deploy-recovered": { phase: "succeeded", terminal: true, revision: "abcdef1234" } } };
+    const rig = () => {
+      const r = childRig(f, deploys);
+      r.deps.sources!.seatDeployments = () => [{ ...deploys.seatDeployments[0]!, project: f.project, revision: "abcdef1234", requestedAt: ago(f, 10) }];
+      r.deps.sources!.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-recovered", error: null, updatedAt: ago(f, 2), ...deploys.deployments["deploy-recovered"] } }) as never;
+      r.deps.sources!.liveness = production.liveness;
+      return r;
+    };
+    const first = rig();
+    const result = await runSeatTickCheck(f.project, first.deps);
+    if (control !== "closed-idle") {
+      expect(result!.verdict).toBe("skipped");
+      expect(first.sent).toHaveLength(0);
+      expect(f.row().announcedDeploys ?? []).not.toContain("deploy-recovered");
+      return;
+    }
+    expect(result!.verdict).toBe("wake");
+    expect(result!.reasons).toContain("deploy-settled");
+    expect(first.sent).toHaveLength(1);
+    const restarted = rig();
+    expect((await runSeatTickCheck(f.project, restarted.deps))!.reasons).not.toContain("deploy-settled");
+    expect(restarted.sent).toHaveLength(0);
+  },
+);
