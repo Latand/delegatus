@@ -167,7 +167,7 @@ test.skipIf(process.env.LLV_REQUIRE_NATIVE_CREDENTIALS !== "1")("native disposab
         const child = Object.assign(new EventEmitter(), { pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: { write: () => true, end: () => undefined } });
         const supervisor = new ClaudeLoginSupervisor({
           spawn: () => child as never, kill: () => { throw new Error("no lifecycle action expected"); },
-          pidStartToken: () => "fixture-start", isExpectedClaude: () => true, waitForExit: async () => undefined,
+          pidStartToken: () => "fixture-start", isExpectedClaude: () => true, waitForExit: async () => true,
           status: async (dir) => ({ loggedIn: status(dir), method: "oauth", email: null, plan: "max" }),
           now: Date.now, setTimeout: () => ({} as NodeJS.Timeout), clearTimeout: () => undefined,
         }, { load: () => [], save: () => undefined });

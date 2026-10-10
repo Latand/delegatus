@@ -19,6 +19,7 @@ const OUTPUT_LIMIT = 64 * 1024;
 const CODE_LIMIT = 8 * 1024;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const TERM_GRACE_MS = 2_000;
+const KILL_WAIT_MS = 2_000;
 /* claude.com / platform.claude.com are what the 2.1.x CLI actually prints
    ("https://claude.com/cai/oauth/authorize?…"); the older hosts stay for
    compatibility. A missing host here shows as "Очікуємо посилання…" forever. */
@@ -60,7 +61,9 @@ export interface ClaudeLoginPorts {
   kill(pid: number, signal: NodeJS.Signals): void;
   pidStartToken(pid: number): string | null;
   isExpectedClaude(pid: number): boolean;
-  waitForExit(pid: number, startToken: string): Promise<void>;
+  /** Resolves true once this process instance is gone, false when it is
+      still running after `timeoutMs`. */
+  waitForExit(pid: number, startToken: string, timeoutMs: number): Promise<boolean>;
   /** `indeterminate` marks a status read that failed to observe the account
       (timeout, spawn failure, bad output) — distinct from a live sign-out. */
   status(home: string): Promise<{ loggedIn: boolean; method: string | null; email: string | null; plan: string | null; indeterminate?: boolean }>;
@@ -81,10 +84,13 @@ function procStartToken(pid: number): string | null {
 }
 
 function exitPoller(startTokenOf: (pid: number) => string | null) {
-  return async function waitForProcessExit(pid: number, startToken: string): Promise<void> {
+  return async function waitForProcessExit(pid: number, startToken: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
     while (startTokenOf(pid) === startToken) {
+      if (Date.now() >= deadline) return false;
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     }
+    return true;
   };
 }
 
@@ -319,15 +325,22 @@ export class ClaudeLoginSupervisor {
   private persistDirty = false;
   private deferredPersist: Promise<void> | null = null;
 
-  private readonly recovery: Promise<void>;
+  private recovery: Promise<void> | null = null;
 
-  constructor(private readonly ports: ClaudeLoginPorts = realClaudeLoginPorts, private readonly store: ClaudeLoginStore = fileClaudeLoginStore) {
-    this.recovery = this.reconcilePersisted();
+  /* Construction touches nothing durable. Every process that loads this module
+     builds a supervisor (each agent's MCP server, the scanner and files
+     workers, sidecars), and recovering here let each of them terminate the
+     Viewer's live sign-in as soon as it started. */
+  constructor(private readonly ports: ClaudeLoginPorts = realClaudeLoginPorts, private readonly store: ClaudeLoginStore = fileClaudeLoginStore) {}
+
+  /** Settles the operations a previous Viewer process left in the store: each
+      live child is terminated and the row ends authenticated or interrupted.
+      Only the Viewer's release activation calls this; it runs once per
+      supervisor and later calls share the first run. */
+  recoverAfterRestart(): Promise<void> {
+    this.recovery ??= this.reconcilePersisted();
+    return this.recovery;
   }
-
-  /** Waits for persisted login recovery. Tests and startup callers can use this
-      before reading a terminal recovery result. */
-  whenRecovered(): Promise<void> { return this.recovery; }
 
   private persistedOperations(): PersistedOperation[] {
     return [...this.operations.values()]
@@ -664,13 +677,18 @@ export class ClaudeLoginSupervisor {
     }));
   }
 
+  /* The Viewer's activation awaits this, so every wait is bounded: a child
+     that ignores SIGTERM held activation forever. terminate() re-proves the
+     pid's start token and command before each signal, so a reused pid is
+     never killed. A child still running after SIGKILL reports false, and
+     recovery then settles the row interrupted without reading its account. */
   private async terminateInherited(item: LoginOperation): Promise<boolean> {
     if (!this.ownsProcess(item)) return true;
     this.terminate(item, "SIGTERM");
-    await this.ports.waitForExit(item.pid, item.startToken);
+    if (await this.ports.waitForExit(item.pid, item.startToken, TERM_GRACE_MS)) return true;
     if (!this.ownsProcess(item)) return true;
     this.terminate(item, "SIGKILL");
-    await this.ports.waitForExit(item.pid, item.startToken);
+    await this.ports.waitForExit(item.pid, item.startToken, KILL_WAIT_MS);
     return !this.ownsProcess(item);
   }
 
@@ -716,8 +734,21 @@ export class ClaudeLoginSupervisor {
 
 function osHome(): string { return process.env.HOME || "/"; }
 
-const defaultClaudeLoginSupervisor = new ClaudeLoginSupervisor();
+const SUPERVISOR_KEY = Symbol.for("llv.claudeLogin.supervisor");
+type SupervisorHolder = { [SUPERVISOR_KEY]?: ClaudeLoginSupervisor };
+
+/* One supervisor per process, shared across the route bundles (each route is
+   its own module graph in a production build), so the operation a sign-in
+   route started is the one the code route, the panel and recovery see. */
+const supervisorHolder = globalThis as SupervisorHolder;
+const defaultClaudeLoginSupervisor = supervisorHolder[SUPERVISOR_KEY] ??= new ClaudeLoginSupervisor();
 export let claudeLoginSupervisor = defaultClaudeLoginSupervisor;
+
+/** The Viewer's release activation step: recover the sign-ins a previous
+    Viewer process left behind before this one serves traffic. */
+export async function recoverClaudeLoginsAtStartup(): Promise<void> {
+  await claudeLoginSupervisor.recoverAfterRestart();
+}
 
 export function setClaudeLoginSupervisorForTests(supervisor: ClaudeLoginSupervisor | null): void {
   claudeLoginSupervisor = supervisor ?? defaultClaudeLoginSupervisor;

@@ -308,7 +308,7 @@ test.skipIf(process.platform !== "darwin")("on macOS a real spawned login clears
     const canceled = await supervisor.cancel(operation.operationId);
     expect(canceled).toEqual(expect.objectContaining({ phase: "canceled" }));
     expect(signals).toContain("SIGTERM");
-    await identity.waitForExit(pid, token);
+    expect(await identity.waitForExit(pid, token, 5_000)).toBe(true);
     expect(identity.isExpectedClaude(pid)).toBe(false);
   } finally {
     for (const real of spawned) await stopFixtureProcess(real);
