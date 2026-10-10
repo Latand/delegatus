@@ -13,7 +13,7 @@ import {
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
-import type { DelegationView, SpeechLine, ToolCallView } from "@/lib/voiceCompanion/reducer";
+import type { CompanionState, DelegationView, SpeechLine, ToolCallView } from "@/lib/voiceCompanion/reducer";
 
 import { CompanionCharacter, type CharacterHandle } from "./CompanionCharacter";
 import { awaitsReport, CompanionTranscript, transcriptLabels, transcriptRect, TRANSCRIPT_CSS } from "./CompanionTranscript";
@@ -58,8 +58,9 @@ const BLOCK: Size = { width: 132, height: 148 };
 const CHARACTER = 68;
 const SHAPE: Size = { width: 56, height: 56 };
 const SHAPE_CHARACTER = 40;
-/** The most speech bubbles shown at once; a newer one sends the oldest away, with everything older than it. */
-export const SPEECH_CAP = 4;
+/** The most speech bubbles shown at once; their cap leaves held cards alone. */
+export const SPEECH_CAP = 6;
+export const REPORT_CAP = 4;
 /** The most call elements shown at once; the calls still at work beyond them are counted on one more element. */
 export const CALL_CAP = 4;
 /** A speech bubble leaves this long after its line finished. */
@@ -300,19 +301,20 @@ type Floater =
   | { kind: "speech"; key: string; speaker: SpeechLine["speaker"]; text: string; cut: number | null; settled: boolean }
   | { kind: "call"; key: string; call: ToolCallView; settled: boolean }
   | { kind: "delegation"; key: string; delegation: DelegationView; settled: boolean }
-  | { kind: "answer"; key: string; delegation: DelegationView; settled: true }
+  | { kind: "answer"; key: string; delegation: DelegationView; answer: DelegationView["answers"][number]; settled: true }
+  | { kind: "report"; key: string; report: CompanionState["orchestratorReports"][number]; settled: true }
   /* A failure, or a fact the operator needs before asking (no orchestrator here), in plain words. */
   | { kind: "notice"; key: string; code: string; tone: "failure" | "note"; settled: true }
   | { kind: "more"; key: string; count: number; settled: false };
 
-const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS, notice: NOTICE_LINGER_MS };
+const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS, report: DELEGATION_LINGER_MS, notice: NOTICE_LINGER_MS };
 /* `far`: how far the element's far edge stands from the lane's end at the character. */
 type Place = { top: number; height: number; width: number; left: number; far: number; arrival: number | null };
 
 /** A line's bubbles, `chars` long at the most. While the line still streams, its last bubble holds only the words
     no later cut can take from it, so a bubble never gives a word back and never keeps a line it emptied. */
 function bubblesOf(line: SpeechLine, chars: number): string[] {
-  const streams = !line.final && line.playback !== "cut" && line.playback !== "played";
+  const streams = !line.final && line.playback !== "cut";
   return splitSpeech(line.text, chars, streams);
 }
 
@@ -572,13 +574,30 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const speaking = state.phase === "speaking";
   useEffect(() => { if (!speaking) character.current?.setLevel(0); }, [speaking, collapsed]);
 
+  // Remember the highest paced count before paint; a false stop/restart cannot retract a shown bubble.
+  const [shownBubbles, setShownBubbles] = useState<ReadonlyMap<string, number>>(new Map());
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- preserve shown bubbles before a restarted playback paints
+    setShownBubbles(previous => {
+      const next = new Map<string, number>();
+      for (const line of state.lines) {
+        if (line.speaker !== "companion") continue;
+        const chunks = bubblesOf(line, charsOf(line));
+        const count = line.playback === "playing" && paced?.key === line.key ? Math.max(1, paced.out) : bubblesOut(line, chunks, state.playing?.itemId === line.itemId ? state.playedMs : 0);
+        next.set(line.key, Math.max(previous.get(line.key) ?? 0, count));
+      }
+      return next.size === previous.size && [...next].every(([key, count]) => previous.get(key) === count) ? previous : next;
+    });
+  }, [state.lines, state.playing, state.playedMs, paced, charsOf]);
+
   const awaiting = store.awaiting();
   /* What may be in the lane: speech, the calls, each delegation with the answer to it, and what went wrong. */
   const candidates = useMemo((): Floater[] => {
     const speech: Floater[] = [];
     for (const line of state.lines.filter((entry) => entry.text.trim())) {
       const chunks = bubblesOf(line, charsOf(line));
-      const out = Math.min(chunks.length, line.playback === "playing" && paced?.key === line.key ? Math.max(1, paced.out) : bubblesOut(line, chunks, 0));
+      const pacedOut = line.playback === "playing" && paced?.key === line.key ? Math.max(1, paced.out) : bubblesOut(line, chunks, 0);
+      const out = Math.min(chunks.length, line.speaker === "companion" ? Math.max(shownBubbles.get(line.key) ?? 0, pacedOut) : pacedOut);
       const done = line.speaker === "operator" ? line.final : line.playback === "played" || line.playback === "cut";
       for (let index = 0; index < out; index += 1) {
         const last = index === out - 1;
@@ -595,14 +614,14 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const deleg: Floater[] = [];
     for (const delegation of delegations) {
       /* Delivered work stays in view after the conversation ends; a confirmation nobody answered does not. */
-      /* A confirmation the model asked for is answered while the conversation goes on, and the talk that
-         follows can send the asking card off the far end. The answer is news, so the decided card arrives
-         again beside the character. */
-      const decided = delegation.proposal?.confirmation && delegation.stage !== "awaiting-confirmation" ? ":decided" : "";
-      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage)) deleg.push({ kind: "delegation", key: `delegation:${delegation.callId}${decided}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) });
-      /* The answer is news of its own: it arrives beside the character, wherever the request has risen to. */
-      if (delegation.answer) deleg.push({ kind: "answer", key: `answer:${delegation.callId}:${delegation.answer.reportId}`, delegation, settled: true });
+      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage)) deleg.push({ kind: "delegation", key: `delegation:${delegation.callId}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) });
     }
+    // A poll can batch standalone reports and replies to several requests in
+    // one render. Their event sequence decides arrival, across every card kind.
+    const reports = [
+      ...delegations.flatMap(delegation => delegation.answers.map(answer => ({ kind: "answer" as const, key: `answer:${delegation.callId}:${answer.reportId}`, delegation, answer, settled: true as const }))),
+      ...state.orchestratorReports.map(report => ({ kind: "report" as const, key: `report:${report.reportId}`, report, settled: true as const })),
+    ].sort((left, right) => (left.kind === "answer" ? left.answer.order : left.report.order) - (right.kind === "answer" ? right.answer.order : right.report.order));
     const notices: Floater[] = [];
     const say = (source: string, code: string, tone: "failure" | "note" = "failure") => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled: true });
     if (refusedStart) say(`start${refusedStart.n}`, refusedStart.code);
@@ -610,8 +629,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (state.error && !awaiting) say("error", state.error);
     if (state.closure?.incomplete && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
-    return [...speech, ...calls, ...deleg, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.phase, state.error, state.closure, paced, refusedStart, seat, talks, awaiting, charsOf]);
+    return [...speech, ...calls, ...deleg, ...reports, ...notices];
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.closure, paced, refusedStart, seat, talks, awaiting, charsOf]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -620,6 +639,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* What arrived beside a proposal that waits for the operator and found no room: it never comes out, so the
      card with its buttons is never sent off the far end by what was said after it. The transcript keeps it. */
   const [withheld, setWithheld] = useState<ReadonlySet<string>>(new Set());
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   const arrivals = useRef(0);
   useEffect(() => {
     const keys = new Set(candidates.map((floater) => floater.key));
@@ -630,6 +650,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       for (const floater of fresh) next.set(floater.key, arrivals.current += 1);
       return next;
     });
+    setDismissed(current => current.size && [...current].some(key => !keys.has(key)) ? new Set([...current].filter(key => keys.has(key))) : current);
     setWithheld((current) => (current.size && [...current].some((key) => !keys.has(key)) ? new Set([...current].filter((key) => keys.has(key))) : current));
     setSettledAt((current) => {
       const next = new Map([...current].filter(([key]) => keys.has(key)));
@@ -642,34 +663,35 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     });
   }, [candidates]);
 
-  /* The lane, oldest first and newest beside the character. It moves one way:
-     an element leaves from the far end, when its time is up and nothing older is
-     still there, or when the count or the room sends it off, and then everything
-     older goes with it. `gate` is the arrival of the newest element that left;
-     nothing at or before it comes back. */
+  /* The lane, oldest first and newest beside the character. Expiry and room remove a prefix;
+     `gate` keeps that prefix out. Each kind's cap dismisses only its own oldest elements,
+     recorded separately so speech cannot dismiss a held confirmation, answer or report. */
   const [gate, setGate] = useState(0);
-  const { floaters, departs } = useMemo(() => {
+  const { floaters, departs, capped } = useMemo(() => {
     const order = (floater: Floater) => arrival.get(floater.key) ?? Number.POSITIVE_INFINITY;
     const ordered = [...candidates].filter((floater) => !withheld.has(floater.key)).sort((left, right) => order(left) - order(right));
-    const lane = ordered.filter((floater) => order(floater) > gate);
+    const lane = ordered.filter((floater) => order(floater) > gate && !dismissed.has(floater.key));
     const expired = (floater: Floater) => floater.kind !== "more" && settledAt.has(floater.key) && now - settledAt.get(floater.key)! >= LINGER_MS[floater.kind];
     let cut = 0;
     while (cut < lane.length && expired(lane[cut]!)) cut += 1;
-    for (const [kind, cap] of [["speech", SPEECH_CAP], ["call", CALL_CAP]] as const) {
-      const held = lane.flatMap((floater, index) => (floater.kind === kind && index >= cut ? [index] : []));
-      if (held.length > cap) cut = held[held.length - cap - 1]! + 1;
+    const available = lane.slice(cut);
+    const capped = new Set<string>();
+    for (const [kinds, cap] of [[new Set(["speech"]), SPEECH_CAP], [new Set(["call"]), CALL_CAP], [new Set(["answer", "report"]), REPORT_CAP]] as const) {
+      const sameKind = available.filter(floater => kinds.has(floater.kind));
+      for (const floater of sameKind.slice(0, Math.max(0, sameKind.length - cap))) capped.add(floater.key);
     }
-    const shown = lane.slice(cut);
+    const shown = available.filter(floater => !capped.has(floater.key));
     const departs = lane.slice(0, cut).reduce((latest, floater) => Math.max(latest, arrival.get(floater.key) ?? 0), 0);
     /* Calls that left the lane while still at work: counted at the far end. */
     const unseen = ordered.filter((floater) => floater.kind === "call" && !floater.settled && !shown.includes(floater)).length;
     const more: Floater[] = unseen ? [{ kind: "more", key: `more:${Math.max(gate, departs)}`, count: unseen, settled: false }] : [];
-    return { floaters: [...more, ...shown], departs };
-  }, [candidates, arrival, settledAt, now, gate, withheld]);
+    return { floaters: [...more, ...shown], departs, capped };
+  }, [candidates, arrival, settledAt, now, gate, withheld, dismissed]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- what left stays out
     if (departs > gate) setGate(departs);
-  }, [departs, gate]);
+    if (capped.size) setDismissed(previous => new Set([...previous, ...capped]));
+  }, [departs, gate, capped]);
 
   /* The screen follows the placement: at once, or for a move the companion makes by itself with elements in its
      lane, in three steps (the lane empties, the character travels, the lane shows again). A new placement on the
@@ -792,7 +814,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (!stack) return;
     for (const card of stack.querySelectorAll<HTMLElement>(":scope > [data-floater] > [data-companion-delegation]")) fitWaiting(card);
   }, [fitKeys, shownLane?.rect.height, locale, expanded, unconfirmedFor]);
-  const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? `${floater.text.length}${floater.cut === null ? "" : "c"}` : floater.kind === "call" ? `${floater.call.status}${(floater.call.result ?? floater.call.summary).length}` : floater.kind === "more" ? floater.count : floater.kind === "notice" ? floater.code : `${floater.delegation.stage}${floater.delegation.notice ?? ""}`}:${arrival.get(floater.key) ?? ""}`).join("|");
+  const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? `${floater.text.length}${floater.cut === null ? "" : "c"}` : floater.kind === "call" ? `${floater.call.status}${(floater.call.result ?? floater.call.summary).length}` : floater.kind === "more" ? floater.count : floater.kind === "notice" ? floater.code : floater.kind === "report" ? `${floater.report.status}${floater.report.text.length}` : `${floater.delegation.stage}${floater.delegation.notice ?? ""}`}:${arrival.get(floater.key) ?? ""}`).join("|");
   useLayoutEffect(() => {
     const stack = stackEl.current;
     if (!stack || !shownLane) { positions.current.clear(); stackFacing.current = null; return; }
@@ -809,15 +831,20 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
        that waits for the operator's answer does not leave for want of room: what is older than it may, and
        what arrives after it and does not fit beside it is withheld instead. The orchestrator's answer holds
        the same way against what arrives after it (the companion's own words about it, which are heard and
-       kept in the transcript), so a short lane keeps the answer in view; it gives way only to what already
-       stands beside it, should that grow past the room. */
+       kept in the transcript), so a short lane keeps the answer in view. Against the companion's words every
+       answer and report in the lane holds so, the older ones as the newest: what is older than the first of
+       them may leave for room, and they give way only from the far end, oldest first, to what already stands
+       beside them, should that grow past the room. The operator's own words take their room as they always
+       did: only the newest answer or report holds against them. */
     const room = shownLane.rect.height - EXIT_ROOM - END_ROOM;
     let excess = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8 - room;
     let sent = 0;
     const waits = nodes.findIndex((node) => node.dataset.awaiting !== undefined);
-    const holds = waits !== -1 ? waits : nodes.findLastIndex((node) => node.dataset.kind === "answer");
+    const reported = (node: HTMLElement) => node.dataset.kind === "answer" || node.dataset.kind === "report";
+    const holds = waits !== -1 ? waits : nodes.findLastIndex(reported);
+    const operatorArrives = holds !== -1 && nodes.slice(holds + 1).some((node) => node.dataset.speaker === "operator" && !before.has(node.dataset.floater!));
     for (const node of nodes.slice(0, holds === -1 ? -1 : holds)) {
-      if (excess <= 0) break;
+      if (excess <= 0 || (waits === -1 && !operatorArrives && reported(node))) break;
       if (node.dataset.kind === "more") continue;
       excess -= node.offsetHeight + 8;
       sent = Math.max(sent, arrived(node) ?? 0);
@@ -826,8 +853,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       const unseen = nodes.slice(holds + 1).filter((node) => !before.has(node.dataset.floater!)).map((node) => node.dataset.floater!);
       if (unseen.length) { setWithheld((current) => new Set([...current, ...unseen])); return; }
       if (waits === -1) {
-        for (const node of nodes.slice(holds, -1)) {
+        for (const node of nodes.slice(0, -1)) {
           if (excess <= 0) break;
+          if (node.dataset.kind === "more" || (arrived(node) ?? Number.POSITIVE_INFINITY) <= sent) continue;
           excess -= node.offsetHeight + 8;
           sent = Math.max(sent, arrived(node) ?? 0);
         }
@@ -835,7 +863,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     }
     /* An element that went from the middle (the session dropped it) takes the older ones along. */
     const here = new Set(nodes.map((node) => node.dataset.floater!));
-    for (const [key, was] of before) if (!here.has(key) && was.arrival !== null && nodes.some((node) => (arrived(node) ?? Number.POSITIVE_INFINITY) < was.arrival!)) sent = Math.max(sent, was.arrival);
+    for (const [key, was] of before) if (!here.has(key) && !dismissed.has(key) && !capped.has(key) && was.arrival !== null && nodes.some((node) => (arrived(node) ?? Number.POSITIVE_INFINITY) < was.arrival!)) sent = Math.max(sent, was.arrival);
     /* Settled before paint: the pass that follows plays the departure. */
     if (sent > gate) { setGate(sent); return; }
     const up = shownLane.direction === "up";
@@ -1143,6 +1171,12 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         </div>
       );
     }
+    if (floater.kind === "report") {
+      return <div className="vc-call vc-deleg vc-reply" data-companion-report data-report-id={floater.report.reportId}>
+        <div className="vc-deleg-head"><span className="vc-call-icon" aria-hidden><Check size={14} /></span><span className="vc-deleg-title">{t("voiceCompanion.orchestrator")} · {t(`voiceCompanion.report.${floater.report.status}`)}</span></div>
+        <p className="vc-answer" tabIndex={0} data-companion-answer>{floater.report.text}</p>
+      </div>;
+    }
     const { delegation } = floater;
     const recipient = delegation.proposal?.recipient ?? delegation.delivery?.recipient ?? null;
     if (floater.kind === "answer") {
@@ -1153,7 +1187,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
             <span className="vc-deleg-title">{t("voiceCompanion.stage.answered")}</span>
             {recipient ? <span className="vc-deleg-engine"><EngineMark engine={recipient.engine} size={14} />{ENGINE_NAME[recipient.engine]}</span> : null}
           </div>
-          <p className="vc-answer" tabIndex={0} data-companion-answer>{delegation.answer?.text}</p>
+          <p className="vc-answer" tabIndex={0} data-companion-answer>{floater.answer.text}</p>
         </div>
       );
     }
@@ -1240,7 +1274,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       {typeof adapter.transcript === "function" ? <style>{TRANSCRIPT_CSS}</style> : null}
       {expanded && reading && readable && view ? (() => {
         const box = transcriptRect(viewportSize(), { ...at, ...block });
-        return <CompanionTranscript record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
+        return <CompanionTranscript usage={state.usage ?? undefined} record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
           onClose={() => { setReading(false); root.current?.querySelector<HTMLElement>("[data-grip]")?.focus(); }} />;
       })() : null}
       {expanded && shownLane ? (
@@ -1325,7 +1359,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       {/* The whole conversation, for a screen reader and for anyone who missed a bubble. */}
       <ol className="vc-sr" aria-live="polite" aria-label={t("voiceCompanion.transcript")} data-companion-transcript>
         {state.lines.filter((line) => line.final || line.playback === "cut").map((line) => <li key={line.key}>{transcriptLine(line)}</li>)}
-        {[...state.deliveryCards.filter((card) => card.callId !== state.delegation?.callId), ...(state.delegation ? [state.delegation] : [])].map((card) => (card.answer ? <li key={card.answer.reportId}>{t("voiceCompanion.orchestrator")}: {card.answer.text}</li> : null))}
+        {[...state.deliveryCards.filter((card) => card.callId !== state.delegation?.callId), ...(state.delegation ? [state.delegation] : [])].map((card) => (card.answers.map(answer => <li key={answer.reportId}>{t("voiceCompanion.orchestrator")}: {answer.text}</li>)))}
+        {state.orchestratorReports.map(report => <li key={report.reportId}>{t("voiceCompanion.orchestrator")}: {report.text}</li>)}
       </ol>
       {/* A confirmation that waits is a decision the operator must be able to reach without the lane being on screen. */}
       {!expanded && stage === "awaiting-confirmation" ? <span className="vc-sr" role="status">{t("voiceCompanion.proposal", { project: state.delegation?.proposal?.recipient.project ?? project ?? "" })}</span> : null}
