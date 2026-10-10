@@ -465,7 +465,7 @@ describe("a wire under the pointer and the keyboard, and riding its column's scr
       (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = class { source: Element; axis: string; constructor(options: { source: Element; axis: string }) { this.source = options.source; this.axis = options.axis; timelines.push(options); } };
       Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, value(this: Element, frames: Keyframe[], options: KeyframeAnimationOptions) {
         animations.push({ node: this, frames, options: options as (typeof animations)[number]["options"] });
-        return { currentTime: 0, playState: "running", finished: new Promise(() => {}), effect: { setKeyframes(next: Keyframe[]) { rekeyed.push(next); } }, cancel() {}, pause() {}, play() {}, finish() {} };
+        return { currentTime: 0, playState: "running", timeline: options.timeline, finished: new Promise(() => {}), effect: { setKeyframes(next: Keyframe[]) { rekeyed.push(next); } }, cancel() {}, pause() {}, play() {}, finish() {} };
       } });
     });
     afterEach(() => { delete (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline; });
@@ -511,6 +511,40 @@ describe("a wire under the pointer and the keyboard, and riding its column's scr
       layer.probe.advance(0);
       expect(rekeyed.map((frames) => frames.at(-1)!.transform)).toEqual(["translateY(-1400px)"]);
       expect(animations.filter((call) => call.options.id === WIRE_RIDE_ID).length).toBe(2);
+    });
+
+    test("a column a script scrolled after the frame read its timeline holds the card's piece where the column is, until a frame reads it", () => {
+      const { layer, root } = board();
+      const body = root.querySelector<HTMLElement>(".col-body")!;
+      scroller(body, "y", 900, 120);
+      layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: Date.now() }]);
+      const column = animations.find((call) => call.options.id === WIRE_RIDE_ID && call.options.timeline!.source === body)!;
+      const timeline = column.options.timeline as { currentTime?: { value: number; unit: string } };
+      const reads = (offset: number) => { timeline.currentTime = { value: (offset / 900) * 100, unit: "percent" }; };
+      const pass = () => { layer.sync(); layer.probe.advance(0); };
+      const shift = () => (column.node.querySelector("[data-oa-shift]") as HTMLElement).style.transform;
+      const keys = () => rekeyed.map((frames) => frames.map((frame) => frame.transform));
+      /* The timeline reads where the column is: the rider rides, nothing is re-keyed. */
+      reads(120);
+      pass();
+      expect(keys()).toEqual([]);
+      /* A frame callback scrolled the column 13 px after the frame read the timeline: the rider stands at the
+         column's offset whichever of the two the frame is painted at, and the shift holds at it. */
+      body.scrollTop = 133;
+      pass();
+      expect(keys()).toEqual([["translateY(-133px)", "translateY(-133px)"]]);
+      expect(shift()).toBe("translate(0px, 133px)");
+      body.scrollTop = 146;
+      reads(133);
+      pass();
+      expect(keys().at(-1)).toEqual(["translateY(-146px)", "translateY(-146px)"]);
+      /* The next frame reads the timeline where the column is: the rider rides the scroll again. */
+      reads(146);
+      pass();
+      expect(keys().at(-1)).toEqual(["none", "translateY(-900px)"]);
+      pass();
+      expect(keys().length).toBe(3);
+      expect(animations.filter((call) => call.options.id === WIRE_RIDE_ID).length).toBe(1);
     });
 
     test("a scroller that holds the seat and the columns both carries the whole wire", () => {

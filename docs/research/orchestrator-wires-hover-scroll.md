@@ -411,6 +411,29 @@ Where the implementation differs from the design above, and what it measured:
   The lag shows in roughly one frame of thirty, so the case now measures at least
   30 frames per form.
 
+- **A script that scrolls from a frame callback.** Chromium reads each scroll
+  timeline when a frame begins, before the frame callbacks run. A script that
+  moves a column from a frame callback, as an animation library does, leaves the
+  timeline one step behind for that frame: read in the page, `currentTime` still
+  stands at the earlier offset after `scrollTop` has changed. The compositor
+  mostly paints the rider at the new offset and now and then at the timeline's,
+  and those frames left the card end one step behind the card (13 px at 1440,
+  10 px at 390), about one script frame in fifty. Deriving the shift from the
+  timeline instead put every script frame one step off the other way, so no
+  shift fits both. A pass that finds a rider's timeline more than half a pixel
+  from the offset it read now gives that rider still keyframes at that offset
+  (`syncRide`, `src/components/kanban/orchestratorWires.ts:381`), and the next
+  pass that finds the two agreeing gives it its range back. A wheel, a touch or
+  a smooth scroll begins every frame with the timeline read, so it never holds a
+  rider. A script scrolling during a wheel scroll holds the card end for those
+  frames.
+- **Measured again** with case 8, whose script sweep now runs down and back
+  until a form has at least 150 measured script frames. Three consecutive runs of
+  this branch had 0 frames off at 1440 side (en), 1440 top (uk), 390 (en) and
+  390 (uk), with 152–170 script frames a form and 32–46 wheel or touch frames.
+  Three runs of the case against the layer before this change all failed, each
+  on script frames 13 px off at 1440.
+
 ## Deferred — not currently justified
 
 - **A seamless seat-side junction during a horizontal board scroll or a pager

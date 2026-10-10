@@ -8,15 +8,15 @@
       "lang": "en",
       "cpu": 4,
       "restGap": 19.5,
-      "samples": 83,
-      "measured": 65,
+      "samples": 304,
+      "measured": 209,
       "off": 0,
-      "worst": 0,
+      "worst": 0.5,
       "byHow": {
-        "wheel": 60,
+        "wheel": 46,
         "touch": 0,
-        "script": 4,
-        "smooth": 1
+        "script": 161,
+        "smooth": 2
       }
     },
     {
@@ -42,15 +42,15 @@
       "lang": "uk",
       "cpu": 4,
       "restGap": 19.5,
-      "samples": 86,
-      "measured": 69,
+      "samples": 300,
+      "measured": 197,
       "off": 0,
       "worst": 0,
       "byHow": {
-        "wheel": 63,
+        "wheel": 44,
         "touch": 0,
-        "script": 5,
-        "smooth": 1
+        "script": 151,
+        "smooth": 2
       }
     },
     {
@@ -76,14 +76,14 @@
       "lang": "en",
       "cpu": 4,
       "restGap": 19,
-      "samples": 78,
-      "measured": 41,
+      "samples": 456,
+      "measured": 198,
       "off": 0,
       "worst": 1,
       "byHow": {
         "wheel": 0,
         "touch": 32,
-        "script": 7,
+        "script": 164,
         "smooth": 2
       }
     },
@@ -93,14 +93,14 @@
       "lang": "uk",
       "cpu": 4,
       "restGap": 19,
-      "samples": 79,
-      "measured": 41,
+      "samples": 458,
+      "measured": 198,
       "off": 0,
-      "worst": 0.5,
+      "worst": 1,
       "byHow": {
         "wheel": 0,
         "touch": 32,
-        "script": 7,
+        "script": 164,
         "smooth": 2
       }
     }

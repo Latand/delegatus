@@ -26471,14 +26471,20 @@ describe("orchestrator wires after a seat action", () => {
           /* The lag shows in one frame of twenty or thirty on the old layer, so a run measures at least thirty. */
           for (let round = 0; round < 8 && samples.filter((sample) => sample.gap !== null).length < 30; round++) await during(phone ? "touch" : "wheel", gesture(round % 2 === 0));
           await scrollCardTo(page, phone, "t-upload", low);
-          /* A script scrolling the column a little each frame. */
-          await during("script", page.evaluate(async ({ phone, distance }) => {
-            const scroller = document.querySelector<HTMLElement>(phone ? '[data-phone-kanban-column="assigned"]' : '[data-kanban-board] section.column[data-status="assigned"] .col-body')!;
-            for (let step = 0; step < 40; step++) {
-              scroller.scrollTop += distance / 40;
-              await new Promise((resolve) => requestAnimationFrame(resolve));
-            }
-          }, { phone, distance }));
+          /* A script scrolling the column a little each frame from a frame callback, as an animation library
+             does: down and back, so the card stays in view. Such a scroll moves the column after the frame
+             read its timelines, and a wire riding them missed by one step in about one frame of fifty, so a
+             form measures at least 150 frames of it. */
+          const scripted = () => samples.filter((sample) => sample.how === "script" && sample.off !== null).length;
+          for (let round = 0; round < 24 && scripted() < 150; round++) {
+            await during("script", page.evaluate(async ({ phone, distance }) => {
+              const scroller = document.querySelector<HTMLElement>(phone ? '[data-phone-kanban-column="assigned"]' : '[data-kanban-board] section.column[data-status="assigned"] .col-body')!;
+              for (let step = 0; step < 160; step++) {
+                scroller.scrollTop += (Math.floor(step / 40) % 2 ? -1 : 1) * (distance / 40);
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+              }
+            }, { phone, distance }));
+          }
           /* The board's own smooth scroll to a card, as a jump along a wire runs it. */
           await scrollCardTo(page, phone, "t-upload", low);
           await during("smooth", page.evaluate(async ({ phone, distance }) => {
@@ -26491,6 +26497,7 @@ describe("orchestrator wires after a seat action", () => {
           const off = measured.filter((sample) => sample.off! > 1);
           runs.push({ form, placement, lang, cpu: 4, restGap: gap, samples: samples.length, measured: measured.length, off: off.length, worst: Math.max(0, ...measured.map((sample) => sample.off!)), byHow: Object.fromEntries(["wheel", "touch", "script", "smooth"].map((how) => [how, measured.filter((sample) => sample.how === how).length])) });
           expect(measured.length).toBeGreaterThanOrEqual(30);
+          expect(scripted()).toBeGreaterThanOrEqual(150);
           expect(off).toEqual([]);
 
           /* The board scrolled sideways under its seat: the card's end of the wire stays on the card. */

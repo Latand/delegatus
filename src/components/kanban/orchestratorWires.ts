@@ -18,7 +18,9 @@ import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS, type LinkTone, ty
  * column's visible part, and that box and the piece in it ride the scrollers
  * that hold the card: a `ScrollTimeline` moves them on the compositor, in the
  * frame the cards move. A scroll moved by script alone reached the card a frame
- * or more late. Without `ScrollTimeline` nothing rides and the wire is redrawn
+ * or more late. A script that scrolls from a frame callback moves the scroller
+ * after the frame read its timelines; for that frame the rider stands where the
+ * scroller is. Without `ScrollTimeline` nothing rides and the wire is redrawn
  * after each scroll, as before.
  *
  * Each piece has a transparent stroke wider than the wire to take the pointer:
@@ -147,8 +149,9 @@ const scrollTimeline = () => {
 
 /** One scroller that moves a card, on one axis: how far it can go and where it is. */
 interface Scroll { source: Element; axis: Axis; range: number; offset: number }
-/** A box moved by one scroller's timeline, so what it holds moves with that scroller's content. */
-interface Rider { source: Element; axis: Axis; range: number; node: HTMLDivElement; animation: Animation | null }
+/** A box moved by one scroller's timeline, so what it holds moves with that scroller's content.
+    `keyed` names the keyframes it was last given: the scroller's range, or the offset it is held at. */
+interface Rider { source: Element; axis: Axis; keyed: string; node: HTMLDivElement; animation: Animation | null }
 /** Riders nested outermost first, and inside them a shift that undoes the offsets read when the
     pieces were drawn: at that moment the riders and the shift cancel out, and from there the riders
     carry the pieces as far as the scrollers go. */
@@ -342,9 +345,16 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     const shift = div("data-oa-shift");
     const nodes = scrolls.map(() => div("data-oa-ride"));
     nodes.forEach((node, index) => node.append(nodes[index + 1] ?? shift));
-    return { outer: nodes[0] ?? shift, shift, key: rideKey(scrolls), riders: scrolls.map((scroll, index) => ({ source: scroll.source, axis: scroll.axis, range: -1, node: nodes[index]!, animation: null })) };
+    return { outer: nodes[0] ?? shift, shift, key: rideKey(scrolls), riders: scrolls.map((scroll, index) => ({ source: scroll.source, axis: scroll.axis, keyed: "", node: nodes[index]!, animation: null })) };
   }
   const dropRide = (ride: Ride) => { for (const rider of ride.riders) rider.animation?.cancel(); };
+  /** Where `rider`'s timeline stands, in pixels of a scroller whose range is `range`: the offset it read
+      when this frame began. `null` before it has read one. */
+  const timelineAt = (rider: Rider, range: number) => {
+    const time = rider.animation?.timeline?.currentTime as { value?: unknown } | number | null | undefined;
+    const percent = typeof time === "number" ? time : typeof time?.value === "number" ? time.value : null;
+    return percent === null ? null : (percent / 100) * range;
+  };
   /** Bring `ride` to these scrollers (outermost first): rebuilt round what it holds when the set
       changed, each rider's keyframes the scroller's range, and the shift the offsets read now. */
   function syncRide(ride: Ride | null, scrolls: readonly Scroll[], place: (outer: HTMLDivElement) => void, x = 0, y = 0): Ride {
@@ -361,10 +371,19 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     }
     const Timeline = scrollTimeline();
     next.riders.forEach((rider, index) => {
-      const range = scrolls[index]!.range;
-      if (rider.range === range || !Timeline) return;
-      rider.range = range;
-      const frames = [{ transform: "none" }, { transform: rider.axis === "block" ? `translateY(${-range}px)` : `translateX(${-range}px)` }];
+      const { range, offset } = scrolls[index]!;
+      if (!Timeline) return;
+      /* A script that moved the scroller after this frame read its timelines (from a frame callback)
+         leaves the timeline a step behind the offset this pass read. Chromium mostly paints the rider at
+         the new offset and now and then at the timeline's, so no shift fits both. Until a frame begins
+         with the timeline read again, the rider stands still at the offset this pass read. */
+      const read = timelineAt(rider, range);
+      const held = read !== null && Math.abs(read - offset) > 0.5;
+      const keyed = held ? `at ${offset}` : `${range}`;
+      if (rider.keyed === keyed) return;
+      rider.keyed = keyed;
+      const to = (at: number) => rider.axis === "block" ? `translateY(${-at}px)` : `translateX(${-at}px)`;
+      const frames = held ? [{ transform: to(offset) }, { transform: to(offset) }] : [{ transform: "none" }, { transform: to(range) }];
       if (rider.animation?.effect) (rider.animation.effect as KeyframeEffect).setKeyframes(frames);
       else rider.animation = rider.node.animate(frames, { timeline: new Timeline({ source: rider.source, axis: rider.axis }), fill: "both", id: WIRE_RIDE_ID });
     });
