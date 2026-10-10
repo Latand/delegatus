@@ -312,10 +312,16 @@
       track(dot, { o: 0 })
         .to(launch, launch + 80, { o: 1 }, "linear")
         .to(launch + 80, land, { x: to.x + 14 - (from.x + from.w / 2 - 5), y: to.y + 20 - (from.y + from.h / 2 - 5) }, GLIDE)
-        .to(land, land + 160, { o: 0, sx: 2.2, sy: 2.2 }, "ease-out");
+        .to(land, land + 120, { o: 0, sx: 2.2, sy: 2.2 }, "ease-out");
       const card = cardEls[flight[task.id]];
       const first = offset(task.id, to);
-      const cardTrack = track(card, { o: 0, x: first.x, y: first.y + 6, sx: 0.97, sy: 0.97 }).to(land - 40, land + 360, { o: 1, y: first.y, sx: 1, sy: 1 });
+      /* The card is opaque from its first frame and its top edge stays on its line
+         (it grows from the top), so the card it lands on never shows through or
+         past it; only its title and body fade in. */
+      const cardTrack = track(card, { o: 0, x: first.x, y: first.y, sx: 0.97, sy: 0.97 })
+        .to(land - 40, land - 40, { o: 1 })
+        .to(land - 40, land + 360, { sx: 1, sy: 1 });
+      for (const part of card.querySelectorAll(".d-ct, .d-cb")) track(part, { o: 0 }).to(land - 40, land + 300, { o: 1 });
       if (task.id === "a") {
         const mid = offset("a", slot("progress", 1));
         cardTrack.to(AT.move + 200, AT.move + 820, { x: mid.x, y: mid.y }, GLIDE).to(AT.toDone, AT.toDone + 750, { x: 0, y: 0 }, GLIDE);
