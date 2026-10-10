@@ -851,7 +851,7 @@ test("a connector ends when the Viewer that started it dies, and an agent that V
   const vendor = stagedConnectorSourceDir();
   for (const [file, body] of Object.entries({
     "mcp/__init__.py": "", "mcp/server/__init__.py": "",
-    "mcp/server/fastmcp.py": "class FastMCP:\n    def streamable_http_app(self):\n        return None\n",
+    "mcp/server/fastmcp.py": "class FastMCP:\n    async def call_tool(self, name, arguments):\n        return []\n    def streamable_http_app(self):\n        return None\n",
     "telegram_mcp/__init__.py": "",
     "telegram_mcp/runtime.py": [
       "class _Tool:", "    def __init__(self, name):", "        self.name = name", "",

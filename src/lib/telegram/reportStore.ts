@@ -125,7 +125,7 @@ const EMPTY: TelegramReportsFile = {
   version: 1,
   settings: DEFAULT_STORED_SETTINGS,
   ["prompt"]: null,
-  cursor: { lastSuccessfulWindowEndAt: null, unreportedSinceAt: null, lastScheduledDay: null },
+  cursor: { lastSuccessfulWindowEndAt: null, unreportedSinceAt: null, unreportedUntilAt: null, lastScheduledDay: null },
   active: null,
   retry: null,
   history: [],
@@ -243,6 +243,18 @@ export function readTelegramReports(): TelegramReportsFile {
   }
   const row = parsed as Partial<TelegramReportsFile>;
   const cursor = (row.cursor && typeof row.cursor === "object" ? row.cursor : {}) as Partial<ReportScheduleCursor>;
+  const history = Array.isArray(row.history)
+    ? row.history.map(sanitizeRow).filter((item): item is TelegramReportRow => item !== null)
+    : [];
+  const unreportedSinceAt = text(cursor.unreportedSinceAt);
+  /* Older cursors stored only the start. Recover the first failed window's
+     end from history before a retry can extend it again. */
+  const legacyFailure = history
+    .filter((item) => (item.status === "failed" || item.status === "account-mismatch")
+      && item.windowStart === unreportedSinceAt
+      && Number.isFinite(Date.parse(item.windowEnd))
+      && Date.parse(item.windowEnd) >= Date.parse(item.windowStart))
+    .sort((left, right) => Date.parse(left.windowEnd) - Date.parse(right.windowEnd))[0];
   return {
     version: 1,
     settings: sanitizeReportSettings(row.settings),
@@ -251,14 +263,13 @@ export function readTelegramReports(): TelegramReportsFile {
       : null,
     cursor: {
       lastSuccessfulWindowEndAt: text(cursor.lastSuccessfulWindowEndAt),
-      unreportedSinceAt: text(cursor.unreportedSinceAt),
+      unreportedSinceAt,
+      unreportedUntilAt: text(cursor.unreportedUntilAt) ?? legacyFailure?.windowEnd ?? null,
       lastScheduledDay: text(cursor.lastScheduledDay),
     },
     active: sanitizeActive(row.active),
     retry: sanitizeRetry(row.retry),
-    history: Array.isArray(row.history)
-      ? row.history.map(sanitizeRow).filter((item): item is TelegramReportRow => item !== null)
-      : [],
+    history,
   };
 }
 

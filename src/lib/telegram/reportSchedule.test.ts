@@ -85,3 +85,13 @@ test("the window runs from the last successful report, 24 h on a first run, capp
   const future = reportWindowFor(now, cursor({ lastSuccessfulWindowEndAt: new Date(now + 3_600_000).toISOString() }));
   expect(Date.parse(future.endAt) - Date.parse(future.startAt)).toBe(24 * 3_600_000);
 });
+
+test("a failed window keeps both bounds until a successful retry", () => {
+  const debt = cursor({
+    unreportedSinceAt: "2026-08-20T07:00:00.000Z",
+    unreportedUntilAt: "2026-08-21T07:00:00.000Z",
+  });
+  const expected = { startAt: "2026-08-20T07:00:00.000Z", endAt: "2026-08-21T07:00:00.000Z" };
+  expect(reportWindowFor(AUGUST_SLOT + 24 * 3_600_000, debt)).toEqual(expected);
+  expect(reportWindowFor(AUGUST_SLOT + 7 * 24 * 3_600_000, debt)).toEqual(expected);
+});

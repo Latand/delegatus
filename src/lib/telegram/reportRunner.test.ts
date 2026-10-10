@@ -556,7 +556,7 @@ test("a connector that cannot answer get_me fails the run rather than reading on
   expect(file.cursor.unreportedSinceAt).toBe(new Date(NOW - 24 * 3_600_000).toISOString());
 });
 
-test("a run whose conversation dies mid-read fails retryably, and the next run covers the missed window", async () => {
+test("a run whose conversation dies retries the same window and advances only after success", async () => {
   const ports = new FakePorts();
   enableReports();
   const runner = new TelegramReportRunner(ports);
@@ -575,26 +575,29 @@ test("a run whose conversation dies mid-read fails retryably, and the next run c
      reported yet. */
   expect(failed.cursor.unreportedSinceAt).toBe(new Date(NOW - 24 * 3_600_000).toISOString());
 
-  /* The retry a day later starts where the FAILED run started, not 24 h before
-     the retry — the day the failure did not cover is still owed, so the retry's
-     window is 48 h wide. */
+  /* A retry a day later keeps both bounds of the failed run. */
   ports.live = true;
   ports.clock = NOW + 24 * 3_600_000;
   await runner.runNow();
   await runner.settled();
   const retry = readTelegramReports().active!;
   expect(Date.parse(retry.windowStart)).toBe(NOW - 24 * 3_600_000);
-  expect(Date.parse(retry.windowEnd)).toBe(ports.clock);
+  expect(Date.parse(retry.windowEnd)).toBe(NOW);
 
   /* And a success clears the debt: the run after it covers only new ground. */
   agentWrites(`${DAILY_REPORT_TAG}\n👀 Worth attention — one item.\n`);
   await runner.tick();
   const settled = readTelegramReports();
   expect(settled.cursor.unreportedSinceAt).toBeNull();
-  expect(settled.cursor.lastSuccessfulWindowEndAt).toBe(new Date(ports.clock).toISOString());
+  expect(settled.cursor.lastSuccessfulWindowEndAt).toBe(new Date(NOW).toISOString());
+  await runner.tick();
+  await runner.settled();
+  const following = readTelegramReports().active!;
+  expect(following.windowStart).toBe(new Date(NOW).toISOString());
+  expect(following.windowEnd).toBe(new Date(ports.clock).toISOString());
 });
 
-test("a failed first run never loses more than the 72 h cap", async () => {
+test("a failed window remains stable even after a week offline", async () => {
   const ports = new FakePorts();
   enableReports();
   const runner = new TelegramReportRunner(ports);
@@ -605,14 +608,33 @@ test("a failed first run never loses more than the 72 h cap", async () => {
   await runner.tick();
   expect(readTelegramReports().history[0].status).toBe("failed");
 
-  /* A Viewer that was off for a week owes more than a report can usefully
-     read, so the window still stops at the cap. */
+  /* Retry the bounded debt before covering new activity. */
   ports.live = true;
   ports.clock = NOW + 7 * 24 * 3_600_000;
   await runner.runNow();
   await runner.settled();
   const retry = readTelegramReports().active!;
-  expect(Date.parse(retry.windowStart)).toBe(ports.clock - 72 * 3_600_000);
+  expect(Date.parse(retry.windowStart)).toBe(NOW - 24 * 3_600_000);
+  expect(Date.parse(retry.windowEnd)).toBe(NOW);
+});
+
+test("the history row, source plan and analyst brief use the feed's capped window", async () => {
+  const ports = new FakePorts();
+  ports.feedCoveredSinceMs = NOW - 2 * 3_600_000;
+  enableReports();
+  const runner = new TelegramReportRunner(ports);
+  await runner.runNow();
+  await runner.settled();
+  const active = readTelegramReports().active!;
+  const cappedStart = new Date(ports.feedCoveredSinceMs).toISOString();
+  expect(active.windowStart).toBe(cappedStart);
+  const plan = JSON.parse(fs.readFileSync(reportSourcesPath(active.runId), "utf8"));
+  expect(plan.windowStart).toBe(cappedStart);
+  expect(JSON.stringify(ports.spawns[0])).toContain(cappedStart);
+  ports.live = false;
+  await runner.tick();
+  expect(readTelegramReports().history[0].windowStart).toBe(cappedStart);
+  expect(readTelegramReports().cursor.unreportedUntilAt).toBe(new Date(NOW).toISOString());
 });
 
 test("a run that writes prose instead of a report fails and keeps the window owed", async () => {

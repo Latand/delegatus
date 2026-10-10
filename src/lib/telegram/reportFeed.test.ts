@@ -72,6 +72,18 @@ test("a dialog that burst repeatedly is one source, stamped with its latest burs
   ]);
 });
 
+test("a retry reads the latest burst inside its fixed window despite later activity", () => {
+  const end = Date.parse("2026-08-21T07:00:00.000Z");
+  const file = writeFeed([
+    line(101, "Dialog A", seconds("2026-08-20T10:00:00.000Z")),
+    line(101, "Dialog A", seconds("2026-08-22T10:00:00.000Z")),
+    line(102, "Dialog B", seconds("2026-08-22T11:00:00.000Z")),
+  ]);
+  expect(readFeedDialogsSince(file, WINDOW_START, end)).toEqual([
+    { id: "101", title: "Dialog A", lastMessageAt: "2026-08-20T10:00:00.000Z" },
+  ]);
+});
+
 test("bots, groups and junk lines are not private dialogs", () => {
   const text = [
     line(910000005, "Reminder Service", seconds("2026-08-20T09:00:00.000Z"), "some_reminder_bot"),

@@ -12,10 +12,9 @@
  *    (a Viewer that was down at 10:00 finds the slot passed and the day
  *    unstamped) and the per-day idempotency (a second tick finds the day
  *    stamped), so neither needs its own mechanism;
- *  - the window runs from the earliest period nobody has reported yet to now,
- *    capped at 72 h, and 24 h on a first run. A failed run leaves that
- *    boundary where it was, so the next run's window still covers the day it
- *    missed instead of starting 24 h before itself.
+ *  - a new window runs to now, capped at 72 h, and 24 h on a first run.
+ *    A failed run retains both bounds until it succeeds, so each retry has
+ *    the same amount to read. Later activity belongs to the following window.
  */
 
 import {
@@ -100,12 +99,11 @@ export interface ReportScheduleCursor {
    * Start of the earliest window nobody has reported yet, or `null` when
    * everything up to {@link lastSuccessfulWindowEndAt} is covered.
    *
-   * A failed run writes its own window start here and a successful one clears
-   * it. Without it the day a failed run was meant to cover is simply lost: the
-   * next day's window would begin 24 h before ITSELF, not 24 h before the run
-   * that failed.
+   * A failed run records its bounded window here; success clears both bounds.
    */
   unreportedSinceAt: string | null;
+  /** End of the failed window. Optional for cursors written before #1229. */
+  unreportedUntilAt?: string | null;
   /** Day key of the last SCHEDULED run that fired (manual runs do not stamp
       it — a Run now must not swallow the day's scheduled report). */
   lastScheduledDay: string | null;
@@ -155,14 +153,17 @@ export interface ReportWindow {
 /**
  * The window a run about to start must cover.
  *
- * It begins at the earliest period nobody has reported — the boundary a failed
- * run left behind, or else the end of the last successful report — and runs to
- * now, never longer than 72 h, and 24 h when there is no previous report at
- * all. A cursor in the future (a clock step back) collapses to the first-run
- * window rather than an inverted range.
+ * A failed window retains its end as well as its start, across restarts and
+ * repeated failures. Otherwise the window runs from the last success to now,
+ * capped at 72 h, with 24 h on a first run. A future cursor falls back to the
+ * first-run window after a clock step back.
  */
 export function reportWindowFor(now: number, cursor: ReportScheduleCursor): ReportWindow {
   const owed = cursor.unreportedSinceAt ? Date.parse(cursor.unreportedSinceAt) : Number.NaN;
+  const until = cursor.unreportedUntilAt ? Date.parse(cursor.unreportedUntilAt) : Number.NaN;
+  if (Number.isFinite(owed) && Number.isFinite(until) && owed <= until && until <= now) {
+    return { startAt: new Date(Math.max(owed, until - REPORT_WINDOW_CAP_MS)).toISOString(), endAt: new Date(until).toISOString() };
+  }
   const reported = cursor.lastSuccessfulWindowEndAt ? Date.parse(cursor.lastSuccessfulWindowEndAt) : Number.NaN;
   const boundary = Number.isFinite(owed) ? owed : reported;
   const start = Number.isFinite(boundary) && boundary < now
