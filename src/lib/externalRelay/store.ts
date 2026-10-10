@@ -65,6 +65,8 @@ export type RelayStore = {
 export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
+  /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
+  ownerTurn?: { clientAttemptId: string; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
   requestId: string;
   leaseId: string;
   relayId: string;

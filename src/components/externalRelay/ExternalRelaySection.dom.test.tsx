@@ -707,3 +707,16 @@ test("owner tier defaults off, patches in place and has a folded caption in en a
     expect(row.querySelector("[data-external-relay-owner-tier]")?.getAttribute("aria-checked")).toBe("false");
   } finally { await act(async () => setLocale("en")); }
 });
+
+
+for (const locale of ["en", "uk"] as const) test(`an unresolved owner stop stays visible in relay settings (${locale})`, async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay()], pending: [], status: [{ id: "relay-1", state: {
+    state: "paused", lastOutcome: "owner_stop_pending", lastOutcomeAt: null, lastProgress: null }, running: {} }] };
+  route(); setLocale(locale);
+  try {
+    const host = await mount(<ExternalRelaySection />);
+    expect(host.querySelector("[data-external-relay-last-outcome]")?.textContent).toBe(locale === "en"
+      ? "Owner turn is still stopping; Delegatus will retry." : "Запуск власника ще зупиняється; Delegatus повторить спробу.");
+  } finally { setLocale("en"); }
+});

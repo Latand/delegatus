@@ -297,7 +297,12 @@ function that both call. Then:
    (`src/lib/spawnNotice/production.ts:120-136`: `lastAssistantMessageFromRecords`,
    then `hardenedRedact`, `compactText.ts:47`). A turn that ended with no
    final message resolves `failed`.
-2. Map it to an answer:
+2. Scrub it at the owner-only egress boundary (`ownerOutput.ts`) before any
+   truncation, answer record or completion body. Exact known relay, pairing,
+   installation and service credentials, opaque spawn credentials, private-key
+   armor and host paths are removed. An unavailable scrubber fails the turn
+   without exposing its input in diagnostics. The non-owner path is unchanged.
+3. Map it to an answer:
 
 | Last message, trimmed | Answer |
 |---|---|
@@ -314,23 +319,16 @@ and contents of this computer. Heartbeats still go out on their timer.
 
 ### 2.8 Cancel, time limit, lease loss, restart
 
-- `cancel()` interrupts the conversation's turn through `applyConversationAction`
-  (`src/lib/conversation/actions.ts`), using the receipt's conversation id.
-  This selects the structured host control channel for an ordinary spawn. A cancel that
-  arrives before the receipt names the conversation is applied as soon as it
-  does. The conversation stays on the board, and the operator can continue
-  it.
-- The hard cap is `target.hardCapMinutes`, as for every run. At the cap the
-  turn is interrupted and `done` resolves `timeout`, which completes
-  `failed` / `hard_cap` (`runner.ts:504-505`).
-- A lease the service took back (404, 409 `lease_lost`) or a stall calls
-  `cancel()` through the runner's existing `lose` and `cancelStalledRun`
-  (`runner.ts:338-344`, `:363-371`, `:378`).
-- A Viewer restart mid-run: the orphan sweep (`poller.ts:73-115`) finds
-  `childPid: null`, stops nothing and completes `failed` /
-  `install_restarted`. The conversation lives in the runtime host, finishes
-  its turn and stays on the board. Its reply never reaches the chat, and the
-  service falls back.
+- `cancel()` persists cancellation custody before calling conversation control.
+  It also retires the exact reserved first prompt; an unavailable registry
+  writer keeps that cleanup owed and prevents confirmation. Pending first
+  prompts use `kill`, so recovering a reservation cannot start a later turn.
+  Both reservation recovery and the journal queue recheck the original owner
+  launch against live custody and the current switch before dispatch.
+  It settles after bounded stop attempts; an unresolved stop keeps the run
+  ledger and its directory for recovery. Pending admissions remain attributed
+  and fenced against a late first prompt, with kill used for queued hosts.
+  A successful control receipt or terminal liveness releases custody.
 
 ## 3. Who gets the tier
 
@@ -502,12 +500,22 @@ conversation later with no lease to answer; the prompt asks for
 - `PATCH /api/external-relay/relays/[id]` accepts `ownerTier` in `target`
   (`route.ts:39-49`) and refuses anything but a boolean (`route.ts:68-97`).
   The route is operator-only already (`routeGuard.ts:8-22`).
-- The poller reads the store again for each claimed request
-  (`poller.ts:253-255`), so a switch turned off refuses the next owner
-  request at once, and §2.4's live check withdraws orchestrator messaging
-  from a run already going. A run already going is an ordinary conversation
-  on the board, and the operator can stop it there. Pausing the relay or
-  turning the target off stops everything, as today.
+- Switching off persists the cutoff before returning from PATCH and revokes
+  active and pending owner turns through conversation control. The launch
+  rechecks authorization under the spawn admission lock, before starting its
+  host, and before publishing or delivering its first prompt. A pending turn
+  is killed; an admitted turn is interrupted. A revoked turn cannot publish
+  an owner reply, including on completion retries. Pause, target disable and
+  unpair apply the same cutoff. Previously delegated tasks continue under
+  their own custody.
+- The run ledger records the client attempt before admission, binds the
+  conversation even after cancellation, and retains an unconfirmed stop.
+  Control attempts have a one-second deadline and three attempts per sweep,
+  separated by 250 ms. An accepted-but-pending receipt does not prove stop.
+  Confirmed control or terminal liveness permits cleanup. Otherwise the
+  settings status reports `owner_stop_pending`, the ordinary conversation
+  remains on the board, and the orphan sweep retries after a Viewer restart.
+
 
 ### 6.2 Where it sits
 
@@ -527,7 +535,7 @@ stage publishes no layout variants: there is no layout to choose.
 | Key | en | uk |
 |---|---|---|
 | `externalRelay.target.ownerTier` | Full agent for the owner | Повний агент для власника |
-| `externalRelay.target.ownerTierHint` | When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else's messages stay data, and they get the usual answer. Turning this off stops new owner runs at once. | Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє нові запуски для власника. |
+| `externalRelay.target.ownerTierHint` | When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else's messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once. | Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді. |
 | `externalRelay.target.ownerTierOn` (folded caption) | full agent for the owner | повний агент для власника |
 
 ## 7. The Celestia owner-tools lane (3a0c0107)
@@ -543,8 +551,8 @@ target whose `ownerTier` is on:
 - With `ownerTier` off, the owner's request takes the tool loop with
   whatever the other lane offers.
 
-This design touches none of that lane's files (`protocol.ts`, `poller.ts`,
-`toolLoop.ts`), and `prompt.ts` only by exporting its escape helper. Calling
+The implementation adds only owner cancellation recovery to `poller.ts`; it
+leaves the other lane's wire and tool-loop files (`protocol.ts`, `toolLoop.ts`) unchanged, and `prompt.ts` only by exporting its escape helper. Calling
 Celestia's tools from inside an owner run is deferred.
 
 ## 8. What the tier exposes, and what limits it
@@ -554,7 +562,7 @@ Celestia's tools from inside an owner run is deferred.
 | A relay service that lies about `is_owner` | the pairing credential; the switch; default off | Turning the switch on trusts the relay service with this computer. The hint says the service decides who the owner is. |
 | Instructions planted in other people's messages, documents or memory | §4: one instruction, everything else data; R6/R7 | Framing lowers the chance; it guarantees nothing. A successful injection has full host access. |
 | The owner forwards a stranger's text | none: the service's message schema carries no forward marker (`protocol.ts:93-104`) | The forwarded text is the owner's request. |
-| The reply leaks host data into a group | the prompt rule; `hardenedRedact` on the reply; no progress lines | A reply the agent writes carelessly is still posted. |
+| The reply leaks host data into a group | owner-only egress scrubbing before truncation, storage and transmission: known relay and installation credentials, opaque spawn credentials, private-key armor and host paths; no progress lines | Arbitrary private prose still depends on the agent following the prompt. |
 | The agent reads secrets on this computer, the relay credential in the state directory included | none beyond ordinary-spawn access | Inherent in "full access", and the reason the switch exists. |
 | A replayed request | `reserveRun` duplicate check (`store.ts:215-218`); the receipt for `relay-owner-<request_id>` | none |
 | Orchestrator authority outliving the request | §2.4: admitted only while the owner run is live and the switch is on | The run's other tools act like any agent's. |

@@ -4,6 +4,8 @@ import path from "node:path";
 import net from "node:net";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { UnixRuntimeHostClient, type RuntimeHostClient } from "./client";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
@@ -24,6 +26,33 @@ function fixture() {
   roots.push(f.root);
   return f;
 }
+
+test("production journal queue refuses a revoked owner's first prompt without a cancellation registry write", async () => {
+  const f = fixture();
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.root, clientAttemptId: "relay-owner-revoked-journal", transport: "structured" });
+  if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+  const operationId = `spawn_message_${begun.receipt.launchId}`;
+  const conversationId = begun.receipt.conversationId;
+  const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+  const profile = emptyLaunchProfile({ cwd: f.root, title: "Owner cutoff fixture" });
+  const staged = f.registry.stageStructuredSpawn(begun.receipt.launchId, {
+    key, artifactPath: path.join(f.root, "owner.jsonl"), cwd: f.root, accountId: "account-a", launchProfile: profile,
+    status: "idle", host: null, structuredHost: { kind: "codex-app-server", endpoint: "fake:owner", process: null,
+      eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: "fixture", pendingAction: "spawn", structuredHostOperationId: begun.receipt.launchId,
+  });
+  if (staged.kind !== "settled") throw Error("owner host fixture unavailable");
+  const delivery = f.registry.holdDelivery(conversationId, "Revoked owner instruction", `spawn_${begun.receipt.launchId}`, "text", [], null, { operationId });
+  const send = spyOn(f.host, "send");
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: f.client });
+    const admitted = f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId, conversationId, text: delivery.text, policy: "queue" });
+    expect(admitted.receipt.status).toBe("queued");
+    await kickStructuredDeliveryQueue();
+    expect(send).not.toHaveBeenCalled();
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+  } finally { send.mockRestore(); await f.cleanup(); }
+});
 
 test("production controller applies a pick after usage_limit_exceeded without another message or turn end", async () => {
   const f = fixture();

@@ -1824,6 +1824,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     client: () => input.client,
     registry: () => input.registry,
     enabled: () => true,
+    authorizeDispatch: input.authorize,
   });
   if (!delivered?.ok) {
     const message = delivered?.error ?? "structured spawn first-message delivery was unavailable";
@@ -2313,7 +2314,7 @@ export async function spawnStructuredConversation(
         binding.unregister = await publishAuthorized();
         forgetUnpublishedHost();
       },
-      deliver: () => deliverFirst(input, identity.path),
+      deliver: async () => { await input.authorize?.(); return deliverFirst(input, identity.path); },
     };
     stagedContinuations.set(operationId, continuation);
     forgetUnpublishedHost = retainUnpublishedStructuredLaunchHost({ key, host, registry: input.registry,
@@ -2330,6 +2331,7 @@ export async function spawnStructuredConversation(
     let initialMessage: void | "held";
     let uncertainFirstMessage = false;
     try {
+      await input.authorize?.();
       initialMessage = await withinDurableSetup(deliverFirst(input, identity.path));
     } catch (error) {
       /* Host identity and ownership are durable by this point. A caller

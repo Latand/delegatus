@@ -1,3 +1,4 @@
+import { ownerRelayAuthorized } from "./ownerAuthority";
 import { runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
@@ -124,9 +125,11 @@ export async function completeRelayRequest(
   body: ExternalRelayCompletion,
   lastHeartbeat: () => number,
   stallMs: number,
+  allowOwnerReply?: () => boolean,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   let wait = 1000;
   while (true) {
+    if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
     try {
       await relayCall(
         relay.api_base,
@@ -198,12 +201,14 @@ export async function runClaimedRequest(
     requester: request?.input.requester ?? null,
     input: rawRequest.input,
   });
+  let allowOwnerReply: (() => boolean) | undefined;
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
     // Persist the local decision before any delivery wait: a restart must
     // leave the generated answer and early declines inspectable.
+    if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
     recorder?.finish({
       outcome:
         body.outcome === "answered"
@@ -218,7 +223,7 @@ export async function runClaimedRequest(
       delivery: "unconfirmed",
       ...loopRecord(),
     });
-    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs);
+    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs, allowOwnerReply);
     const completion = sent.body;
     recorder?.recordDelivery({
       outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
@@ -269,6 +274,7 @@ export async function runClaimedRequest(
   }
   const profile = answerProfileFor(requester);
   const owner = ownerTierFor(target, request);
+  if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let conversation: RelayConversation | null = null;
   let conversationEvidence: { sessionId?: string | null; promptTokens?: number | null; compacted?: boolean } = {};
@@ -288,6 +294,7 @@ export async function runClaimedRequest(
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}` } } : {}),
       requestId,
       leaseId,
       relayId: relay.id,
@@ -409,6 +416,8 @@ export async function runClaimedRequest(
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
         run = owner ? runOwnerAgent({
+          authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
+          credentials: [relay.credential],
           request, owner, target, accountId: selection.account.accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: (conversationId) => {
@@ -546,12 +555,15 @@ export async function runClaimedRequest(
     if (recorder?.begun && !recorder.finished)
       recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
     try {
-      if (recorded) dropRun(requestId);
+      const held = readRunLedger().runs.find(r => r.requestId === requestId);
+      const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
+      if (recorded && !custodyPending) dropRun(requestId);
     } catch (error) {
       console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
     }
     try {
-      if (runDir) fs.rmSync(runDir, { recursive: true, force: true });
+      const held = readRunLedger().runs.find(r => r.requestId === requestId);
+      if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) fs.rmSync(runDir, { recursive: true, force: true });
     } catch (error) {
       console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
     }

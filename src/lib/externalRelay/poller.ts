@@ -1,3 +1,5 @@
+import { confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
+import { changeRun } from "./store";
 import { sweepConversations } from "./conversations";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
@@ -66,15 +68,35 @@ const targetRefreshes = (controller.targetRefreshes ??= new Map<
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
-  return { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
+  const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
+  try {
+    const pending = readRunLedger().runs.find(run => run.relayId === id && run.ownerTurn?.cancel && !run.ownerTurn.confirmed);
+    return { ...status, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
+  } catch {
+    console.error("External relay cancellation custody unreadable; run ledger preserved");
+    return { ...status, lastOutcome: "local_error" };
+  }
 }
 export function wakeExternalRelayPoller(id: string) {
   loops.get(id)?.abort.abort();
 }
-export async function sweepExternalRelayOrphans(): Promise<void> {
+export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Promise<void> {
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
   for (const run of readRunLedger().runs) {
-    if (processMatches(run.ownerPid, run.ownerIdentity)) continue;
+    const ownerAlive = processMatches(run.ownerPid, run.ownerIdentity);
+    if (run.ownerTurn) {
+      if (ownerAlive && !run.ownerTurn.cancel) continue;
+      if (!ownerAlive) {
+        run.ownerTurn.admissionComplete = true;
+        changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
+      }
+      if (!run.ownerTurn.cancel) {
+        run.ownerTurn.cancel = "kill";
+        changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: "kill" } }));
+      }
+      if (!run.ownerTurn.confirmed && !await confirmOwnerStop(run, ownerPorts)) continue;
+      noteRelayOutcome(run.relayId, "failed:cancelled");
+    } else if (ownerAlive) continue;
     if (run.childPid && processMatches(run.childPid, run.childIdentity))
       terminateHeadlessReviewerGroup(run.childPid, run.childIdentity);
     const relay = readRelayStore().relays.find(
@@ -108,7 +130,8 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
       path.basename(run.runDir).startsWith("llv-external-relay-")
     )
       fs.rmSync(run.runDir, { recursive: true, force: true });
-    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery);
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery,
+      run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId)?.conversationId : undefined);
     dropRun(run.requestId);
   }
   sweepConversations(readRelayStore().relays, readRunLedger().runs);

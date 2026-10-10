@@ -1,4 +1,5 @@
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 
 import {
@@ -106,6 +107,8 @@ export type StructuredMessageResult =
   | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
+  /** Trusted caller fence, repeated immediately before first-prompt dispatch. */
+  authorizeDispatch?: () => void | Promise<void>;
   /** Controller-only eligibility, checked after runtime reads and before admission. */
   idleContinuationAllowed?: () => boolean | Promise<boolean>;
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
@@ -978,6 +981,12 @@ function heldDrainProgress(
   };
 }
 
+function ownerFirstPromptAllowed(registry: AgentRegistry, operationId: string): boolean {
+  if (!operationId.startsWith("spawn_message_")) return true;
+  const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
+  return ownerRelaySpawnAuthorized(receipt?.clientAttemptId);
+}
+
 export async function deliverHeldStructuredMessage(
   request: HeldStructuredMessageRequest,
   dependencies: HeldStructuredMessageDependencies = {},
@@ -999,6 +1008,18 @@ async function deliverHeldAttempt(
   registry: AgentRegistry,
   progress: ReturnType<typeof heldDrainProgress>,
 ): Promise<HeldStructuredMessageOutcome> {
+  const operationId = request.command?.operationId
+    ?? registry.readOnlySnapshot().heldDeliveries[request.deliveryId]?.command.operationId ?? request.deliveryId;
+  const refuseOwnerPrompt = async (): Promise<HeldStructuredMessageOutcome | undefined> => {
+    if (ownerFirstPromptAllowed(registry, operationId)) return undefined;
+    const delivery = reservationFor(registry, operationId);
+    if (!delivery) return "failed";
+    const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId },
+      () => registry.terminalizeHeldDelivery(delivery.id, "owner relay first prompt authorization revoked"));
+    return ended.acquired ? "failed" : heldForRetry("owner first prompt cancellation awaits the registry writer");
+  };
+  const refused = await refuseOwnerPrompt();
+  if (refused !== undefined) return refused;
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
     progress.unreadable("runtime host client is unavailable");
@@ -1090,6 +1111,8 @@ async function deliverHeldAttempt(
       policy: "interrupt-active" as const,
     };
     progress.wait("dispatching");
+    if (!ownerFirstPromptAllowed(registry, operationId))
+      return await refuseOwnerPrompt() ?? heldForRetry("owner first prompt authorization changed");
     const result = await client.command({
       kind: command.kind,
       operationId: command.operationId,
@@ -1779,6 +1802,18 @@ export async function enqueueStructuredMessage(
         nextWakeMs: null,
       }) ?? written;
       lastWritten = written;
+      try {
+        if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+        await dependencies.authorizeDispatch?.();
+        if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+      }
+      catch {
+        // Nothing reached the journal: terminalize the reservation so recovery
+        // cannot dispatch this first prompt later as an uncertain send.
+        const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
+          () => registry.terminalizeHeldDelivery(assigned.id, "autonomous first prompt authorization revoked"));
+        return ended.acquired ? "caller-revoked" as const : "caller-revocation-pending" as const;
+      }
       commandResult = await client.command({
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
@@ -1801,6 +1836,8 @@ export async function enqueueStructuredMessage(
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);
+    if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
+    if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.

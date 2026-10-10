@@ -201,14 +201,19 @@ export function answerRecorder(base: {
 export type AnswerRecorder = NonNullable<ReturnType<typeof answerRecorder>>;
 
 /** Settles a record a dead owner left running, as the orphan sweep settles its lease. */
-export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery): void {
+export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery, conversationId?: string): void {
   try {
     for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
       const record = readRecord(file);
-      if (!record || record.state !== "running") continue;
+      if (!record) continue;
+      if (record.state !== "running") {
+        if (conversationId && record.conversationId !== conversationId) writeRecord(file, { ...record, conversationId });
+        continue;
+      }
       const now = Date.now();
       writeRecord(file, {
         ...record,
+        ...(conversationId ? { conversationId } : {}),
         state: "finished",
         outcome: "failed:install_restarted",
         delivery,

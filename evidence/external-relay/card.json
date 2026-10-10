@@ -1,7 +1,7 @@
 {
   "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
   "browser": {
-    "pid": 4022891,
+    "pid": 528110,
     "closed": true
   },
   "readings": [
@@ -56,14 +56,14 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -227,7 +227,7 @@
         "id": "bot-1",
         "summary": "Opus 5.5 · 1 of 2 running · 10/h",
         "warned": false,
-        "rowHeight": 430,
+        "rowHeight": 446,
         "open": true,
         "engine": "Claude",
         "settings": [
@@ -249,7 +249,7 @@
             "width": 48,
             "height": 44
           },
-          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops new owner runs at once.",
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -318,13 +318,13 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 07:57",
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -394,7 +394,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:06.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -524,14 +524,14 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -695,7 +695,7 @@
         "id": "bot-1",
         "summary": "Opus 5.5 · 1 of 2 running · 10/h",
         "warned": false,
-        "rowHeight": 430,
+        "rowHeight": 446,
         "open": true,
         "engine": "Claude",
         "settings": [
@@ -717,7 +717,7 @@
             "width": 48,
             "height": 44
           },
-          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops new owner runs at once.",
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -786,13 +786,13 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 07:57",
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -862,7 +862,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:06.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -1009,14 +1009,14 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -1202,7 +1202,7 @@
             "width": 36,
             "height": 24
           },
-          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops new owner runs at once.",
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -1304,13 +1304,13 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 07:57",
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -1382,7 +1382,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:06.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -1549,14 +1549,14 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Answered · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Answered · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -1742,7 +1742,7 @@
             "width": 36,
             "height": 24
           },
-          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops new owner runs at once.",
+          "hint": "When the owner writes in a chat, the answer runs on this computer as an ordinary Delegatus agent with full access and every Delegatus tool. The relay service says who the owner is. Everyone else’s messages stay data, and they get the usual answer. Turning this off stops active and pending owner turns and blocks their replies at once.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -1844,13 +1844,13 @@
         }
       ],
       "pairedAs": [
-        "Paired as Person A (@person_a) · Oct 9, 08:57",
-        "Paired as Person A (@person_a) · Oct 9, 08:57"
+        "Paired as Person A (@person_a) · Oct 9, 09:41",
+        "Paired as Person A (@person_a) · Oct 9, 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Failed: the agent stopped with an error · 07:57",
+      "lastOutcome": "Failed: the agent stopped with an error · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -1922,7 +1922,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:06.\n\nCancel",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nWaiting for you to confirm in the relay service…\n\nOpen the link, or enter this code in the relay service:\n\nK7QM-9XTD\nOpen the relay service's pairing page\n\nThe code works until 09:50.\n\nCancel",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -2072,14 +2072,14 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -2265,7 +2265,7 @@
             "width": 48,
             "height": 44
           },
-          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє нові запуски для власника.",
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -2334,13 +2334,13 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 07:57",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -2410,7 +2410,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:06.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -2540,14 +2540,14 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -2733,7 +2733,7 @@
             "width": 48,
             "height": 44
           },
-          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє нові запуски для власника.",
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -2802,13 +2802,13 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 07:57",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -2878,7 +2878,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:06.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -3025,14 +3025,14 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -3196,7 +3196,7 @@
         "id": "bot-1",
         "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
         "warned": false,
-        "rowHeight": 284,
+        "rowHeight": 300,
         "open": true,
         "engine": "Claude",
         "settings": [
@@ -3218,7 +3218,7 @@
             "width": 36,
             "height": 24
           },
-          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє нові запуски для власника.",
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -3320,13 +3320,13 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 07:57",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -3398,7 +3398,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:06.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],
@@ -3565,14 +3565,14 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Відповіли · 08:53",
-      "lastProgress": "Support bot · 08:52",
+      "lastOutcome": "Відповіли · 09:37",
+      "lastProgress": "Support bot · 09:36",
       "targets": [
         {
           "id": "bot-1",
@@ -3736,7 +3736,7 @@
         "id": "bot-1",
         "summary": "Opus 5.5 · 1 з 2 виконуються · 10/год",
         "warned": false,
-        "rowHeight": 284,
+        "rowHeight": 300,
         "open": true,
         "engine": "Claude",
         "settings": [
@@ -3758,7 +3758,7 @@
             "width": 36,
             "height": 24
           },
-          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє нові запуски для власника.",
+          "hint": "Коли в чаті пише власник, відповідь виконує звичайний агент Delegatus на цьому комп’ютері з повним доступом і всіма інструментами Delegatus. Хто власник, повідомляє сервіс. Повідомлення всіх інших лишаються даними, і вони отримують звичайну відповідь. Вимкнення одразу зупиняє активні й очікувані запуски для власника та блокує їхні відповіді.",
           "hintOverflow": false
         },
         "answeredHere": true,
@@ -3860,13 +3860,13 @@
         }
       ],
       "pairedAs": [
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57",
-        "Під’єднано як Person A (@person_a) · 9 жовт., 08:57"
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41",
+        "Під’єднано як Person A (@person_a) · 9 жовт., 09:41"
       ],
       "cut": [],
       "pairing": null,
       "pairingText": null,
-      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 07:57",
+      "lastOutcome": "Не вдалося: агент зупинився з помилкою · 08:41",
       "lastProgress": null,
       "targets": [
         {
@@ -3938,7 +3938,7 @@
       "pairedAs": [],
       "cut": [],
       "pairing": "pending",
-      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:06.\n\nСкасувати",
+      "pairingText": "E\n\nExample relay\nrelay.example\n\nAnswers questions in the example chats.\n\nЧекаємо на ваше підтвердження в сервісі…\n\nВідкрийте посилання або введіть цей код у сервісі:\n\nK7QM-9XTD\nВідкрити сторінку під’єднання в сервісі\n\nКод дійсний до 09:50.\n\nСкасувати",
       "lastOutcome": null,
       "lastProgress": null,
       "targets": [],

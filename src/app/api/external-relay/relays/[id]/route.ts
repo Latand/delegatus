@@ -1,3 +1,4 @@
+import { revokeOwnerRuns } from "@/lib/externalRelay/ownerRun";
 import { NextRequest, NextResponse } from "next/server";
 import { validateLaunchModel } from "@/lib/agent/models";
 import { effortScale } from "@/lib/agent/efforts";
@@ -107,6 +108,7 @@ export async function PATCH(req: NextRequest, context: Context) {
     }));
     if (!updated)
       return NextResponse.json({ error: "not_found" }, { status: 404 });
+    await revokeOwnerRuns(id);
     refreshExternalRelayPollers(id);
     return NextResponse.json({ relay: updated });
   } catch (error) {
@@ -118,6 +120,7 @@ export async function DELETE(req: NextRequest, context: Context) {
   if (denied) return denied;
   try {
     const result = await unpairRelay((await context.params).id);
+    await revokeOwnerRuns((await context.params).id);
     refreshExternalRelayPollers((await context.params).id);
     return NextResponse.json(result);
   } catch (error) {

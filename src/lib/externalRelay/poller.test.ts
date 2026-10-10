@@ -21,6 +21,24 @@ import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot 
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
+test("unreadable cancellation custody leaves relay settings accessible and preserves ledger bytes", () => {
+  const file = externalRelayFile("runs");
+  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  const content = "{broken fixture-private-content";
+  const diagnostics: unknown[][] = [], oldError = console.error;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+  console.error = (...args) => { diagnostics.push(args); };
+  try {
+    expect(relayPollerStatus("fixture-relay")).toMatchObject({ state: "paused", lastOutcome: "local_error" });
+    expect(fs.readFileSync(file, "utf8")).toBe(content);
+    expect(JSON.stringify(diagnostics)).toContain("custody unreadable");
+    expect(JSON.stringify(diagnostics)).not.toContain("fixture-private-content");
+  } finally {
+    console.error = oldError;
+    if (before) fs.writeFileSync(file, before); else fs.rmSync(file, { force: true });
+  }
+});
 afterAll(() => {
   stopExternalRelayPollers();
   for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true });

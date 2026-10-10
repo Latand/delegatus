@@ -1,8 +1,15 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
-import { ownerAnswer, ownerRunPrompt, runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
+import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, settleOwnerFirstPrompt, type OwnerRunPorts } from "./ownerRun";
+import { appDirIn } from "../../../bin/appDir.mjs";
 
 function request(): ExternalRelayRequest {
   return requestSchema.parse({ ...contextRequest, input: { ...contextRequest.input,
@@ -87,13 +94,13 @@ test("normal spawn fields and final turn are used without a child or progress st
   expect(bound).toEqual(["conversation_owner"]);
 });
 
-test("cancel before admission settles immediately and interrupts the late conversation", async () => {
+test("cancel before admission retains custody and kills the late conversation", async () => {
   let release!: (result: Awaited<ReturnType<typeof launch>>) => void;
   const stops: string[] = [];
   const run = start({ launch: () => new Promise(r => { release = r; }), observe: async () => ({ state: "running" }), stop: async (id, action) => { stops.push(id + ":" + action); } });
   run.cancel(); expect(await run.done).toMatchObject({ status: "cancelled" });
   release(await launch()); await new Promise(r => setTimeout(r, 5));
-  expect(stops).toEqual(["conversation_owner:interrupt"]);
+  expect(stops).toEqual(["conversation_owner:kill"]);
 });
 
 test("hard cap interrupts even while observation is unresponsive", async () => {
@@ -108,4 +115,80 @@ test("queued admission is killed and a refused launch never falls back", async (
     observe: async () => { throw Error("must not observe queued launch"); }, stop: async (_id, action) => { stops.push(action); } };
   expect(await start(ports).done).toMatchObject({ status: "failed" }); expect(stops).toEqual(["kill"]);
   expect(await start({ ...ports, launch: async () => ({ status: 503, body: {} }) }).done).toMatchObject({ status: "failed" });
+});
+
+
+test("timeout retries a transient interruption failure before settling", async () => {
+  let stops = 0;
+  const run = start({ launch, observe: async () => ({ state: "running" }), pollMs: 1,
+    stop: async () => { if (++stops === 1) throw Error("transient control failure"); } }, 10);
+  expect(await run.done).toMatchObject({ status: "timeout" });
+  expect(stops).toBe(2);
+});
+
+test("owner output removes host paths and private keys before truncating", () => {
+  const r = request(); r.answer.max_chars = 32000;
+  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt",
+    String.raw`C:\review-fixture\private-note.txt`, String.raw`\\fixture-host\share\private-note.txt`];
+  const material = "fixture-private-material";
+  const key = ["-----BEGIN RSA PRIVATE KEY-----", material, "-----END RSA PRIVATE KEY-----"].join("\n");
+  const answer = ownerAnswer(["Done", ...paths, key].join("\n"), r, instruction())!.text;
+  for (const value of [...paths, material]) expect(answer).not.toContain(value);
+  expect(answer).toContain("Done");
+  const link = "https://example.test/docs/work";
+  expect(ownerAnswer(link, r, instruction())!.text).toBe(link);
+  for (const footer of ["-----END PGP PRIVATE KEY BLOCK-----", ""]) {
+    const pgp = ["-----BEGIN PGP PRIVATE KEY BLOCK-----", "fixture-pgp-private-material", footer].join("\n");
+    expect(ownerAnswer(pgp, r, instruction())!.text).toBe("[redacted]");
+  }
+});
+
+test("owner output scrubs the remembered installation access key when the environment has no token", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-access-key-"));
+  const directory = appDirIn(root);
+  const originalXdg = process.env.XDG_CONFIG_HOME, originalToken = process.env.LLV_TOKEN;
+  const credential = "7b".repeat(16);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "phone-access"), "tailscale");
+  fs.writeFileSync(path.join(directory, "token"), credential);
+  process.env.XDG_CONFIG_HOME = root;
+  delete process.env.LLV_TOKEN;
+  try {
+    const r = request(); r.answer.max_chars = 32000;
+    expect(ownerAnswer(`Finished. Access value: ${credential}`, r, instruction())!.text)
+      .toBe("Finished. Access value: [redacted]");
+  } finally {
+    if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = originalXdg;
+    if (originalToken === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = originalToken;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("failed owner receipt releases custody only after owed first-prompt cleanup and host liveness", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "owner-prompt-custody-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const clientAttemptId = "relay-owner-prompt-custody";
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId });
+  if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+  const conversationId = begun.receipt.conversationId;
+  const delivery = registry.holdDelivery(conversationId, "Owner instruction", `spawn_${begun.receipt.launchId}`, "text", [], null,
+    { operationId: `spawn_message_${begun.receipt.launchId}` });
+  const sources = { registry: () => registry, now: () => Date.now(),
+    liveness: async () => [{ reason: "host_gone_turn_settled" }] } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  const write = registry.deliveryWrite.bind(registry);
+  let refused = true;
+  const writer = spyOn(registry, "deliveryWrite").mockImplementation(async (...args) => {
+    if (refused && args[0].label === "delivery.owner-cutoff") return { acquired: false };
+    return write(...args);
+  });
+  try {
+    expect(await settleOwnerFirstPrompt(clientAttemptId, conversationId, registry)).toEqual({ confirmed: false, pending: true });
+    expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]!.text).toBe("Owner instruction");
+    // A pending prompt can recover even after its original host has gone.
+    expect(await observeOwnerTurn({ clientAttemptId, claimedAt: new Date().toISOString() }, sources)).toMatchObject({ state: "running" });
+    refused = false;
+    expect(await settleOwnerFirstPrompt(clientAttemptId, conversationId, registry)).toEqual({ confirmed: true, pending: true });
+    expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", text: "" });
+    expect(await observeOwnerTurn({ clientAttemptId, claimedAt: new Date().toISOString() }, sources)).toMatchObject({ state: "failed", failure: { kind: "host-died" } });
+  } finally { writer.mockRestore(); registry.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
 });

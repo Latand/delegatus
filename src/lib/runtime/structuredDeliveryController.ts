@@ -1,3 +1,4 @@
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
@@ -961,7 +962,11 @@ export async function bindStructuredDeliveryQueue(
       /* The durable delivery record's own fence (#1131): a send a receipt query
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */
-      settled: (operationId: string) => sendIsSettled(registry.readOnlySnapshot(), operationId),
+      settled: (operationId: string) => {
+        const snapshot = registry.readOnlySnapshot();
+        const receipt = operationId.startsWith("spawn_message_") ? snapshot.receipts[operationId.slice("spawn_message_".length)] : null;
+        return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
+      },
       /* Who may write to this conversation's engine right now (#1131): the
          evidence a `delivering` row is compared against before it is called
          abandoned, so a send another live executor is actuating is left to it. */

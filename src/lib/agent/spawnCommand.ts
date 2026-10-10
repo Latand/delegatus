@@ -157,6 +157,8 @@ export interface SpawnCommandDependencies {
   /** In-process autonomous callers recheck their admission hold under the
       account lock. Direct operator requests omit this callback. */
   autonomousAdmissionHeld?(): boolean;
+  /** Trusted caller authorization, including replays and first-prompt delivery. */
+  authorizeAutonomousLaunch?(): void;
   /** Trusted automatic target restriction, checked under the account lock
       immediately before a fresh launch receipt is reserved. */
   assertAccountAdmission?(accountId: string): void;
@@ -998,6 +1000,7 @@ export async function executeSpawnRequest(
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
     const begun = await withAccountMutationLockAsync(() => {
+      dependencies.authorizeAutonomousLaunch?.();
       const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
       if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
         && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) return null;
@@ -1202,6 +1205,11 @@ export async function executeSpawnRequest(
     ): void => {
       dependencies.defer(async () => {
         let response: SpawnResponse;
+        try { dependencies.authorizeAutonomousLaunch?.(); }
+        catch {
+          await registry.failStructuredSpawnOffLoop(receipt.launchId, "autonomous launch authorization revoked");
+          return;
+        }
         try {
           response = await dependencies.spawnStructuredConversation({
             engine,
@@ -1212,6 +1220,7 @@ export async function executeSpawnRequest(
             imageRefs,
             registry,
             client: runtimeClient,
+            authorize: dependencies.authorizeAutonomousLaunch,
           });
           recordActualLaunchAccount(receipt, account.accountId, response.path);
         } catch (error) {
@@ -1355,6 +1364,7 @@ export async function executeSpawnRequest(
       }
     }
     const startedAtMs = Date.now();
+    dependencies.authorizeAutonomousLaunch?.();
     const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt);
     const childPath = await resolveSpawnedTranscriptPath({
       engine,
