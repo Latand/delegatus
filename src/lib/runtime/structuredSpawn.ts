@@ -1,3 +1,5 @@
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
@@ -509,7 +511,7 @@ async function failStructuredLaunchAndReap(
     try {
       await client.transitionOperation(launchId, "failed", { reason });
     } catch (error) {
-      console.error("[spawn] runtime operation failure did not settle during reconciliation", {
+      spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] runtime operation failure did not settle during reconciliation", {
         launchId,
         error: structuredSpawnFailureReason(error),
       });
@@ -523,7 +525,7 @@ async function failStructuredLaunchAndReap(
       try {
         released = await (options.releaseHost ?? releaseStructuredDeliveryHost)(cleanup.key);
       } catch (error) {
-        console.error("[spawn] registered host release failed during reconciliation", {
+        spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] registered host release failed during reconciliation", {
           launchId,
           error: structuredSpawnFailureReason(error),
         });
@@ -541,13 +543,13 @@ async function failStructuredLaunchAndReap(
         try {
           const terminated = await (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process);
           if (!terminated && cleanup.process.pid !== process.pid) {
-            console.error("[spawn] staged host termination remained unconfirmed", {
+            spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] staged host termination remained unconfirmed", {
               launchId,
               pid: cleanup.process.pid,
             });
           }
         } catch (error) {
-          console.error("[spawn] staged host termination failed during reconciliation", {
+          spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] staged host termination failed during reconciliation", {
             launchId,
             error: structuredSpawnFailureReason(error),
           });
@@ -805,6 +807,8 @@ async function actuateQueuedPinnedSpawn(
   const queued = queuedPinnedSpawnForReceipt(receipt);
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
+  if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+    return failQueuedPinnedSpawn(registry, receipt, "owner relay queued launch authorization revoked");
   const admissionClaim = receipt.transport === "tmux"
     ? registry.claimTmuxSpawnActuation(receipt.launchId)
     : registry.claimStartingStructuredSpawn(receipt.launchId);
@@ -859,6 +863,8 @@ async function actuateQueuedPinnedSpawn(
       `pinned account is unavailable: ${admission.reason}`,
     );
   }
+  if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+    return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "owner relay queued launch authorization revoked");
   let response: SpawnResponse | null = null;
   let tmuxImagePaths: string[] = [];
   try {
@@ -896,6 +902,10 @@ async function actuateQueuedPinnedSpawn(
         imageRefs: claimedQueue.imageRefs,
         registry,
         client,
+        authorize: () => {
+          if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
+            throw new Error("owner relay queued launch authorization revoked");
+        },
       });
     }
   } catch (error) {
@@ -919,7 +929,7 @@ async function actuateQueuedPinnedSpawn(
       rememberHandoffChild(response.path, claimedQueue.parentArtifactPath);
       persistHandoffLineage();
     } catch (error) {
-      console.error("[spawn] queued handoff lineage persistence failed", {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] queued handoff lineage persistence failed", {
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
         error,
@@ -930,7 +940,7 @@ async function actuateQueuedPinnedSpawn(
     try {
       await (options.publishFilesRevision ?? publishFilesRevision)(client);
     } catch (error) {
-      console.error("[spawn] queued transcript materialization refresh failed", {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] queued transcript materialization refresh failed", {
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
         error,
@@ -984,7 +994,7 @@ export async function terminalizeStaleStructuredSpawns(
         if (recoveredReceipt.state === "failed" || recoveredReceipt.state === "conflicted") terminalized.push(receipt.launchId);
         else if (recoveredReceipt.state === "completed") recovered.push(receipt.launchId);
       } catch (error) {
-        console.error("[reaper] queued pinned spawn recovery failed", {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] queued pinned spawn recovery failed", {
           launchId: receipt.launchId,
           error,
         });
@@ -1008,7 +1018,7 @@ export async function terminalizeStaleStructuredSpawns(
         const failed = registry.readOnlySnapshot().receipts[receipt.launchId];
         if (failed?.state === "failed" || failed?.state === "conflicted") terminalized.push(receipt.launchId);
       } catch (error) {
-        console.error("[reaper] stale tmux spawn reconciliation failed", {
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale tmux spawn reconciliation failed", {
           launchId: receipt.launchId,
           error,
         });
@@ -1023,7 +1033,7 @@ export async function terminalizeStaleStructuredSpawns(
       if (reconciled.state === "failed") terminalized.push(receipt.launchId);
       else if (reconciled.state === "completed") recovered.push(receipt.launchId);
     } catch (error) {
-      console.error("[reaper] stale structured spawn reconciliation failed", {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale structured spawn reconciliation failed", {
         launchId: receipt.launchId,
         error,
       });
@@ -1827,6 +1837,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     client: () => input.client,
     registry: () => input.registry,
     enabled: () => true,
+    authorizeDispatch: input.authorize,
   });
   if (!delivered?.ok) {
     const message = delivered?.error ?? "structured spawn first-message delivery was unavailable";
@@ -2229,7 +2240,7 @@ export async function spawnStructuredConversation(
       try {
         await lateHost.release();
       } catch (error) {
-        console.error("[spawn] late structured host could not be released after setup timeout", {
+        spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] late structured host could not be released after setup timeout", {
           launchId: input.receipt.launchId,
           error: structuredSpawnFailureReason(error),
         });
@@ -2316,7 +2327,7 @@ export async function spawnStructuredConversation(
         binding.unregister = await publishAuthorized();
         forgetUnpublishedHost();
       },
-      deliver: () => deliverFirst(input, identity.path),
+      deliver: async () => { await input.authorize?.(); return deliverFirst(input, identity.path); },
     };
     stagedContinuations.set(operationId, continuation);
     forgetUnpublishedHost = retainUnpublishedStructuredLaunchHost({ key, host, registry: input.registry,
@@ -2333,6 +2344,7 @@ export async function spawnStructuredConversation(
     let initialMessage: void | "held";
     let uncertainFirstMessage = false;
     try {
+      await input.authorize?.();
       initialMessage = await withinDurableSetup(deliverFirst(input, identity.path));
     } catch (error) {
       /* Host identity and ownership are durable by this point. A caller
@@ -2533,7 +2545,7 @@ export async function spawnStructuredConversation(
       }
     }
     if (cleanupError !== null) {
-      console.error("[spawn] failed host cleanup remained unconfirmed", {
+      spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] failed host cleanup remained unconfirmed", {
         launchId: input.receipt.launchId,
         error: structuredSpawnFailureReason(cleanupError),
       });

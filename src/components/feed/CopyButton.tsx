@@ -18,6 +18,9 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     /* permission denied — try the legacy path */
   }
+  /* Selecting the textarea takes focus; removing it would leave focus on <body>, out of the dialog or menu the
+     copy was pressed in, so Escape and tab order there stop working. Focus goes back where it was. */
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -30,6 +33,8 @@ export async function copyText(text: string): Promise<boolean> {
     return ok;
   } catch {
     return false;
+  } finally {
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
   }
 }
 

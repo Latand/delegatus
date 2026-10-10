@@ -378,6 +378,44 @@ test("engine change stops before spawning and keeps the slot, access and attempt
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ n: 1, conversationId: "conversation_new", runtimeSwitches: [{ mode: "handoff", phase: "committed" }] });
 });
 
+test("switch-owned teardown preserves a failed operator stop through compaction", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill, switchOperationKey } = await import("./runtimeSwitch");
+  const h = switchHarness();
+  const pipeline = await runningStage(h);
+  const filename = path.join(process.env.LLV_STATE_DIR!, "switch-stop-custody.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: h.wallClock });
+  const sessionKey = { engine: "claude" as const, sessionId: "switch-stop-session" };
+  journal.executeOperation({ kind: "kill", operationId: "real-operator-stop", idempotencyKey: "real-operator-stop", conversationId: STAGE_CONVERSATION, sessionKey, origin: { kind: "operator" } });
+  journal.transitionOperation("real-operator-stop", "failed");
+  h.ports.allowedAccountIds = () => ["default"];
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "default", kind: "default", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: {} } } as never);
+  h.ports.stopStageAgent = async (target, options) => {
+    const operationId = options!.operationId!;
+    journal.executeOperation({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: target.conversationId!, sessionKey,
+      origin: options?.automatic ? { kind: "agent", role: "pipeline" } : { kind: "operator" } });
+    journal.transitionOperation(operationId, "delivered");
+    return { outcome: "stopped" };
+  };
+  h.ports.spawnAgent = async (_input, reserved) => {
+    await reserved({ launchId: "launch-switch-successor", conversationId: "conversation_switch_successor", accountId: "default" });
+    return { launchId: "launch-switch-successor", conversationId: "conversation_switch_successor", accountId: "default", sessionId: "switch-successor", transcript: "/codex/switch-successor.jsonl", paneId: null };
+  };
+  try {
+    expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", applyNow: true }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+    expect(record.phase).toBe("committed");
+    journal.append({ scope: { type: "session", id: STAGE_CONVERSATION }, kind: "delta", payload: { text: "later history" } });
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor), operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+    expect(await hasRuntimeSwitchKill(client, STAGE_CONVERSATION, new Date(h.wallClock() - 1).toISOString(),
+      [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")], true)).toBe(true);
+  } finally { journal.close(); }
+});
+
 test("quota-neutral switches suppress their own abort notice and old verdicts", async () => {
   const h = switchHarness(); await requestSwitch(h); const cut = h.wallClock();
   await tickPipelines([], h.ports);
@@ -1011,12 +1049,40 @@ test("a retained kill boundary with a compacted receipt fences switch continuati
     journal.compact(1);
     expect(journal.operationResult("operator-kill")).toBeNull();
     const client = { effectBatch: async (kinds: string[], cursor: number) => journal.effectBatch(100, kinds, cursor), operationStatus: async (id: string) => journal.operationResult(id) };
-    await expect(hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(h.wallClock()).toISOString())).rejects.toThrow("kill boundary");
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(h.wallClock()).toISOString())).toBe(true);
     h.ports.runtimeSwitchKilled = (id, since, ignored) => hasRuntimeSwitchKill(client as never, id, since, ignored);
     await tickPipelines([], h.ports);
-    expect(loadPipelines()[0]!.stateDetail).toContain("kill boundary");
+    expect(loadPipelines()[0]!.stateDetail).toContain("stage stopped by kill");
     h.advance(10 * 60_000); await tickPipelines([], h.ports);
     expect(loadPipelines()[0]!.state).toBe("needs_decision"); expect(h.continuations).toHaveLength(1);
+  } finally { journal.close(); }
+});
+
+test("compacted historical operator kills do not block a later switch-owned teardown", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
+  const filename = path.join(process.env.LLV_STATE_DIR!, "historical-kill.sqlite");
+  let now = Date.parse("2026-10-02T10:00:00Z");
+  const firstAt = now;
+  let journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => now });
+  const sessionKey = { engine: "claude" as const, sessionId: "historical-kill-session" };
+  try {
+    for (const [operationId, origin] of [["historical-operator", { kind: "operator" }], ["owned-switch-stop", { kind: "agent", role: "pipeline" }]] as const) {
+      journal.executeOperation({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: STAGE_CONVERSATION, sessionKey, origin });
+      journal.transitionOperation(operationId, "delivered");
+      now += 1000;
+    }
+    journal.append({ scope: { type: "session", id: STAGE_CONVERSATION }, kind: "delta", payload: { text: "later history" } });
+    journal.compact(1);
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.operationResult("historical-operator")).toBeNull();
+    expect(journal.operationResult("owned-switch-stop")).toBeNull();
+    const client = { effectBatch: async (kinds: string[], cursor: number) => journal.effectBatch(100, kinds, cursor), operationStatus: async (id: string) => journal.operationResult(id) };
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(firstAt + 500).toISOString(), ["owned-switch-stop"])).toBe(false);
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(firstAt).toISOString(), ["owned-switch-stop"])).toBe(true);
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(firstAt + 500).toISOString())).toBe(true);
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(now).toISOString())).toBe(false);
   } finally { journal.close(); }
 });
 

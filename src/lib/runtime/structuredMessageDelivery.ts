@@ -1,4 +1,6 @@
+import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 
 import {
@@ -106,6 +108,8 @@ export type StructuredMessageResult =
   | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
+  /** Trusted caller fence, repeated immediately before first-prompt dispatch. */
+  authorizeDispatch?: () => void | Promise<void>;
   /** Controller-only eligibility, checked after runtime reads and before admission. */
   idleContinuationAllowed?: () => boolean | Promise<boolean>;
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
@@ -168,7 +172,7 @@ function settleRecord(progress: DeliveryProgressPort | null, operationId: string
   try {
     progress.settle?.(operationId, state, reason);
   } catch (error) {
-    console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+    spawnDiagnosticError("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -784,10 +788,10 @@ function uncertainReservationFailure(reservation: HeldDelivery): StructuredMessa
 function requestDeliveryDrain(kick: () => void | Promise<void>): void {
   try {
     void Promise.resolve(kick()).catch((error) => {
-      console.error("[structured delivery] drain request failed", error);
+      spawnDiagnosticError("[structured delivery] drain request failed", error);
     });
   } catch (error) {
-    console.error("[structured delivery] drain request failed", error);
+    spawnDiagnosticError("[structured delivery] drain request failed", error);
   }
 }
 
@@ -972,10 +976,16 @@ function heldDrainProgress(
           nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
         });
       } catch (error) {
-        console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+        spawnDiagnosticError("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
       }
     },
   };
+}
+
+function ownerFirstPromptAllowed(registry: AgentRegistry, operationId: string): boolean {
+  if (!operationId.startsWith("spawn_message_")) return true;
+  const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
+  return ownerRelaySpawnAuthorized(receipt?.clientAttemptId);
 }
 
 export async function deliverHeldStructuredMessage(
@@ -999,6 +1009,18 @@ async function deliverHeldAttempt(
   registry: AgentRegistry,
   progress: ReturnType<typeof heldDrainProgress>,
 ): Promise<HeldStructuredMessageOutcome> {
+  const operationId = request.command?.operationId
+    ?? registry.readOnlySnapshot().heldDeliveries[request.deliveryId]?.command.operationId ?? request.deliveryId;
+  const refuseOwnerPrompt = async (): Promise<HeldStructuredMessageOutcome | undefined> => {
+    if (ownerFirstPromptAllowed(registry, operationId)) return undefined;
+    const delivery = reservationFor(registry, operationId);
+    if (!delivery) return "failed";
+    const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId },
+      () => registry.terminalizeHeldDelivery(delivery.id, "owner relay first prompt authorization revoked"));
+    return ended.acquired ? "failed" : heldForRetry("owner first prompt cancellation awaits the registry writer");
+  };
+  const refused = await refuseOwnerPrompt();
+  if (refused !== undefined) return refused;
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
     progress.unreadable("runtime host client is unavailable");
@@ -1009,7 +1031,9 @@ async function deliverHeldAttempt(
     session = await progress.step("reading the recipient's runtime session",
       () => readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined }));
   } catch (error) {
-    console.error("[structured delivery] runtime session read failed", error);
+    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
+      `spawn_message_${receipt.launchId}` === request.command?.operationId)?.clientAttemptId,
+      "[structured delivery] runtime session read failed", error);
     progress.unreadable(error instanceof Error ? error.message : String(error));
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
@@ -1090,6 +1114,8 @@ async function deliverHeldAttempt(
       policy: "interrupt-active" as const,
     };
     progress.wait("dispatching");
+    if (!ownerFirstPromptAllowed(registry, operationId))
+      return await refuseOwnerPrompt() ?? heldForRetry("owner first prompt authorization changed");
     const result = await client.command({
       kind: command.kind,
       operationId: command.operationId,
@@ -1207,7 +1233,9 @@ export async function enqueueStructuredMessage(
   try {
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
-    console.error("[structured delivery] runtime session read failed", error);
+    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
+      receipt.launchId === request.launchId || `spawn_message_${receipt.launchId}` === request.operationId)?.clientAttemptId,
+      "[structured delivery] runtime session read failed", error);
     if (dependencies.idleContinuationAllowed) return continuationRefused(`runtime session read failed: ${error instanceof Error ? error.message : String(error)}`);
     return holdDuringRuntimeSynchronization(
       request,
@@ -1779,6 +1807,18 @@ export async function enqueueStructuredMessage(
         nextWakeMs: null,
       }) ?? written;
       lastWritten = written;
+      try {
+        if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+        await dependencies.authorizeDispatch?.();
+        if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
+      }
+      catch {
+        // Nothing reached the journal: terminalize the reservation so recovery
+        // cannot dispatch this first prompt later as an uncertain send.
+        const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
+          () => registry.terminalizeHeldDelivery(assigned.id, "autonomous first prompt authorization revoked"));
+        return ended.acquired ? "caller-revoked" as const : "caller-revocation-pending" as const;
+      }
       commandResult = await client.command({
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
@@ -1801,6 +1841,8 @@ export async function enqueueStructuredMessage(
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);
+    if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
+    if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.

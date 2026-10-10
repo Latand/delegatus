@@ -215,7 +215,7 @@ test("the production admission seam refuses whole-input retractions, and a reque
   expect(admission.events(session.id, 0).some((event: CompanionEvent) => event.type === "delegation.tool.result" && event.result.status === "queued")).toBe(true);
 });
 
-test("reordered finals, later speech, seat rotation, and restart cannot revive an unconfirmed proposal", async () => {
+test("reordered finals and withdrawn proposals stay refused; a valid confirmation rebinds after rotation", async () => {
   const storage = new CompanionStorage();
   let epoch = 1;
   let sends = 0;
@@ -237,10 +237,11 @@ test("reordered finals, later speech, seat rotation, and restart cannot revive a
   const moved = restarted.propose(session.id, "moved", "ask-again", "Перевір план", { confirmation: "Планів два." })!;
   epoch++;
   await restarted.confirm(session.id, { type: "confirmation", proposalId: moved.proposalId, via: "tap", decision: "send" });
-  expect(sends).toBe(0);
+  expect(sends).toBe(1);
+  expect(restarted.events(session.id, 0).filter(event => event.type === "delegation.retargeted")).toMatchObject([{ recipient: { seatEpoch: 2 } }]);
 });
 
-test("only reports with the delivery key, project and frozen manager identity answer concurrent requests", async () => {
+test("reports answer only their delivery key and project, including a successor manager", async () => {
   const storage = new CompanionStorage();
   const recipient = { project: "reply-project", conversationId: "conversation_reply", seatEpoch: 1, engine: "claude" as const };
   let reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
@@ -251,15 +252,16 @@ test("only reports with the delivery key, project and frozen manager identity an
   const proposal = admission.propose(session.id, "call", "ask", "Review the plan")!;
   await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
   const key = admission.session(session.id).proposals[proposal.proposalId].delivery!.clientMessageId;
-  const report = (id: string, changes = {}): import("@/lib/bridge/types").BridgeReportV1 => ({ id, key: id, seq: 1, at: "2026-10-06T00:00:00Z", class: "completed", body: "Checked the plan",
+  let reportSeq = 0;
+  const report = (id: string, changes = {}): import("@/lib/bridge/types").BridgeReportV1 => ({ id, key: id, seq: ++reportSeq, at: "2026-10-06T00:00:00Z", class: "completed", body: "Checked the plan",
     project: recipient.project, correlatesDirective: key, origin: { kind: "manager", conversationId: recipient.conversationId, role: "orchestrator" }, ...changes });
   reports = [report("unrelated", { correlatesDirective: "other-key" }), report("foreign", { project: "other-project" }),
     report("wrong-agent", { origin: { kind: "manager", conversationId: "conversation_other", role: "orchestrator" } }), report("unattributed", { origin: undefined })];
-  expect(admission.pollReplies(session.id)).toEqual([]);
+  expect(admission.pollReports(session.id)).toMatchObject([{ type: "orchestrator.report", reportId: "unrelated" }, { type: "orchestrator.answer", reportId: "wrong-agent" }]);
   reports.push(report("correct"));
   expect(admission.pollReplies(session.id)).toMatchObject([{ type: "orchestrator.answer", reportId: "correct" }]);
   expect(new CompanionAdmission(new CompanionStorage(), { recipient: () => recipient, send: async () => { throw new Error("unexpected send"); }, reports: () => reports }).pollReplies(session.id)).toEqual([]);
-  expect(new CompanionStorage().read().sessions[session.id].events.filter(event => event.type === "orchestrator.answer")).toMatchObject([{ reportId: "correct", status: "result" }]);
+  expect(new CompanionStorage().read().sessions[session.id].events.filter(event => event.type === "orchestrator.answer")).toMatchObject([{ reportId: "wrong-agent", status: "result" }, { reportId: "correct", status: "result" }]);
 });
 
 test("project succession preserves an admitted voice binding and its reply correlation", async () => {
@@ -384,4 +386,225 @@ test("the session transcript stops at 4 MB with an explicit truncation marker an
   const ids = record.entries.map(entry => entry.id);
   expect([ids.includes("tool-0"), ids.includes("tool-599")]).toEqual([true, false]);
   expect(fs.statSync(path.join(root, "state", "voice-companion", "transcripts", `${session.id}.jsonl`)).size).toBeLessThanOrEqual(4 * 1024 * 1024);
+});
+
+function reportFixture(project: string, seq: number, changes: Partial<import("@/lib/bridge/types").BridgeReportV1> = {}): import("@/lib/bridge/types").BridgeReportV1 {
+  return { id: `report-${project}-${seq}`, project, seq, at: "2026-10-10T07:00:00Z", class: "status", body: "Progress",
+    origin: { kind: "manager", conversationId: "conversation_successor", role: "orchestrator" }, ...changes };
+}
+
+for (const closed of [false, true]) for (const evicted of [false, true]) test(`the first upgraded poll recovers only unconsumed published legacy replies${closed ? " after hangup" : ""}${evicted ? " from the journal alone" : ""}`, async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const paths = { recipient: () => ({ project: "legacy", conversationId: "conversation_legacy", seatEpoch: 1, engine: "codex" as const }),
+    reports: () => reports, send: async () => ({ status: "queued" as const, operationId: "operation-legacy" }) };
+  const storage = new CompanionStorage();
+  const admission = new CompanionAdmission(storage, paths);
+  const session = admission.create({ project: "legacy", locale: "en", authority: "live-model" });
+  await admission.delegate(session.id, "request", "turn", "Review the plan");
+  const held = Object.values(admission.session(session.id).proposals)[0];
+  const consumed = reportFixture("legacy", 2, { correlatesDirective: held.delivery!.clientMessageId });
+  admission.emit(session.id, { type: "orchestrator.answer", delivery: held.delivery!, reportId: consumed.id, status: "progress", text: consumed.body });
+  if (evicted) for (let index = 0; index < 520; index++) admission.emit(session.id, { type: "tool.called", callId: `read-${index}`, name: "list_tasks", summary: "Read open tasks" });
+  if (closed) admission.retire(session.id);
+  // These are exactly the session/proposal fields absent from base version 1.
+  storage.change(document => {
+    const row = document.sessions[session.id];
+    delete row.currentProject; delete row.reportWatermarks; delete row.spokenReports; delete row.startedBy; delete row.endedAt;
+    for (const proposal of Object.values(row.proposals)) { delete proposal.publishedReceipt; delete proposal.retargetCount; }
+    row.proposals[held.proposal.proposalId].reports.push(consumed.id);
+  });
+  reports.push(reportFixture("legacy", 1), consumed,
+    reportFixture("legacy", 3, { class: "completed", correlatesDirective: held.delivery!.clientMessageId }), reportFixture("legacy", 4));
+  const upgraded = new CompanionAdmission(new CompanionStorage(), paths);
+  expect(upgraded.pollReports(session.id)).toMatchObject([{ type: "orchestrator.answer", reportId: "report-legacy-3", delivery: held.delivery }]);
+  expect(upgraded.pollReports(session.id)).toEqual([]);
+  expect(upgraded.session(session.id).reportWatermarks).toEqual({ legacy: 4 });
+  expect(upgraded.transcriptRecord(session.id).entries.filter(entry => entry.kind === "report").map(entry => entry.id)).toEqual([
+    `report-${consumed.id}`, "report-report-legacy-3",
+  ]);
+  reports.push(reportFixture("legacy", 5));
+  expect(upgraded.pollReports(session.id)).toMatchObject([{ type: "orchestrator.report", reportId: "report-legacy-5" }]);
+});
+
+test("a published receipt keeps its reply correlation after event retention and a restart", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const paths = { recipient: () => ({ project: "receipt-retention", conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" as const }),
+    reports: () => reports, send: async () => ({ status: "delivered" as const, operationId: "operation-retained" }) };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths);
+  const session = admission.create({ project: "receipt-retention", locale: "en", authority: "live-model" });
+  await admission.delegate(session.id, "request", "turn", "Review the plan");
+  const held = Object.values(admission.session(session.id).proposals)[0];
+  expect(admission.events(session.id, 0).some(event => event.type === "delegation.tool.result")).toBe(true);
+  for (let index = 0; index < 520; index++) admission.emit(session.id, { type: "tool.called", callId: `read-${index}`, name: "list_tasks", summary: "Read open tasks" });
+  expect(admission.events(session.id, 0).some(event => event.type === "delegation.tool.result")).toBe(false);
+  reports.push(reportFixture("receipt-retention", 1, { class: "completed", correlatesDirective: held.delivery!.clientMessageId }));
+  const restarted = new CompanionAdmission(new CompanionStorage(), paths);
+  expect(restarted.pollReports(session.id)).toMatchObject([{ type: "orchestrator.answer", delivery: held.delivery, reportId: "report-receipt-retention-1" }]);
+  expect(restarted.pollReports(session.id)).toEqual([]);
+  expect(restarted.transcriptRecord(session.id).entries.filter(entry => entry.kind === "report")).toMatchObject([{ data: { delivery: held.delivery } }]);
+  // Pre-marker sessions recover the same evidence from their retained request.
+  restarted.storage.change(document => { delete document.sessions[session.id].proposals[held.proposal.proposalId].publishedReceipt; });
+  reports.push(reportFixture("receipt-retention", 2, { class: "completed", correlatesDirective: held.delivery!.clientMessageId }));
+  expect(new CompanionAdmission(new CompanionStorage(), paths).pollReports(session.id)).toMatchObject([{ type: "orchestrator.answer", delivery: held.delivery }]);
+});
+
+test("all fresh manager reports are ordered and committed once with advancing project watermarks across two pollers and a restart", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let reports = [reportFixture("reports", 10)];
+  const paths = { recipient: () => null, reports: () => reports, send: async () => { throw new Error("unused"); } };
+  const storage = new CompanionStorage();
+  const admission = new CompanionAdmission(storage, paths);
+  const session = admission.create({ project: "reports", locale: "uk" });
+  admission.protect("synthetic-secret-value");
+  reports = [...reports, reportFixture("reports", 14), reportFixture("reports", 11), reportFixture("reports", 12, { synthetic: true }),
+    reportFixture("reports", 13, { origin: undefined }), reportFixture("other", 15),
+    reportFixture("reports", 16, { body: `synthetic-secret-value /private/file.txt ${"я".repeat(1400)}` })];
+  const other = new CompanionAdmission(storage, paths);
+  const polls = await Promise.all([Promise.resolve().then(() => admission.pollReports(session.id)), Promise.resolve().then(() => other.pollReports(session.id))]);
+  expect(polls.map(events => events.map(event => event.type === "orchestrator.report" ? event.reportId : "wrong"))).toEqual([
+    ["report-reports-11", "report-reports-14", "report-reports-16"], [],
+  ]);
+  expect(polls[0][2]).toMatchObject({ type: "orchestrator.report", project: "reports", at: Date.parse("2026-10-10T07:00:00Z") });
+  expect(JSON.stringify(storage.read().sessions[session.id])).not.toContain("synthetic-secret-value");
+  expect(JSON.stringify(polls)).not.toContain("/private/file.txt");
+  expect(polls[0][2].type === "orchestrator.report" && polls[0][2].text.length).toBe(1200);
+  reports = Array.from({ length: 270 }, (_, index) => reportFixture("reports", index + 17));
+  expect(admission.pollReports(session.id)).toHaveLength(270);
+  const persisted = storage.read().sessions[session.id];
+  expect(persisted.spokenReports).toHaveLength(256);
+  expect(persisted.reportWatermarks).toEqual({ reports: 286 });
+  reports.unshift(reportFixture("reports", 11));
+  expect(new CompanionAdmission(storage, paths).pollReports(session.id)).toEqual([]);
+  expect(admission.transcriptRecord(session.id).entries.filter(entry => entry.kind === "report")).toHaveLength(273);
+});
+
+test("project context baselines new projects once, preserves visited cursors, and polls explicit delegated targets", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const reports = [reportFixture("a", 1), reportFixture("b", 2), reportFixture("c", 3)];
+  const sent: import("./contract").Delivery[] = [];
+  const paths = { recipient: (project: string) => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" as const }),
+    reports: (project: string) => reports.filter(report => report.project === project),
+    send: async ({ delivery }: Parameters<import("./admission").CompanionDeliveryPaths["send"]>[0]) => { sent.push(delivery); return { status: "queued" as const, operationId: `op-${sent.length}` }; } };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths);
+  const session = admission.create({ project: "a", locale: "en", authority: "live-model" });
+  admission.setProject(session.id, "b");
+  expect(admission.pollReports(session.id)).toEqual([]);
+  const asked = await admission.delegate(session.id, "ask", "turn", "Review", { project: "c", confirmation: "Choose a plan" });
+  expect(asked.state).toBe("awaiting");
+  if (asked.state !== "awaiting") throw new Error("missing proposal");
+  admission.setProject(session.id, null);
+  await admission.confirm(session.id, { proposalId: asked.proposal.proposalId, decision: "send", via: "tap" });
+  expect(sent[0].recipient.project).toBe("c");
+  expect((await admission.delegate(session.id, "implicit", "other", "Inspect")).state).toBe("refused");
+  reports.push(reportFixture("a", 4), reportFixture("b", 5), reportFixture("c", 6, { correlatesDirective: sent[0].clientMessageId }));
+  expect(admission.pollReports(session.id)).toMatchObject([{ type: "orchestrator.answer", reportId: "report-c-6" }]);
+  admission.setProject(session.id, "a");
+  expect(admission.pollReports(session.id)).toMatchObject([{ type: "orchestrator.report", reportId: "report-a-4" }]);
+  admission.setProject(session.id, "b");
+  expect(admission.pollReports(session.id)).toMatchObject([{ type: "orchestrator.report", reportId: "report-b-5" }]);
+  const persisted = admission.session(session.id);
+  expect(persisted.project).toBe("a");
+  expect(persisted.currentProject).toBe("b");
+  expect(persisted.reportWatermarks).toEqual({ a: 4, b: 5, c: 6 });
+  const held = persisted.proposals[asked.proposal.proposalId];
+  const { admittedVoiceBinding } = await import("./admission");
+  expect(admittedVoiceBinding({ sessionId: session.id, proposalId: asked.proposal.proposalId, project: "c", recipient: sent[0].recipient.conversationId,
+    key: sent[0].clientMessageId, text: held.text! })).not.toBeNull();
+  expect(admittedVoiceBinding({ sessionId: session.id, proposalId: asked.proposal.proposalId, project: "a", recipient: sent[0].recipient.conversationId,
+    key: sent[0].clientMessageId, text: held.text! })).toBeNull();
+});
+
+test("a refused seat race rebinds once with a fresh correlation key; unknown sends keep their original target", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  for (const fate of ["refused", "unknown", "twice"] as const) {
+    let epoch = 1;
+    const sent: Parameters<import("./admission").CompanionDeliveryPaths["send"]>[0][] = [];
+    const paths = { recipient: () => ({ project: fate, conversationId: `conversation_${epoch}`, seatEpoch: epoch, engine: "codex" as const }), reports: () => [],
+      send: async (binding: Parameters<import("./admission").CompanionDeliveryPaths["send"]>[0]) => {
+        sent.push(binding);
+        if (sent.length === 1 || fate === "twice") { epoch++; return fate === "unknown" ? { status: "unknown" as const, operationId: null }
+          : { status: "failed" as const, code: "voice_seat_changed", operationId: null }; }
+        return { status: "delivered" as const, operationId: "op-rebound" };
+      } };
+    const admission = new CompanionAdmission(new CompanionStorage(), paths);
+    const session = admission.create({ project: fate, locale: "en", authority: "live-model" });
+    const outcome = await admission.delegate(session.id, "call", "turn", "Review");
+    const held = Object.values(admission.session(session.id).proposals)[0];
+    if (fate === "unknown") {
+      expect(outcome).toEqual({ state: "sent", status: "unknown" });
+      expect(sent).toHaveLength(1);
+      expect(held.delivery!.recipient.seatEpoch).toBe(1);
+      expect(held.retargetCount).toBeUndefined();
+    } else {
+      expect(sent).toHaveLength(2);
+      expect(sent[1].delivery.clientMessageId).not.toBe(sent[0].delivery.clientMessageId);
+      expect(sent[1].text).toContain(sent[1].delivery.clientMessageId);
+      expect(sent[1].text).not.toContain(sent[0].delivery.clientMessageId);
+      expect(held.retargetCount).toBe(1);
+      expect(outcome).toMatchObject({ state: "sent", status: fate === "twice" ? "failed" : "delivered" });
+      await new CompanionAdmission(new CompanionStorage(), paths).confirm(session.id, { proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+      expect(sent).toHaveLength(2);
+    }
+    admission.retire(session.id);
+  }
+});
+
+test("a confirmation whose project has no manager ends with no_orchestrator and sends nothing", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let active = true;
+  let sends = 0;
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => active ? { project, conversationId: "conversation_seat", seatEpoch: 1, engine: "codex" } : null,
+    reports: () => [], send: async () => { sends++; return { status: "queued", operationId: "op" }; } });
+  const session = admission.create({ project: "a", locale: "en", authority: "live-model" });
+  const outcome = await admission.delegate(session.id, "call", "turn", "Review", { confirmation: "Which plan?" });
+  if (outcome.state !== "awaiting") throw new Error("missing proposal");
+  active = false;
+  await admission.confirm(session.id, { proposalId: outcome.proposal.proposalId, decision: "send", via: "tap" });
+  expect(admission.outcome(session.id, outcome.proposal.proposalId)).toEqual({ state: "refused", code: "no_orchestrator" });
+  expect(sends).toBe(0);
+});
+
+test("a successor report whose send response was lost stays visible without inventing an operation", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => ({ project, conversationId: "conversation_first", seatEpoch: 1, engine: "codex" }),
+    reports: () => reports, send: async () => ({ status: "unknown", operationId: null }) });
+  const session = admission.create({ project: "unknown-reply", locale: "en", authority: "live-model" });
+  await admission.delegate(session.id, "call", "turn", "Review");
+  const held = Object.values(admission.session(session.id).proposals)[0];
+  reports.push(reportFixture("unknown-reply", 1, { correlatesDirective: held.delivery!.clientMessageId }));
+  expect(admission.pollReports(session.id)).toMatchObject([{ type: "orchestrator.report", project: "unknown-reply", reportId: "report-unknown-reply-1" }]);
+  expect(admission.session(session.id).proposals[held.proposal.proposalId].delivery?.operationId).toBeNull();
+  expect(admission.pollReports(session.id)).toEqual([]);
+});
+
+test("a restart during the one seat retry recovers its persisted new key and cannot repeat the retarget", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let epoch = 1;
+  const attempts: string[] = [];
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const recipient = () => ({ project: "retry-restart", conversationId: `conversation_retry_${epoch}`, seatEpoch: epoch, engine: "codex" as const });
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient, reports: () => [], send: async ({ delivery }) => {
+    attempts.push(delivery.clientMessageId);
+    if (attempts.length === 1) { epoch++; return { status: "failed", operationId: null, code: "voice_seat_changed" }; }
+    await waiting;
+    return { status: "unknown", operationId: null };
+  } });
+  const session = admission.create({ project: "retry-restart", locale: "en", authority: "live-model" });
+  const original = admission.delegate(session.id, "call", "turn", "Review");
+  for (let turn = 0; turn < 50 && attempts.length < 2; turn++) await new Promise(resolve => setTimeout(resolve, 2));
+  expect(attempts).toHaveLength(2);
+  const held = Object.values(admission.session(session.id).proposals)[0];
+  expect(held).toMatchObject({ status: "unknown", retargetCount: 1, delivery: { recipient: { seatEpoch: 2 } } });
+  const recovery = new CompanionAdmission(new CompanionStorage(), { recipient, reports: () => [], send: async ({ delivery }) => {
+    attempts.push(delivery.clientMessageId); return { status: "delivered", operationId: "operation-recovered-retry" };
+  } });
+  await recovery.confirm(session.id, { proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+  release();
+  expect(await original).toEqual({ state: "sent", status: "delivered" });
+  expect(attempts).toEqual([attempts[0], held.delivery!.clientMessageId, held.delivery!.clientMessageId]);
+  expect(admission.events(session.id, 0).filter(event => event.type === "delegation.retargeted")).toHaveLength(1);
 });

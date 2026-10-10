@@ -1,3 +1,5 @@
+import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
+import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
@@ -32,7 +34,7 @@ import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, t
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
-import type { EngineHost, HostState } from "./engineHost";
+import { StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
@@ -229,6 +231,10 @@ function pendingAccountSwitch(registry: AgentRegistry, conversationId: string): 
   return phase !== undefined && IN_FLIGHT_MIGRATION_PHASES.has(phase);
 }
 
+function controllerDiagnosticError(...args: unknown[]): void {
+  spawnDiagnosticErrorForRegistry(state.activeRegistry, ...args);
+}
+
 function deliveryStateKey(state: HostState): string {
   return JSON.stringify([state.status, state.activeTurnRef, state.nativeQueueRevision]);
 }
@@ -331,7 +337,7 @@ function terminalDeliveryOutcome(
   const conversationId = receiptConversationId as `conversation_${string}`;
   if (expected.conversationId
     && registry.canonicalConversationId(conversationId) !== registry.canonicalConversationId(expected.conversationId)) {
-    console.error("[structured delivery] terminal receipt conversation mismatch", {
+    controllerDiagnosticError("[structured delivery] terminal receipt conversation mismatch", {
       operationId: expected.operationId,
       deliveryConversationId: expected.conversationId,
       receiptConversationId,
@@ -374,7 +380,7 @@ async function acknowledgeTerminalProjection(
       await client.acknowledgeTerminalProjection(operationIds.slice(offset, offset + TERMINAL_ACKNOWLEDGEMENT_BATCH_SIZE));
     }
   } catch (error) {
-    console.error("[structured delivery] terminal projection acknowledgement failed", {
+    controllerDiagnosticError("[structured delivery] terminal projection acknowledgement failed", {
       operationIds: operationIds.length,
       error,
     });
@@ -405,7 +411,7 @@ async function projectLostTerminalAcknowledgement(
   try {
     result = await client.operationStatus(operationId, { currentRetryLeaf: true });
   } catch (error) {
-    console.error("[structured delivery] lost terminal acknowledgement could not be read", { operationId, error });
+    controllerDiagnosticError("[structured delivery] lost terminal acknowledgement could not be read", { operationId, error });
     return false;
   }
   if (!result) {
@@ -428,7 +434,7 @@ async function projectLostTerminalAcknowledgement(
       outcome.route,
     )) return false;
   } catch (error) {
-    console.error("[structured delivery] lost terminal acknowledgement could not be projected", {
+    controllerDiagnosticError("[structured delivery] lost terminal acknowledgement could not be projected", {
       operationId,
       error,
     });
@@ -492,7 +498,7 @@ async function reconcileTerminalDeliveries(
            not be read contributes no outcome, so the row keeps the state it
            has and the next startup asks again. Nothing is terminalized on it,
            and the other rows in the page are still reconciled. */
-        console.error("[structured delivery] terminal receipt reconciliation failed", {
+        controllerDiagnosticError("[structured delivery] terminal receipt reconciliation failed", {
           operationId: delivery.command.operationId,
           conversationId: delivery.conversationId,
           error,
@@ -927,7 +933,7 @@ export async function bindStructuredDeliveryQueue(
         for (let attempt = 0; attempt < SWITCH_HOLD_WRITE_ATTEMPTS; attempt += 1) {
           if ((await hold()).acquired) return true;
         }
-        console.error("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
+        controllerDiagnosticError("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
         return false;
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
@@ -974,7 +980,18 @@ export async function bindStructuredDeliveryQueue(
       /* The durable delivery record's own fence (#1131): a send a receipt query
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */
-      settled: (operationId: string) => sendIsSettled(registry.readOnlySnapshot(), operationId),
+      settled: (operationId: string) => {
+        const snapshot = registry.readOnlySnapshot();
+        const receipt = operationId.startsWith("spawn_message_") ? snapshot.receipts[operationId.slice("spawn_message_".length)] : null;
+        return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
+      },
+      diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
+      authorizeDispatch: (operationId: string) => {
+        if (!operationId.startsWith("spawn_message_")) return;
+        const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
+        if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
+          throw new StructuredSendRefusedError("owner relay first prompt authorization revoked");
+      },
       /* Who may write to this conversation's engine right now (#1131): the
          evidence a `delivering` row is compared against before it is called
          abandoned, so a send another live executor is actuating is left to it. */
@@ -1315,7 +1332,7 @@ export async function bindStructuredDeliveryQueue(
       if (retryScheduled) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
-      console.error(
+      controllerDiagnosticError(
         retryScheduled
           ? "[structured delivery] queue drain failed; retry scheduled"
           : "[structured delivery] queue drain failed; retry already pending",
@@ -1384,7 +1401,7 @@ export async function bindStructuredDeliveryQueue(
       "structured host state is unavailable",
     );
     if (!hostState.readable) {
-      console.error("[structured delivery] host state unavailable; projection left as published", {
+      controllerDiagnosticError("[structured delivery] host state unavailable; projection left as published", {
         conversationId,
         reason: hostState.reason,
       });
@@ -1667,7 +1684,7 @@ export async function bindStructuredDeliveryQueue(
         );
       } catch (error) {
         if (isRuntimeHostTransportFailure(error)) throw error;
-        console.error("[structured delivery] producer cursor unavailable; replaying host events");
+        controllerDiagnosticError("[structured delivery] producer cursor unavailable; replaying host events");
       }
     }
     if (abandoned()) return async () => {};
@@ -1706,7 +1723,7 @@ export async function bindStructuredDeliveryQueue(
           deliveryState = nextDeliveryState;
           requestDrain();
         })
-        .catch(() => { console.error("[structured delivery] host state sync failed"); });
+        .catch(() => { controllerDiagnosticError("[structured delivery] host state sync failed"); });
       publishChains.set(key, next);
     });
     const entry = entryForHost(registry, item);
@@ -1737,7 +1754,7 @@ export async function bindStructuredDeliveryQueue(
             break;
           } catch {
             if (!policyObserved && !policyErrorReported) {
-              console.error("[structured delivery] native sub-agent policy observation could not be recorded; retrying");
+              controllerDiagnosticError("[structured delivery] native sub-agent policy observation could not be recorded; retrying");
               policyErrorReported = true;
             }
             await new Promise<void>((resolve) => setTimeout(resolve, 100));
@@ -1745,7 +1762,7 @@ export async function bindStructuredDeliveryQueue(
         }
       }
     })().catch(() => {
-      if (!eventsStopped) console.error("[structured delivery] engine event sync failed");
+      if (!eventsStopped) controllerDiagnosticError("[structured delivery] engine event sync failed");
     });
     const stopEvents = async () => {
       if (eventsStopped) return;
@@ -1784,7 +1801,7 @@ export async function bindStructuredDeliveryQueue(
     try {
       await register(item);
     } catch (error) {
-      console.error("[structured delivery] carried-over host registration failed; retrying", error);
+      controllerDiagnosticError("[structured delivery] carried-over host registration failed; retrying", error);
       if (!stillPending()) return;
       const timer = setTimeout(() => {
         inheritedRetries.delete(key);
@@ -2005,7 +2022,7 @@ export async function bindStructuredDeliveryQueue(
       if (sweeping) return;
       sweeping = true;
       void settleHostlessSessions()
-        .catch(() => { console.error("[structured delivery] dead-host session settlement failed"); })
+        .catch(() => { controllerDiagnosticError("[structured delivery] dead-host session settlement failed"); })
         .finally(() => { sweeping = false; });
     }, settleIntervalMs);
     settleTimer.unref?.();
@@ -2022,7 +2039,7 @@ export async function bindStructuredDeliveryQueue(
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
       void queue.tick().catch((error) => {
-        console.error("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
+        controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }, watchdogMs);
     watchdogTimer.unref?.();
@@ -2046,7 +2063,7 @@ export async function bindStructuredDeliveryQueue(
         mirrorSettledReceipts(registry, progressStore);
         if (complete) progressStore.checkpoint(sweptAt - sweepMs);
       } catch (error) {
-        console.error("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
+        controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
       }
       void settleDueSends({
         registry,
@@ -2058,7 +2075,7 @@ export async function bindStructuredDeliveryQueue(
         },
         onSettled: () => requestDrain(),
       }).catch((error) => {
-        console.error("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+        controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }, sweepMs);
     settlementSweepTimer.unref?.();
@@ -2240,7 +2257,7 @@ export async function recordDemotionInterruption(
   try {
     seat = await orchestratorSeatFor(registry, conversationId, options.seats);
   } catch (error) {
-    console.error("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
+    controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
   }
   const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   if (!evidenceStands()) return false;
@@ -2265,7 +2282,7 @@ export async function recordDemotionInterruption(
     stage: interruptionStageOf(snapshot.memberships, conversationId),
   });
   if (created) {
-    console.error("[viewer release] recorded an interrupted turn owed one continuation", {
+    controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
       conversationId, hostKey, turnRef, obligation: obligation.id,
     });
   }
@@ -2314,7 +2331,7 @@ async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<Id
     const evidenceStands = () => idleHostEvidenceIdentity(key.sessionId, transcriptPath) === before;
     if (evidenceStands()) return { ...decided, evidenceStands };
   }
-  console.error("[viewer release] an idle host's evidence kept moving under its reads; recording nothing for it", {
+  controllerDiagnosticError("[viewer release] an idle host's evidence kept moving under its reads; recording nothing for it", {
     hostKey: sessionKeyId(key),
   });
   return NO_IDLE_HOST_CUT;
@@ -2344,7 +2361,7 @@ async function decideIdleHostCut(key: SessionKey, transcriptPath: string): Promi
     }
   }
   if (tail.integrity !== "complete") {
-    console.error("[viewer release] an idle host's transcript could not be read whole; recording nothing for it", {
+    controllerDiagnosticError("[viewer release] an idle host's transcript could not be read whole; recording nothing for it", {
       hostKey: sessionKeyId(key),
     });
     return nothing;
@@ -2355,7 +2372,7 @@ async function decideIdleHostCut(key: SessionKey, transcriptPath: string): Promi
   const host = hostTurnReading(ledger);
   const record = engineRecordSince("claude", ledger, tail);
   if (host.state === "unreadable" || record === "unreadable" || record === "undelimited") {
-    console.error("[viewer release] an idle host's turn evidence could not be decided; recording nothing for it", {
+    controllerDiagnosticError("[viewer release] an idle host's turn evidence could not be decided; recording nothing for it", {
       hostKey: sessionKeyId(key), ledger: host.state, record,
     });
     return nothing;
@@ -2369,7 +2386,7 @@ async function decideIdleHostCut(key: SessionKey, transcriptPath: string): Promi
     background = await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn);
   }
   if (background.state !== "read") {
-    console.error("[viewer release] an idle host's background work could not be read whole; recording nothing for it", {
+    controllerDiagnosticError("[viewer release] an idle host's background work could not be read whole; recording nothing for it", {
       hostKey: sessionKeyId(key), reason: background.reason,
     });
     return nothing;
@@ -2408,7 +2425,7 @@ export async function handOverHostForDemotion(
       registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork, idle.evidenceStands,
     )) return true;
   }
-  console.error("[viewer release] an idle host's evidence kept moving before its cut was recorded; recording nothing for it", {
+  controllerDiagnosticError("[viewer release] an idle host's evidence kept moving before its cut was recorded; recording nothing for it", {
     hostKey: sessionKeyId(key),
   });
   return marked;
@@ -2452,7 +2469,7 @@ export async function releaseStructuredDeliveryHostsForDemotion(
       }
     } catch (error) {
       unrecorded.add(sessionKeyId(key));
-      console.error("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
+      controllerDiagnosticError("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
         hostKey: sessionKeyId(key), error,
       });
       recordFailures.push(error);

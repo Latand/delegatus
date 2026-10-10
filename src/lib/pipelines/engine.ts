@@ -78,7 +78,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { requestPipelineTick } from "./controllerSignal";
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
-import { durableStageTurnEvidence, type StageTurnEvidence } from "./durableEvidence";
+import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
 import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
@@ -285,7 +285,7 @@ export interface PipelinePorts {
   paneAgentAlive(paneId: string): Promise<boolean>;
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
-  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string;
+  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
   stopInterruptedStageAgent?(target: PipelineStageHostRef, options?: { allowIdle?: boolean }): Promise<PipelineStageStopResult | null>;
@@ -381,6 +381,8 @@ export interface PipelinePorts {
   cancelRuntimeSwitch?(conversationId: string, operationId: string): Promise<void>;
   runtimeSwitchDelivery?(conversationId: string, clientMessageId: string): { state: "pending" | "delivered" | "failed"; at?: string; error?: string } | Promise<{ state: "pending" | "delivered" | "failed"; at?: string; error?: string }>;
   runtimeSwitchKilled?(conversationId: string, since: string, ignoredOperationIds?: readonly string[]): Promise<boolean>;
+  /** Retained operator kill authority; unavailable evidence rejects automatic recovery. */
+  conversationOperatorStopped?(conversationId: string, since: string, ignoredOperationIds?: readonly string[]): Promise<boolean>;
   conversationGeneration?(conversationId: string): (import("./types").PipelineRuntimeSeat & { sessionId: string; agentPath: string | null }) | null;
   requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
   /** An ordinary reseat still owed by this conversation, including a retryable failure. */
@@ -809,6 +811,7 @@ const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
 
 export type StageStopProbes = {
   operationId?: string;
+  automatic?: true;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   client?: RuntimeHostClient | null;
@@ -820,6 +823,7 @@ export type StageStopProbes = {
     conversationId: string;
     transcriptPath: string;
     action: "kill";
+    actor?: { kind: "agent"; conversationId: string };
     onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   }) => Promise<{ status: number; body: unknown }>;
@@ -959,6 +963,7 @@ export async function stopPipelineStageAgent(
       return applyConversationAction(request);
     });
     const result = await applyAction({ conversationId, transcriptPath, action: "kill", ...(probes.operationId ? { operationId: probes.operationId } : {}),
+      ...(probes.automatic ? { actor: { kind: "agent" as const, conversationId } } : {}),
       ...(probes.onlyIfIdle ? { onlyIfIdle: probes.onlyIfIdle } : {}),
       ...(probes.providerRecovery ? { providerRecovery: probes.providerRecovery } : {}),
     });
@@ -1429,7 +1434,7 @@ export function defaultPipelinePorts(
     },
     stopStageAgent: (target, options) => options?.onlyIfIdle
       ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
-      : stopPipelineStageAgent(target, { operationId: options?.operationId }),
+      : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic }),
     stopInterruptedStageAgent: async (target, options) => {
       const probe = await stageHostProbe(target);
       const stamp = () => {
@@ -1646,6 +1651,7 @@ export function defaultPipelinePorts(
       if (registry.conversation(conversationId as ViewerConversationId)?.reconfigure?.operationId === operationId) return;
       if (await runtimeHostClient()?.operationStatus(operationId)) return;
       const result = await dispatchStructuredControl({ conversationId, path, action, operationId,
+        actor: { kind: "agent", conversationId },
         ...(action === "reconfigure" ? { reconfiguration: { model: target.model ?? undefined, effort: target.effort ?? undefined,
           fast: target.engine === "codex" ? !!target.serviceTier && !["default", "standard"].includes(target.serviceTier) : null,
           ...(target.accountId ? { accountId: target.accountId } : {}) } } : {}) });
@@ -1665,6 +1671,11 @@ export function defaultPipelinePorts(
       const client = runtimeHostClient();
       if (!client) throw new Error("runtime host unreachable");
       return hasRuntimeSwitchKill(client, conversationId, since, ignored);
+    },
+    conversationOperatorStopped: async (conversationId, since, ignored) => {
+      const client = runtimeHostClient();
+      if (!client) throw new Error("runtime host unreachable");
+      return hasRuntimeSwitchKill(client, conversationId, since, ignored, true);
     },
     runtimeSwitchDelivery: async (conversationId, key) => {
       const receipt = registry.deliveryAdmissionForKey(conversationId, key);
@@ -1834,6 +1845,13 @@ const DEPLOY_CUT_HOLD_DETAIL = "a Viewer deployment cut this stage's turn; the s
 const HOST_LOST_READ_ONLY_RERUNS = 2;
 const HOST_LOST_READ_ONLY_RERUN = "the stage host was lost before it reported a verdict; the read-only stage runs again on the same head";
 const UNREGISTERED_STAGE_HOST_DIED_REASON = "the stage host died before its session registered";
+const PROVIDER_OPERATOR_CANCELLED_DETAIL = "provider recovery cancelled by operator control; waiting for operator decision";
+const OPERATOR_STOP_EVIDENCE_WAIT_DETAIL = "automatic recovery is waiting for durable operator-stop evidence";
+const PROVIDER_NOTIFICATION_CANCELLED_DETAILS = new Set([
+  PROVIDER_OPERATOR_CANCELLED_DETAIL,
+  "provider recovery cancelled after newer stage activity; waiting for operator decision",
+  "automatic provider retry cancelled after newer stage activity; waiting for operator decision",
+]);
 /** Attempt states that end a round; a pending cursor over one of these queues a
     fresh attempt on the next tick (tickRunStage/tickReviewStage). */
 const TERMINAL_ATTEMPT_STATES = new Set<PipelineStageAttempt["state"]>(["passed", "failed", "needs_decision", "skipped"]);
@@ -2292,11 +2310,12 @@ async function recoverProviderCut(
   notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null } | null,
   ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   const now = ports.now();
   const time = unixMs(now);
   let wait = attempt.providerWait;
   if (wait?.retryCancelled) {
-    park(pipeline, "provider recovery cancelled by operator control; waiting for operator decision", attempt);
+    park(pipeline, PROVIDER_OPERATOR_CANCELLED_DETAIL, attempt);
     persist();
     return true;
   }
@@ -2441,7 +2460,15 @@ async function recoverProviderCut(
   const controlGeneration = pipeline.controlGeneration;
   let continuationRefusal: string | null = null;
   const continuationAllowed = async () => {
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
+      continuationRefusal = "operator-stop authority holds provider recovery";
+      return false;
+    }
     const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attemptEvidenceFloor(attempt), undefined, cutTs);
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
+      continuationRefusal = "operator-stop authority holds provider recovery";
+      return false;
+    }
     continuationRefusal = pipeline.state !== "running" ? "pipeline is no longer running"
       : pipeline.closedAt ? "pipeline was closed"
       : pipeline.hiddenAt ? "pipeline was hidden"
@@ -2450,6 +2477,7 @@ async function recoverProviderCut(
       : attempt.verdict ? "stage verdict was recorded"
       : wait.retryCancelled ? "provider retry was cancelled by operator control"
       : !latest ? "stage transcript evidence could not be read"
+      : latest.snapshot && stageTurnEvidenceCurrent(latest) !== true ? "stage transcript changed during authority lookup"
       : latest.promptHistoryComplete === false ? "delivered prompt history is incomplete"
       : newerExternalProviderPrompt(attempt, latest) ? "newer external stage activity was recorded"
       : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
@@ -2478,14 +2506,14 @@ async function recoverProviderCut(
     recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     persist();
-  } else waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  } else if (!wait.retryCancelled) waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
   return true;
 }
 
 /** An absent registry resident does not establish that a recorded pane exited. */
 async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts, options?: { onlyIfIdle: true;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef }): Promise<PipelineStageStopResult> {
-  const stopped = await ports.stopStageAgent(target, options);
+  const stopped = await ports.stopStageAgent(target, options?.onlyIfIdle ? options : { ...options, automatic: true });
   if (stopped.outcome !== "not-running" || !target.paneId) return stopped;
   if (options?.onlyIfIdle) {
     // Pane identity proves ownership, but cannot fence a new operator turn.
@@ -2526,6 +2554,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   }
   const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient";
   const confirmProviderCut = async () => {
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (!providerLimit) return true;
     if (!attempt.paneId && attempt.conversationId && ports.conversationRegistered?.(attempt.conversationId) === false) {
       park(pipeline, "provider account recovery cannot verify recorded host ownership; waiting for operator decision", attempt);
@@ -2533,6 +2562,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
       return false;
     }
     const activity = await providerCutActivity(pipeline, attempt, ports, persist);
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (activity === "unchanged") return true;
     if (activity === "newer") {
       park(pipeline, "provider account recovery cancelled after newer stage activity; waiting for operator decision", attempt);
@@ -4631,7 +4661,6 @@ function secondInterruptionParkDetail(replacedCause: PipelineStageInterruptionCa
     : `the automatic replacement attempt ${ownCause === "host-lost" ? "lost its host" : "went silent"}${same ? " too" : ""}`;
   return `${what}; retry-stage to start another attempt`;
 }
-const RESTART_REPLACEMENT_CUT_AGAIN = "the automatic restart attempt was interrupted by another Delegatus restart; retry-stage to start another attempt";
 const recoveryHost = globalThis as typeof globalThis & {
   __llvPipelineRecoveryBootId?: string;
   __llvPipelineRecoveryBootStartedAt?: number;
@@ -4642,7 +4671,7 @@ const PIPELINE_RECOVERY_BOOT_STARTED_AT = recoveryHost.__llvPipelineRecoveryBoot
 async function stopInterruptedStageAttempt(stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<PipelineStageStopResult> {
   const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
     launchId: attempt.launchId, conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId,
-    ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}) });
+    ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}) }, { automatic: true });
   if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
   return stopped;
 }
@@ -4661,9 +4690,44 @@ async function stopAutomaticInterruptedStageAttempt(stage: PipelineStage, attemp
 function providerRecoveryOwnsTurn(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
   const wait = attempt.providerWait;
   if (!wait) return false;
-  return !((durable?.message?.ts ?? 0) > wait.turnTs
+  return !(durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)
+    || (durable?.message?.ts ?? 0) > wait.turnTs
     || wait.actionAt && durable?.turn === "busy" && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > wait.turnTs
     || durable?.turn === "terminal" && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > wait.turnTs);
+}
+
+async function operatorStopHoldsStageRecovery(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void): Promise<boolean> {
+  if (attempt.report) return false;
+  if (!attempt.conversationId || !ports.conversationOperatorStopped) return false;
+  const waitingDetail = OPERATOR_STOP_EVIDENCE_WAIT_DETAIL;
+  try {
+    const ignored = attempt.runtimeSwitches?.flatMap(record =>
+      ["interrupt", "stop", "stop-launch"].map(action => switchOperationKey(record, action)));
+    if (!await ports.conversationOperatorStopped(attempt.conversationId, attemptEvidenceFloor(attempt) ?? attempt.startedAt ?? ports.now(), ignored)) {
+      const retry = attempt.providerWait?.stageRetry;
+      const parkedDetail = retry?.detail ?? (attempt.providerWait && pipeline.state === "needs_decision" ? attempt.error : null);
+      if (parkedDetail && pipeline.stateDetail === waitingDetail && attempt.error === parkedDetail) {
+        pipeline.stateDetail = parkedDetail;
+        persist();
+      }
+      return false;
+    }
+  } catch {
+    if (pipeline.stateDetail !== waitingDetail) {
+      pipeline.stateDetail = waitingDetail;
+      persist();
+    }
+    ports.scheduleTick?.(1_000);
+    return true;
+  }
+  if (attempt.report) return false;
+  if (attempt.providerWait) {
+    attempt.providerWait.retryCancelled = true;
+    delete attempt.providerWait.stageRetry;
+  }
+  park(pipeline, "provider recovery cancelled by operator stop; waiting for operator decision", attempt);
+  persist();
+  return true;
 }
 
 async function replaceInterruptedStageAttempt(
@@ -4674,17 +4738,39 @@ async function replaceInterruptedStageAttempt(
   // A stage report is durable authority even when succession entered recovery
   // (or one was recorded while the host-stop operation was awaiting).
   if (attempt.report) return false;
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   const previous = attempt.restartRecovery;
-  /* A restart replacement that a restart cuts again parks, in this boot or a
-     later one: one automatic attempt per cut stage. */
-  if (interruption.restarted && attempt.restartContext?.cause === "restart"
-    && (interruption.cut || previous?.replacedAttempt !== undefined && previous.bootId !== bootId)) {
-    park(pipeline, RESTART_REPLACEMENT_CUT_AGAIN, attempt);
-    persist();
+  const needsPromptHistory = interruption.cut || previous?.promptBoundary !== undefined;
+  // Zero requests verified history from attempt start, including busy turns
+  // without a native cut. The reader streams prompt ordinals beyond its cap.
+  const restartEvidence = () => ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined,
+    attempt.startedAt, undefined, attempt.providerWait?.turnTs ?? 0);
+  const before = needsPromptHistory && attempt.agentPath
+    ? await restartEvidence()
+    : null;
+  if (needsPromptHistory && attempt.agentPath && (!before || before.promptHistoryComplete === false && before.promptCount === undefined)) {
+    ports.scheduleTick?.(1_000);
     return true;
   }
+  const promptBoundary = previous?.promptBoundary ?? before?.promptCount;
+  const cancelForOperatorPrompt = (evidence: StageTurnEvidence | null | undefined) => {
+    if (!needsPromptHistory || attempt.report || promptBoundary === undefined
+      || (evidence?.lastExternalPromptIndex ?? -1) < promptBoundary) return false;
+    if (attempt.providerWait) {
+      attempt.providerWait.retryCancelled = true;
+      delete attempt.providerWait.stageRetry;
+    }
+    park(pipeline, "restart recovery cancelled after newer stage activity; waiting for operator decision", attempt);
+    persist();
+    return true;
+  };
+  if (cancelForOperatorPrompt(before)) return true;
+  if (attempt.report || attempt.providerWait?.retryCancelled || newerExternalProviderPrompt(attempt, before)
+    || interruption.cut && before && !restartCutOf(attempt, before, ports)) return false;
+  /* A second interruption in the same boot keeps the bounded recovery policy.
+     Each new service boot or recorded deploy cut owes its own replacement. */
   if (previous?.bootId === bootId) {
-    if (previous.replacedAttempt !== undefined) {
+    if (previous.replacedAttempt !== undefined && !interruption.cut) {
       park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
       persist();
       return true;
@@ -4702,7 +4788,8 @@ async function replaceInterruptedStageAttempt(
   /* A stop of ours that already ended this host still names the cause while
      nothing has been written since the host was gone. */
   const endedEarlier = previous?.stopped && previous.stopped.lastRecordAt === lastRecordAt ? previous.stopped : undefined;
-  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt, ...(endedEarlier ? { stopped: endedEarlier } : {}) };
+  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt,
+    ...(promptBoundary === undefined ? {} : { promptBoundary }), ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   persist();
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
   /* A withdrawn stop did nothing, so it leaves no reservation behind either;
@@ -4716,8 +4803,9 @@ async function replaceInterruptedStageAttempt(
   // Termination can take long enough for the old turn to finish or make new
   // progress. Preserve that evidence and let the normal settlement path read
   // it before changing the original attempt or reserving a replacement.
-  const latest = attempt.agentPath
-    ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt)
+  let latest = attempt.agentPath
+    ? needsPromptHistory ? await restartEvidence()
+      : await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, attempt.providerWait?.turnTs)
     : null;
   /* The stop ended a live host. A CLI appends undated bookkeeping as it exits,
      and an undated newest record is dated by the file, so the transcript's
@@ -4726,6 +4814,14 @@ async function replaceInterruptedStageAttempt(
   if (stopped.outcome === "stopped") {
     attempt.restartRecovery.stopped = { ...interruption, lastRecordAt: latest?.lastRecordAt ?? null };
     persist();
+  }
+  // A recorded cut needs verified post-stop cancellation evidence. Keep its
+  // wait and confirmed termination while the transcript read is uncertain.
+  if (needsPromptHistory && !attempt.report && attempt.agentPath && (!latest
+    || latest.promptHistoryComplete === false && latest.promptCount === undefined
+    || promptBoundary !== undefined && latest.promptCount !== undefined && latest.promptCount < promptBoundary)) {
+    ports.scheduleTick?.(1_000);
+    return true;
   }
   const ended = attempt.restartRecovery.stopped;
   if (latest?.turn === "terminal" && latest.message && latest.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
@@ -4737,10 +4833,24 @@ async function replaceInterruptedStageAttempt(
       return true;
     }
   }
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  const current = stageTurnEvidenceCurrent(latest);
+  if (current !== true && attempt.agentPath) {
+    latest = needsPromptHistory ? await restartEvidence()
+      : await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, attempt.providerWait?.turnTs);
+    if (cancelForOperatorPrompt(latest)) return true;
+    // A changed native snapshot spends another tick. Its authority read must
+    // fence that snapshot too before a replacement can be reserved.
+    if (current === false || !latest) { ports.scheduleTick?.(1_000); return true; }
+  }
+  if (cancelForOperatorPrompt(latest)) return true;
   /* A newer record under a live host is progress. Under a host this recovery
      ended it is what the exit wrote, and the replacement goes ahead. A turn a
      restart cut goes ahead in any shape until the agent's own work moves. */
-  if (attempt.report || providerRecoveryOwnsTurn(attempt, latest) || attempt.state !== "running") return false;
+  // Operator input may arrive while termination is awaiting. Its native order
+  // fences even a service cut when its timestamp equals or predates that cut.
+  if (attempt.report || attempt.providerWait?.retryCancelled || newerExternalProviderPrompt(attempt, latest)
+    || (!interruption.cut && providerRecoveryOwnsTurn(attempt, latest)) || attempt.state !== "running") return false;
   if (interruption.cut
     ? !restartCutOf(attempt, latest, ports)
     : latest?.turn !== "busy" || latest.launchOnly || (!ended && (latest.lastRecordAt ?? null) !== lastRecordAt)) {
@@ -4833,10 +4943,6 @@ function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence 
   return (worked ?? 0) <= unixMs(cut.recordedAt);
 }
 
-function pendingHostDeathWait(attempt: PipelineStageAttempt): boolean {
-  return attempt.providerWait?.condition.kind === "host_death";
-}
-
 /**
  * A stage whose host a service restart took down is retried once.
  *
@@ -4845,17 +4951,16 @@ function pendingHostDeathWait(attempt: PipelineStageAttempt): boolean {
  * verdict", parking the lane for a person to press retry: a deploy on
  * 2026-10-06 did that to two builders minutes from the end of their work. The
  * restart is the cause and the work is in the worktree, so one fresh attempt
- * picks it up there. A replacement the next restart cuts parks instead, in
- * whichever boot sees it, before any other recovery could start a third.
+ * picks it up there. A later recorded restart owes another replacement; an
+ * unchanged cut cannot replace the attempt it already created.
  */
 async function recoverRestartCutStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   durable: StageTurnEvidence | null | undefined, ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
-  /* A host-death wait is the timer before a relaunch that has not happened.
-     The recorded restart names what ended the host, so its attempt takes
-     that relaunch's place. */
-  if (pendingHostDeathWait(attempt)) delete attempt.providerWait;
+  /* The restart's recorded cut takes precedence over a saved provider wait.
+     Keep that wait until termination is confirmed and the replacement is
+     reserved, so a withdrawn stop loses no provider recovery obligation. */
   const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
   const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, durable?.lastRecordAt ?? null,
@@ -4875,7 +4980,8 @@ async function recoverInterruptedStageTurn(
   const interrupted = await ports.conversationTurnInterrupted?.(attempt.conversationId);
   if (!interrupted) return false;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
-  if (durable?.turn !== "busy" || durable.launchOnly || providerRecoveryOwnsTurn(attempt, durable)) return false;
+  if (durable?.turn !== "busy" || durable.launchOnly
+    || providerRecoveryOwnsTurn(attempt, durable) && !restartCutOf(attempt, durable, ports)) return false;
   /* An idle host whose transcript is still growing is an agent at work. */
   if (interrupted === "idle" && !idleTurnSilent(durable, ports)) return false;
   if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
@@ -4914,11 +5020,13 @@ async function recoverInterruptedStageTurn(
      ends it later is a lost host or a stop, and is named as such. An undated
      transcript proves no work after the boot. */
   const newestRecordAt = recoveryEvidence.lastRecordAt ?? recoveryEvidence.message?.ts ?? null;
+  const recordedCut = !attempt.providerWait?.retryCancelled && !newerExternalProviderPrompt(attempt, recoveryEvidence)
+    && restartCutOf(attempt, recoveryEvidence, ports);
   const restarted = (bootStartedAt > unixMs(attemptEvidenceFloor(attempt)) && (newestRecordAt === null || newestRecordAt <= bootStartedAt))
     || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch)
-    || restartCutOf(attempt, recoveryEvidence, ports);
+    || recordedCut;
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null,
-    { kind: latestInterrupted, restarted });
+    { kind: latestInterrupted, restarted, ...(recordedCut ? { cut: true } : {}) });
 }
 /** Silence after a legacy continuation before the attempt parks for the operator. */
 const SEVERED_TURN_PARK_SILENCE_MS = 10 * 60_000;
@@ -6086,8 +6194,7 @@ async function tickRunStage(
   if (!attempt.agentPath) {
     if ((structuredActive === false || paneActive === false) && !attempt.report) {
       /* A restart that cut the attempt before its transcript was found owns
-         it like any other cut: the one fresh attempt, or the park when this
-         attempt is that one. */
+         its fresh attempt, retaining the worktree like any other cut. */
       if (restartCutOf(attempt, null, ports)
         && await recoverRestartCutStage(pipeline, stage, attempt, null, ports, persist)) return;
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
@@ -6173,14 +6280,14 @@ async function tickRunStage(
   if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return;
   // Native transcript publication can lag a live turn that already filed its report.
   if (attempt.report && !reportTurnFinished(attempt, durable) && structuredActive !== false && !hostUnavailablePastGrace) return;
-  /* A turn a service restart cut is the restart's: its one fresh attempt, or
-     the park when it is that attempt, comes before every other recovery here.
-     A provider wait already under way keeps its own, except the timer before
-     a host-death relaunch while the host is still gone: the restart is what
-     ended that host. */
+  /* A recorded service cut owns its fresh attempt even if provider recovery
+     observed the abort first. Real operator cancellation retains its fence.
+     restartCutOf excludes turns the provider ended before the restart. */
   const hostGone = hostUnavailablePastGrace || structuredActive === false || paneActive === false || Boolean(unregisteredHostDeath);
+  await reconcileMisclassifiedProviderCancellation(pipeline, stage, attempt, ports, persist, durable);
   const restartCut = !oomDeath && !heldForDeployCut && !attempt.report
-    && ((hostGone && pendingHostDeathWait(attempt)) || !providerRecoveryOwnsTurn(attempt, durable)) && restartCutOf(attempt, durable, ports);
+    && !attempt.providerWait?.retryCancelled && !newerExternalProviderPrompt(attempt, durable)
+    && restartCutOf(attempt, durable, ports);
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))
@@ -6330,7 +6437,7 @@ async function tickRunStage(
       agentPath: attempt.agentPath,
       paneId: attempt.paneId,
       ...(attempt.historical && !attempt.legacyReview ? { adopted: true as const } : {}),
-    });
+    }, { automatic: true });
     if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
     if (stopped.outcome === "failed" || stopped.outcome === "unresolved" || stopped.outcome === "unconfirmed") {
       pipeline.stateDetail = stopped.outcome === "unconfirmed"
@@ -7622,6 +7729,85 @@ function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAtte
   writeEngineParkedTaskNote(pipeline, detail, attempt);
 }
 
+/** Old readers persisted agent notifications as operator cancellation. Repair
+    only that unchanged park when verified native and control evidence agree. */
+async function reconcileMisclassifiedProviderCancellation(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void, evidence?: StageTurnEvidence | null): Promise<boolean> {
+  const wait = attempt.providerWait;
+  const unchanged = () => {
+    const controlledAt = Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? ""));
+    return stage.kind === "run" && attempt.providerWait === wait && wait?.retryCancelled && !wait.stageRetry && !attempt.report && !attempt.verdict
+      && !attempt.historical && !attempt.activation && !pipeline.closedAt && !pipeline.hiddenAt
+      && pipeline.remoteAction?.state !== "pending" && ["running", "needs_decision"].includes(pipeline.state)
+      && PROVIDER_NOTIFICATION_CANCELLED_DETAILS.has(pipeline.stateDetail ?? "") && attempt.error === pipeline.stateDetail
+      && controlledAt < unixMs(attemptEvidenceFloor(attempt)) && (!pipeline.controlGeneration || controlledAt > 0);
+  };
+  if (!unchanged() || !attempt.agentPath || !attempt.conversationId || !ports.conversationOperatorStopped) return false;
+  try {
+    evidence ??= await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined,
+      attemptEvidenceFloor(attempt), undefined, wait!.turnTs);
+    if (!evidence || evidence.promptHistoryComplete === false && evidence.promptCount === undefined) { ports.scheduleTick?.(1_000); return false; }
+    const boundary = evidence.requestedPromptBoundary;
+    if (boundary === undefined || (evidence.promptCount ?? 0) <= boundary
+      || (evidence.lastExternalPromptIndex ?? boundary) >= boundary) return false;
+    const ignored = attempt.runtimeSwitches?.flatMap(record => ["interrupt", "stop", "stop-launch"].map(action => switchOperationKey(record, action)));
+    if (await ports.conversationOperatorStopped(attempt.conversationId, attemptEvidenceFloor(attempt) ?? attempt.startedAt ?? ports.now(), ignored)) return false;
+    if (!unchanged() || stageTurnEvidenceCurrent(evidence) !== true) { ports.scheduleTick?.(1_000); return false; }
+  } catch { ports.scheduleTick?.(1_000); return false; }
+  delete wait!.retryCancelled;
+  attempt.error = null;
+  attempt.completedAt = null;
+  attempt.state = "running";
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = "restoring provider recovery after an authenticated stage notification";
+  recordProviderRecovery(attempt, "wait", wait!.condition, pipeline.stateDetail, ports.now());
+  clearEngineTaskNote(pipeline);
+  persist();
+  return true;
+}
+
+/** A service cut owns an automatic provider park even without a retry timer. */
+async function reconcileParkedRestartCut(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void): Promise<boolean> {
+  const wait = attempt.providerWait;
+  const retry = wait?.stageRetry;
+  const recovery = attempt.providerRecoveries?.at(-1);
+  const unchanged = () => {
+    const controlledAt = Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? ""));
+    return stage.kind === "run" && pipeline.state === "needs_decision" && attempt.state === "needs_decision"
+      && attempt.providerWait === wait && !attempt.report && !attempt.verdict && !attempt.activation && !attempt.historical
+      && (pipeline.stateDetail === attempt.error || pipeline.stateDetail === OPERATOR_STOP_EVIDENCE_WAIT_DETAIL)
+      && controlledAt < unixMs(attemptEvidenceFloor(attempt))
+      && (!pipeline.controlGeneration || controlledAt > 0)
+      && (retry ? !wait?.retryCancelled && retry.controlGeneration === (pipeline.controlGeneration ?? null)
+        && pipeline.stateDetail === retry.detail
+        : recovery?.action === "park" && attempt.error?.startsWith(`stage cut by ${wait?.condition.label}`)
+          && attempt.error.startsWith(recovery.summary));
+  };
+  if (!wait || !unchanged() || !attempt.agentPath || !attempt.conversationId || !ports.conversationOperatorStopped
+    || ports.conversationRegistered?.(attempt.conversationId) === false || !restartCutOf(attempt, null, ports)
+    || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return false;
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+    undefined, attemptEvidenceFloor(attempt), undefined, wait.turnTs);
+  const boundary = durable?.requestedPromptBoundary;
+  if (!durable || boundary === undefined) { ports.scheduleTick?.(1_000); return true; }
+  if (!restartCutOf(attempt, durable, ports)
+    || (durable.lastExternalPromptIndex ?? boundary) >= boundary) return false;
+  if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  if (!unchanged() || stageTurnEvidenceCurrent(durable) !== true) { ports.scheduleTick?.(1_000); return true; }
+  delete wait.retryCancelled;
+  attempt.state = "running";
+  attempt.completedAt = null;
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = null;
+  setCursorState(pipeline, stage.id, "running");
+  clearEngineTaskNote(pipeline);
+  persist();
+  return true;
+}
+
 /** A persisted quota park remains a scheduled engine obligation after restart. */
 async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): Promise<boolean> {
   if (pipeline.state !== "needs_decision" || pipeline.closedAt || pipeline.hiddenAt || pipeline.remoteAction?.state === "pending") return false;
@@ -7629,6 +7815,14 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const wait = attempt?.providerWait;
   const lastRecovery = attempt?.providerRecoveries?.at(-1);
+  if (stage?.kind === "run" && attempt?.report && wait && restartCutOf(attempt, null, ports)) {
+    await settleOnRecordedReport(pipeline, stage, attempt, ports, persist);
+    return true;
+  }
+  if (stage && attempt && await reconcileMisclassifiedProviderCancellation(pipeline, stage, attempt, ports, persist)) return true;
+  if (attempt && wait && !wait.retryCancelled
+    && await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
+  if (stage && attempt && await reconcileParkedRestartCut(pipeline, stage, attempt, ports, persist)) return true;
   // Upgrade only the engine's unchanged quota park. Pauses, answers and other
   // park causes have no authority to create an automatic retry obligation.
   if (stage?.kind === "run" && attempt && wait?.condition.kind === "usage_limit" && !wait.stageRetry && !wait.retryCancelled
@@ -7670,7 +7864,9 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     return true;
   }
   const confirmUnchangedCut = async () => {
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     const state = await providerCutActivity(pipeline, attempt, ports, persist);
+    if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (attempt.providerWait !== wait) return false; // The retry moved to a newer chain.
     if (state === "unchanged" && (!attempt.conversationId
       || ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true)) return true;
@@ -8826,7 +9022,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             && reportedAttempt.report.actor.kind === "agent"
             && reportedAttempt.report.actor.conversationId === reportedAttempt.conversationId;
           if (pipeline.state === "needs_decision" && reportedStage?.kind === "run" && reportedAttempt?.report
-            && (completedSwitchReport || /stage spawn|verdict|host|rate limited|stage ended before its session|stage agent exited before its session/.test(reportedAttempt.error ?? pipeline.stateDetail ?? ""))) {
+            && (completedSwitchReport || PROVIDER_NOTIFICATION_CANCELLED_DETAILS.has(reportedAttempt.error ?? "")
+              || /stage spawn|verdict|host|rate limited|stage ended before its session|stage agent exited before its session/.test(reportedAttempt.error ?? pipeline.stateDetail ?? ""))) {
             pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, controllerPorts, persistPipeline) || pipelineChanged;
           }
           pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, controllerPorts, persistPipeline) || pipelineChanged;

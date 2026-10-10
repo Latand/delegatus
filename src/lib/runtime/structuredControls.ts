@@ -73,6 +73,8 @@ export interface StructuredControlRequest {
       Absent means the operator: an agent is the only caller that can name
       itself here, exactly as `requireOperatorAuthority` reads a request. */
   actor?: AccountChoiceActor;
+  /** Verified control authorship, separately from account-choice attribution. */
+  controlOrigin?: import("./messageOrigin").MessageOrigin;
 }
 
 /** An account pick for this conversation that has not settled (#1846). */
@@ -321,12 +323,13 @@ export async function dispatchStructuredControl(
      are refused before a durable reconfigure can be claimed. */
   const reconfigurableEngine = conversation.engine;
 
-  if (structuredKill
+  const pipelineStage = snapshot.memberships[conversation.id]?.some(membership => membership.kind === "pipeline");
+  if (structuredKill && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
     /* The durable projection already records this session as torn down, so a
-       repeated kill replays the terminal outcome instead of re-entering the
-       command channel or the legacy pane-close ladder. */
+       retirement replays the terminal outcome. Pipeline operator stops still
+       need durable admission to fence recovery of the dead stage. */
     return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "delivered" } };
   }
 
@@ -456,6 +459,7 @@ export async function dispatchStructuredControl(
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
       ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey,
+          origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId } : { kind: "operator" }),
           ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
           ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
       /* #862: a compact command carries a generation fence and nothing else.
@@ -481,6 +485,8 @@ export async function dispatchStructuredControl(
             }
           : {
               kind: "interrupt",
+              origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId }
+                : { kind: "operator" }),
               operationId,
               idempotencyKey: operationId,
               conversationId: conversation.id,

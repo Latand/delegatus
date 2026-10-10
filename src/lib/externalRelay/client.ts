@@ -66,12 +66,16 @@ export async function relayCall<T = unknown>(
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   body?: unknown,
   credential?: string,
-  options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {},
+  options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal;
+    /** Trusted caller rechecks its body after DNS, immediately before emission. */
+    prepareBody?: () => unknown;
+  } = {},
 ): Promise<{ status: number; body: T | null }> {
   const { url, address } = await target(apiBase);
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
-  const encoded = body === undefined ? null : Buffer.from(JSON.stringify(body));
+  const outgoing = options.prepareBody ? options.prepareBody() : body;
+  const encoded = outgoing === undefined ? null : Buffer.from(JSON.stringify(outgoing));
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise((resolve, reject) => {
     const request = transport.request(

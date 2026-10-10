@@ -2381,9 +2381,9 @@ catch drift in the field. Each kills the group and completes the lease as
 
 **[rc] Who gets which profile.** `answerProfileFor(requester)` in
 `src/lib/externalRelay/profile.ts` chooses the profile from the request's
-requester. In this revision every requester, the owner included, gets the
-profile above with web search, and nothing is granted from `is_owner`. The
-owner's unrestricted tier is the next slice's, and branches there.
+requester. The restricted profile above remains unchanged. A target's
+optional, default-off `ownerTier` switch selects a full ordinary agent for
+the service-identified owner; see [relay-owner-tier.md](relay-owner-tier.md).
 
 ### B.6.6 [delta] The profile in a long-lived conversation
 

@@ -509,6 +509,9 @@ export type PipelineStageAttempt = {
     /** Present only on compatibility records written by the continuation implementation. */
     clientMessageId?: string;
     lastRecordAt: number | null;
+    /** Verified prompt ordinal before termination; retained across uncertain
+        reads and later boots so a delivered operator prompt still fences it. */
+    promptBoundary?: number;
     replacementAttempt?: number;
     replacedAttempt?: number;
     /** Set once a stop this recovery issued ended a live host: the evidence
