@@ -185,5 +185,7 @@ esac
     expect(git(fixture.checkout, "rev-parse", "HEAD")).toBe(fixture.first);
   } finally {
     for (const pid of [child, bootstrap.pid]) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    // Unreaped, the bootstrap still reads as alive to the teardown check.
+    await bootstrap.exited;
   }
 }, 60_000);
