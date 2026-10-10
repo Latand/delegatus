@@ -2,7 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry } from "@/lib/agent/registry";
+import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
@@ -11,6 +12,7 @@ import { ownerTierFor } from "./profile";
 import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, type OwnerRunPorts } from "./ownerRun";
 import { reserveRun, readRunLedger, externalRelayFile, dropRun } from "./store";
 import { appDirIn } from "../../../bin/appDir.mjs";
+import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRedaction";
 
 function request(): ExternalRelayRequest {
   return requestSchema.parse({ ...contextRequest, input: { ...contextRequest.input,
@@ -77,6 +79,136 @@ test("final answer redacts before truncation, keeps sentinels and counts Unicode
   expect(ownerAnswer("sk-" + "a".repeat(48), r, owner)!.text).not.toContain("a".repeat(48));
   delete r.input.tools;
   expect(ownerAnswer("[handoff]", r, owner)).toBeNull();
+});
+
+test("owner final answers scrub quoted credential fields and encoded JSON", () => {
+  const r = request(); r.answer.max_chars = 32000;
+  const secret = ["fixture", "host", "credential", "value"].join("-");
+  const json = JSON.stringify({ status: "Done", nested: { password: secret, api_key: secret,
+    clientSecret: secret, pwd: secret, credentials: { values: [secret] } }, tokenCount: 7, passwordChanged: false });
+  for (const text of [json, `Done\n\`\`\`json\n${json}\n\`\`\``, JSON.stringify({ detail: json }),
+    JSON.stringify(JSON.stringify({ detail: json })), String.raw`{"pass\u0077ord":"${secret}"}`,
+    `{'password': '${secret}', 'status': 'Done'}`]) {
+    const answer = ownerAnswer(text, r, instruction())!.text;
+    expect(answer).not.toContain(secret);
+    expect(answer).toContain("[redacted]");
+  }
+  expect(JSON.parse(ownerAnswer(json, r, instruction())!.text)).toMatchObject({
+    status: "Done", tokenCount: 7, passwordChanged: false,
+  });
+  r.answer.max_chars = 20;
+  expect(ownerAnswer(json, r, instruction())!.text).not.toContain(secret.slice(0, 5));
+});
+
+test("owner final answers refuse truncated JSON credentials", async () => {
+  const secret = ["fixture", "host", "credential", "value"].join("-");
+  for (const text of [`{"password":"${secret}`, `{"api_key":{"value":"${secret}"`,
+    JSON.stringify({ detail: `{"password":"${secret}` })]) {
+    expect(() => ownerAnswer(text, request(), instruction())).toThrow();
+    const run = start({ launch, observe: async () => ({ state: "ended", finalText: text }),
+      stop: async () => {}, pollMs: 1 });
+    expect(await run.done).toMatchObject({ status: "failed", answer: null });
+  }
+});
+
+test("owner final answers withhold encoded known credentials", () => {
+  const r = request(); r.answer.max_chars = 32000;
+  const value = ["fixture", "installation", "access", "value"].join("-");
+  const encoded = Array.from(value, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+  const mixed = value.slice(0, 16) + encoded.slice(16 * 6);
+  for (const text of [`{"detail":"${encoded}"}`, JSON.stringify({ detail: encoded }),
+    `{"detail":"${mixed}"}`, JSON.stringify({ detail: mixed }),
+    JSON.stringify({ detail: JSON.stringify({ detail: mixed }) }),
+    Array.from(value, char => `%${char.charCodeAt(0).toString(16)}`).join(""), value.split("").join("\u200b")]) {
+    const answer = ownerAnswer(text, r, instruction(), [value])!.text;
+    expect(answer).toBe("[redacted]");
+  }
+});
+
+test("owner final answers withhold partially encoded capabilities before path scrubbing", () => {
+  const value = "q".repeat(43);
+  const partial = value.slice(0, 42) + `\\u${value.charCodeAt(42).toString(16).padStart(4, "0")}`;
+  const r = request(); r.answer.max_chars = 32000;
+  let text = partial;
+  for (let depth = 0; depth < 4; depth++) {
+    text = JSON.stringify({ detail: text });
+    for (const known of [[value], []]) {
+      const answer = ownerAnswer(text, r, instruction(), known)!.text;
+      expect(answer).toBe("[redacted]");
+      expect(answer).not.toContain(value.slice(0, 42));
+    }
+  }
+});
+
+test("owner answers scrub opaque tokens before archive home-path shaping", () => {
+  const value = "q".repeat(36) + ["", "home", "a"].join("-");
+  const r = request(); r.answer.max_chars = 32000;
+  for (const text of [value, JSON.stringify({ detail: value }), JSON.stringify({ detail: JSON.stringify({ detail: value }) })]) {
+    const answer = ownerAnswer(text, r, instruction())!.text;
+    expect(answer).not.toContain(value.slice(0, 36));
+    expect(answer).toContain("[redacted]");
+  }
+});
+
+test("owner answers scrub whole opaque tokens before vendor-family redaction", () => {
+  const value = "q".repeat(27) + ["", "sk", "r".repeat(12)].join("-");
+  const r = request(); r.answer.max_chars = 32000;
+  for (const text of [value, JSON.stringify({ detail: value }), JSON.stringify({ detail: JSON.stringify({ detail: value }) })]) {
+    expect(ownerAnswer(text, r, instruction())!.text).not.toContain(value.slice(0, 27));
+    for (const encoded of [text.replace(value[0]!, "%71"), text.replace(value[0]!, "\\u0071")])
+      expect(ownerAnswer(encoded, r, instruction())!.text).not.toContain(value.slice(1, 27));
+  }
+});
+
+test("production owner observation scrubs raw transcript answers before ordinary notice shaping", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-answer-reader-"));
+  const transcript = path.join(root, "transcript.jsonl");
+  const value = "q".repeat(27) + ["", "sk", "r".repeat(12)].join("-");
+  const original = process.env.LLV_SPAWN_CAPABILITY;
+  process.env.LLV_SPAWN_CAPABILITY = value;
+  const registry = agentRegistry();
+  const reader = spyOn(registry, "conversation");
+  const id = "conversation_reader_fixture";
+  const sources = { registry: () => ({
+    spawnReceiptForClientAttempt: () => ({ state: "completed", conversationId: id, launchId: "launch_reader_fixture", artifactPath: transcript }),
+    readOnlySnapshot: () => ({ heldDeliveries: {} }),
+  }), now: Date.now, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: new Date().toISOString() }] } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  try {
+    for (const engine of ["codex", "claude"] as const) {
+      reader.mockReturnValue({ engine, generations: [{ path: transcript }] } as ReturnType<AgentRegistry["conversation"]>);
+      fs.writeFileSync(transcript, JSON.stringify(engine === "codex"
+        ? { payload: { type: "task_complete", last_agent_message: value } }
+        : { type: "assistant", message: { content: [{ type: "text", text: value }] } }) + "\n");
+      expect(spawnNoticeFinalMessage(id).text).toContain(value.slice(0, 27));
+      const observed = await observeOwnerTurn({ clientAttemptId: "relay-owner-reader-fixture", claimedAt: new Date(0).toISOString() }, sources);
+      expect(observed).toMatchObject({ state: "ended", finalText: "[redacted]", turnError: null });
+      fs.writeFileSync(transcript, JSON.stringify(engine === "codex"
+        ? { payload: { type: "turn_aborted", reason: value } }
+        : { type: "system", level: "error", content: value }) + "\n");
+      expect(await observeOwnerTurn({ clientAttemptId: "relay-owner-reader-fixture", claimedAt: new Date(0).toISOString() }, sources))
+        .toMatchObject({ state: "ended", turnError: "[redacted]" });
+    }
+  } finally {
+    reader.mockRestore();
+    if (original === undefined) delete process.env.LLV_SPAWN_CAPABILITY; else process.env.LLV_SPAWN_CAPABILITY = original;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("encoded owner output applies provider, opaque credential, armor and path rules", () => {
+  const value = ["fixture", "retained", "provider", "value"].join("-");
+  retainProviderRedactionSecrets([value]);
+  const r = request(); r.answer.max_chars = 32000;
+  for (const raw of [value, "p".repeat(43), "-----BEGIN PRIVATE KEY-----\nfixture-private-material", "/srv/fixture/private.txt"])
+    for (const encode of [
+      (text: string) => Array.from(text, char => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`).join(""),
+      (text: string) => Array.from(text, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join(""),
+    ]) {
+      const answer = ownerAnswer(JSON.stringify({ detail: encode(raw) }), r, instruction())!.text;
+      expect(answer).not.toContain(encode(raw));
+      expect(answer).not.toContain(JSON.stringify(raw).slice(1, -1));
+      expect(answer).toMatch(/\[(?:redacted|path)\]/);
+    }
 });
 
 function start(ports: OwnerRunPorts, hardCapMs = 1000, onConversation = (_id: string) => {}) {

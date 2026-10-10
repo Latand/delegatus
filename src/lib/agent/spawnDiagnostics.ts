@@ -1,6 +1,7 @@
 import type { AgentRegistry } from "@/lib/agent/registry";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { scrubOwnerOutput } from "@/lib/externalRelay/ownerOutput";
+import { redactArchive } from "@/lib/reviewHistory/redaction";
 
 const ownerDiagnostics = new AsyncLocalStorage<boolean>();
 
@@ -15,12 +16,14 @@ export function bindSpawnDiagnostics<T>(work: () => T): () => T {
   return () => ownerDiagnostics.run(owner, work);
 }
 
-/** Serialize before scrubbing so console cannot inspect a raw object or stack. */
+/** Flatten Errors, then scrub fields before console can inspect an object or stack. */
 export function spawnDiagnosticError(...args: unknown[]): void {
   if (!ownerDiagnostics.getStore()) { console.error(...args); return; }
   try {
     const seen = new WeakSet<object>();
     const serialized = JSON.stringify(args, (_key, value) => {
+      // Inspect each original string before archive shaping can erase a
+      // credential suffix. Field-name redaction still follows for non-strings.
       if (typeof value === "string") return scrubOwnerOutput(value);
       if (value && typeof value === "object") {
         if (seen.has(value)) return "[circular]";
@@ -31,7 +34,16 @@ export function spawnDiagnosticError(...args: unknown[]): void {
       }
       return value;
     });
-    console.error(scrubOwnerOutput(serialized));
+    // Error properties are now ordinary fields. Redact whole credential values
+    // by key (including objects and numbers) before serializing for emission.
+    const safe = redactArchive(JSON.parse(serialized));
+    // Scrub decoded strings so path rules cannot consume JSON escape sequences.
+    console.error(JSON.stringify(safe, (_key, value) => {
+      if (typeof value === "string") return scrubOwnerOutput(value);
+      if (value && typeof value === "object" && !Array.isArray(value))
+        return Object.fromEntries(Object.entries(value).map(([key, field]) => [scrubOwnerOutput(key), field]));
+      return value;
+    }));
   } catch {
     // Resolver, getters and serialization failures must never expose the input.
     console.error("Owner relay diagnostic unavailable; sensitive details withheld");

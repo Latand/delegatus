@@ -2147,7 +2147,9 @@ test("owner credentials, host paths and key material never reach completion, ans
   const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
   const material = "fixture-private-material";
   const pgpMaterial = "fixture-pgp-private-material";
-  const finalText = ["Done", paired.credential, control, spawn, ...paths, "-----BEGIN PRIVATE KEY-----", material, "-----END PRIVATE KEY-----",
+  const value = ["fixture", "host", "credential", "value"].join("-");
+  const json = JSON.stringify({ password: value, api_key: value });
+  const finalText = ["Done", json, JSON.stringify({ detail: json }), paired.credential, control, spawn, ...paths, "-----BEGIN PRIVATE KEY-----", material, "-----END PRIVATE KEY-----",
     "-----BEGIN PGP PRIVATE KEY BLOCK-----", pgpMaterial, "-----END PGP PRIVATE KEY BLOCK-----"].join("\n");
   const oldError = console.error;
   console.error = (...args) => { diagnostics.push(args); };
@@ -2159,13 +2161,53 @@ test("owner credentials, host paths and key material never reach completion, ans
     });
     expect(outcome).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Done") } });
     const record = readAnswerRecord(paired.id, "target_1", "owner_scrubbed");
-    for (const surface of [completions, record, diagnostics]) for (const secret of [paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    expect(completions).toHaveLength(1);
+    expect(record?.answer?.text).toContain("Done");
+    for (const surface of [completions, record, diagnostics]) for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    const encoded = Array.from(paired.credential, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+    const encodedOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_encoded",
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_encoded" } }),
+        observe: async () => ({ state: "ended", finalText: `{"detail":"${encoded}"}` }), stop: async () => {} },
+    });
+    expect(encodedOutcome).toMatchObject({ outcome: "answered", answer: { text: "[redacted]" } });
+    expect(completions[1]).toMatchObject({ answer: { text: "[redacted]" } });
+    expect(readAnswerRecord(paired.id, "target_1", "owner_encoded")?.answer?.text).toBe("[redacted]");
+    let partial = control.slice(0, 42) + `\\u${control.charCodeAt(42).toString(16).padStart(4, "0")}`;
+    for (let depth = 0; depth < 3; depth++) {
+      partial = JSON.stringify({ detail: partial });
+      const id = `owner_partial_${depth}`;
+      const result = await runClaimedRequest(paired, { ...contextRequest, request_id: id,
+        input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+        ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_partial" } }),
+          observe: async () => ({ state: "ended", finalText: partial }), stop: async () => {} },
+      });
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: "[redacted]" } });
+      expect(completions.at(-1)).toMatchObject({ answer: { text: "[redacted]" } });
+      expect(readAnswerRecord(paired.id, "target_1", id)?.answer?.text).toBe("[redacted]");
+      expect(JSON.stringify([completions, readAnswerRecord(paired.id, "target_1", id), diagnostics])).not.toContain(control.slice(0, 42));
+    }
+    for (const [kind, opaque] of [["home", "q".repeat(36) + ["", "home", "a"].join("-")],
+      ["vendor", "q".repeat(27) + ["", "sk", "r".repeat(12)].join("-")],
+      ["encoded", "%71" + "q".repeat(26) + ["", "sk", "r".repeat(12)].join("-")]] as const) {
+      const id = `owner_opaque_${kind}`;
+      const opaqueOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: id,
+        answer: { ...contextRequest.answer, max_chars: 32000 },
+        input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+        ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_opaque" } }),
+          observe: async () => ({ state: "ended", finalText: JSON.stringify({ detail: opaque }) }), stop: async () => {} },
+      });
+      const opaqueRecord = readAnswerRecord(paired.id, "target_1", id);
+      expect(opaqueOutcome).toMatchObject({ outcome: "answered" });
+      expect(opaqueRecord?.answer?.text).toContain("[redacted]");
+      expect(JSON.stringify([opaqueOutcome, opaqueRecord, completions])).not.toContain(opaque.slice(0, 27));
+    }
     await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_safe_diagnostic",
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
       timeoutMs: 10, ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_diag" } }),
         observe: async () => ({ state: "running" }), stop: async () => { throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
     });
-    for (const secret of [paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
     const { dropRun } = await import("./store"); dropRun("owner_safe_diagnostic");
   } finally { console.error = oldError; await service.close(); }
 });

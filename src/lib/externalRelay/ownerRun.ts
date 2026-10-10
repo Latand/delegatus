@@ -5,6 +5,7 @@ import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurn, typ
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
+import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
 import { changeRun, readRunLedger, type RunRecord } from "./store";
 import { ownerRelayAuthorized } from "./ownerAuthority";
@@ -73,7 +74,7 @@ const productionPorts: OwnerRunPorts = {
 
 class OwnerPromptCleanupPending extends Error {}
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">): Promise<SpawnedTurnObservation> {
-  const observed = await observeSpawnedTurn(run, sources);
+  const observed = await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, scrubOwnerOutput));
   const receipt = sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId);
   const prompt = receipt && Object.values(sources.registry().readOnlySnapshot().heldDeliveries)
     .find(row => row.command.operationId === `spawn_message_${receipt.launchId}`);
