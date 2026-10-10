@@ -144,6 +144,21 @@ test("owner output removes host paths and private keys before truncating", () =>
   }
 });
 
+test("owner output withholds private armor cut inside its opening header", () => {
+  const r = request(); r.answer.max_chars = 32000;
+  for (const header of ["-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PGP PRIVATE KEY BLOCK-----"]) {
+    for (let length = "-----BEGIN".length; length <= header.length; length++) {
+      const fragment = header.slice(0, length);
+      expect(ownerAnswer(`Detail ${fragment}`, r, instruction())!.text).toBe("Detail [redacted]");
+      for (const text of [JSON.stringify({ error: fragment }), `Error: ${fragment}\n    at fixture`]) {
+        const answer = ownerAnswer(text, r, instruction())!.text;
+        expect(answer).not.toContain("-----BEGIN");
+        expect(answer).not.toContain("PRIVATE KEY");
+      }
+    }
+  }
+});
+
 test("owner output scrubs the remembered installation access key when the environment has no token", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-access-key-"));
   const directory = appDirIn(root);

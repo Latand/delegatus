@@ -18,8 +18,10 @@ export function scrubOwnerOutput(text: string, credentials: readonly string[] = 
     // Spawn capabilities and pairing credentials are opaque base64url values.
     .replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, "[redacted]")
     .replace(/\b[a-f0-9]{64}\b/gi, "[redacted]")
-    // Also cover incomplete armor, before any length limit can cut its footer.
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g, "[redacted]")
+    // Cover armor whose header or footer was cut by an upstream length limit.
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-{0,5}[\s\S]*(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g, "[redacted]")
+    // A bounded error can embed an unfinished opener in JSON or an Error stack.
+    .replace(/-----BEGIN(?: [A-Z ]*)?-{0,4}(?=$|[\r\n"'\\])/g, "[redacted]")
     // Absolute POSIX, home-relative, file URI, drive and UNC paths, including
     // escaped spaces. Ordinary web URLs keep their paths.
     .replace(/file:\/\/[^\s<>"'`]+/gi, "[path]")
