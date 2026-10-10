@@ -184,14 +184,20 @@ export class UpdateRunner {
         exitCode = await Promise.race([
           this.runStep(name, push),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              // PID disappearance cannot settle a pending exit notification.
-              // Bound that wait by the step deadline, then classify the loss.
+            const expire = () => {
               const alive = this.ports.childAlive?.();
               this.ports.abort?.();
-              reject(alive === null || alive === false
+              reject(alive === false
                 ? new StepError({ kind: "interrupted" }, `${name} child process ended without an exit status before the deadline`)
                 : new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
+            };
+            timer = setTimeout(() => {
+              // Let a queued exit settle runStep before finalizing the deadline.
+              // Bound the wait; missing status alone never proves interruption.
+              if (this.ports.childAlive?.() === null) {
+                timer = setTimeout(expire, this.config.livenessPollMs ?? 1_000);
+                timer.unref?.();
+              } else expire();
             }, limit);
             timer.unref?.();
           }),
@@ -378,7 +384,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       if (completion === null) return true;
       if (completion.ended) return completion.code !== null;
       // Missing-PID polls carry no exit status, however often they run.
-      // Wait for exit/close, or let the deadline settle an unreported loss.
+      // Wait for exit/close; the deadline bounds an unreported completion.
       return !current || sameProcess(current) ? true : null;
     },
     memAvailableMb,
