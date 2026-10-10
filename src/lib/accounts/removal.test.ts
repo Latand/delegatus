@@ -279,10 +279,10 @@ test("an unresolved live launch blocks removal of every managed account for its 
   expect(accountRemovalBlockers("claude", "work")).toEqual([]);
 });
 
-test("an aged queued pin blocks every account until its durable receipt settles", () => {
+for (const engine of ["claude", "codex"] as const) test(`an aged queued ${engine} pin blocks only its named account until its receipt settles (issue #1600)`, () => {
   const store = registry();
   const begun = beginLegacySpawnFixture(store, {
-    engine: "claude",
+    engine,
     cwd: "/repo",
     transport: "structured",
     accountId: "work",
@@ -295,7 +295,7 @@ test("an aged queued pin blocks every account until its durable receipt settles"
     retryAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
     accountId: "work",
     locale: "en",
-    spec: { engine: "claude", command: "claude", cwd: "/repo", windowName: "queued-pin", launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Queued account work" }) },
+    spec: { engine, command: engine, cwd: "/repo", windowName: "queued-pin", launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Queued account work" }) },
     ["prompt"]: "continue",
     imageRefs: [],
     parentArtifactPath: null,
@@ -304,13 +304,21 @@ test("an aged queued pin blocks every account until its durable receipt settles"
   store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner!);
 
   /* The dialog names a queued pin apart from a running agent (#1857). */
-  expect(accountRemovalBlockers("claude", "work", DAYS_LATER)).toEqual(["queued_pin"]);
-  expect(accountRemovalBlockers("claude", "other", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
+  expect(accountRemovalBlockers(engine === "claude" ? "codex" : "claude", "work", DAYS_LATER)).toEqual([]);
 
   /* Anything genuinely running outranks the queued pin. */
-  beginLegacySpawnFixture(store, { engine: "claude", cwd: "/repo", accountId: "work" });
-  expect(accountRemovalBlockers("claude", "work")).toEqual(["live_sessions"]);
-  expect(accountRemovalBlockers("claude", "other")).toEqual(["queued_pin"]);
+  const running = beginLegacySpawnFixture(store, { engine, cwd: "/repo", accountId: "work" });
+  if (running.kind !== "created") throw new Error("expected a live launch receipt");
+  expect(accountRemovalBlockers(engine, "work")).toEqual(["live_sessions"]);
+  expect(accountRemovalBlockers(engine, "other")).toEqual([]);
+
+  expect(store.failSpawn(running.receipt.launchId, "launch ended")).toBe(true);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual(["queued_pin"]);
+  expect(store.failSpawn(begun.receipt.launchId, "queued launch cancelled")).toBe(true);
+  expect(accountRemovalBlockers(engine, "work", DAYS_LATER)).toEqual([]);
+  expect(accountRemovalBlockers(engine, "other", DAYS_LATER)).toEqual([]);
 });
 
 /* Production shape of issue #1595: launch receipts pinned to an account, left
